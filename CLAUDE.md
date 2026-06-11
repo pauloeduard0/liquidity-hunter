@@ -113,6 +113,23 @@ Full architecture rationale, including SOLID notes, is documented in
 `BinanceDataProvider` and `OHLCVProvider` are re-exported from
 `liquidity_hunter.data` for convenience.
 
+### Liquidity layer (`liquidity_hunter/liquidity`)
+
+- **`liquidity/detectors/base.py`** — `LiquidityZoneDetector`, the abstract
+  port all detectors implement (`detect(candles) -> list[LiquidityZone]`).
+- **`liquidity/detectors/swing_points.py`** — `SwingHighDetector` /
+  `SwingLowDetector`: fractal-style local extrema (configurable `lookback`),
+  returning point zones (`price_high == price_low`) with `strength` derived
+  from prominence relative to the candle range.
+- **`liquidity/detectors/equal_levels.py`** — `EqualHighDetector` /
+  `EqualLowDetector`: group swing points within a configurable
+  `tolerance_pct` (relative tolerance) into equal-level zones, requiring
+  `min_touches` (default 2); `strength` scales with touch count.
+- **`liquidity/detectors/_common.py`** — shared `validate_candles` and
+  `price_range` helpers.
+
+All detectors are re-exported from `liquidity_hunter.liquidity`.
+
 ### Examples (`liquidity_hunter/app/examples`)
 
 Runnable scripts demonstrating module usage. Each exposes a `main(provider=...)`
@@ -121,12 +138,14 @@ function so it can be tested with a fake provider (no network) — see
 
 ```bash
 poetry run python -m liquidity_hunter.app.examples.fetch_btcusdt_1h
+poetry run python -m liquidity_hunter.app.examples.detect_btcusdt_liquidity
 ```
 
 ## Project status
 
-This is an early-stage scaffold. `core.domain` models and the
-`data.providers` (Binance/CCXT) module are implemented. The remaining layer
-packages (`indicators`, `liquidity`, `psychology`, `scoring`, `dashboard`)
-currently contain only an `__init__.py` describing their intended
-responsibility, with no implementation yet.
+This is an early-stage scaffold. `core.domain` models, the `data.providers`
+(Binance/CCXT) module, and the `liquidity.detectors` (swing/equal-level)
+module are implemented. The remaining layer packages (`indicators`,
+`psychology`, `scoring`, `dashboard`, and `MarketStructure` detection within
+`liquidity`) currently contain only an `__init__.py` describing their
+intended responsibility, with no implementation yet.

@@ -54,6 +54,30 @@ first five:
 poetry run python -m liquidity_hunter.app.examples.fetch_btcusdt_1h
 ```
 
+### Detecting liquidity zones
+
+Swing-point and equal-level detectors take a list of `Candle` objects and
+return `LiquidityZone` objects (type, price range, strength, timeframe):
+
+```python
+from liquidity_hunter.liquidity import (
+    EqualHighDetector,
+    EqualLowDetector,
+    SwingHighDetector,
+    SwingLowDetector,
+)
+
+swing_highs = SwingHighDetector(lookback=2).detect(candles)
+equal_highs = EqualHighDetector(tolerance_pct=0.0005, min_touches=2).detect(candles)
+```
+
+Run the example script, which fetches 500 BTCUSDT 1h candles and prints the
+detected swing highs/lows and equal highs/lows:
+
+```bash
+poetry run python -m liquidity_hunter.app.examples.detect_btcusdt_liquidity
+```
+
 ## Development
 
 ```bash
