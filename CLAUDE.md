@@ -58,6 +58,8 @@ liquidity  psychology │
  └───►  data ◄────────┘
          │
         core (domain)
+
+dashboard, api ── both depend on app, core (alternative presentation layers)
 ```
 
 | Layer        | Responsibility                                                              | May depend on                     |
@@ -69,7 +71,8 @@ liquidity  psychology │
 | `psychology` | Modeling of `RetailBias` from sentiment/positioning data                     | `core`, `data`                      |
 | `scoring`    | Composite, descriptive scoring combining `liquidity` and `psychology` output | `core`, `liquidity`, `psychology`   |
 | `app`        | Composition root and orchestration                                           | all of the above                    |
-| `dashboard`  | Presentation/visualization of `app` output                                   | `app`, `core`                       |
+| `dashboard`  | Presentation/visualization of `app` output (Streamlit)                      | `app`, `core`                       |
+| `api`        | Presentation of `app` output as JSON over HTTP (FastAPI)                    | `app`, `core`                       |
 | `config`     | Application settings (environment-driven, via `pydantic-settings`)          | nothing                             |
 
 ### Domain entities (`liquidity_hunter/core/domain`)
@@ -281,13 +284,44 @@ feel inspired by TradingView/Bloomberg-style terminals):
 Tested with `streamlit.testing.v1.AppTest` in
 `liquidity_hunter/tests/dashboard/test_app.py`.
 
+### API layer (`liquidity_hunter/api`)
+
+A FastAPI app exposing `app.load_dashboard_data` output as JSON, depending
+only on `app` and `core` (an alternative presentation layer to
+`dashboard`):
+
+- **`api/main.py`** — `app = FastAPI(...)`, with CORS enabled (open, for a
+  future separate frontend) and the routers below registered. Run with:
+
+  ```bash
+  poetry run uvicorn liquidity_hunter.api.main:app --reload
+  ```
+
+- **`api/routes/health.py`** — `GET /api/health` returns `{"status": "ok"}`.
+- **`api/routes/dashboard.py`** — `GET /api/dashboard` (query params
+  `symbol`, `timeframe`, `limit`, `swing_lookback`, defaults matching
+  `load_dashboard_data`) calls `load_dashboard_data` directly (no
+  duplicated logic) and returns a `DashboardDataResponse`. Results are
+  cached per parameter combination via `api/cache.TTLCache`
+  (`DEFAULT_TTL_SECONDS = 300`) to avoid redundant Binance requests.
+- **`api/cache.py`** — `TTLCache`, a minimal generic in-memory
+  time-based cache (`get_or_set(key, factory)`).
+- **`api/schemas.py`** — `DashboardDataResponse`, a Pydantic `BaseModel`
+  (`from_attributes=True`) mirroring the `DashboardData` dataclass fields,
+  used to serialize it to JSON; nested domain types (`Candle`,
+  `LiquidityZone`, `MarketStructure`, `ScoredLiquidityZone`,
+  `RetailBiasEstimate`) are already `DomainModel`s and serialize as-is.
+
+Tested with FastAPI's `TestClient` in `liquidity_hunter/tests/api/test_main.py`.
+
 ## Project status
 
 This is an early-stage scaffold. `core.domain` models, the `data.providers`
 (Binance/CCXT) module, `indicators.volume_delta`, the `liquidity.detectors`
 (swing/equal-level, swing market structure) module, `scoring.engine`
 (`LiquidityScoringEngine`), `psychology.analyzers` (`RetailTrapAnalyzer`),
-and the `dashboard` Streamlit app are implemented. Internal/minor
+the `dashboard` Streamlit app, and the `api` FastAPI app are implemented.
+Internal/minor
 `MarketStructure` detection within `liquidity` is not yet implemented.
 `SwingStructureDetector`'s BOS/CHoCH confirmation rule now uses
 `indicators.volume_delta` ("close beyond level AND volume delta ratio

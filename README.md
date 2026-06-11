@@ -169,6 +169,36 @@ tabs for detected zones, recent structure events, and summary statistics:
 poetry run streamlit run liquidity_hunter/dashboard/app.py
 ```
 
+### Running the API
+
+A FastAPI application (`liquidity_hunter.api`) exposes the same research
+data as JSON, reusing `app.load_dashboard_data` directly:
+
+```bash
+poetry run uvicorn liquidity_hunter.api.main:app --reload
+```
+
+#### Endpoints
+
+- `GET /api/health` — liveness check, returns `{"status": "ok"}`.
+- `GET /api/dashboard` — a `DashboardData` snapshot (candles, liquidity
+  zones, ranked zones, market structure events, retail bias estimate) as
+  JSON. Query parameters:
+
+  | Parameter        | Type     | Default   | Notes                                  |
+  |-------------------|----------|-----------|-----------------------------------------|
+  | `symbol`          | string   | `BTCUSDT` |                                          |
+  | `timeframe`       | string   | `1h`      | One of the `TimeFrame` values (e.g. `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, `1w`) |
+  | `limit`           | integer  | `500`     | Number of candles, `1`-`1000`           |
+  | `swing_lookback`  | integer  | `50`      | Passed to `SwingStructureDetector`, must be `> 0` |
+
+  Responses are cached in-memory per parameter combination for 300 seconds
+  to avoid redundant Binance requests.
+
+  ```bash
+  curl "http://127.0.0.1:8000/api/dashboard?symbol=BTCUSDT&timeframe=1h&limit=500&swing_lookback=50"
+  ```
+
 ## Development
 
 ```bash
