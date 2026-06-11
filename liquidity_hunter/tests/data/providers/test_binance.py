@@ -10,7 +10,23 @@ from liquidity_hunter.core.domain import Candle, TimeFrame
 from liquidity_hunter.data.exceptions import DataProviderConnectionError, DataProviderRequestError
 from liquidity_hunter.data.providers.binance import BinanceDataProvider, to_ccxt_symbol
 
-SAMPLE_ROW = [1_700_000_000_000, 100.0, 110.0, 90.0, 105.0, 1234.5]
+# Raw Binance kline row (12 columns): open time, open, high, low, close,
+# volume, close time, quote asset volume, number of trades, taker buy base
+# asset volume, taker buy quote asset volume, ignore.
+SAMPLE_ROW = [
+    1_700_000_000_000,
+    "100.0",
+    "110.0",
+    "90.0",
+    "105.0",
+    "1234.5",
+    1_700_003_599_999,
+    "129000.0",
+    100,
+    "617.25",
+    "64500.0",
+    "0",
+]
 
 
 @pytest.mark.parametrize(
@@ -33,7 +49,7 @@ def test_to_ccxt_symbol_rejects_unknown_format() -> None:
 
 def test_get_ohlcv_returns_candles() -> None:
     mock_exchange = MagicMock()
-    mock_exchange.fetch_ohlcv.return_value = [SAMPLE_ROW]
+    mock_exchange.publicGetKlines.return_value = [SAMPLE_ROW]
 
     provider = BinanceDataProvider(exchange=mock_exchange)
     candles = provider.get_ohlcv("BTCUSDT", TimeFrame.H1, limit=1)
@@ -48,15 +64,18 @@ def test_get_ohlcv_returns_candles() -> None:
             low=90.0,
             close=105.0,
             volume=1234.5,
+            taker_buy_volume=617.25,
         )
     ]
-    mock_exchange.fetch_ohlcv.assert_called_once_with("BTC/USDT", timeframe="1h", limit=1)
+    mock_exchange.publicGetKlines.assert_called_once_with(
+        {"symbol": "BTCUSDT", "interval": "1h", "limit": 1}
+    )
 
 
 @patch("liquidity_hunter.data.retry.time.sleep")
 def test_get_ohlcv_retries_on_network_error_then_succeeds(mock_sleep) -> None:
     mock_exchange = MagicMock()
-    mock_exchange.fetch_ohlcv.side_effect = [
+    mock_exchange.publicGetKlines.side_effect = [
         ccxt.NetworkError("timeout"),
         ccxt.NetworkError("timeout"),
         [SAMPLE_ROW],
@@ -68,13 +87,13 @@ def test_get_ohlcv_retries_on_network_error_then_succeeds(mock_sleep) -> None:
     candles = provider.get_ohlcv("BTCUSDT", TimeFrame.H1, limit=1)
 
     assert len(candles) == 1
-    assert mock_exchange.fetch_ohlcv.call_count == 3
+    assert mock_exchange.publicGetKlines.call_count == 3
 
 
 @patch("liquidity_hunter.data.retry.time.sleep")
 def test_get_ohlcv_raises_connection_error_after_max_retries(mock_sleep) -> None:
     mock_exchange = MagicMock()
-    mock_exchange.fetch_ohlcv.side_effect = ccxt.NetworkError("timeout")
+    mock_exchange.publicGetKlines.side_effect = ccxt.NetworkError("timeout")
 
     provider = BinanceDataProvider(
         exchange=mock_exchange, max_retries=3, retry_base_delay_seconds=0.01
@@ -83,12 +102,12 @@ def test_get_ohlcv_raises_connection_error_after_max_retries(mock_sleep) -> None
     with pytest.raises(DataProviderConnectionError):
         provider.get_ohlcv("BTCUSDT", TimeFrame.H1, limit=1)
 
-    assert mock_exchange.fetch_ohlcv.call_count == 3
+    assert mock_exchange.publicGetKlines.call_count == 3
 
 
 def test_get_ohlcv_raises_request_error_on_exchange_error_without_retry() -> None:
     mock_exchange = MagicMock()
-    mock_exchange.fetch_ohlcv.side_effect = ccxt.BadSymbol("invalid symbol")
+    mock_exchange.publicGetKlines.side_effect = ccxt.BadSymbol("invalid symbol")
 
     provider = BinanceDataProvider(
         exchange=mock_exchange, max_retries=3, retry_base_delay_seconds=0.01
@@ -97,4 +116,4 @@ def test_get_ohlcv_raises_request_error_on_exchange_error_without_retry() -> Non
     with pytest.raises(DataProviderRequestError):
         provider.get_ohlcv("BTCUSDT", TimeFrame.H1, limit=1)
 
-    assert mock_exchange.fetch_ohlcv.call_count == 1
+    assert mock_exchange.publicGetKlines.call_count == 1

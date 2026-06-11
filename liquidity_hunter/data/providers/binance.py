@@ -2,6 +2,7 @@
 
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 import ccxt
 
@@ -54,26 +55,30 @@ class BinanceDataProvider(OHLCVProvider):
                 unknown symbol or invalid timeframe).
         """
         ccxt_symbol = to_ccxt_symbol(symbol)
-        raw_rows = self._fetch_ohlcv(ccxt_symbol, timeframe, limit)
+        raw_rows = self._fetch_klines(ccxt_symbol, timeframe, limit)
         return [self._to_candle(symbol, timeframe, row) for row in raw_rows]
 
-    def _fetch_ohlcv(
-        self, ccxt_symbol: str, timeframe: TimeFrame, limit: int
-    ) -> list[list[float]]:
+    def _fetch_klines(self, ccxt_symbol: str, timeframe: TimeFrame, limit: int) -> list[list[Any]]:
+        # ccxt's unified `fetch_ohlcv` only returns 6 columns (no taker buy
+        # volume), so the raw `/api/v3/klines` endpoint is used instead via
+        # ccxt's implicit `publicGetKlines` method, which returns Binance's
+        # native 12-column rows including taker buy base asset volume.
+        binance_symbol = ccxt_symbol.replace("/", "")
+
         @retry_with_backoff(
             exceptions=(ccxt.NetworkError,),
             max_attempts=self._max_retries,
             base_delay_seconds=self._retry_base_delay_seconds,
         )
-        def _fetch() -> list[list[float]]:
+        def _fetch() -> list[list[Any]]:
             logger.debug(
-                "Fetching OHLCV: symbol=%s timeframe=%s limit=%d",
-                ccxt_symbol,
+                "Fetching klines: symbol=%s timeframe=%s limit=%d",
+                binance_symbol,
                 timeframe.value,
                 limit,
             )
-            result: list[list[float]] = self._exchange.fetch_ohlcv(
-                ccxt_symbol, timeframe=timeframe.value, limit=limit
+            result: list[list[Any]] = self._exchange.publicGetKlines(
+                {"symbol": binance_symbol, "interval": timeframe.value, "limit": limit}
             )
             return result
 
@@ -97,15 +102,17 @@ class BinanceDataProvider(OHLCVProvider):
         return rows
 
     @staticmethod
-    def _to_candle(symbol: str, timeframe: TimeFrame, row: list[float]) -> Candle:
-        timestamp_ms, open_, high, low, close, volume = row
+    def _to_candle(symbol: str, timeframe: TimeFrame, row: list[Any]) -> Candle:
+        timestamp_ms, open_, high, low, close, volume = row[:6]
+        taker_buy_volume = row[9]
         return Candle(
             symbol=symbol,
             timeframe=timeframe,
-            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
-            open=open_,
-            high=high,
-            low=low,
-            close=close,
-            volume=volume,
+            timestamp=datetime.fromtimestamp(int(timestamp_ms) / 1000, tz=UTC),
+            open=float(open_),
+            high=float(high),
+            low=float(low),
+            close=float(close),
+            volume=float(volume),
+            taker_buy_volume=float(taker_buy_volume),
         )

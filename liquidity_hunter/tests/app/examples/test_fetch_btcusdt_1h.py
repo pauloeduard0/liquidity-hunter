@@ -29,6 +29,7 @@ def _make_candles(count: int) -> list[Candle]:
             low=99.0,
             close=100.5,
             volume=10.0,
+            taker_buy_volume=5.0,
         )
         for _ in range(count)
     ]

@@ -30,6 +30,7 @@ def test_candle_valid_construction() -> None:
         low=1.09,
         close=1.11,
         volume=1000,
+        taker_buy_volume=600,
     )
     assert candle.high >= candle.open
     assert candle.low <= candle.close
@@ -46,6 +47,22 @@ def test_candle_rejects_inconsistent_high() -> None:
             low=1.04,
             close=1.11,
             volume=1000,
+            taker_buy_volume=600,
+        )
+
+
+def test_candle_rejects_taker_buy_volume_exceeding_volume() -> None:
+    with pytest.raises(ValueError, match="taker_buy_volume must be <= volume"):
+        Candle(
+            symbol="EURUSD",
+            timeframe=TimeFrame.H1,
+            timestamp=NOW,
+            open=1.10,
+            high=1.12,
+            low=1.09,
+            close=1.11,
+            volume=1000,
+            taker_buy_volume=1001,
         )
 
 

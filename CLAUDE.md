@@ -78,8 +78,10 @@ All domain entities subclass `DomainModel` (`core/domain/base.py`), a Pydantic
 `BaseModel` configured as **immutable** (`frozen=True`), with `extra="forbid"`
 and `validate_assignment=True`. New entities should follow this pattern.
 
-- **`Candle`** — a single OHLCV price bar; validates high/low consistency
-  against open/close in a `model_validator`.
+- **`Candle`** — a single OHLCV price bar, including `taker_buy_volume`
+  (taker buy base asset volume, the basis for `indicators.volume_delta`);
+  validates high/low consistency against open/close and
+  `taker_buy_volume <= volume` in `model_validator`s.
 - **`LiquidityZone`** — a price region holding resting liquidity (equal
   highs/lows, order blocks, fair value gaps, etc.); validates
   `price_high >= price_low`.
@@ -102,7 +104,11 @@ Full architecture rationale, including SOLID notes, is documented in
   market data sources implement (`get_ohlcv(symbol, timeframe, limit) -> list[Candle]`).
 - **`data/providers/binance.py`** — `BinanceDataProvider`, a CCXT-backed
   implementation for Binance. `to_ccxt_symbol()` converts concatenated
-  symbols (e.g. `"BTCUSDT"`) to CCXT's unified `"BASE/QUOTE"` form.
+  symbols (e.g. `"BTCUSDT"`) to CCXT's unified `"BASE/QUOTE"` form. Candles
+  are fetched via ccxt's implicit `publicGetKlines` (raw Binance
+  `/api/v3/klines`, 12 columns) rather than `fetch_ohlcv`, since only the
+  raw response includes taker buy base asset volume (column index 9),
+  needed to populate `Candle.taker_buy_volume`.
 - **`data/retry.py`** — `retry_with_backoff` decorator (exponential backoff,
   logged) used to retry transient `ccxt.NetworkError`s.
 - **`data/exceptions.py`** — `DataProviderConnectionError` (retries
@@ -111,6 +117,15 @@ Full architecture rationale, including SOLID notes, is documented in
 
 `BinanceDataProvider` and `OHLCVProvider` are re-exported from
 `liquidity_hunter.data` for convenience.
+
+### Indicators layer (`liquidity_hunter/indicators`)
+
+- **`indicators/volume_delta.py`** — `volume_delta(candle) -> float`
+  computes `2 * taker_buy_volume - volume` (net taker buy/sell aggression
+  for that candle, ranging from `-volume` to `+volume`);
+  `volume_delta_series(candles) -> list[float]` applies it across a series,
+  1:1 aligned with `candles`. Both are re-exported from
+  `liquidity_hunter.indicators`.
 
 ### Liquidity layer (`liquidity_hunter/liquidity`)
 
@@ -246,13 +261,14 @@ Tested with `streamlit.testing.v1.AppTest` in
 ## Project status
 
 This is an early-stage scaffold. `core.domain` models, the `data.providers`
-(Binance/CCXT) module, the `liquidity.detectors` (swing/equal-level,
-swing market structure) module, `scoring.engine`
+(Binance/CCXT) module, `indicators.volume_delta`, the `liquidity.detectors`
+(swing/equal-level, swing market structure) module, `scoring.engine`
 (`LiquidityScoringEngine`), `psychology.analyzers` (`RetailTrapAnalyzer`),
-and the `dashboard` Streamlit app are implemented. The remaining work
-(`indicators`, and internal/minor `MarketStructure` detection within
-`liquidity`) is described by an `__init__.py` only, with no implementation
-yet. `SwingStructureDetector`'s BOS/CHoCH confirmation rule is provisional
-(first pivot beyond the active level) and is expected to be refined once
-`indicators` exposes volume-delta data, adding liquidity-sweep filtering
-for false breakouts.
+and the `dashboard` Streamlit app are implemented. Internal/minor
+`MarketStructure` detection within `liquidity` is not yet implemented.
+`SwingStructureDetector`'s BOS/CHoCH confirmation rule is still provisional
+(first pivot beyond the active level); it is expected to be refined to
+"close beyond level AND strong volume delta in breakout direction", with a
+weak-delta break treated as a liquidity sweep (level stays active, the
+mitigated zone reflected via `LiquidityZone.is_mitigated`), now that
+`indicators.volume_delta` is available.

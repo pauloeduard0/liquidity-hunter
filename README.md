@@ -54,6 +54,18 @@ first five:
 poetry run python -m liquidity_hunter.app.examples.fetch_btcusdt_1h
 ```
 
+### Computing volume delta
+
+`volume_delta` derives net taker buy/sell aggression for a candle from
+`Candle.taker_buy_volume` (`2 * taker_buy_volume - volume`); `volume_delta_series`
+applies it across a series, 1:1 aligned with `candles`:
+
+```python
+from liquidity_hunter.indicators import volume_delta_series
+
+deltas = volume_delta_series(candles)
+```
+
 ### Detecting liquidity zones
 
 Swing-point and equal-level detectors take a list of `Candle` objects and
