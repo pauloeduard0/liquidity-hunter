@@ -1,4 +1,4 @@
-"""Swing (major) market structure detector: BOS / CHoCH from swing pivots.
+"""Swing (major) market structure detector: BOS/CHoCH and HH/HL/LH/LL.
 
 This module adapts the core idea of the LuxAlgo "Smart Money Concepts"
 indicator (BOS/CHoCH from alternating swing highs/lows) with one key
@@ -9,6 +9,11 @@ would flip the trend. It is only promoted to that role once the *opposite*
 active reference is actually broken. Until then it is held as a "pending"
 candidate. This avoids flagging a CHoCH against a minor retracement pivot
 that was never structurally significant.
+
+Every pivot that does *not* break the active reference on its side is also
+labeled HH/HL/LH/LL by comparing it to the previous pivot of the same type
+-- a purely descriptive observation, independent of the active/pending
+state machine.
 """
 
 from dataclasses import dataclass
@@ -19,6 +24,17 @@ from liquidity_hunter.liquidity.detectors._common import validate_candles
 from liquidity_hunter.liquidity.detectors.base import MarketStructureDetector
 from liquidity_hunter.liquidity.detectors.swing_points import SwingHighDetector, SwingLowDetector
 
+# Label for a pivot relative to the previous pivot of the same type, keyed
+# by whether the new pivot is higher (True) or lower (False).
+_HIGH_PIVOT_LABELS: dict[bool, tuple[StructureEvent, MarketDirection]] = {
+    True: (StructureEvent.HIGHER_HIGH, MarketDirection.BULLISH),
+    False: (StructureEvent.LOWER_HIGH, MarketDirection.BEARISH),
+}
+_LOW_PIVOT_LABELS: dict[bool, tuple[StructureEvent, MarketDirection]] = {
+    True: (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH),
+    False: (StructureEvent.LOWER_LOW, MarketDirection.BEARISH),
+}
+
 
 @dataclass(frozen=True)
 class _Pivot:
@@ -27,7 +43,7 @@ class _Pivot:
 
 
 class SwingStructureDetector(MarketStructureDetector):
-    """Detects BOS/CHoCH events from major (swing) pivots.
+    """Detects BOS/CHoCH and HH/HL/LH/LL from major (swing) pivots.
 
     Swing highs/lows are sourced from `SwingHighDetector`/`SwingLowDetector`
     using `swing_lookback`, then walked in chronological order maintaining
@@ -44,6 +60,12 @@ class SwingStructureDetector(MarketStructureDetector):
     active reference on its side. This is a provisional confirmation rule
     (no false-breakout/liquidity-sweep filtering yet) and is expected to be
     refined once volume-delta data is available.
+
+    A pivot that breaks the active reference is, by construction, always
+    higher (for highs) or lower (for lows) than the previous pivot of the
+    same type -- so it is reported only as BOS/CHoCH, an HH/LL label would
+    be redundant. Pivots that do *not* break the active reference are
+    reported as HH/LH (highs) or HL/LL (lows) instead.
     """
 
     def __init__(self, swing_lookback: int = 50) -> None:
@@ -69,6 +91,8 @@ class SwingStructureDetector(MarketStructureDetector):
         active_low: _Pivot | None = None
         pending_high: _Pivot | None = None
         pending_low: _Pivot | None = None
+        last_high: _Pivot | None = None
+        last_low: _Pivot | None = None
         trend = MarketDirection.NEUTRAL
 
         for timestamp, kind, price in pivots:
@@ -100,7 +124,22 @@ class SwingStructureDetector(MarketStructureDetector):
                     pending_high = None
                     trend = MarketDirection.BULLISH
                 else:
+                    label = self._label(price, last_high, _HIGH_PIVOT_LABELS)
+                    if label is not None:
+                        event_type, direction, reference_price = label
+                        events.append(
+                            MarketStructure(
+                                symbol=symbol,
+                                timeframe=timeframe,
+                                timestamp=timestamp,
+                                event=event_type,
+                                direction=direction,
+                                price_level=price,
+                                reference_price_level=reference_price,
+                            )
+                        )
                     pending_high = pivot
+                last_high = pivot
             else:
                 if active_low is None:
                     active_low = pivot
@@ -127,6 +166,38 @@ class SwingStructureDetector(MarketStructureDetector):
                     pending_low = None
                     trend = MarketDirection.BEARISH
                 else:
+                    label = self._label(price, last_low, _LOW_PIVOT_LABELS)
+                    if label is not None:
+                        event_type, direction, reference_price = label
+                        events.append(
+                            MarketStructure(
+                                symbol=symbol,
+                                timeframe=timeframe,
+                                timestamp=timestamp,
+                                event=event_type,
+                                direction=direction,
+                                price_level=price,
+                                reference_price_level=reference_price,
+                            )
+                        )
                     pending_low = pivot
+                last_low = pivot
 
         return events
+
+    @staticmethod
+    def _label(
+        price: float,
+        last_pivot: _Pivot | None,
+        labels: dict[bool, tuple[StructureEvent, MarketDirection]],
+    ) -> tuple[StructureEvent, MarketDirection, float] | None:
+        """HH/LH (or HL/LL) label for `price` vs. the previous same-type pivot.
+
+        Returns `None` for the first pivot of its type (`last_pivot is None`)
+        or when `price` exactly equals `last_pivot.price` (no higher/lower
+        label applies).
+        """
+        if last_pivot is None or price == last_pivot.price:
+            return None
+        event_type, direction = labels[price > last_pivot.price]
+        return event_type, direction, last_pivot.price

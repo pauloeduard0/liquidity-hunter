@@ -128,15 +128,19 @@ Full architecture rationale, including SOLID notes, is documented in
   the abstract port for structure detectors
   (`detect(candles) -> list[MarketStructure]`).
 - **`liquidity/detectors/market_structure.py`** — `SwingStructureDetector`:
-  detects BOS/CHoCH on the major (swing) structure. Sources swing pivots
-  from `SwingHighDetector`/`SwingLowDetector` (`swing_lookback`) and walks
-  them chronologically maintaining `active_high`/`active_low` references
-  and `pending_high`/`pending_low` candidates. A pending pivot is only
-  promoted to active once the *opposite* active level breaks — this avoids
-  flagging a CHoCH against a minor retracement pivot. A break is currently
-  confirmed as soon as a pivot exceeds the active level on its side
-  (provisional rule, to be refined with volume-delta-based liquidity-sweep
-  filtering). Internal/minor structure detection is not yet implemented.
+  detects BOS/CHoCH and HH/HL/LH/LL on the major (swing) structure. Sources
+  swing pivots from `SwingHighDetector`/`SwingLowDetector` (`swing_lookback`)
+  and walks them chronologically maintaining `active_high`/`active_low`
+  references and `pending_high`/`pending_low` candidates. A pending pivot is
+  only promoted to active once the *opposite* active level breaks — this
+  avoids flagging a CHoCH against a minor retracement pivot. A break is
+  currently confirmed as soon as a pivot exceeds the active level on its
+  side (provisional rule, to be refined with volume-delta-based
+  liquidity-sweep filtering). Pivots that don't break the active level are
+  labeled HH/LH (highs) or HL/LL (lows) by comparison with the previous
+  pivot of the same type — a breaking pivot is always HH/LL by construction,
+  so it is reported only as BOS/CHoCH (no redundant label). Internal/minor
+  structure detection is not yet implemented.
 - **`liquidity/detectors/_common.py`** — shared `validate_candles` and
   `price_range` helpers.
 
