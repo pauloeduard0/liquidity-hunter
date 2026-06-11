@@ -14,8 +14,7 @@ and market psychology analysis. It is explicitly **not** a trading system:
 
 ## Commands
 
-This project uses Poetry with Python 3.12. No `poetry.lock` is committed yet,
-so run `poetry install` first.
+This project uses Poetry with Python 3.12.
 
 ```bash
 # Install dependencies (or: pip install -r requirements-dev.txt)
@@ -90,9 +89,9 @@ and `validate_assignment=True`. New entities should follow this pattern.
   given `BiasSource`, with a bounded `sentiment_score` and `confidence`.
 
 Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
-`LiquidityZoneType`, `StructureEvent`, `BiasSource`) live in
-`core/domain/enums.py`. Extend behavior by adding enum members rather than
-branching logic elsewhere (Open/Closed principle).
+`LiquidityZoneType`, `StructureEvent`, `BiasSource`, `RetailPositioning`)
+live in `core/domain/enums.py`. Extend behavior by adding enum members
+rather than branching logic elsewhere (Open/Closed principle).
 
 Full architecture rationale, including SOLID notes, is documented in
 `liquidity_hunter/docs/architecture.md`.
@@ -130,6 +129,29 @@ Full architecture rationale, including SOLID notes, is documented in
 
 All detectors are re-exported from `liquidity_hunter.liquidity`.
 
+### Psychology layer (`liquidity_hunter/psychology`)
+
+- **`psychology/analyzers/base.py`** — `RetailBiasEstimator`, the abstract
+  port all retail bias estimators implement
+  (`analyze(symbol, higher_timeframe_direction, market_structure_events,
+  liquidity_zones, current_price) -> RetailBiasEstimate`). The plain-domain-type
+  inputs double as a feature set, so a future ML-based estimator can
+  implement the same interface as a drop-in replacement.
+- **`psychology/analyzers/retail_trap.py`** — `RetailTrapAnalyzer`, a
+  rule-based `RetailBiasEstimator`. Combines the higher timeframe trend,
+  the most recent `MarketStructure` event, and nearby `LiquidityZone`s to
+  estimate retail crowd psychology (e.g. "buying a perceived bottom against
+  the higher timeframe trend").
+- **`psychology/models.py`** — `RetailBiasEstimate`: `dominant_side`
+  (`RetailPositioning`: LONG/SHORT/NEUTRAL), `confidence` (0-100), and a
+  human-readable `explanation`. Distinct from `core.domain.RetailBias`,
+  which represents a *measured* sentiment observation rather than an
+  *inferred* one.
+
+The full estimation logic (confidence formula and worked example) is
+documented in `liquidity_hunter/docs/psychology.md`. All three are
+re-exported from `liquidity_hunter.psychology`.
+
 ### Scoring layer (`liquidity_hunter/scoring`)
 
 - **`scoring/engine.py`** — `LiquidityScoringEngine.score(zones, current_price)`
@@ -155,14 +177,15 @@ function so it can be tested with a fake provider (no network) — see
 poetry run python -m liquidity_hunter.app.examples.fetch_btcusdt_1h
 poetry run python -m liquidity_hunter.app.examples.detect_btcusdt_liquidity
 poetry run python -m liquidity_hunter.app.examples.score_btcusdt_liquidity
+poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 ```
 
 ## Project status
 
 This is an early-stage scaffold. `core.domain` models, the `data.providers`
 (Binance/CCXT) module, the `liquidity.detectors` (swing/equal-level)
-module, and `scoring.engine` (`LiquidityScoringEngine`) are implemented.
-The remaining layer packages (`indicators`, `psychology`, `dashboard`, and
-`MarketStructure` detection within `liquidity`) currently contain only an
-`__init__.py` describing their intended responsibility, with no
-implementation yet.
+module, `scoring.engine` (`LiquidityScoringEngine`), and
+`psychology.analyzers` (`RetailTrapAnalyzer`) are implemented. The
+remaining layer packages (`indicators`, `dashboard`, and `MarketStructure`
+detection within `liquidity`) currently contain only an `__init__.py`
+describing their intended responsibility, with no implementation yet.

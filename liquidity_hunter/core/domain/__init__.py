@@ -11,6 +11,7 @@ from liquidity_hunter.core.domain.enums import (
     LiquiditySide,
     LiquidityZoneType,
     MarketDirection,
+    RetailPositioning,
     StructureEvent,
     TimeFrame,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "MarketDirection",
     "MarketStructure",
     "RetailBias",
+    "RetailPositioning",
     "StructureEvent",
     "TimeFrame",
 ]

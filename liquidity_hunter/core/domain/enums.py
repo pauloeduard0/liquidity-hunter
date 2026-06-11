@@ -62,3 +62,11 @@ class BiasSource(str, Enum):
     SOCIAL_SENTIMENT = "social_sentiment"
     SURVEY = "survey"
     OTHER = "other"
+
+
+class RetailPositioning(str, Enum):
+    """Estimated dominant position side held by retail market participants."""
+
+    LONG = "long"
+    SHORT = "short"
+    NEUTRAL = "neutral"

@@ -99,6 +99,34 @@ liquidity zones, and prints them ranked by score:
 poetry run python -m liquidity_hunter.app.examples.score_btcusdt_liquidity
 ```
 
+### Estimating retail crowd psychology
+
+`RetailTrapAnalyzer` estimates what retail traders are likely thinking and
+doing — not a price prediction or a trading signal — from the higher
+timeframe trend, recent market structure, and nearby liquidity zones (see
+`liquidity_hunter/docs/psychology.md` for the full methodology):
+
+```python
+from liquidity_hunter.psychology import RetailTrapAnalyzer
+
+estimate = RetailTrapAnalyzer().analyze(
+    symbol="BTCUSDT",
+    higher_timeframe_direction=higher_timeframe_direction,
+    market_structure_events=market_structure_events,
+    liquidity_zones=liquidity_zones,
+    current_price=current_price,
+)
+print(estimate.dominant_side, estimate.confidence, estimate.explanation)
+```
+
+Run the example script, which estimates retail bias for an illustrative
+"higher timeframe bearish, lower timeframe bullish change of character"
+scenario:
+
+```bash
+poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
+```
+
 ## Development
 
 ```bash
