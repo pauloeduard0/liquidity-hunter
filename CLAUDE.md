@@ -148,14 +148,21 @@ Full architecture rationale, including SOLID notes, is documented in
   and walks them chronologically maintaining `active_high`/`active_low`
   references and `pending_high`/`pending_low` candidates. A pending pivot is
   only promoted to active once the *opposite* active level breaks — this
-  avoids flagging a CHoCH against a minor retracement pivot. A break is
-  currently confirmed as soon as a pivot exceeds the active level on its
-  side (provisional rule, to be refined with volume-delta-based
-  liquidity-sweep filtering). Pivots that don't break the active level are
+  avoids flagging a CHoCH against a minor retracement pivot. A pivot whose
+  price exceeds the active level on its side is confirmed as a BOS/CHoCH
+  only if its candle's `close` is also beyond that level AND its
+  `volume_delta` (see `indicators.volume_delta`) ratio
+  (`abs(volume_delta) / volume`) is at least the constructor's
+  `min_volume_delta_ratio` (default `0.2`) in the breakout direction. If
+  either condition fails, the active level is left unchanged and a
+  `StructureEvent.LIQUIDITY_SWEEP` is reported instead (`price_level` the
+  sweeping pivot, `reference_price_level` the swept active level); the swept
+  pivot becomes the new `pending_high`/`pending_low`, so it can still be
+  promoted to active later. Pivots that don't break the active level are
   labeled HH/LH (highs) or HL/LL (lows) by comparison with the previous
-  pivot of the same type — a breaking pivot is always HH/LL by construction,
-  so it is reported only as BOS/CHoCH (no redundant label). Internal/minor
-  structure detection is not yet implemented.
+  pivot of the same type — a confirmed or swept pivot is reported only as
+  BOS/CHoCH/`LIQUIDITY_SWEEP` (no redundant label). Internal/minor structure
+  detection is not yet implemented.
 - **`liquidity/detectors/_common.py`** — shared `validate_candles` and
   `price_range` helpers.
 
@@ -266,9 +273,9 @@ This is an early-stage scaffold. `core.domain` models, the `data.providers`
 (`LiquidityScoringEngine`), `psychology.analyzers` (`RetailTrapAnalyzer`),
 and the `dashboard` Streamlit app are implemented. Internal/minor
 `MarketStructure` detection within `liquidity` is not yet implemented.
-`SwingStructureDetector`'s BOS/CHoCH confirmation rule is still provisional
-(first pivot beyond the active level); it is expected to be refined to
-"close beyond level AND strong volume delta in breakout direction", with a
-weak-delta break treated as a liquidity sweep (level stays active, the
-mitigated zone reflected via `LiquidityZone.is_mitigated`), now that
-`indicators.volume_delta` is available.
+`SwingStructureDetector`'s BOS/CHoCH confirmation rule now uses
+`indicators.volume_delta` ("close beyond level AND volume delta ratio
+`>= min_volume_delta_ratio` in the breakout direction"), with a failed
+confirmation reported as `StructureEvent.LIQUIDITY_SWEEP` rather than a
+break. Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
+`invalidated_at` for the swept zone is not yet implemented.

@@ -52,6 +52,7 @@ class StructureEvent(str, Enum):
     LOWER_LOW = "lower_low"
     BREAK_OF_STRUCTURE = "break_of_structure"
     CHANGE_OF_CHARACTER = "change_of_character"
+    LIQUIDITY_SWEEP = "liquidity_sweep"
 
 
 class BiasSource(str, Enum):

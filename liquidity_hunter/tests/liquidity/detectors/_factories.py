@@ -12,12 +12,13 @@ def make_candle(
     high: float,
     low: float,
     symbol: str = "BTCUSDT",
+    close: float | None = None,
     taker_buy_volume: float = 0.5,
 ) -> Candle:
-    """Build a valid `Candle` with the given high/low and a midpoint open/close.
+    """Build a valid `Candle` with the given high/low and a midpoint open.
 
-    `taker_buy_volume` defaults to half of `volume` (1.0), i.e. a neutral
-    (zero) volume delta.
+    `close` defaults to the high/low midpoint. `taker_buy_volume` defaults
+    to half of `volume` (1.0), i.e. a neutral (zero) volume delta.
     """
     mid = (high + low) / 2
     return Candle(
@@ -27,7 +28,7 @@ def make_candle(
         open=mid,
         high=high,
         low=low,
-        close=mid,
+        close=mid if close is None else close,
         volume=1.0,
         taker_buy_volume=taker_buy_volume,
     )

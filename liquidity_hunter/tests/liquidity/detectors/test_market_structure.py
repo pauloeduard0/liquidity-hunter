@@ -2,7 +2,7 @@
 
 import pytest
 
-from liquidity_hunter.core.domain import MarketDirection, StructureEvent
+from liquidity_hunter.core.domain import Candle, MarketDirection, StructureEvent
 from liquidity_hunter.liquidity.detectors.market_structure import SwingStructureDetector
 from liquidity_hunter.tests.liquidity.detectors._factories import make_candle, make_series
 
@@ -25,6 +25,27 @@ for _index, _value in {2: 200.0, 12: 190.0, 22: 193.0, 32: 205.0}.items():
 LOWS = [145.0] * 35
 for _index, _value in {7: 140.0, 17: 130.0, 27: 120.0}.items():
     LOWS[_index] = _value
+
+# For each breaking pivot above, a (close, taker_buy_volume) override that
+# confirms the break: `close` beyond the active level, and `taker_buy_volume`
+# giving a `volume_delta` ratio of 0.4 (>= the detector's default
+# `min_volume_delta_ratio` of 0.2) in the breakout direction.
+_CONFIRMATION_OVERRIDES = {
+    17: (135.0, 0.3),  # close < active_low (140); bearish volume delta
+    22: (192.0, 0.7),  # close > active_high (190); bullish volume delta
+    27: (125.0, 0.3),  # close < active_low (130); bearish volume delta
+    32: (200.0, 0.7),  # close > active_high (193); bullish volume delta
+}
+
+
+def _confirmed_series(highs: list[float], lows: list[float]) -> list[Candle]:
+    """`make_series(highs, lows)` with `_CONFIRMATION_OVERRIDES` applied."""
+    candles = make_series(highs, lows)
+    for index, (close, taker_buy_volume) in _CONFIRMATION_OVERRIDES.items():
+        candles[index] = make_candle(
+            index, highs[index], lows[index], close=close, taker_buy_volume=taker_buy_volume
+        )
+    return candles
 
 # A "ladder" sequence (lookback=2) where no pivot ever breaks the bootstrap
 # active_high (300) / active_low (100), so every subsequent pivot is a
@@ -56,7 +77,7 @@ EQUAL_LOWS[7] = 100.0
 
 
 def test_swing_structure_detector_full_sequence() -> None:
-    candles = make_series(HIGHS, LOWS)
+    candles = _confirmed_series(HIGHS, LOWS)
 
     events = SwingStructureDetector(swing_lookback=2).detect(candles)
 
@@ -85,7 +106,7 @@ def test_pending_pivot_does_not_trigger_bos_choch_until_promoted() -> None:
     breaks at index 17, where it is promoted to `active_high` (190) and
     index 22's break (193) reports it as `reference_price_level`.
     """
-    candles = make_series(HIGHS, LOWS)
+    candles = _confirmed_series(HIGHS, LOWS)
 
     events = SwingStructureDetector(swing_lookback=2).detect(candles)
 
@@ -144,3 +165,90 @@ def test_swing_structure_detector_rejects_mixed_symbols() -> None:
 def test_swing_structure_detector_rejects_empty_candles() -> None:
     with pytest.raises(ValueError, match="must not be empty"):
         SwingStructureDetector().detect([])
+
+
+def test_swing_structure_detector_rejects_invalid_min_volume_delta_ratio() -> None:
+    with pytest.raises(ValueError, match="min_volume_delta_ratio must be between 0 and 1"):
+        SwingStructureDetector(min_volume_delta_ratio=1.5)
+
+    with pytest.raises(ValueError, match="min_volume_delta_ratio must be between 0 and 1"):
+        SwingStructureDetector(min_volume_delta_ratio=-0.1)
+
+
+# A swept-then-promoted-then-broken sequence (lookback=2):
+#
+#   index  2: swing high 200 -> bootstraps active_high
+#   index  7: swing low  140 -> bootstraps active_low
+#   index 12: swing high 210 -> wick exceeds active_high (200), but its
+#                                 close (195) doesn't -> LIQUIDITY_SWEEP,
+#                                 active_high stays 200, pending_high = 210
+#   index 17: swing low  130 -> below active_low (140), confirmed -> BOS
+#                                 bearish, promotes pending_high (210) to
+#                                 active_high
+#   index 22: swing high 215 -> above active_high (210), confirmed -> CHoCH
+#                                 bullish, referencing the previously-swept
+#                                 210 level
+SWEEP_HIGHS = [150.0] * 25
+for _index, _value in {2: 200.0, 12: 210.0, 22: 215.0}.items():
+    SWEEP_HIGHS[_index] = _value
+
+SWEEP_LOWS = [145.0] * 25
+for _index, _value in {7: 140.0, 17: 130.0}.items():
+    SWEEP_LOWS[_index] = _value
+
+
+def test_liquidity_sweep_does_not_break_active_level_but_updates_pending() -> None:
+    candles = make_series(SWEEP_HIGHS, SWEEP_LOWS)
+    # index 12: wick (210) > active_high (200) but close (195) doesn't confirm.
+    candles[12] = make_candle(12, SWEEP_HIGHS[12], SWEEP_LOWS[12], close=195.0)
+    # index 17: close (135) < active_low (140) with bearish volume delta -> confirmed.
+    candles[17] = make_candle(
+        17, SWEEP_HIGHS[17], SWEEP_LOWS[17], close=135.0, taker_buy_volume=0.3
+    )
+    # index 22: close (212) > active_high (210) with bullish volume delta -> confirmed.
+    candles[22] = make_candle(
+        22, SWEEP_HIGHS[22], SWEEP_LOWS[22], close=212.0, taker_buy_volume=0.7
+    )
+
+    events = SwingStructureDetector(swing_lookback=2).detect(candles)
+
+    assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
+        (StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH, 210.0, 200.0),
+        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 130.0, 140.0),
+        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, 215.0, 210.0),
+    ]
+
+
+def test_liquidity_sweep_when_volume_delta_too_weak() -> None:
+    """A wick break with a confirming close but a neutral (zero) volume
+    delta is reported as a `LIQUIDITY_SWEEP`, not a confirmed BOS.
+    """
+    highs = [150.0, 200.0, 150.0, 210.0, 150.0]
+    lows = [145.0] * 5
+    candles = make_series(highs, lows)
+    # index 3: close (205) > active_high (200), but taker_buy_volume=0.5
+    # (the make_candle default) gives volume_delta == 0.
+    candles[3] = make_candle(3, highs[3], lows[3], close=205.0)
+
+    events = SwingStructureDetector(swing_lookback=1).detect(candles)
+
+    assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
+        (StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH, 210.0, 200.0),
+    ]
+
+
+def test_min_volume_delta_ratio_zero_confirms_on_sign_alone() -> None:
+    """With `min_volume_delta_ratio=0.0`, any non-zero volume delta in the
+    breakout direction confirms the break, regardless of magnitude.
+    """
+    highs = [150.0, 200.0, 150.0, 210.0, 150.0]
+    lows = [145.0] * 5
+    candles = make_series(highs, lows)
+    # A barely-positive volume delta (taker_buy_volume just above half).
+    candles[3] = make_candle(3, highs[3], lows[3], close=205.0, taker_buy_volume=0.51)
+
+    events = SwingStructureDetector(swing_lookback=1, min_volume_delta_ratio=0.0).detect(candles)
+
+    assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
+        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 210.0, 200.0),
+    ]

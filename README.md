@@ -94,12 +94,15 @@ poetry run python -m liquidity_hunter.app.examples.detect_btcusdt_liquidity
 
 `SwingStructureDetector` walks swing highs/lows and reports break of
 structure (BOS) and change of character (CHoCH) events on the major
-(swing) structure:
+(swing) structure. A pivot that breaks the active level is confirmed as
+BOS/CHoCH only if its candle's close is also beyond that level and its
+volume delta ratio is at least `min_volume_delta_ratio` in the breakout
+direction; otherwise it's reported as a `LIQUIDITY_SWEEP`:
 
 ```python
 from liquidity_hunter.liquidity import SwingStructureDetector
 
-events = SwingStructureDetector(swing_lookback=50).detect(candles)
+events = SwingStructureDetector(swing_lookback=50, min_volume_delta_ratio=0.2).detect(candles)
 for event in events:
     print(event.timestamp, event.event, event.direction, event.price_level)
 ```
