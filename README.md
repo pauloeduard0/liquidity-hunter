@@ -78,6 +78,27 @@ detected swing highs/lows and equal highs/lows:
 poetry run python -m liquidity_hunter.app.examples.detect_btcusdt_liquidity
 ```
 
+### Scoring liquidity zones
+
+`LiquidityScoringEngine` ranks detected zones as liquidity targets, scoring
+each on distance from the current price, number of touches, and timeframe
+weight (see `liquidity_hunter/docs/scoring.md` for the full methodology):
+
+```python
+from liquidity_hunter.scoring import LiquidityScoringEngine
+
+ranked = LiquidityScoringEngine().score(zones, current_price=candles[-1].close)
+for scored in ranked[:5]:
+    print(scored.zone.zone_type, scored.score)
+```
+
+Run the example script, which fetches 500 BTCUSDT 1h candles, detects
+liquidity zones, and prints them ranked by score:
+
+```bash
+poetry run python -m liquidity_hunter.app.examples.score_btcusdt_liquidity
+```
+
 ## Development
 
 ```bash

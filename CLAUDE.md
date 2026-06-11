@@ -130,6 +130,21 @@ Full architecture rationale, including SOLID notes, is documented in
 
 All detectors are re-exported from `liquidity_hunter.liquidity`.
 
+### Scoring layer (`liquidity_hunter/scoring`)
+
+- **`scoring/engine.py`** — `LiquidityScoringEngine.score(zones, current_price)`
+  ranks `LiquidityZone` objects as liquidity targets, returning
+  `list[ScoredLiquidityZone]` sorted by descending score (0-100).
+- **`scoring/models.py`** — `ScoredLiquidityZone`: a zone plus its
+  composite `score` and the three component scores (`distance_score`,
+  `touch_score`, `timeframe_score`).
+- **`scoring/weights.py`** — `DEFAULT_TIMEFRAME_WEIGHTS`, the per-timeframe
+  weighting used by the `timeframe_score` factor.
+
+The full scoring methodology (formulas and worked examples) is documented
+in `liquidity_hunter/docs/scoring.md`. All three are re-exported from
+`liquidity_hunter.scoring`.
+
 ### Examples (`liquidity_hunter/app/examples`)
 
 Runnable scripts demonstrating module usage. Each exposes a `main(provider=...)`
@@ -139,13 +154,15 @@ function so it can be tested with a fake provider (no network) — see
 ```bash
 poetry run python -m liquidity_hunter.app.examples.fetch_btcusdt_1h
 poetry run python -m liquidity_hunter.app.examples.detect_btcusdt_liquidity
+poetry run python -m liquidity_hunter.app.examples.score_btcusdt_liquidity
 ```
 
 ## Project status
 
 This is an early-stage scaffold. `core.domain` models, the `data.providers`
-(Binance/CCXT) module, and the `liquidity.detectors` (swing/equal-level)
-module are implemented. The remaining layer packages (`indicators`,
-`psychology`, `scoring`, `dashboard`, and `MarketStructure` detection within
-`liquidity`) currently contain only an `__init__.py` describing their
-intended responsibility, with no implementation yet.
+(Binance/CCXT) module, the `liquidity.detectors` (swing/equal-level)
+module, and `scoring.engine` (`LiquidityScoringEngine`) are implemented.
+The remaining layer packages (`indicators`, `psychology`, `dashboard`, and
+`MarketStructure` detection within `liquidity`) currently contain only an
+`__init__.py` describing their intended responsibility, with no
+implementation yet.
