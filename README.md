@@ -199,6 +199,29 @@ poetry run uvicorn liquidity_hunter.api.main:app --reload
   curl "http://127.0.0.1:8000/api/dashboard?symbol=BTCUSDT&timeframe=1h&limit=500&swing_lookback=50"
   ```
 
+### Running the React frontend
+
+A React + TypeScript frontend (`frontend/`), built with Vite and styled
+with Tailwind CSS, consumes `GET /api/dashboard` and renders the same dark,
+institutional theme as the Streamlit dashboard. The current scope covers
+the top KPI row (price, retail bias, dominant liquidity, trend) and the
+main candlestick chart (top-ranked liquidity zones and BOS/CHoCH/
+liquidity-sweep markers) using
+[Lightweight Charts](https://tradingview.github.io/lightweight-charts/).
+Other panels (sidebar, bottom tabs) remain Streamlit-only for now.
+
+With the FastAPI app running (see above), in a separate terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The dev server proxies `/api/*` requests to `http://127.0.0.1:8000` (see
+`frontend/vite.config.ts`), so the FastAPI app must be running for the
+dashboard to load data.
+
 ## Development
 
 ```bash
@@ -210,4 +233,19 @@ poetry run ruff check .
 
 # Type-check (strict mode)
 poetry run mypy liquidity_hunter
+```
+
+### Frontend
+
+```bash
+cd frontend
+
+# Type-check
+npx tsc -b
+
+# Lint
+npm run lint
+
+# Build for production
+npm run build
 ```

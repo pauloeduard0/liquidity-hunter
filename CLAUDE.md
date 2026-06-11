@@ -39,6 +39,22 @@ Test discovery is configured to `liquidity_hunter/tests` (see
 layout 1:1 (e.g. `liquidity_hunter/core/domain/candle.py` →
 `liquidity_hunter/tests/core/domain/test_models.py`).
 
+### Frontend (`frontend/`)
+
+A separate React + TypeScript + Vite project (Tailwind CSS, Lightweight
+Charts), outside the `liquidity_hunter` Python package, that consumes
+`GET /api/dashboard`. Run `poetry run uvicorn liquidity_hunter.api.main:app
+--reload` first, then:
+
+```bash
+cd frontend
+npm install
+npm run dev      # dev server, proxies /api -> http://127.0.0.1:8000
+npx tsc -b       # type-check
+npm run lint     # eslint
+npm run build    # production build
+```
+
 ## Architecture
 
 The codebase follows clean architecture: **dependencies flow inward only**,
@@ -321,6 +337,9 @@ This is an early-stage scaffold. `core.domain` models, the `data.providers`
 (swing/equal-level, swing market structure) module, `scoring.engine`
 (`LiquidityScoringEngine`), `psychology.analyzers` (`RetailTrapAnalyzer`),
 the `dashboard` Streamlit app, and the `api` FastAPI app are implemented.
+A React frontend (`frontend/`) is in progress: the KPI row and main chart
+(candlesticks, top-ranked liquidity zones, structure event markers) are
+implemented; the sidebar panels and bottom tabs remain Streamlit-only.
 Internal/minor
 `MarketStructure` detection within `liquidity` is not yet implemented.
 `SwingStructureDetector`'s BOS/CHoCH confirmation rule now uses
