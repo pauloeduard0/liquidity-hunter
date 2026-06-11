@@ -180,12 +180,57 @@ poetry run python -m liquidity_hunter.app.examples.score_btcusdt_liquidity
 poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 ```
 
+### Composition root (`liquidity_hunter/app/dashboard_data.py`)
+
+- **`DashboardData`** — a frozen dataclass snapshot combining `candles`,
+  `higher_timeframe_direction`, `liquidity_zones`, `ranked_zones`,
+  `market_structure_events`, and `retail_bias` for one symbol/timeframe.
+- **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=...)`**
+  — fetches candles, runs all liquidity detectors, scores the zones via
+  `LiquidityScoringEngine`, and runs `RetailTrapAnalyzer` to produce a
+  `DashboardData`. `higher_timeframe_direction` is currently derived by
+  `_infer_trend_direction` (a simple recent-average-close comparison) as a
+  placeholder until `MarketStructure` detection is implemented;
+  `market_structure_events` is `[]` until then.
+
+`DashboardData` and `ScoredLiquidityZone` are re-exported from
+`liquidity_hunter.app` for use by `dashboard`.
+
+### Dashboard layer (`liquidity_hunter/dashboard`)
+
+A modular Streamlit app, depending only on `app` and `core`:
+
+- **`dashboard/app.py`** — entrypoint; loads a cached `DashboardData` (via
+  `liquidity_hunter.app.load_dashboard_data`) and renders each section in
+  order. Run with:
+
+  ```bash
+  poetry run streamlit run liquidity_hunter/dashboard/app.py
+  ```
+
+- **`dashboard/charts.py`** — pure Plotly figure builders (no Streamlit
+  dependency): `candlestick_chart`, `liquidity_zones_chart`,
+  `ranking_chart`, `confidence_gauge`.
+- **`dashboard/sections/`** — one module per section, each exposing
+  `render(data: DashboardData) -> None`:
+  1. `market_structure` — higher timeframe trend + candlestick chart.
+  2. `retail_bias` — `dominant_side`, `confidence`, and `explanation` from
+     `RetailBiasEstimate`.
+  3. `liquidity_zones` — candlestick chart with detected zones overlaid,
+     plus a table.
+  4. `liquidity_ranking` — bar chart and table of `ScoredLiquidityZone`s.
+  5. `retail_trap_score` — gauge chart of `retail_bias.confidence`.
+
+Tested with `streamlit.testing.v1.AppTest` in
+`liquidity_hunter/tests/dashboard/test_app.py`.
+
 ## Project status
 
 This is an early-stage scaffold. `core.domain` models, the `data.providers`
 (Binance/CCXT) module, the `liquidity.detectors` (swing/equal-level)
-module, `scoring.engine` (`LiquidityScoringEngine`), and
-`psychology.analyzers` (`RetailTrapAnalyzer`) are implemented. The
-remaining layer packages (`indicators`, `dashboard`, and `MarketStructure`
-detection within `liquidity`) currently contain only an `__init__.py`
-describing their intended responsibility, with no implementation yet.
+module, `scoring.engine` (`LiquidityScoringEngine`), `psychology.analyzers`
+(`RetailTrapAnalyzer`), and the `dashboard` Streamlit app are implemented.
+The remaining work (`indicators` and `MarketStructure` detection within
+`liquidity`) is described by an `__init__.py` only, with no implementation
+yet — `app.dashboard_data._infer_trend_direction` is a placeholder for the
+trend input until `MarketStructure` detection lands.
