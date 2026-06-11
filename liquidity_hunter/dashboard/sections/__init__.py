@@ -5,17 +5,23 @@ function that draws one section of the dashboard with Streamlit.
 """
 
 from liquidity_hunter.dashboard.sections import (
-    liquidity_ranking,
-    liquidity_zones,
-    market_structure,
-    retail_bias,
-    retail_trap_score,
+    kpi_row,
+    liquidity_targets,
+    liquidity_zones_table,
+    main_chart,
+    market_structure_panel,
+    recent_events,
+    retail_trap_panel,
+    statistics,
 )
 
 __all__ = [
-    "liquidity_ranking",
-    "liquidity_zones",
-    "market_structure",
-    "retail_bias",
-    "retail_trap_score",
+    "kpi_row",
+    "liquidity_targets",
+    "liquidity_zones_table",
+    "main_chart",
+    "market_structure_panel",
+    "recent_events",
+    "retail_trap_panel",
+    "statistics",
 ]

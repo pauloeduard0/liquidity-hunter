@@ -158,10 +158,12 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 
 ### Running the dashboard
 
-A Streamlit dashboard renders live BTCUSDT research data with Plotly
-charts, split into five modular sections: market structure (trend,
-candlestick chart, and BOS/CHoCH events), retail bias, detected liquidity
-zones, liquidity ranking, and retail trap score:
+A Streamlit dashboard renders live BTCUSDT research data as a dark,
+multi-column research terminal: a top KPI row (price, retail bias,
+dominant liquidity level, trend), a main candlestick chart annotated with
+liquidity zones and BOS/CHoCH/liquidity-sweep markers, a right sidebar
+(liquidity targets, retail trap analysis, market structure), and bottom
+tabs for detected zones, recent structure events, and summary statistics:
 
 ```bash
 poetry run streamlit run liquidity_hunter/dashboard/app.py

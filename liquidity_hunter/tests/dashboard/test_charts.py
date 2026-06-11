@@ -2,16 +2,18 @@
 
 import plotly.graph_objects as go
 
-from liquidity_hunter.core.domain import LiquiditySide
+from liquidity_hunter.core.domain import LiquiditySide, MarketDirection, StructureEvent
 from liquidity_hunter.dashboard.charts import (
+    DEFAULT_TOP_N_ZONES,
     candlestick_chart,
     confidence_gauge,
     liquidity_zones_chart,
+    main_chart,
     ranking_chart,
 )
 from liquidity_hunter.scoring import LiquidityScoringEngine
 from liquidity_hunter.tests.liquidity.detectors._factories import make_series
-from liquidity_hunter.tests.psychology._factories import make_zone
+from liquidity_hunter.tests.psychology._factories import make_structure_event, make_zone
 from liquidity_hunter.tests.scoring._factories import make_zone as make_scored_zone
 
 HIGHS = [
@@ -57,3 +59,24 @@ def test_confidence_gauge_sets_value() -> None:
 
     assert isinstance(fig.data[0], go.Indicator)
     assert fig.data[0].value == 82.0
+
+
+def test_main_chart_limits_zones_to_top_n() -> None:
+    candles = make_series(HIGHS, LOWS)
+    zones = [make_scored_zone(100.0 + i, strength=0.5) for i in range(15)]
+    ranked = LiquidityScoringEngine().score(zones, current_price=100.0)
+    events = [
+        make_structure_event(
+            StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, price_level=110.0
+        ),
+        make_structure_event(
+            StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BEARISH, price_level=95.0
+        ),
+    ]
+
+    fig = main_chart(candles, ranked, events)
+
+    assert isinstance(fig.data[0], go.Candlestick)
+    assert len(fig.layout.shapes) == DEFAULT_TOP_N_ZONES
+    scatter_names = [trace.name for trace in fig.data if isinstance(trace, go.Scatter)]
+    assert scatter_names == ["BOS", "Sweep"]

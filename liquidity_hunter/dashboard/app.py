@@ -10,12 +10,16 @@ import streamlit as st
 from liquidity_hunter import app
 from liquidity_hunter.app import DashboardData
 from liquidity_hunter.core.domain import TimeFrame
+from liquidity_hunter.dashboard import styles
 from liquidity_hunter.dashboard.sections import (
-    liquidity_ranking,
-    liquidity_zones,
-    market_structure,
-    retail_bias,
-    retail_trap_score,
+    kpi_row,
+    liquidity_targets,
+    liquidity_zones_table,
+    main_chart,
+    market_structure_panel,
+    recent_events,
+    retail_trap_panel,
+    statistics,
 )
 
 SYMBOL = "BTCUSDT"
@@ -31,19 +35,40 @@ def _load(symbol: str, timeframe: str, limit: int) -> DashboardData:
 def main() -> None:
     """Render the liquidity-hunter research dashboard."""
     st.set_page_config(page_title="Liquidity Hunter", layout="wide")
+    styles.inject()
+
     st.title("Liquidity Hunter")
     st.caption(
-        "Research dashboard for market liquidity and retail crowd "
-        "psychology. Descriptive only -- not trading advice."
+        "Liquidity intelligence and retail crowd psychology research -- "
+        "descriptive only, not trading advice."
     )
 
     data = _load(SYMBOL, TIMEFRAME.value, LIMIT)
 
-    market_structure.render(data)
-    retail_bias.render(data)
-    liquidity_zones.render(data)
-    liquidity_ranking.render(data)
-    retail_trap_score.render(data)
+    kpi_row.render(data)
+
+    main_col, side_col = st.columns([3, 1])
+
+    with main_col:
+        main_chart.render(data)
+
+    with side_col:
+        with st.container(border=True):
+            liquidity_targets.render(data)
+        with st.container(border=True):
+            retail_trap_panel.render(data)
+        with st.container(border=True):
+            market_structure_panel.render(data)
+
+    zones_tab, events_tab, stats_tab = st.tabs(
+        ["Detected Liquidity Zones", "Recent Events", "Statistics"]
+    )
+    with zones_tab:
+        liquidity_zones_table.render(data)
+    with events_tab:
+        recent_events.render(data)
+    with stats_tab:
+        statistics.render(data)
 
 
 main()

@@ -1,20 +1,12 @@
-"""Section 3: Detected Liquidity Zones."""
+"""Bottom area: detected liquidity zones table."""
 
 import streamlit as st
 
 from liquidity_hunter.app import DashboardData
-from liquidity_hunter.dashboard.charts import liquidity_zones_chart
 
 
 def render(data: DashboardData) -> None:
-    """Render the detected liquidity zones section for `data`."""
-    st.header("3. Detected Liquidity Zones")
-
-    fig = liquidity_zones_chart(
-        data.candles, data.liquidity_zones, title=f"{data.symbol} ({data.timeframe.value})"
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
+    """Render the detected liquidity zones table for `data`."""
     st.dataframe(
         [
             {
@@ -27,5 +19,5 @@ def render(data: DashboardData) -> None:
             }
             for zone in data.liquidity_zones
         ],
-        use_container_width=True,
+        hide_index=True,
     )

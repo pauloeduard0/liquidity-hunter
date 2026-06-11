@@ -37,15 +37,22 @@ def test_dashboard_renders_all_sections(monkeypatch: pytest.MonkeyPatch) -> None
     )
 
     at = AppTest.from_file(APP_PATH)
-    at.run()
+    at.run(timeout=15)
 
     assert not at.exception
 
-    headers = [header.value for header in at.header]
-    assert headers == [
-        "1. Market Structure",
-        "2. Retail Bias",
-        "3. Detected Liquidity Zones",
-        "4. Liquidity Ranking",
-        "5. Retail Trap Score",
-    ]
+    assert at.title[0].value == "Liquidity Hunter"
+
+    metric_labels = [metric.label for metric in at.metric]
+    assert "BTCUSDT Price" in metric_labels
+    assert "Retail Bias" in metric_labels
+    assert "Dominant Liquidity" in metric_labels
+    assert "Trend" in metric_labels
+    assert "Dominant Side" in metric_labels
+    assert "Trap Risk" in metric_labels
+    assert "Liquidity Zones" in metric_labels
+
+    tab_labels = [tab.label for tab in at.tabs]
+    assert tab_labels == ["Detected Liquidity Zones", "Recent Events", "Statistics"]
+
+    assert len(at.dataframe) == 3

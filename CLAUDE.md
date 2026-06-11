@@ -238,29 +238,45 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 
 ### Dashboard layer (`liquidity_hunter/dashboard`)
 
-A modular Streamlit app, depending only on `app` and `core`:
+A modular Streamlit app, depending only on `app` and `core`, styled as a
+dark, multi-column "trading intelligence" layout (institutional look and
+feel inspired by TradingView/Bloomberg-style terminals):
 
 - **`dashboard/app.py`** — entrypoint; loads a cached `DashboardData` (via
-  `liquidity_hunter.app.load_dashboard_data`) and renders each section in
-  order. Run with:
+  `liquidity_hunter.app.load_dashboard_data`), injects the custom theme
+  (`dashboard.styles`), and assembles the layout: a top KPI row, a main
+  area (chart + right sidebar panels), and a bottom tab group. Run with:
 
   ```bash
   poetry run streamlit run liquidity_hunter/dashboard/app.py
   ```
 
+- **`dashboard/styles.py`** — `inject()` injects custom CSS (card styling,
+  spacing, section titles) on top of the dark theme defined in
+  `.streamlit/config.toml`.
 - **`dashboard/charts.py`** — pure Plotly figure builders (no Streamlit
-  dependency): `candlestick_chart`, `liquidity_zones_chart`,
-  `ranking_chart`, `confidence_gauge`.
+  dependency), all sharing an institutional dark theme
+  (`_apply_dark_theme`): `candlestick_chart`, `liquidity_zones_chart`
+  (zone overlays, optionally annotated with `ScoredLiquidityZone` scores
+  via `ranked_zones`), `main_chart` (zones + BOS/CHoCH/`LIQUIDITY_SWEEP`
+  markers via `_add_structure_events`), `ranking_chart`, `confidence_gauge`.
 - **`dashboard/sections/`** — one module per section, each exposing
   `render(data: DashboardData) -> None`:
-  1. `market_structure` — higher timeframe trend, candlestick chart, and a
-     table of detected BOS/CHoCH events.
-  2. `retail_bias` — `dominant_side`, `confidence`, and `explanation` from
-     `RetailBiasEstimate`.
-  3. `liquidity_zones` — candlestick chart with detected zones overlaid,
-     plus a table.
-  4. `liquidity_ranking` — bar chart and table of `ScoredLiquidityZone`s.
-  5. `retail_trap_score` — gauge chart of `retail_bias.confidence`.
+  - `kpi_row` — top row: price, retail bias, dominant liquidity level, and
+    higher timeframe trend.
+  - `main_chart` — the primary chart (see `charts.main_chart`).
+  - `liquidity_targets` — right sidebar: top-ranked `ScoredLiquidityZone`s
+    (price, type, score, distance %).
+  - `retail_trap_panel` — right sidebar: `RetailBiasEstimate` dominant
+    side, a descriptive Low/Medium/High "trap risk" label derived from
+    `confidence`, and `explanation`.
+  - `market_structure_panel` — right sidebar: trend for the dashboard's
+    loaded timeframe and the latest structure event. Currently
+    single-timeframe; a future phase may add a per-timeframe
+    (D1/H4/H1/M15) view.
+  - `liquidity_zones_table`, `recent_events`, `statistics` — bottom tabs:
+    detected zones table, structure events table, and descriptive summary
+    counts.
 
 Tested with `streamlit.testing.v1.AppTest` in
 `liquidity_hunter/tests/dashboard/test_app.py`.
