@@ -124,6 +124,19 @@ Full architecture rationale, including SOLID notes, is documented in
   `EqualLowDetector`: group swing points within a configurable
   `tolerance_pct` (relative tolerance) into equal-level zones, requiring
   `min_touches` (default 2); `strength` scales with touch count.
+- **`liquidity/detectors/base.py`** — also defines `MarketStructureDetector`,
+  the abstract port for structure detectors
+  (`detect(candles) -> list[MarketStructure]`).
+- **`liquidity/detectors/market_structure.py`** — `SwingStructureDetector`:
+  detects BOS/CHoCH on the major (swing) structure. Sources swing pivots
+  from `SwingHighDetector`/`SwingLowDetector` (`swing_lookback`) and walks
+  them chronologically maintaining `active_high`/`active_low` references
+  and `pending_high`/`pending_low` candidates. A pending pivot is only
+  promoted to active once the *opposite* active level breaks — this avoids
+  flagging a CHoCH against a minor retracement pivot. A break is currently
+  confirmed as soon as a pivot exceeds the active level on its side
+  (provisional rule, to be refined with volume-delta-based liquidity-sweep
+  filtering). Internal/minor structure detection is not yet implemented.
 - **`liquidity/detectors/_common.py`** — shared `validate_candles` and
   `price_range` helpers.
 
@@ -185,13 +198,14 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 - **`DashboardData`** — a frozen dataclass snapshot combining `candles`,
   `higher_timeframe_direction`, `liquidity_zones`, `ranked_zones`,
   `market_structure_events`, and `retail_bias` for one symbol/timeframe.
-- **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=...)`**
+- **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=..., swing_lookback=...)`**
   — fetches candles, runs all liquidity detectors, scores the zones via
-  `LiquidityScoringEngine`, and runs `RetailTrapAnalyzer` to produce a
-  `DashboardData`. `higher_timeframe_direction` is currently derived by
-  `_infer_trend_direction` (a simple recent-average-close comparison) as a
-  placeholder until `MarketStructure` detection is implemented;
-  `market_structure_events` is `[]` until then.
+  `LiquidityScoringEngine`, runs `SwingStructureDetector(swing_lookback=...)`
+  to populate `market_structure_events`, and runs `RetailTrapAnalyzer` to
+  produce a `DashboardData`. `higher_timeframe_direction` is the `direction`
+  of the most recent `MarketStructure` event (`_latest_structure_direction`),
+  or `NEUTRAL` if none have been detected yet (e.g. too few candles for
+  `swing_lookback`).
 
 `DashboardData` and `ScoredLiquidityZone` are re-exported from
 `liquidity_hunter.app` for use by `dashboard`.
@@ -213,7 +227,8 @@ A modular Streamlit app, depending only on `app` and `core`:
   `ranking_chart`, `confidence_gauge`.
 - **`dashboard/sections/`** — one module per section, each exposing
   `render(data: DashboardData) -> None`:
-  1. `market_structure` — higher timeframe trend + candlestick chart.
+  1. `market_structure` — higher timeframe trend, candlestick chart, and a
+     table of detected BOS/CHoCH events.
   2. `retail_bias` — `dominant_side`, `confidence`, and `explanation` from
      `RetailBiasEstimate`.
   3. `liquidity_zones` — candlestick chart with detected zones overlaid,
@@ -227,10 +242,13 @@ Tested with `streamlit.testing.v1.AppTest` in
 ## Project status
 
 This is an early-stage scaffold. `core.domain` models, the `data.providers`
-(Binance/CCXT) module, the `liquidity.detectors` (swing/equal-level)
-module, `scoring.engine` (`LiquidityScoringEngine`), `psychology.analyzers`
-(`RetailTrapAnalyzer`), and the `dashboard` Streamlit app are implemented.
-The remaining work (`indicators` and `MarketStructure` detection within
+(Binance/CCXT) module, the `liquidity.detectors` (swing/equal-level,
+swing market structure) module, `scoring.engine`
+(`LiquidityScoringEngine`), `psychology.analyzers` (`RetailTrapAnalyzer`),
+and the `dashboard` Streamlit app are implemented. The remaining work
+(`indicators`, and internal/minor `MarketStructure` detection within
 `liquidity`) is described by an `__init__.py` only, with no implementation
-yet — `app.dashboard_data._infer_trend_direction` is a placeholder for the
-trend input until `MarketStructure` detection lands.
+yet. `SwingStructureDetector`'s BOS/CHoCH confirmation rule is provisional
+(first pivot beyond the active level) and is expected to be refined once
+`indicators` exposes volume-delta data, adding liquidity-sweep filtering
+for false breakouts.

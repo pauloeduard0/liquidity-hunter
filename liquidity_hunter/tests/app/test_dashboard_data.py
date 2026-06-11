@@ -1,9 +1,13 @@
 """Tests for `liquidity_hunter.app.dashboard_data`."""
 
-import pytest
-
-from liquidity_hunter.app.dashboard_data import _infer_trend_direction, load_dashboard_data
-from liquidity_hunter.core.domain import Candle, MarketDirection, RetailPositioning, TimeFrame
+from liquidity_hunter.app.dashboard_data import load_dashboard_data
+from liquidity_hunter.core.domain import (
+    Candle,
+    MarketDirection,
+    RetailPositioning,
+    StructureEvent,
+    TimeFrame,
+)
 from liquidity_hunter.data.providers.base import OHLCVProvider
 from liquidity_hunter.tests.liquidity.detectors._factories import make_series
 
@@ -12,6 +16,16 @@ HIGHS = [
     100.0, 101.0, 102.0, 110.0, 103.0, 102.0, 101.0, 100.0,
 ]
 LOWS = [h - 5 for h in HIGHS]
+
+# A short series whose only swing high (200) and lows (140, then 130) trigger
+# one BOS event with `swing_lookback=2` (see test_market_structure.py for the
+# full state-machine walkthrough).
+STRUCTURE_HIGHS = [150.0] * 15
+STRUCTURE_HIGHS[2] = 200.0
+
+STRUCTURE_LOWS = [145.0] * 15
+STRUCTURE_LOWS[7] = 140.0
+STRUCTURE_LOWS[12] = 130.0
 
 
 class _FakeProvider(OHLCVProvider):
@@ -42,21 +56,22 @@ def test_load_dashboard_data_assembles_research_snapshot() -> None:
     assert isinstance(data.retail_bias.dominant_side, RetailPositioning)
 
 
-@pytest.mark.parametrize(
-    ("highs", "expected"),
-    [
-        ([101.0, 102.0, 103.0, 104.0], MarketDirection.BULLISH),
-        ([104.0, 103.0, 102.0, 101.0], MarketDirection.BEARISH),
-        ([101.0, 101.0, 101.0, 101.0], MarketDirection.NEUTRAL),
-        ([101.0, 102.0], MarketDirection.NEUTRAL),  # fewer than 2 * lookback candles
-    ],
-)
-def test_infer_trend_direction(highs: list[float], expected: MarketDirection) -> None:
-    candles = make_series(highs, [h - 1 for h in highs])
+def test_load_dashboard_data_derives_trend_from_market_structure() -> None:
+    candles = make_series(STRUCTURE_HIGHS, STRUCTURE_LOWS, symbol="BTCUSDT")
 
-    assert _infer_trend_direction(candles, lookback=2) == expected
+    data = load_dashboard_data(provider=_FakeProvider(candles), symbol="BTCUSDT", swing_lookback=2)
+
+    assert len(data.market_structure_events) == 1
+    event = data.market_structure_events[0]
+    assert event.event is StructureEvent.BREAK_OF_STRUCTURE
+    assert event.direction is MarketDirection.BEARISH
+    assert data.higher_timeframe_direction is MarketDirection.BEARISH
 
 
-def test_infer_trend_direction_invalid_lookback_raises() -> None:
-    with pytest.raises(ValueError, match="lookback"):
-        _infer_trend_direction([], lookback=0)
+def test_load_dashboard_data_neutral_trend_with_no_structure_events() -> None:
+    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+
+    data = load_dashboard_data(provider=_FakeProvider(candles), symbol="BTCUSDT")
+
+    assert data.market_structure_events == []
+    assert data.higher_timeframe_direction is MarketDirection.NEUTRAL

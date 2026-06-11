@@ -19,11 +19,12 @@ from liquidity_hunter.liquidity import (
     EqualLowDetector,
     SwingHighDetector,
     SwingLowDetector,
+    SwingStructureDetector,
 )
 from liquidity_hunter.psychology import RetailBiasEstimate, RetailTrapAnalyzer
 from liquidity_hunter.scoring import LiquidityScoringEngine, ScoredLiquidityZone
 
-DEFAULT_TREND_LOOKBACK = 20
+DEFAULT_SWING_LOOKBACK = 50
 
 
 @dataclass(frozen=True)
@@ -41,28 +42,15 @@ class DashboardData:
     retail_bias: RetailBiasEstimate
 
 
-def _infer_trend_direction(candles: list[Candle], lookback: int) -> MarketDirection:
-    """Infer a higher timeframe trend direction from recent average closes.
+def _latest_structure_direction(events: list[MarketStructure]) -> MarketDirection:
+    """The `direction` of the most recent `MarketStructure` event, or NEUTRAL.
 
-    This is a simple descriptive placeholder for `MarketStructure`
-    detection (not yet implemented, see CLAUDE.md "Project status"): it
-    compares the average close of the most recent `lookback` candles to
-    the average close of the `lookback` candles before that.
+    Used as the higher timeframe trend context: the prevailing bias implied
+    by the latest confirmed BOS/CHoCH on the swing structure.
     """
-    if lookback < 1:
-        raise ValueError("lookback must be >= 1")
-    if len(candles) < lookback * 2:
+    if not events:
         return MarketDirection.NEUTRAL
-
-    closes = [candle.close for candle in candles]
-    recent_avg = sum(closes[-lookback:]) / lookback
-    previous_avg = sum(closes[-2 * lookback : -lookback]) / lookback
-
-    if recent_avg > previous_avg:
-        return MarketDirection.BULLISH
-    if recent_avg < previous_avg:
-        return MarketDirection.BEARISH
-    return MarketDirection.NEUTRAL
+    return max(events, key=lambda event: event.timestamp).direction
 
 
 def load_dashboard_data(
@@ -70,7 +58,7 @@ def load_dashboard_data(
     symbol: str = "BTCUSDT",
     timeframe: TimeFrame = TimeFrame.H1,
     limit: int = 500,
-    trend_lookback: int = DEFAULT_TREND_LOOKBACK,
+    swing_lookback: int = DEFAULT_SWING_LOOKBACK,
 ) -> DashboardData:
     """Fetch candles and assemble liquidity, ranking, and retail bias data."""
     provider = provider if provider is not None else BinanceDataProvider()
@@ -85,12 +73,11 @@ def load_dashboard_data(
 
     current_price = candles[-1].close
     ranked_zones = LiquidityScoringEngine().score(liquidity_zones, current_price)
-    higher_timeframe_direction = _infer_trend_direction(candles, trend_lookback)
 
-    # MarketStructure detection is not yet implemented (see CLAUDE.md
-    # "Project status"). RetailTrapAnalyzer falls back to
-    # `higher_timeframe_direction` when no structure events are supplied.
-    market_structure_events: list[MarketStructure] = []
+    market_structure_events = SwingStructureDetector(swing_lookback=swing_lookback).detect(
+        candles
+    )
+    higher_timeframe_direction = _latest_structure_direction(market_structure_events)
 
     retail_bias = RetailTrapAnalyzer().analyze(
         symbol=symbol,

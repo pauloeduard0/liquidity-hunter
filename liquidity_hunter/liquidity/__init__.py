@@ -9,14 +9,18 @@ from liquidity_hunter.liquidity.detectors import (
     EqualHighDetector,
     EqualLowDetector,
     LiquidityZoneDetector,
+    MarketStructureDetector,
     SwingHighDetector,
     SwingLowDetector,
+    SwingStructureDetector,
 )
 
 __all__ = [
     "EqualHighDetector",
     "EqualLowDetector",
     "LiquidityZoneDetector",
+    "MarketStructureDetector",
     "SwingHighDetector",
     "SwingLowDetector",
+    "SwingStructureDetector",
 ]

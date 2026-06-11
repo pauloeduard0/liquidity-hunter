@@ -78,6 +78,20 @@ detected swing highs/lows and equal highs/lows:
 poetry run python -m liquidity_hunter.app.examples.detect_btcusdt_liquidity
 ```
 
+### Detecting market structure
+
+`SwingStructureDetector` walks swing highs/lows and reports break of
+structure (BOS) and change of character (CHoCH) events on the major
+(swing) structure:
+
+```python
+from liquidity_hunter.liquidity import SwingStructureDetector
+
+events = SwingStructureDetector(swing_lookback=50).detect(candles)
+for event in events:
+    print(event.timestamp, event.event, event.direction, event.price_level)
+```
+
 ### Scoring liquidity zones
 
 `LiquidityScoringEngine` ranks detected zones as liquidity targets, scoring
@@ -130,9 +144,9 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 ### Running the dashboard
 
 A Streamlit dashboard renders live BTCUSDT research data with Plotly
-charts, split into five modular sections: market structure (trend +
-candlestick chart), retail bias, detected liquidity zones, liquidity
-ranking, and retail trap score:
+charts, split into five modular sections: market structure (trend,
+candlestick chart, and BOS/CHoCH events), retail bias, detected liquidity
+zones, liquidity ranking, and retail trap score:
 
 ```bash
 poetry run streamlit run liquidity_hunter/dashboard/app.py
