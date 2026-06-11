@@ -12,6 +12,7 @@ pydantic = "^2.9"
 pydantic-settings = "^2.5"
 pandas = "^2.2"
 numpy = "^2.1"
+ccxt = "^4.4"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
@@ -35,6 +36,10 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "ccxt.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["liquidity_hunter/tests"]
