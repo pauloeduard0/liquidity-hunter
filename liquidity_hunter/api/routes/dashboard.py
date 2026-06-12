@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query
 from liquidity_hunter.api.cache import TTLCache
 from liquidity_hunter.api.schemas import DashboardDataResponse
 from liquidity_hunter.app.dashboard_data import (
+    DEFAULT_INTERNAL_SWING_LOOKBACK,
     DEFAULT_SWING_LOOKBACK,
     DashboardData,
     load_dashboard_data,
@@ -26,13 +27,14 @@ def get_dashboard(
     timeframe: TimeFrame = TimeFrame.H1,
     limit: Annotated[int, Query(gt=0, le=1000)] = 500,
     swing_lookback: Annotated[int, Query(gt=0)] = DEFAULT_SWING_LOOKBACK,
+    internal_swing_lookback: Annotated[int, Query(gt=0)] = DEFAULT_INTERNAL_SWING_LOOKBACK,
 ) -> DashboardDataResponse:
     """Return a `DashboardData` snapshot for `symbol`/`timeframe` as JSON.
 
     Results are cached in-memory per parameter combination for
     `cache.DEFAULT_TTL_SECONDS` seconds to avoid redundant Binance requests.
     """
-    cache_key = (symbol, timeframe, limit, swing_lookback)
+    cache_key = (symbol, timeframe, limit, swing_lookback, internal_swing_lookback)
     data = _cache.get_or_set(
         cache_key,
         lambda: load_dashboard_data(
@@ -40,6 +42,7 @@ def get_dashboard(
             timeframe=timeframe,
             limit=limit,
             swing_lookback=swing_lookback,
+            internal_swing_lookback=internal_swing_lookback,
         ),
     )
     return DashboardDataResponse.model_validate(data)

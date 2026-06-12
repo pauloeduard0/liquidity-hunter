@@ -5,16 +5,12 @@ import {
   LineSeries,
   LineStyle,
   createChart,
-  createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
-  type ISeriesMarkersPluginApi,
-  type SeriesMarker,
-  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts'
 
-import type { DashboardData } from '../types/dashboard'
+import type { DashboardData, MarketStructure } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -23,7 +19,9 @@ import {
   FONT_COLOR,
   GRID_COLOR,
   STRUCTURE_EVENT_STYLES,
+  TREND_ICONS,
   ZONE_COLORS,
+  ZONE_TYPE_LABELS,
 } from '../theme'
 
 /**
@@ -37,11 +35,60 @@ function toUtcTimestamp(isoTimestamp: string): UTCTimestamp {
   return (Date.parse(isoTimestamp) / 1000) as UTCTimestamp
 }
 
-function formatZoneType(zoneType: string): string {
-  return zoneType
-    .split('_')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ')
+function formatPrice(price: number): string {
+  return price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+/** A horizontal line from `startTime` to `lastCandleTime` at `value`, collapsing to a single point if `startTime` is at or after `lastCandleTime`. */
+function lineFrom(startTime: UTCTimestamp, lastCandleTime: UTCTimestamp, value: number) {
+  return startTime < lastCandleTime
+    ? [
+        { time: startTime, value },
+        { time: lastCandleTime, value },
+      ]
+    : [{ time: lastCandleTime, value }]
+}
+
+/**
+ * Whether `event` reports the same pivot as one in `majorEvents`. The
+ * internal-scope detector can re-detect the same swing pivot as the
+ * major-scope detector (a major extreme is, by construction, also a local
+ * extreme at a smaller lookback), so such duplicates are skipped to avoid
+ * rendering the same level twice.
+ */
+function isDuplicateOfMajor(event: MarketStructure, majorEvents: MarketStructure[]): boolean {
+  return majorEvents.some(
+    (major) =>
+      major.timestamp === event.timestamp &&
+      major.event === event.event &&
+      major.price_level === event.price_level,
+  )
+}
+
+/**
+ * Where `event`'s line should stop: a BOS/CHoCH/Sweep marks the active
+ * level on its `direction` side as of `event.timestamp`. Only a *later*
+ * BOS or CHoCH of the same scope and direction moves that active level (a
+ * Sweep, by definition, leaves it unchanged), so the line is bounded there
+ * -- otherwise it extends to `lastCandleTime` as the current active level.
+ */
+function structureLineEndTime(
+  event: MarketStructure,
+  allEvents: MarketStructure[],
+  lastCandleTime: UTCTimestamp,
+): UTCTimestamp {
+  const eventTime = toUtcTimestamp(event.timestamp)
+  const supersededAt = allEvents
+    .filter(
+      (other) =>
+        other.scope === event.scope &&
+        other.direction === event.direction &&
+        (other.event === 'break_of_structure' || other.event === 'change_of_character') &&
+        toUtcTimestamp(other.timestamp) > eventTime,
+    )
+    .map((other) => toUtcTimestamp(other.timestamp))
+
+  return supersededAt.length > 0 ? (Math.min(...supersededAt) as UTCTimestamp) : lastCandleTime
 }
 
 interface MainChartProps {
@@ -53,8 +100,7 @@ export function MainChart({ data }: MainChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
-  const zoneSeriesRef = useRef<ISeriesApi<'Line'>[]>([])
-  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
+  const overlaySeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const hasFittedRef = useRef(false)
 
   useEffect(() => {
@@ -84,7 +130,6 @@ export function MainChart({ data }: MainChartProps) {
       wickDownColor: CANDLE_DOWN_COLOR,
     })
     seriesRef.current = series
-    markersPluginRef.current = createSeriesMarkers(series, [])
 
     const handleResize = () => chart.applyOptions({ width: container.clientWidth })
     window.addEventListener('resize', handleResize)
@@ -94,8 +139,7 @@ export function MainChart({ data }: MainChartProps) {
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
-      zoneSeriesRef.current = []
-      markersPluginRef.current = null
+      overlaySeriesRef.current = []
       hasFittedRef.current = false
     }
   }, [])
@@ -115,27 +159,20 @@ export function MainChart({ data }: MainChartProps) {
       })),
     )
 
-    for (const zoneSeries of zoneSeriesRef.current) {
-      chart.removeSeries(zoneSeries)
+    for (const overlaySeries of overlaySeriesRef.current) {
+      chart.removeSeries(overlaySeries)
     }
-    zoneSeriesRef.current = []
+    overlaySeriesRef.current = []
 
     const lastCandleTime = toUtcTimestamp(data.candles[data.candles.length - 1].timestamp)
 
     for (const scored of data.ranked_zones.slice(0, TOP_N_ZONES)) {
       const { zone, score } = scored
       const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
-      const title = `${formatZoneType(zone.zone_type)} (${zone.strength.toFixed(2)}) · ${score.toFixed(0)}`
+      const label = ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type
+      const title = `${label} (${zone.strength.toFixed(2)}) · ${score.toFixed(0)}`
       const price = (zone.price_high + zone.price_low) / 2
       const startTime = toUtcTimestamp(zone.formed_at)
-
-      const points =
-        startTime < lastCandleTime
-          ? [
-              { time: startTime, value: price },
-              { time: lastCandleTime, value: price },
-            ]
-          : [{ time: lastCandleTime, value: price }]
 
       const zoneSeries = chart.addSeries(LineSeries, {
         color,
@@ -146,25 +183,40 @@ export function MainChart({ data }: MainChartProps) {
         crosshairMarkerVisible: false,
         title,
       })
-      zoneSeries.setData(points)
-      zoneSeriesRef.current.push(zoneSeries)
+      zoneSeries.setData(lineFrom(startTime, lastCandleTime, price))
+      overlaySeriesRef.current.push(zoneSeries)
     }
 
-    const markers: SeriesMarker<Time>[] = data.market_structure_events.map((event) => {
-      const style = STRUCTURE_EVENT_STYLES[event.event] ?? {
-        label: event.event,
-        color: DEFAULT_ZONE_COLOR,
-      }
-      const isBullish = event.direction === 'bullish'
-      return {
-        time: toUtcTimestamp(event.timestamp),
-        position: isBullish ? 'aboveBar' : 'belowBar',
-        shape: isBullish ? 'arrowUp' : 'arrowDown',
-        color: style.color,
-        text: style.label,
-      }
-    })
-    markersPluginRef.current?.setMarkers(markers)
+    // BOS/CHoCH/liquidity-sweep levels, major and internal (deduped against
+    // major). HH/HL/LH/LL pivot events are not rendered on this chart.
+    const majorEvents = data.market_structure_events
+    const allEvents = [...majorEvents, ...data.internal_structure_events]
+    const structureEvents = allEvents.filter(
+      (event) =>
+        event.event in STRUCTURE_EVENT_STYLES &&
+        !(event.scope === 'internal' && isDuplicateOfMajor(event, majorEvents)),
+    )
+
+    for (const event of structureEvents) {
+      const style = STRUCTURE_EVENT_STYLES[event.event]
+      const isInternal = event.scope === 'internal'
+      const directionIcon = TREND_ICONS[event.direction] ?? ''
+      const title = `${style.label}${isInternal ? ' (Internal)' : ''} ${directionIcon} · ${formatPrice(event.price_level)}`
+      const startTime = toUtcTimestamp(event.timestamp)
+      const endTime = structureLineEndTime(event, allEvents, lastCandleTime)
+
+      const structureSeries = chart.addSeries(LineSeries, {
+        color: isInternal ? `${style.color}80` : style.color,
+        lineWidth: 1,
+        lineStyle: isInternal ? LineStyle.Dotted : LineStyle.Dashed,
+        lastValueVisible: true,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+        title,
+      })
+      structureSeries.setData(lineFrom(startTime, endTime, event.price_level))
+      overlaySeriesRef.current.push(structureSeries)
+    }
 
     // Only auto-fit on the first load -- later refreshes shouldn't reset the user's zoom/pan.
     if (!hasFittedRef.current) {

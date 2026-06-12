@@ -2,7 +2,12 @@
 
 import plotly.graph_objects as go
 
-from liquidity_hunter.core.domain import LiquiditySide, MarketDirection, StructureEvent
+from liquidity_hunter.core.domain import (
+    LiquiditySide,
+    MarketDirection,
+    StructureEvent,
+    StructureScope,
+)
 from liquidity_hunter.dashboard.charts import (
     DEFAULT_TOP_N_ZONES,
     candlestick_chart,
@@ -77,6 +82,55 @@ def test_main_chart_limits_zones_to_top_n() -> None:
     fig = main_chart(candles, ranked, events)
 
     assert isinstance(fig.data[0], go.Candlestick)
-    assert len(fig.layout.shapes) == DEFAULT_TOP_N_ZONES
-    scatter_names = [trace.name for trace in fig.data if isinstance(trace, go.Scatter)]
-    assert scatter_names == ["BOS", "Sweep"]
+    # DEFAULT_TOP_N_ZONES zone lines, plus one hline per structure event.
+    assert len(fig.layout.shapes) == DEFAULT_TOP_N_ZONES + len(events)
+    annotation_texts = [annotation.text for annotation in fig.layout.annotations]
+    assert any(text.startswith("BOS ▲ · 110.00") for text in annotation_texts)
+    assert any(text.startswith("Sweep ▼ · 95.00") for text in annotation_texts)
+
+
+def test_main_chart_adds_internal_scope_lines() -> None:
+    candles = make_series(HIGHS, LOWS)
+    zones = [make_scored_zone(100.0 + i, strength=0.5) for i in range(15)]
+    ranked = LiquidityScoringEngine().score(zones, current_price=100.0)
+    events = [
+        make_structure_event(
+            StructureEvent.BREAK_OF_STRUCTURE,
+            MarketDirection.BULLISH,
+            price_level=110.0,
+            scope=StructureScope.MAJOR,
+        ),
+        make_structure_event(
+            StructureEvent.BREAK_OF_STRUCTURE,
+            MarketDirection.BULLISH,
+            price_level=108.0,
+            scope=StructureScope.INTERNAL,
+        ),
+    ]
+
+    fig = main_chart(candles, ranked, events)
+
+    annotation_texts = [annotation.text for annotation in fig.layout.annotations]
+    assert any(text.startswith("BOS ▲ · 110.00") for text in annotation_texts)
+    assert any(text.startswith("BOS (Internal) ▲ · 108.00") for text in annotation_texts)
+
+
+def test_main_chart_skips_internal_event_duplicating_major() -> None:
+    candles = make_series(HIGHS, LOWS)
+    zones = [make_scored_zone(100.0 + i, strength=0.5) for i in range(15)]
+    ranked = LiquidityScoringEngine().score(zones, current_price=100.0)
+    major = make_structure_event(
+        StructureEvent.BREAK_OF_STRUCTURE,
+        MarketDirection.BULLISH,
+        price_level=110.0,
+        scope=StructureScope.MAJOR,
+    )
+    duplicate_internal = major.model_copy(update={"scope": StructureScope.INTERNAL})
+    events = [major, duplicate_internal]
+
+    fig = main_chart(candles, ranked, events)
+
+    # Only one hline is added for the deduplicated pair.
+    assert len(fig.layout.shapes) == DEFAULT_TOP_N_ZONES + 1
+    annotation_texts = [annotation.text for annotation in fig.layout.annotations]
+    assert not any("(Internal)" in text for text in annotation_texts)

@@ -33,3 +33,12 @@ def render(data: DashboardData) -> None:
         )
     else:
         st.caption("No structure events detected yet.")
+
+    if data.internal_structure_events:
+        latest_internal = data.internal_structure_events[-1]
+        st.caption(
+            f"Latest (Internal): {latest_internal.event.value.replace('_', ' ').title()} "
+            f"@ {latest_internal.price_level:,.2f}"
+        )
+    else:
+        st.caption("No internal structure events detected yet.")

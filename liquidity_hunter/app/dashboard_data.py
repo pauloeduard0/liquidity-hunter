@@ -11,6 +11,7 @@ from liquidity_hunter.core.domain import (
     LiquidityZone,
     MarketDirection,
     MarketStructure,
+    StructureScope,
     TimeFrame,
 )
 from liquidity_hunter.data import BinanceDataProvider, OHLCVProvider
@@ -25,6 +26,7 @@ from liquidity_hunter.psychology import RetailBiasEstimate, RetailTrapAnalyzer
 from liquidity_hunter.scoring import LiquidityScoringEngine, ScoredLiquidityZone
 
 DEFAULT_SWING_LOOKBACK = 50
+DEFAULT_INTERNAL_SWING_LOOKBACK = 10
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class DashboardData:
     liquidity_zones: list[LiquidityZone]
     ranked_zones: list[ScoredLiquidityZone]
     market_structure_events: list[MarketStructure]
+    internal_structure_events: list[MarketStructure]
     retail_bias: RetailBiasEstimate
 
 
@@ -59,6 +62,7 @@ def load_dashboard_data(
     timeframe: TimeFrame = TimeFrame.H1,
     limit: int = 500,
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
+    internal_swing_lookback: int = DEFAULT_INTERNAL_SWING_LOOKBACK,
 ) -> DashboardData:
     """Fetch candles and assemble liquidity, ranking, and retail bias data."""
     provider = provider if provider is not None else BinanceDataProvider()
@@ -77,6 +81,9 @@ def load_dashboard_data(
     market_structure_events = SwingStructureDetector(swing_lookback=swing_lookback).detect(
         candles
     )
+    internal_structure_events = SwingStructureDetector(
+        swing_lookback=internal_swing_lookback, scope=StructureScope.INTERNAL
+    ).detect(candles)
     higher_timeframe_direction = _latest_structure_direction(market_structure_events)
 
     retail_bias = RetailTrapAnalyzer().analyze(
@@ -96,5 +103,6 @@ def load_dashboard_data(
         liquidity_zones=liquidity_zones,
         ranked_zones=ranked_zones,
         market_structure_events=market_structure_events,
+        internal_structure_events=internal_structure_events,
         retail_bias=retail_bias,
     )

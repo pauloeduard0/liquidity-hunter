@@ -93,18 +93,25 @@ poetry run python -m liquidity_hunter.app.examples.detect_btcusdt_liquidity
 ### Detecting market structure
 
 `SwingStructureDetector` walks swing highs/lows and reports break of
-structure (BOS) and change of character (CHoCH) events on the major
-(swing) structure. A pivot that breaks the active level is confirmed as
-BOS/CHoCH only if its candle's close is also beyond that level and its
-volume delta ratio is at least `min_volume_delta_ratio` in the breakout
-direction; otherwise it's reported as a `LIQUIDITY_SWEEP`:
+structure (BOS) and change of character (CHoCH) events. A pivot that
+breaks the active level is confirmed as BOS/CHoCH only if its candle's
+close is also beyond that level and its volume delta ratio is at least
+`min_volume_delta_ratio` in the breakout direction; otherwise it's
+reported as a `LIQUIDITY_SWEEP`. Every event is stamped with a `scope`
+(`StructureScope.MAJOR` by default), so the same detector can be run again
+with a smaller `swing_lookback` and `scope=StructureScope.INTERNAL` to
+surface finer-grained ("internal") structure on the same candles:
 
 ```python
+from liquidity_hunter.core.domain import StructureScope
 from liquidity_hunter.liquidity import SwingStructureDetector
 
 events = SwingStructureDetector(swing_lookback=50, min_volume_delta_ratio=0.2).detect(candles)
+internal_events = SwingStructureDetector(
+    swing_lookback=10, scope=StructureScope.INTERNAL
+).detect(candles)
 for event in events:
-    print(event.timestamp, event.event, event.direction, event.price_level)
+    print(event.timestamp, event.event, event.direction, event.price_level, event.scope)
 ```
 
 ### Scoring liquidity zones
@@ -182,15 +189,16 @@ poetry run uvicorn liquidity_hunter.api.main:app --reload
 
 - `GET /api/health` — liveness check, returns `{"status": "ok"}`.
 - `GET /api/dashboard` — a `DashboardData` snapshot (candles, liquidity
-  zones, ranked zones, market structure events, retail bias estimate) as
-  JSON. Query parameters:
+  zones, ranked zones, major and internal market structure events, retail
+  bias estimate) as JSON. Query parameters:
 
-  | Parameter        | Type     | Default   | Notes                                  |
-  |-------------------|----------|-----------|-----------------------------------------|
-  | `symbol`          | string   | `BTCUSDT` |                                          |
-  | `timeframe`       | string   | `1h`      | One of the `TimeFrame` values (e.g. `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, `1w`) |
-  | `limit`           | integer  | `500`     | Number of candles, `1`-`1000`           |
-  | `swing_lookback`  | integer  | `50`      | Passed to `SwingStructureDetector`, must be `> 0` |
+  | Parameter                 | Type     | Default   | Notes                                  |
+  |---------------------------|----------|-----------|-----------------------------------------|
+  | `symbol`                  | string   | `BTCUSDT` |                                          |
+  | `timeframe`               | string   | `1h`      | One of the `TimeFrame` values (e.g. `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, `1w`) |
+  | `limit`                   | integer  | `500`     | Number of candles, `1`-`1000`           |
+  | `swing_lookback`          | integer  | `50`      | Passed to `SwingStructureDetector` for `market_structure_events`, must be `> 0` |
+  | `internal_swing_lookback` | integer  | `10`      | Passed to `SwingStructureDetector` for `internal_structure_events`, must be `> 0` |
 
   Responses are cached in-memory per parameter combination for 10 seconds
   to avoid redundant Binance requests while still keeping the dashboard

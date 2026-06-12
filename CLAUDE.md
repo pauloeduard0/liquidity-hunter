@@ -165,23 +165,54 @@ Full architecture rationale, including SOLID notes, is documented in
   detects BOS/CHoCH and HH/HL/LH/LL on the major (swing) structure. Sources
   swing pivots from `SwingHighDetector`/`SwingLowDetector` (`swing_lookback`)
   and walks them chronologically maintaining `active_high`/`active_low`
-  references and `pending_high`/`pending_low` candidates. A pending pivot is
-  only promoted to active once the *opposite* active level breaks — this
-  avoids flagging a CHoCH against a minor retracement pivot. A pivot whose
-  price exceeds the active level on its side is confirmed as a BOS/CHoCH
-  only if its candle's `close` is also beyond that level AND its
-  `volume_delta` (see `indicators.volume_delta`) ratio
-  (`abs(volume_delta) / volume`) is at least the constructor's
-  `min_volume_delta_ratio` (default `0.2`) in the breakout direction. If
-  either condition fails, the active level is left unchanged and a
+  references, `pending_high`/`pending_low` candidates, and the current
+  `trend` (`MarketDirection`, starting `NEUTRAL`). `pending_high`/
+  `pending_low` accumulate the *most extreme* pivot of their kind (highest
+  high / lowest low) seen since the *opposite* active level was last set,
+  not merely the most recent one — so when a pending pivot is promoted to
+  active (once the *opposite* active level breaks), it represents the true
+  extreme of the leg that just ended, the natural reference for the next
+  reversal in the other direction. This avoids flagging a CHoCH against a
+  minor retracement pivot. Structure (price action) and confirmation
+  (volume) are kept separate: a pivot that breaks the active level on its
+  side *in the direction of `trend`* (including the first break while
+  `trend` is still `NEUTRAL`) is reported as a `BREAK_OF_STRUCTURE` on price
+  alone — a wick beyond the active level is enough, regardless of the
+  candle's `close` or `volume_delta` (see `indicators.volume_delta`). A
+  pivot that breaks the active level *against* `trend` is only confirmed as
+  a `CHANGE_OF_CHARACTER` if the candle's `close` is also beyond that level
+  AND its `volume_delta` ratio (`abs(volume_delta) / volume`) is at least
+  the constructor's `min_volume_delta_ratio` (default `0.2`) in the breakout
+  direction. Otherwise the active level is left unchanged and a
   `StructureEvent.LIQUIDITY_SWEEP` is reported instead (`price_level` the
   sweeping pivot, `reference_price_level` the swept active level); the swept
-  pivot becomes the new `pending_high`/`pending_low`, so it can still be
-  promoted to active later. Pivots that don't break the active level are
-  labeled HH/LH (highs) or HL/LL (lows) by comparison with the previous
-  pivot of the same type — a confirmed or swept pivot is reported only as
-  BOS/CHoCH/`LIQUIDITY_SWEEP` (no redundant label). Internal/minor structure
-  detection is not yet implemented.
+  pivot is folded into `pending_high`/`pending_low` (per the accumulation
+  rule above), so it can still be promoted to active later. When a BOS or
+  CHoCH *does* update the active level on its side, the new value is
+  `_extreme(pending_high/low, breaking_pivot)` — the more extreme of the
+  breaking pivot and that side's own pending accumulation — so an earlier
+  same-side `LIQUIDITY_SWEEP` that reached further than the pivot confirming
+  the break still ends up as the active level, preserving the true extreme
+  of the leg that just ended. A BOS/CHoCH on one side also retires the
+  *opposite* side's active level (it belonged to the leg that just ended):
+  it is replaced by that side's `pending_high`/`pending_low` (the extreme
+  pivot accumulated during the leg), promoted to active — or, if nothing has
+  accumulated yet, discarded to `None` rather than left stale. While an
+  active level is `None`, pivots on that side cannot trigger a BOS/CHoCH;
+  they are purely descriptive HH/HL/LH/LL labels that accumulate into
+  pending, until the next opposite-side BOS/CHoCH promotes that accumulation
+  to active. The very first pivot of each kind (the bootstrap) is also seeded
+  into the opposite side's pending candidate if that side has already been
+  bootstrapped, since it chronologically falls within that side's
+  active-creation window. Pivots that
+  don't break the active level are labeled HH/LH (highs) or HL/LL (lows) by
+  comparison with the previous pivot of the same type — a confirmed or swept
+  pivot is reported only as BOS/CHoCH/`LIQUIDITY_SWEEP` (no redundant
+  label). The constructor's `scope`
+  (`StructureScope`, default `MAJOR`) is stamped onto every emitted
+  `MarketStructure`, letting the same detector be run a second time with a
+  smaller `swing_lookback` to surface internal/minor structure (see
+  `app.dashboard_data.load_dashboard_data`).
 - **`liquidity/detectors/_common.py`** — shared `validate_candles` and
   `price_range` helpers.
 
@@ -242,15 +273,21 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 
 - **`DashboardData`** — a frozen dataclass snapshot combining `candles`,
   `higher_timeframe_direction`, `liquidity_zones`, `ranked_zones`,
-  `market_structure_events`, and `retail_bias` for one symbol/timeframe.
-- **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=..., swing_lookback=...)`**
+  `market_structure_events`, `internal_structure_events`, and `retail_bias`
+  for one symbol/timeframe.
+- **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=..., swing_lookback=..., internal_swing_lookback=...)`**
   — fetches candles, runs all liquidity detectors, scores the zones via
   `LiquidityScoringEngine`, runs `SwingStructureDetector(swing_lookback=...)`
-  to populate `market_structure_events`, and runs `RetailTrapAnalyzer` to
-  produce a `DashboardData`. `higher_timeframe_direction` is the `direction`
-  of the most recent `MarketStructure` event (`_latest_structure_direction`),
-  or `NEUTRAL` if none have been detected yet (e.g. too few candles for
-  `swing_lookback`).
+  to populate `market_structure_events`, runs a second
+  `SwingStructureDetector(swing_lookback=internal_swing_lookback,
+  scope=StructureScope.INTERNAL)` (default `internal_swing_lookback=
+  DEFAULT_INTERNAL_SWING_LOOKBACK = 10`) to populate
+  `internal_structure_events`, and runs `RetailTrapAnalyzer` to produce a
+  `DashboardData`. `higher_timeframe_direction` is the `direction` of the
+  most recent `MarketStructure` event in `market_structure_events`
+  (`_latest_structure_direction`), or `NEUTRAL` if none have been detected
+  yet (e.g. too few candles for `swing_lookback`) — `internal_structure_events`
+  does not affect `higher_timeframe_direction`.
 
 `DashboardData` and `ScoredLiquidityZone` are re-exported from
 `liquidity_hunter.app` for use by `dashboard`.
@@ -279,22 +316,29 @@ feel inspired by TradingView/Bloomberg-style terminals):
   (zone overlays, optionally annotated with `ScoredLiquidityZone` scores
   via `ranked_zones`), `main_chart` (zones + BOS/CHoCH/`LIQUIDITY_SWEEP`
   markers via `_add_structure_events`), `ranking_chart`, `confidence_gauge`.
+  `_add_structure_events` renders `StructureScope.MAJOR` events as labeled
+  triangle markers and overlays any `StructureScope.INTERNAL` events of the
+  same `StructureEvent` type as smaller, textless, semi-transparent markers
+  (trace name suffixed `" (Internal)"`).
 - **`dashboard/sections/`** — one module per section, each exposing
   `render(data: DashboardData) -> None`:
   - `kpi_row` — top row: price, retail bias, dominant liquidity level, and
     higher timeframe trend.
-  - `main_chart` — the primary chart (see `charts.main_chart`).
+  - `main_chart` — the primary chart (see `charts.main_chart`), passing the
+    concatenation of `market_structure_events` and
+    `internal_structure_events`.
   - `liquidity_targets` — right sidebar: top-ranked `ScoredLiquidityZone`s
     (price, type, score, distance %).
   - `retail_trap_panel` — right sidebar: `RetailBiasEstimate` dominant
     side, a descriptive Low/Medium/High "trap risk" label derived from
     `confidence`, and `explanation`.
   - `market_structure_panel` — right sidebar: trend for the dashboard's
-    loaded timeframe and the latest structure event. Currently
-    single-timeframe; a future phase may add a per-timeframe
-    (D1/H4/H1/M15) view.
+    loaded timeframe, the latest `market_structure_events` entry, and the
+    latest `internal_structure_events` entry. Currently single-timeframe;
+    a future phase may add a per-timeframe (D1/H4/H1/M15) view.
   - `liquidity_zones_table`, `recent_events`, `statistics` — bottom tabs:
-    detected zones table, structure events table, and descriptive summary
+    detected zones table, structure events table (major and internal,
+    sorted by timestamp with a "Scope" column), and descriptive summary
     counts.
 
 Tested with `streamlit.testing.v1.AppTest` in
@@ -315,9 +359,10 @@ only on `app` and `core` (an alternative presentation layer to
 
 - **`api/routes/health.py`** — `GET /api/health` returns `{"status": "ok"}`.
 - **`api/routes/dashboard.py`** — `GET /api/dashboard` (query params
-  `symbol`, `timeframe`, `limit`, `swing_lookback`, defaults matching
-  `load_dashboard_data`) calls `load_dashboard_data` directly (no
-  duplicated logic) and returns a `DashboardDataResponse`. Results are
+  `symbol`, `timeframe`, `limit`, `swing_lookback`, `internal_swing_lookback`,
+  defaults matching `load_dashboard_data`) calls `load_dashboard_data`
+  directly (no duplicated logic) and returns a `DashboardDataResponse`.
+  Results are
   cached per parameter combination via `api/cache.TTLCache`, with a 10s TTL
   (shorter than `cache.DEFAULT_TTL_SECONDS = 300`, since the frontend polls
   this endpoint to keep the dashboard near-live) to avoid redundant Binance
@@ -342,11 +387,19 @@ the `dashboard` Streamlit app, and the `api` FastAPI app are implemented.
 A React frontend (`frontend/`) is in progress: the KPI row and main chart
 (candlesticks, top-ranked liquidity zones, structure event markers) are
 implemented; the sidebar panels and bottom tabs remain Streamlit-only.
-Internal/minor
-`MarketStructure` detection within `liquidity` is not yet implemented.
-`SwingStructureDetector`'s BOS/CHoCH confirmation rule now uses
-`indicators.volume_delta` ("close beyond level AND volume delta ratio
-`>= min_volume_delta_ratio` in the breakout direction"), with a failed
-confirmation reported as `StructureEvent.LIQUIDITY_SWEEP` rather than a
-break. Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
-`invalidated_at` for the swept zone is not yet implemented.
+`SwingStructureDetector` reports a `BREAK_OF_STRUCTURE` on price alone (a
+wick beyond the active level is enough) for any break *in the direction of
+the current `trend`* (including the first break while `trend` is still
+`NEUTRAL`); `indicators.volume_delta` confirmation ("close beyond level AND
+volume delta ratio `>= min_volume_delta_ratio` in the breakout direction")
+gates only counter-trend breaks, reported as `CHANGE_OF_CHARACTER` if
+confirmed, with a failed confirmation reported as
+`StructureEvent.LIQUIDITY_SWEEP` instead. `MarketStructure.scope`
+(`StructureScope`: `MAJOR`/`INTERNAL`)
+distinguishes the swing-structure pass (`market_structure_events`,
+`swing_lookback`, also the sole input to `higher_timeframe_direction`) from
+a second, finer-grained pass (`internal_structure_events`,
+`internal_swing_lookback`, default `DEFAULT_INTERNAL_SWING_LOOKBACK = 10`)
+surfacing minor/internal structure on the same candle series. Wiring
+`LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` / `invalidated_at`
+for the swept zone is not yet implemented.

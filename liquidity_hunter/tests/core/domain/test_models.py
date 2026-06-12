@@ -14,6 +14,7 @@ from liquidity_hunter.core.domain import (
     MarketStructure,
     RetailBias,
     StructureEvent,
+    StructureScope,
     TimeFrame,
 )
 
@@ -104,6 +105,20 @@ def test_market_structure_valid_construction() -> None:
         price_level=1.15,
     )
     assert structure.direction is MarketDirection.BULLISH
+    assert structure.scope is StructureScope.MAJOR
+
+
+def test_market_structure_accepts_internal_scope() -> None:
+    structure = MarketStructure(
+        symbol="EURUSD",
+        timeframe=TimeFrame.D1,
+        timestamp=NOW,
+        event=StructureEvent.BREAK_OF_STRUCTURE,
+        direction=MarketDirection.BULLISH,
+        price_level=1.15,
+        scope=StructureScope.INTERNAL,
+    )
+    assert structure.scope is StructureScope.INTERNAL
 
 
 def test_retail_bias_valid_construction() -> None:

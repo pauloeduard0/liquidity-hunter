@@ -24,6 +24,17 @@ export const ZONE_COLORS: Record<string, string> = {
 }
 export const DEFAULT_ZONE_COLOR = '#888888'
 
+/** Short labels for `LiquidityZoneType` values, used in chart line titles. */
+export const ZONE_TYPE_LABELS: Record<string, string> = {
+  equal_highs: 'EQH',
+  equal_lows: 'EQL',
+  swing_high: 'SH',
+  swing_low: 'SL',
+  order_block: 'OB',
+  fair_value_gap: 'FVG',
+  liquidity_pool: 'LP',
+}
+
 export const STRUCTURE_EVENT_STYLES: Record<string, { label: string; color: string }> = {
   break_of_structure: { label: 'BOS', color: '#26a69a' },
   change_of_character: { label: 'CHoCH', color: '#ffb74d' },

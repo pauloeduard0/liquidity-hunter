@@ -5,7 +5,12 @@ from datetime import datetime
 from pydantic import Field
 
 from liquidity_hunter.core.domain.base import DomainModel
-from liquidity_hunter.core.domain.enums import MarketDirection, StructureEvent, TimeFrame
+from liquidity_hunter.core.domain.enums import (
+    MarketDirection,
+    StructureEvent,
+    StructureScope,
+    TimeFrame,
+)
 
 
 class MarketStructure(DomainModel):
@@ -18,3 +23,4 @@ class MarketStructure(DomainModel):
     direction: MarketDirection
     price_level: float = Field(gt=0)
     reference_price_level: float | None = Field(default=None, gt=0)
+    scope: StructureScope = StructureScope.MAJOR

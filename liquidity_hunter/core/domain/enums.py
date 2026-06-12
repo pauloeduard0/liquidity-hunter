@@ -55,6 +55,13 @@ class StructureEvent(str, Enum):
     LIQUIDITY_SWEEP = "liquidity_sweep"
 
 
+class StructureScope(str, Enum):
+    """Whether a `MarketStructure` event is major (swing) or internal (minor) structure."""
+
+    MAJOR = "major"
+    INTERNAL = "internal"
+
+
 class BiasSource(str, Enum):
     """Origin of a retail psychology / sentiment observation."""
 

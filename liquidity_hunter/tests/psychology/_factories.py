@@ -9,6 +9,7 @@ from liquidity_hunter.core.domain import (
     MarketDirection,
     MarketStructure,
     StructureEvent,
+    StructureScope,
     TimeFrame,
 )
 
@@ -23,6 +24,7 @@ def make_structure_event(
     timeframe: TimeFrame = TimeFrame.M15,
     timestamp: datetime = FORMED_AT,
     price_level: float = 100.0,
+    scope: StructureScope = StructureScope.MAJOR,
 ) -> MarketStructure:
     """Build a `MarketStructure` event."""
     return MarketStructure(
@@ -32,6 +34,7 @@ def make_structure_event(
         event=event,
         direction=direction,
         price_level=price_level,
+        scope=scope,
     )
 
 

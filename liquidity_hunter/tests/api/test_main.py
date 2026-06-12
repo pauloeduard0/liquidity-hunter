@@ -58,6 +58,7 @@ def test_dashboard_returns_snapshot(client: TestClient) -> None:
     assert len(body["candles"]) == len(HIGHS)
     assert "ranked_zones" in body
     assert "market_structure_events" in body
+    assert "internal_structure_events" in body
     assert body["retail_bias"]["symbol"] == "BTCUSDT"
 
 
@@ -84,5 +85,11 @@ def test_dashboard_rejects_non_positive_limit(client: TestClient) -> None:
 
 def test_dashboard_rejects_non_positive_swing_lookback(client: TestClient) -> None:
     response = client.get("/api/dashboard", params={"swing_lookback": 0})
+
+    assert response.status_code == 422
+
+
+def test_dashboard_rejects_non_positive_internal_swing_lookback(client: TestClient) -> None:
+    response = client.get("/api/dashboard", params={"internal_swing_lookback": 0})
 
     assert response.status_code == 422

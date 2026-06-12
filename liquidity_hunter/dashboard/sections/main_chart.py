@@ -11,7 +11,7 @@ def render(data: DashboardData) -> None:
     fig = main_chart(
         data.candles,
         data.ranked_zones,
-        data.market_structure_events,
+        [*data.market_structure_events, *data.internal_structure_events],
         title=f"{data.symbol} · {data.timeframe.value.upper()}",
     )
     st.plotly_chart(fig, theme=None)

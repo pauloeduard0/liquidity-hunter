@@ -31,6 +31,8 @@ export type StructureEvent =
   | 'change_of_character'
   | 'liquidity_sweep'
 
+export type StructureScope = 'major' | 'internal'
+
 export type RetailPositioning = 'long' | 'short' | 'neutral'
 
 export interface Candle {
@@ -66,6 +68,7 @@ export interface MarketStructure {
   direction: MarketDirection
   price_level: number
   reference_price_level: number | null
+  scope: StructureScope
 }
 
 export interface ScoredLiquidityZone {
@@ -93,5 +96,6 @@ export interface DashboardData {
   liquidity_zones: LiquidityZone[]
   ranked_zones: ScoredLiquidityZone[]
   market_structure_events: MarketStructure[]
+  internal_structure_events: MarketStructure[]
   retail_bias: RetailBiasEstimate
 }

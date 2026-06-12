@@ -33,4 +33,5 @@ class DashboardDataResponse(BaseModel):
     liquidity_zones: list[LiquidityZone]
     ranked_zones: list[ScoredLiquidityZone]
     market_structure_events: list[MarketStructure]
+    internal_structure_events: list[MarketStructure]
     retail_bias: RetailBiasEstimate

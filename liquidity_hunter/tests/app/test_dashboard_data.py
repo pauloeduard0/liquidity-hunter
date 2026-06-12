@@ -6,6 +6,7 @@ from liquidity_hunter.core.domain import (
     MarketDirection,
     RetailPositioning,
     StructureEvent,
+    StructureScope,
     TimeFrame,
 )
 from liquidity_hunter.data.providers.base import OHLCVProvider
@@ -45,6 +46,7 @@ def test_load_dashboard_data_assembles_research_snapshot() -> None:
     assert data.candles == candles
     assert data.current_price == candles[-1].close
     assert data.market_structure_events == []
+    assert isinstance(data.internal_structure_events, list)
 
     # 2 swing highs + 1 swing low + 1 equal-highs zone (see detector tests)
     assert len(data.liquidity_zones) == 4
@@ -77,6 +79,31 @@ def test_load_dashboard_data_derives_trend_from_market_structure() -> None:
     assert event.event is StructureEvent.BREAK_OF_STRUCTURE
     assert event.direction is MarketDirection.BEARISH
     assert data.higher_timeframe_direction is MarketDirection.BEARISH
+
+
+def test_load_dashboard_data_internal_structure_events_use_internal_scope() -> None:
+    candles = make_series(STRUCTURE_HIGHS, STRUCTURE_LOWS, symbol="BTCUSDT")
+    candles[12] = make_candle(
+        12,
+        STRUCTURE_HIGHS[12],
+        STRUCTURE_LOWS[12],
+        symbol="BTCUSDT",
+        close=135.0,
+        taker_buy_volume=0.3,
+    )
+
+    data = load_dashboard_data(
+        provider=_FakeProvider(candles), symbol="BTCUSDT", internal_swing_lookback=2
+    )
+
+    assert data.internal_structure_events
+    assert all(
+        event.scope is StructureScope.INTERNAL for event in data.internal_structure_events
+    )
+    # `higher_timeframe_direction` still reflects only `market_structure_events`
+    # (empty here, since `swing_lookback` keeps its default of 50).
+    assert data.market_structure_events == []
+    assert data.higher_timeframe_direction is MarketDirection.NEUTRAL
 
 
 def test_load_dashboard_data_neutral_trend_with_no_structure_events() -> None:
