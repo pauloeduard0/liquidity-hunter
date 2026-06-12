@@ -2,11 +2,11 @@ import { useEffect, useRef } from 'react'
 import {
   CandlestickSeries,
   ColorType,
+  LineSeries,
   LineStyle,
   createChart,
   createSeriesMarkers,
   type IChartApi,
-  type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type SeriesMarker,
@@ -53,8 +53,9 @@ export function MainChart({ data }: MainChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
-  const priceLinesRef = useRef<IPriceLine[]>([])
+  const zoneSeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
+  const hasFittedRef = useRef(false)
 
   useEffect(() => {
     const container = containerRef.current
@@ -93,15 +94,16 @@ export function MainChart({ data }: MainChartProps) {
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
-      priceLinesRef.current = []
+      zoneSeriesRef.current = []
       markersPluginRef.current = null
+      hasFittedRef.current = false
     }
   }, [])
 
   useEffect(() => {
     const chart = chartRef.current
     const series = seriesRef.current
-    if (!chart || !series) return
+    if (!chart || !series || data.candles.length === 0) return
 
     series.setData(
       data.candles.map((candle) => ({
@@ -113,31 +115,39 @@ export function MainChart({ data }: MainChartProps) {
       })),
     )
 
-    for (const line of priceLinesRef.current) {
-      series.removePriceLine(line)
+    for (const zoneSeries of zoneSeriesRef.current) {
+      chart.removeSeries(zoneSeries)
     }
-    priceLinesRef.current = []
+    zoneSeriesRef.current = []
+
+    const lastCandleTime = toUtcTimestamp(data.candles[data.candles.length - 1].timestamp)
 
     for (const scored of data.ranked_zones.slice(0, TOP_N_ZONES)) {
       const { zone, score } = scored
       const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
       const title = `${formatZoneType(zone.zone_type)} (${zone.strength.toFixed(2)}) · ${score.toFixed(0)}`
-      const prices = zone.price_high === zone.price_low
-        ? [zone.price_high]
-        : [zone.price_high, zone.price_low]
+      const price = (zone.price_high + zone.price_low) / 2
+      const startTime = toUtcTimestamp(zone.formed_at)
 
-      for (const price of prices) {
-        priceLinesRef.current.push(
-          series.createPriceLine({
-            price,
-            color,
-            lineWidth: 1,
-            lineStyle: LineStyle.Dotted,
-            axisLabelVisible: true,
-            title,
-          }),
-        )
-      }
+      const points =
+        startTime < lastCandleTime
+          ? [
+              { time: startTime, value: price },
+              { time: lastCandleTime, value: price },
+            ]
+          : [{ time: lastCandleTime, value: price }]
+
+      const zoneSeries = chart.addSeries(LineSeries, {
+        color,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        lastValueVisible: true,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+        title,
+      })
+      zoneSeries.setData(points)
+      zoneSeriesRef.current.push(zoneSeries)
     }
 
     const markers: SeriesMarker<Time>[] = data.market_structure_events.map((event) => {
@@ -156,7 +166,11 @@ export function MainChart({ data }: MainChartProps) {
     })
     markersPluginRef.current?.setMarkers(markers)
 
-    chart.timeScale().fitContent()
+    // Only auto-fit on the first load -- later refreshes shouldn't reset the user's zoom/pan.
+    if (!hasFittedRef.current) {
+      chart.timeScale().fitContent()
+      hasFittedRef.current = true
+    }
   }, [data])
 
   return <div ref={containerRef} className="w-full" />

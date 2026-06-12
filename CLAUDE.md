@@ -318,8 +318,10 @@ only on `app` and `core` (an alternative presentation layer to
   `symbol`, `timeframe`, `limit`, `swing_lookback`, defaults matching
   `load_dashboard_data`) calls `load_dashboard_data` directly (no
   duplicated logic) and returns a `DashboardDataResponse`. Results are
-  cached per parameter combination via `api/cache.TTLCache`
-  (`DEFAULT_TTL_SECONDS = 300`) to avoid redundant Binance requests.
+  cached per parameter combination via `api/cache.TTLCache`, with a 10s TTL
+  (shorter than `cache.DEFAULT_TTL_SECONDS = 300`, since the frontend polls
+  this endpoint to keep the dashboard near-live) to avoid redundant Binance
+  requests.
 - **`api/cache.py`** — `TTLCache`, a minimal generic in-memory
   time-based cache (`get_or_set(key, factory)`).
 - **`api/schemas.py`** — `DashboardDataResponse`, a Pydantic `BaseModel`

@@ -15,7 +15,9 @@ from liquidity_hunter.core.domain import TimeFrame
 
 router = APIRouter(tags=["dashboard"])
 
-_cache: TTLCache[DashboardData] = TTLCache()
+# Shorter than `cache.DEFAULT_TTL_SECONDS`: the frontend polls this endpoint
+# to keep the chart/price near-live, so a long TTL would make it feel frozen.
+_cache: TTLCache[DashboardData] = TTLCache(ttl_seconds=10.0)
 
 
 @router.get("/api/dashboard", response_model=DashboardDataResponse)

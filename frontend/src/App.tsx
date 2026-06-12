@@ -8,6 +8,10 @@ import type { DashboardData } from './types/dashboard'
 const SYMBOL = 'BTCUSDT'
 const TIMEFRAME = '1h'
 
+// How often to poll `/api/dashboard` for fresh candles/price -- kept close
+// to the backend's cache TTL so the chart/price update near-live.
+const REFRESH_INTERVAL_MS = 5_000
+
 function App() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -15,16 +19,22 @@ function App() {
   useEffect(() => {
     let cancelled = false
 
-    fetchDashboardData({ symbol: SYMBOL, timeframe: TIMEFRAME })
-      .then((result) => {
-        if (!cancelled) setData(result)
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
-      })
+    const load = () => {
+      fetchDashboardData({ symbol: SYMBOL, timeframe: TIMEFRAME })
+        .then((result) => {
+          if (!cancelled) setData(result)
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+        })
+    }
+
+    load()
+    const interval = setInterval(load, REFRESH_INTERVAL_MS)
 
     return () => {
       cancelled = true
+      clearInterval(interval)
     }
   }, [])
 

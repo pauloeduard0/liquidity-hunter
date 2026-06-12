@@ -192,8 +192,9 @@ poetry run uvicorn liquidity_hunter.api.main:app --reload
   | `limit`           | integer  | `500`     | Number of candles, `1`-`1000`           |
   | `swing_lookback`  | integer  | `50`      | Passed to `SwingStructureDetector`, must be `> 0` |
 
-  Responses are cached in-memory per parameter combination for 300 seconds
-  to avoid redundant Binance requests.
+  Responses are cached in-memory per parameter combination for 10 seconds
+  to avoid redundant Binance requests while still keeping the dashboard
+  near-live.
 
   ```bash
   curl "http://127.0.0.1:8000/api/dashboard?symbol=BTCUSDT&timeframe=1h&limit=500&swing_lookback=50"
