@@ -269,24 +269,13 @@ def test_liquidity_sweep_when_volume_delta_too_weak() -> None:
     ]
 
 
-def test_detector_stamps_major_scope_by_default() -> None:
+def test_detector_stamps_major_scope() -> None:
     candles = _confirmed_series(HIGHS, LOWS)
 
     events = SwingStructureDetector(swing_lookback=2).detect(candles)
 
     assert events
     assert all(event.scope is StructureScope.MAJOR for event in events)
-
-
-def test_detector_stamps_internal_scope_when_configured() -> None:
-    candles = _confirmed_series(HIGHS, LOWS)
-
-    events = SwingStructureDetector(swing_lookback=2, scope=StructureScope.INTERNAL).detect(
-        candles
-    )
-
-    assert events
-    assert all(event.scope is StructureScope.INTERNAL for event in events)
 
 
 def test_min_volume_delta_ratio_zero_confirms_choch_on_sign_alone() -> None:

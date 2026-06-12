@@ -67,7 +67,6 @@ from liquidity_hunter.core.domain import (
     MarketDirection,
     MarketStructure,
     StructureEvent,
-    StructureScope,
 )
 from liquidity_hunter.indicators import volume_delta
 from liquidity_hunter.liquidity.detectors._common import validate_candles
@@ -143,18 +142,12 @@ class SwingStructureDetector(MarketStructureDetector):
     as HH/LH (highs) or HL/LL (lows) instead.
     """
 
-    def __init__(
-        self,
-        swing_lookback: int = 50,
-        min_volume_delta_ratio: float = 0.2,
-        scope: StructureScope = StructureScope.MAJOR,
-    ) -> None:
+    def __init__(self, swing_lookback: int = 50, min_volume_delta_ratio: float = 0.2) -> None:
         if not 0.0 <= min_volume_delta_ratio <= 1.0:
             raise ValueError("min_volume_delta_ratio must be between 0 and 1")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
         self._low_detector = SwingLowDetector(lookback=swing_lookback)
         self._min_volume_delta_ratio = min_volume_delta_ratio
-        self._scope = scope
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -206,7 +199,6 @@ class SwingStructureDetector(MarketStructureDetector):
                                 direction=MarketDirection.BULLISH,
                                 price_level=price,
                                 reference_price_level=active_high.price,
-                                scope=self._scope,
                             )
                         )
                         if pending_low is not None:
@@ -227,7 +219,6 @@ class SwingStructureDetector(MarketStructureDetector):
                                 direction=MarketDirection.BULLISH,
                                 price_level=price,
                                 reference_price_level=active_high.price,
-                                scope=self._scope,
                             )
                         )
                         pending_high = self._extreme(pending_high, pivot, higher=True)
@@ -244,7 +235,6 @@ class SwingStructureDetector(MarketStructureDetector):
                                 direction=direction,
                                 price_level=price,
                                 reference_price_level=reference_price,
-                                scope=self._scope,
                             )
                         )
                     pending_high = self._extreme(pending_high, pivot, higher=True)
@@ -272,7 +262,6 @@ class SwingStructureDetector(MarketStructureDetector):
                                 direction=MarketDirection.BEARISH,
                                 price_level=price,
                                 reference_price_level=active_low.price,
-                                scope=self._scope,
                             )
                         )
                         if pending_high is not None:
@@ -293,7 +282,6 @@ class SwingStructureDetector(MarketStructureDetector):
                                 direction=MarketDirection.BEARISH,
                                 price_level=price,
                                 reference_price_level=active_low.price,
-                                scope=self._scope,
                             )
                         )
                         pending_low = self._extreme(pending_low, pivot, higher=False)
@@ -310,7 +298,6 @@ class SwingStructureDetector(MarketStructureDetector):
                                 direction=direction,
                                 price_level=price,
                                 reference_price_level=reference_price,
-                                scope=self._scope,
                             )
                         )
                     pending_low = self._extreme(pending_low, pivot, higher=False)

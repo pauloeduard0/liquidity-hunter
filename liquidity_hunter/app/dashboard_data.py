@@ -11,13 +11,13 @@ from liquidity_hunter.core.domain import (
     LiquidityZone,
     MarketDirection,
     MarketStructure,
-    StructureScope,
     TimeFrame,
 )
 from liquidity_hunter.data import BinanceDataProvider, OHLCVProvider
 from liquidity_hunter.liquidity import (
     EqualHighDetector,
     EqualLowDetector,
+    InternalStructureDetector,
     SwingHighDetector,
     SwingLowDetector,
     SwingStructureDetector,
@@ -81,8 +81,13 @@ def load_dashboard_data(
     market_structure_events = SwingStructureDetector(swing_lookback=swing_lookback).detect(
         candles
     )
-    internal_structure_events = SwingStructureDetector(
-        swing_lookback=internal_swing_lookback, scope=StructureScope.INTERNAL
+
+    finer_timeframe = timeframe.finer()
+    finer_candles = (
+        provider.get_ohlcv(symbol, finer_timeframe, limit) if finer_timeframe is not None else None
+    )
+    internal_structure_events = InternalStructureDetector(
+        swing_lookback=internal_swing_lookback, finer_candles=finer_candles
     ).detect(candles)
     higher_timeframe_direction = _latest_structure_direction(market_structure_events)
 

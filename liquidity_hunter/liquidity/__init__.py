@@ -8,6 +8,7 @@ imbalances, and structural events. Depends on `core`, `data`, and
 from liquidity_hunter.liquidity.detectors import (
     EqualHighDetector,
     EqualLowDetector,
+    InternalStructureDetector,
     LiquidityZoneDetector,
     MarketStructureDetector,
     SwingHighDetector,
@@ -18,6 +19,7 @@ from liquidity_hunter.liquidity.detectors import (
 __all__ = [
     "EqualHighDetector",
     "EqualLowDetector",
+    "InternalStructureDetector",
     "LiquidityZoneDetector",
     "MarketStructureDetector",
     "SwingHighDetector",
