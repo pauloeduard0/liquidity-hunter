@@ -270,56 +270,38 @@ Full architecture rationale, including SOLID notes, is documented in
   entirely — `SwingStructureDetector`'s `volume_delta`-ratio confirmation
   (`min_volume_delta_ratio`) is unaffected and unchanged.
 
-  A confirmed `CHANGE_OF_CHARACTER` additionally requires the pivot to clear
-  `choch_candidate_high`/`choch_candidate_low` (mirrored per side) — state
-  distinct from `active_<side>`/`pending_<side>` that tracks the swing
-  high/low which defined the leg leading into the most recent confirmed
-  BOS/CHoCH on the *opposite* side, i.e. the level a CHoCH must actually
-  break to represent a real reversal. A persistence-confirmed break of
-  `active_<side>` alone is not sufficient: `active_<side>` is a *trailing*
-  reference, so after a reversal it can be silently re-bootstrapped (no
-  event) by a pivot formed *during the pullback that follows* — part of the
-  new leg, not the leg being reversed. Treating a break of that
-  pullback-formed `active_<side>` as the CHoCH reference would flag an
-  internal bounce as a structural reversal. `choch_candidate_<side>`
-  survives `active_<side>` resets to `None` and silent re-bootstraps, so it
-  remains the correct reversal target. Every confirmed BOS/CHoCH performs
-  `active_<side> = pending_<side>; pending_<side> = None` on the *opposite*
-  side, but `choch_candidate_<side>` is snapshotted from the pre-reset
-  `active_<side>` only when that BOS/CHoCH is itself a confirmed *reversal*
-  — only a reversal means a leg on the opposite side has genuinely ended,
-  making its pre-reset `active_<side>` "the extreme of the leg that just
-  ended". A same-direction continuation BOS performs the same
-  `active_<side>`/`pending_<side>` reset but leaves `choch_candidate_<side>`
-  untouched: its pre-reset `active_<side>` is typically just a post-reversal
-  pullback pivot formed *during* the current leg, and snapshotting it would
-  overwrite a correct `choch_candidate_<side>` with a spurious, too-close
-  level. A counter-trend
-  pivot that passes the persistence check but does not also clear
-  `choch_candidate_<side>` (when one has been recorded) is reported as a
-  `LIQUIDITY_SWEEP` with `trend` unchanged — an internal bounce within the
-  leg `choch_candidate_<side>` still defines, folding the opposite side's
-  `active_<side>` into `pending_<side>` as usual. A confirmed
-  `CHANGE_OF_CHARACTER`'s `reference_price_level` is `choch_candidate_<side>`
-  if one has been recorded, else the more extreme of `active_<side>` and
-  `pending_<side>` by price (the pre-`choch_candidate_<side>` fallback); a
-  `BREAK_OF_STRUCTURE`'s `reference_price_level` is always `active_<side>`.
-
-  `choch_candidate_<side>` is not frozen at the value set by the BOS/CHoCH
-  that created it: a `LOWER_HIGH`/`HIGHER_LOW` pivot *ratchets*
-  `choch_candidate_high`/`choch_candidate_low` to itself if `trend` is
-  `BEARISH`/`BULLISH` (respectively) AND a `HIGHER_LOW`/`LOWER_HIGH` has been
-  confirmed on the *opposite* side since `choch_candidate_high`/
-  `choch_candidate_low` was last set. The opposite-side confirmation
-  requirement distinguishes a re-bootstrap pullback top/bottom (formed right
-  after a reversal, before the opposite side has confirmed anything — must
-  NOT become `choch_candidate_<side>`) from a later LH/HL that is itself
-  part of the current leg's now-confirmed structure — a closer, more
-  relevant CHoCH level than the (possibly much older) one recorded when the
-  leg began. Each `HIGHER_LOW`/`LOWER_HIGH` label both runs its own side's
-  ratchet check and arms the *opposite* side's ratchet for next time;
-  setting `choch_candidate_<side>` at a confirmed BOS/CHoCH disarms it
-  again.
+  The reversal (`CHANGE_OF_CHARACTER`) reference is tracked explicitly per
+  side as `validated_choch_high`/`validated_choch_low`, distinct from the
+  trailing `active_<side>` and from `pending_<side>`. `validated_choch_high`
+  (the level a *bullish* CHoCH must break) is updated **only when a new LL is
+  confirmed** — a sustained bearish break printing a low *below the bearish
+  leg's previous lowest low* (`last_ll`), not merely below the trailing
+  `active_low` (which may be a pullback/higher low) — and is then set to
+  `last_high_pivot`: the **last** swing high before that new LL (the most
+  recent one, not the highest bounce earlier in the leg; in a clean
+  alternating staircase the high between the two most recent LLs is
+  unambiguous, but when extraction is non-alternating the most recent high is
+  the reversal-relevant one). While price makes no new LL (it prints a higher
+  low instead), `validated_choch_high` is **frozen**. A bullish CHoCH fires
+  when, with `trend` BEARISH, a high pivot breaks (sustained, per the
+  persistence rule above) *above* `validated_choch_high`; its
+  `reference_price_level` is `validated_choch_high` — never the trailing
+  `active_high`, never the breaking pivot. A high pivot that breaks the
+  trailing `active_high` but not `validated_choch_high`, or whose break does
+  not hold, is a `LIQUIDITY_SWEEP` (trend unchanged) — an internal bounce in
+  the still-intact bearish leg. The low side mirrors this exactly: a new HH (a
+  sustained bullish break above the bullish leg's `last_hh`) sets
+  `validated_choch_low = last_low_pivot` (the last low before that HH), and a
+  bearish CHoCH fires on a sustained break below `validated_choch_low`. A
+  confirmed reversal resets the opposite leg's running extreme
+  (`last_ll`/`last_hh`) so the next leg re-initialises cleanly.
+  `last_high_pivot`/`last_low_pivot` track the most recent swing high/low
+  pivot regardless of the `active`/`pending` promotion machinery, so the CHoCH
+  reference is always sourced from the real last pivot (never a value retired
+  to `None`). A `BREAK_OF_STRUCTURE`'s `reference_price_level` is always the
+  trailing `active_<side>` it broke. (This validated-reference rule replaces
+  the earlier `choch_candidate_<side>` + ratchet + `hl_since_last_ll`/
+  `lh_since_last_hh` machinery entirely.)
 - **`liquidity/detectors/_common.py`** — shared `validate_candles`,
   `price_range`, `Pivot`, `collect_pivots`, and `is_sustained_break` helpers
   (the latter used by `InternalStructureDetector` for persistence-based
@@ -522,22 +504,20 @@ as a `LIQUIDITY_SWEEP` ("false break"). This replaces the previous
 `InternalStructureDetector` entirely (`TimeFrame.to_timedelta()` and
 `_common.is_confirmed_break`/`has_volume_spike` have been removed);
 `SwingStructureDetector`'s `volume_delta`-ratio confirmation is unaffected.
-A persistence-confirmed counter-trend break is reported as a confirmed
-`CHANGE_OF_CHARACTER` only if it *also* clears `choch_candidate_high`/
-`choch_candidate_low` (when one has been recorded) — persistent state, set
-when a confirmed BOS/CHoCH on the opposite side retires `active_<side>`,
-that survives `active_<side>`'s subsequent reset to `None` and silent
-re-bootstrap by a post-reversal pullback pivot, so a CHoCH cannot be flagged
-against a pullback-formed level that never defined the leg being reversed.
-Otherwise the break is a `LIQUIDITY_SWEEP` with `trend` unchanged. A
-confirmed `CHANGE_OF_CHARACTER`'s `reference_price_level` is
-`choch_candidate_<side>` if recorded, else `max`/`min` of
-`active_<side>`/`pending_<side>` by price.
-`choch_candidate_high`/`choch_candidate_low` ratchet toward a later
-`LOWER_HIGH`/`HIGHER_LOW` of the same leg once the *opposite* side has
-confirmed at least one `HIGHER_LOW`/`LOWER_HIGH` since `choch_candidate_high`/
-`choch_candidate_low` was last set — so a CHoCH can fire against the most
-recent confirmed LH/HL of the current leg rather than only the (possibly much
-older) level recorded when the leg began.
+The `CHANGE_OF_CHARACTER` reference is `validated_choch_high`/
+`validated_choch_low`: the **last** swing high/low (`last_high_pivot`/
+`last_low_pivot`) before the current leg's most recent *new LL/HH* (a
+sustained break beyond the leg's running extreme `last_ll`/`last_hh`, not
+merely the trailing `active_<side>`). It is frozen while price makes no new
+LL/HH, so it stays the swing high/low that defined the leg — not a later
+pullback pivot, and not the leg's tallest bounce when extraction is
+non-alternating. A bullish CHoCH fires on a sustained break *above*
+`validated_choch_high` (mirror for bearish); a break of the trailing
+`active_<side>` that does not also clear the validated reference (or does not
+hold) is a `LIQUIDITY_SWEEP` with `trend` unchanged. A confirmed
+`CHANGE_OF_CHARACTER`'s `reference_price_level` is `validated_choch_<side>`;
+a `BREAK_OF_STRUCTURE`'s is the trailing `active_<side>` it broke. This
+validated-reference rule replaced the earlier `choch_candidate_<side>` +
+ratchet + `hl_since_last_ll`/`lh_since_last_hh` machinery entirely.
 Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
 `invalidated_at` for the swept zone is not yet implemented.
