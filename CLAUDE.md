@@ -283,11 +283,18 @@ Full architecture rationale, including SOLID notes, is documented in
   pullback-formed `active_<side>` as the CHoCH reference would flag an
   internal bounce as a structural reversal. `choch_candidate_<side>`
   survives `active_<side>` resets to `None` and silent re-bootstraps, so it
-  remains the correct reversal target. It is set only when a confirmed
-  BOS/CHoCH on the *opposite* side performs its `active_<side> =
-  pending_<side>; pending_<side> = None` reset: the pre-reset
-  `active_<side>` (if not `None`) becomes `choch_candidate_<side>`, since it
-  was the extreme of the leg that BOS/CHoCH just ended. A counter-trend
+  remains the correct reversal target. Every confirmed BOS/CHoCH performs
+  `active_<side> = pending_<side>; pending_<side> = None` on the *opposite*
+  side, but `choch_candidate_<side>` is snapshotted from the pre-reset
+  `active_<side>` only when that BOS/CHoCH is itself a confirmed *reversal*
+  — only a reversal means a leg on the opposite side has genuinely ended,
+  making its pre-reset `active_<side>` "the extreme of the leg that just
+  ended". A same-direction continuation BOS performs the same
+  `active_<side>`/`pending_<side>` reset but leaves `choch_candidate_<side>`
+  untouched: its pre-reset `active_<side>` is typically just a post-reversal
+  pullback pivot formed *during* the current leg, and snapshotting it would
+  overwrite a correct `choch_candidate_<side>` with a spurious, too-close
+  level. A counter-trend
   pivot that passes the persistence check but does not also clear
   `choch_candidate_<side>` (when one has been recorded) is reported as a
   `LIQUIDITY_SWEEP` with `trend` unchanged — an internal bounce within the

@@ -244,6 +244,87 @@ def test_active_references_recover_after_retirement_to_none() -> None:
     assert bullish_refs == [200.0, 210.0, 215.0]
 
 
+# A sequence (lookback=1, persistence_candles=1) where a confirmed
+# *continuation* BOS, occurring after a CHoCH has already snapshotted
+# choch_candidate_high, must NOT overwrite that snapshot with its own
+# pre-reset active_high (a post-reversal pullback top formed during the new
+# leg):
+#
+#   index  1: swing high 200 -> bootstraps active_high = 200; no event
+#   index  3: swing low  100 -> bootstraps active_low = 100; pending_low
+#                                 seeded with this pivot (100); no event
+#   index  5: swing high 210 -> above active_high (200); trend NEUTRAL ->
+#                                 BREAK_OF_STRUCTURE bullish; trend becomes
+#                                 BULLISH; active_low promoted from
+#                                 pending_low (100, unchanged); active_high
+#                                 = 210
+#   index  7: swing low   50 -> below active_low (100); trend BULLISH ->
+#                                 CHoCH-candidate. Close (55) and the
+#                                 following candle's close (92) both clear
+#                                 100 -> CHANGE_OF_CHARACTER bearish; trend
+#                                 becomes BEARISH; choch_candidate_high is
+#                                 set to the current active_high (210, the
+#                                 top of the leg that just ended); active_high
+#                                 is promoted from pending_high (None, never
+#                                 accumulated) -> active_high = None;
+#                                 active_low = 50
+#   index  9: swing high 205 -> active_high is None, so this pivot silently
+#                                 re-bootstraps it (no event); active_low is
+#                                 already set, so pending_high is seeded with
+#                                 this pivot (205) -- a pullback top formed
+#                                 *during* the new bearish leg
+#   index 11: swing low   30 -> below active_low (50); trend already
+#                                 BEARISH -> continuation BREAK_OF_STRUCTURE
+#                                 bearish (no persistence check needed);
+#                                 trend stays BEARISH. Because this is a
+#                                 continuation, not a reversal,
+#                                 choch_candidate_high is left untouched at
+#                                 210 -- NOT overwritten with the pullback
+#                                 top 205 accumulated at index 9. active_high
+#                                 is promoted from pending_high (205) ->
+#                                 active_high = 205; active_low = 30
+#   index 13: swing high 225 -> above active_high (205); trend BEARISH ->
+#                                 CHoCH-candidate. Close (215) and the
+#                                 following candle's close (210) both clear
+#                                 205, and 225 also clears choch_candidate_high
+#                                 (210) -> CHANGE_OF_CHARACTER bullish with
+#                                 reference_price_level=210
+#                                 (choch_candidate_high, the top of the
+#                                 pre-reversal leg -- not the post-reversal
+#                                 pullback top 205)
+_CHOCH_CANDIDATE_HIGHS = [150.0] * 14
+for _index, _value in {1: 200.0, 5: 210.0, 9: 205.0, 13: 225.0}.items():
+    _CHOCH_CANDIDATE_HIGHS[_index] = _value
+
+_CHOCH_CANDIDATE_LOWS = [140.0] * 14
+for _index, _value in {3: 100.0, 7: 50.0, 11: 30.0}.items():
+    _CHOCH_CANDIDATE_LOWS[_index] = _value
+
+
+def test_choch_candidate_not_overwritten_by_continuation_bos() -> None:
+    candles = make_series(_CHOCH_CANDIDATE_HIGHS, _CHOCH_CANDIDATE_LOWS)
+    # index 7: close (55) and index 8's close (92) both clear active_low
+    # (100) -> confirmed CHANGE_OF_CHARACTER, snapshotting
+    # choch_candidate_high = 210.
+    candles[7] = make_candle(7, _CHOCH_CANDIDATE_HIGHS[7], _CHOCH_CANDIDATE_LOWS[7], close=55.0)
+    candles[8] = make_candle(8, 95.0, 90.0, close=92.0)
+    # index 13: close (215) and index 14's close (210) both clear active_high
+    # (205) -> confirmed CHANGE_OF_CHARACTER.
+    candles[13] = make_candle(
+        13, _CHOCH_CANDIDATE_HIGHS[13], _CHOCH_CANDIDATE_LOWS[13], close=215.0
+    )
+    candles.append(make_candle(14, 215.0, 205.0, close=210.0))
+
+    events = InternalStructureDetector(swing_lookback=1, persistence_candles=1).detect(candles)
+
+    assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
+        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 210.0, 200.0),
+        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, 50.0, 100.0),
+        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 30.0, 50.0),
+        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, 225.0, 210.0),
+    ]
+
+
 def test_internal_structure_detector_returns_empty_for_short_series() -> None:
     candles = make_series(HIGHS[:2], LOWS[:2])
 
