@@ -297,6 +297,22 @@ Full architecture rationale, including SOLID notes, is documented in
   if one has been recorded, else the more extreme of `active_<side>` and
   `pending_<side>` by price (the pre-`choch_candidate_<side>` fallback); a
   `BREAK_OF_STRUCTURE`'s `reference_price_level` is always `active_<side>`.
+
+  `choch_candidate_<side>` is not frozen at the value set by the BOS/CHoCH
+  that created it: a `LOWER_HIGH`/`HIGHER_LOW` pivot *ratchets*
+  `choch_candidate_high`/`choch_candidate_low` to itself if `trend` is
+  `BEARISH`/`BULLISH` (respectively) AND a `HIGHER_LOW`/`LOWER_HIGH` has been
+  confirmed on the *opposite* side since `choch_candidate_high`/
+  `choch_candidate_low` was last set. The opposite-side confirmation
+  requirement distinguishes a re-bootstrap pullback top/bottom (formed right
+  after a reversal, before the opposite side has confirmed anything — must
+  NOT become `choch_candidate_<side>`) from a later LH/HL that is itself
+  part of the current leg's now-confirmed structure — a closer, more
+  relevant CHoCH level than the (possibly much older) one recorded when the
+  leg began. Each `HIGHER_LOW`/`LOWER_HIGH` label both runs its own side's
+  ratchet check and arms the *opposite* side's ratchet for next time;
+  setting `choch_candidate_<side>` at a confirmed BOS/CHoCH disarms it
+  again.
 - **`liquidity/detectors/_common.py`** — shared `validate_candles`,
   `price_range`, `Pivot`, `collect_pivots`, and `is_sustained_break` helpers
   (the latter used by `InternalStructureDetector` for persistence-based
@@ -510,5 +526,11 @@ Otherwise the break is a `LIQUIDITY_SWEEP` with `trend` unchanged. A
 confirmed `CHANGE_OF_CHARACTER`'s `reference_price_level` is
 `choch_candidate_<side>` if recorded, else `max`/`min` of
 `active_<side>`/`pending_<side>` by price.
+`choch_candidate_high`/`choch_candidate_low` ratchet toward a later
+`LOWER_HIGH`/`HIGHER_LOW` of the same leg once the *opposite* side has
+confirmed at least one `HIGHER_LOW`/`LOWER_HIGH` since `choch_candidate_high`/
+`choch_candidate_low` was last set — so a CHoCH can fire against the most
+recent confirmed LH/HL of the current leg rather than only the (possibly much
+older) level recorded when the leg began.
 Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
 `invalidated_at` for the swept zone is not yet implemented.

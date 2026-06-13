@@ -73,8 +73,24 @@ pending_<side>; pending_<side> = None` reset): the pre-reset `active_<side>`,
 if not `None`, is saved as `choch_candidate_<side>` first, so it survives
 even if `active_<side>` becomes `None` and silently re-bootstraps on a
 post-reversal pullback pivot (which must NOT become the next CHoCH's
-reference). `choch_candidate_<side>` is left untouched by re-bootstrapping,
-`LIQUIDITY_SWEEP`s, and HL/LH labels.
+reference).
+
+`choch_candidate_<side>` is not frozen at that initial value for the rest of
+the leg, though: a re-bootstrapped pivot with no opposite-side confirmation
+yet (like the post-reversal pullback pivot above) must not become
+`choch_candidate_<side>`, but a *later* LH/HL that forms *after* the
+opposite side has confirmed at least one HL/LH of its own is itself part of
+the current leg's structure -- a closer, more relevant level for a CHoCH to
+clear than the (possibly much older) level recorded at the leg's start. So
+`choch_candidate_high` *ratchets* to a `LOWER_HIGH` pivot if `trend` is
+`BEARISH` and a `HIGHER_LOW` has been confirmed since `choch_candidate_high`
+was last set (mirrored: `choch_candidate_low` ratchets to a `HIGHER_LOW`
+pivot if `trend` is `BULLISH` and a `LOWER_HIGH` has been confirmed since
+`choch_candidate_low` was last set). Each `HIGHER_LOW`/`LOWER_HIGH` label
+both performs its own side's ratchet check and arms the *opposite* side's
+ratchet for next time; setting `choch_candidate_<side>` (at a confirmed
+BOS/CHoCH) disarms it again. Otherwise, `choch_candidate_<side>` is left
+untouched by re-bootstrapping and `LIQUIDITY_SWEEP`s.
 
 Confirmation is *persistence*-based rather than volume-based (see
 `_common.is_sustained_break`): the breaking candle must close beyond the
@@ -148,8 +164,12 @@ class InternalStructureDetector(MarketStructureDetector):
         `choch_candidate_<side>` (either side) is untouched.
     - A high pivot below `active_high` (a low pivot above `active_low`) is a
       descriptive `LOWER_HIGH`/`HIGHER_LOW` label, and also folds the
-      opposite side's `active_<side>` into its `pending_<side>`.
-      `choch_candidate_<side>` is untouched.
+      opposite side's `active_<side>` into its `pending_<side>`. If `trend`
+      is `BEARISH` (`BULLISH`) and a `HIGHER_LOW` (`LOWER_HIGH`) has been
+      confirmed since `choch_candidate_high` (`choch_candidate_low`) was
+      last set, this pivot *ratchets* `choch_candidate_high`
+      (`choch_candidate_low`) to itself -- see module docstring. Either way,
+      this pivot arms the *opposite* side's ratchet for its next LH/HL.
     - A pivot exactly equal to `active_<side>` produces no event and does
       not touch either `pending_<side>` or `choch_candidate_<side>`.
 
@@ -202,6 +222,17 @@ class InternalStructureDetector(MarketStructureDetector):
         # current active_<side>.
         choch_candidate_high: Pivot | None = None
         choch_candidate_low: Pivot | None = None
+        # Whether a confirmed HIGHER_LOW/LOWER_HIGH has occurred since
+        # choch_candidate_high/choch_candidate_low was last set (by a
+        # confirmed bearish/bullish BOS or CHoCH "spending" active_<side>).
+        # Gates the choch_candidate_<side> ratchet below: a LH/HL pivot only
+        # refines choch_candidate_<side> toward itself once at least one
+        # opposite-side pivot has confirmed the current leg's structure --
+        # otherwise it may be a re-bootstrap pullback top/bottom that doesn't
+        # represent the leg yet (e.g. the first high after a fresh LL, before
+        # any higher low has formed).
+        higher_low_since_choch_candidate_high = False
+        lower_high_since_choch_candidate_low = False
         trend = MarketDirection.NEUTRAL
 
         def emit(
@@ -280,6 +311,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         trend = MarketDirection.BULLISH
                         if active_low is not None:
                             choch_candidate_low = active_low
+                        lower_high_since_choch_candidate_low = False
                         active_low = pending_low
                         pending_low = None
                     else:
@@ -299,6 +331,15 @@ class InternalStructureDetector(MarketStructureDetector):
                         price,
                         active_high.price,
                     )
+                    # Ratchet choch_candidate_high toward this LH: once a
+                    # confirmed HIGHER_LOW has occurred in the current
+                    # bearish leg, a subsequent LH is itself part of that
+                    # leg's structure (not a pre-HL re-bootstrap pullback
+                    # top), so it becomes the new level a bullish CHoCH must
+                    # clear.
+                    if trend is MarketDirection.BEARISH and higher_low_since_choch_candidate_high:
+                        choch_candidate_high = pivot
+                    lower_high_since_choch_candidate_low = True
                     pending_low = self._extreme(pending_low, active_low, higher=False)
                 active_high = pivot
             else:
@@ -347,6 +388,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         trend = MarketDirection.BEARISH
                         if active_high is not None:
                             choch_candidate_high = active_high
+                        higher_low_since_choch_candidate_high = False
                         active_high = pending_high
                         pending_high = None
                     else:
@@ -366,6 +408,14 @@ class InternalStructureDetector(MarketStructureDetector):
                         price,
                         active_low.price,
                     )
+                    # Mirror of the LOWER_HIGH ratchet above: once a
+                    # confirmed LOWER_HIGH has occurred in the current
+                    # bullish leg, a subsequent HL is part of that leg's
+                    # structure, so it becomes the new level a bearish CHoCH
+                    # must clear.
+                    if trend is MarketDirection.BULLISH and lower_high_since_choch_candidate_low:
+                        choch_candidate_low = pivot
+                    higher_low_since_choch_candidate_high = True
                     pending_high = self._extreme(pending_high, active_high, higher=True)
                 active_low = pivot
 
