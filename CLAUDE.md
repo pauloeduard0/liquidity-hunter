@@ -269,6 +269,34 @@ Full architecture rationale, including SOLID notes, is documented in
   `volume_delta`/volume-spike confirmation for `InternalStructureDetector`
   entirely — `SwingStructureDetector`'s `volume_delta`-ratio confirmation
   (`min_volume_delta_ratio`) is unaffected and unchanged.
+
+  A confirmed `CHANGE_OF_CHARACTER` additionally requires the pivot to clear
+  `choch_candidate_high`/`choch_candidate_low` (mirrored per side) — state
+  distinct from `active_<side>`/`pending_<side>` that tracks the swing
+  high/low which defined the leg leading into the most recent confirmed
+  BOS/CHoCH on the *opposite* side, i.e. the level a CHoCH must actually
+  break to represent a real reversal. A persistence-confirmed break of
+  `active_<side>` alone is not sufficient: `active_<side>` is a *trailing*
+  reference, so after a reversal it can be silently re-bootstrapped (no
+  event) by a pivot formed *during the pullback that follows* — part of the
+  new leg, not the leg being reversed. Treating a break of that
+  pullback-formed `active_<side>` as the CHoCH reference would flag an
+  internal bounce as a structural reversal. `choch_candidate_<side>`
+  survives `active_<side>` resets to `None` and silent re-bootstraps, so it
+  remains the correct reversal target. It is set only when a confirmed
+  BOS/CHoCH on the *opposite* side performs its `active_<side> =
+  pending_<side>; pending_<side> = None` reset: the pre-reset
+  `active_<side>` (if not `None`) becomes `choch_candidate_<side>`, since it
+  was the extreme of the leg that BOS/CHoCH just ended. A counter-trend
+  pivot that passes the persistence check but does not also clear
+  `choch_candidate_<side>` (when one has been recorded) is reported as a
+  `LIQUIDITY_SWEEP` with `trend` unchanged — an internal bounce within the
+  leg `choch_candidate_<side>` still defines, folding the opposite side's
+  `active_<side>` into `pending_<side>` as usual. A confirmed
+  `CHANGE_OF_CHARACTER`'s `reference_price_level` is `choch_candidate_<side>`
+  if one has been recorded, else the more extreme of `active_<side>` and
+  `pending_<side>` by price (the pre-`choch_candidate_<side>` fallback); a
+  `BREAK_OF_STRUCTURE`'s `reference_price_level` is always `active_<side>`.
 - **`liquidity/detectors/_common.py`** — shared `validate_candles`,
   `price_range`, `Pivot`, `collect_pivots`, and `is_sustained_break` helpers
   (the latter used by `InternalStructureDetector` for persistence-based
@@ -471,5 +499,16 @@ as a `LIQUIDITY_SWEEP` ("false break"). This replaces the previous
 `InternalStructureDetector` entirely (`TimeFrame.to_timedelta()` and
 `_common.is_confirmed_break`/`has_volume_spike` have been removed);
 `SwingStructureDetector`'s `volume_delta`-ratio confirmation is unaffected.
+A persistence-confirmed counter-trend break is reported as a confirmed
+`CHANGE_OF_CHARACTER` only if it *also* clears `choch_candidate_high`/
+`choch_candidate_low` (when one has been recorded) — persistent state, set
+when a confirmed BOS/CHoCH on the opposite side retires `active_<side>`,
+that survives `active_<side>`'s subsequent reset to `None` and silent
+re-bootstrap by a post-reversal pullback pivot, so a CHoCH cannot be flagged
+against a pullback-formed level that never defined the leg being reversed.
+Otherwise the break is a `LIQUIDITY_SWEEP` with `trend` unchanged. A
+confirmed `CHANGE_OF_CHARACTER`'s `reference_price_level` is
+`choch_candidate_<side>` if recorded, else `max`/`min` of
+`active_<side>`/`pending_<side>` by price.
 Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
 `invalidated_at` for the swept zone is not yet implemented.

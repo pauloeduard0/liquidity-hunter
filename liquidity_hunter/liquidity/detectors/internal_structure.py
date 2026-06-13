@@ -50,6 +50,32 @@ reference *against* `trend` is a `CHANGE_OF_CHARACTER` if confirmed, or a
 `LIQUIDITY_SWEEP` otherwise. A pivot that does not exceed the active
 reference is labeled `LOWER_HIGH`/`HIGHER_LOW`.
 
+A `BREAK_OF_STRUCTURE`'s `reference_price_level` is simply `active_<side>`
+(the level it broke). A `CHANGE_OF_CHARACTER`'s reference is more subtle:
+`active_<side>` is a *trailing* reference and may be a minor pivot formed
+*after* the most recent opposite-side extreme that defined the leg now being
+reversed -- using it (or `pending_<side>`) as the CHoCH level would flag a
+merely-internal bounce as a structural reversal. `choch_candidate_high`/
+`choch_candidate_low` track the *actual* level a CHoCH must clear: the
+`active_<side>` that was active -- i.e. the extreme of the leg leading into
+the opposite side's most recent confirmed BOS/CHoCH -- at the moment that
+opposite-side event "spent" it (see below). A counter-trend break is only a
+`CHANGE_OF_CHARACTER` if it is a sustained break of `active_<side>` *and*
+(when `choch_candidate_<side>` has been recorded) the pivot also clears
+`choch_candidate_<side>`; otherwise it is a `LIQUIDITY_SWEEP` (trend
+unchanged) -- an internal bounce within the leg that `choch_candidate_<side>`
+still defines. The confirmed CHoCH's `reference_price_level` is
+`choch_candidate_<side>` if recorded, else the same max/min-of-active/pending
+fallback used before `choch_candidate_<side>` existed.
+`choch_candidate_<side>` is updated only when a confirmed BOS/CHoCH on the
+*opposite* side "spends" `active_<side>` (the `active_<side> =
+pending_<side>; pending_<side> = None` reset): the pre-reset `active_<side>`,
+if not `None`, is saved as `choch_candidate_<side>` first, so it survives
+even if `active_<side>` becomes `None` and silently re-bootstraps on a
+post-reversal pullback pivot (which must NOT become the next CHoCH's
+reference). `choch_candidate_<side>` is left untouched by re-bootstrapping,
+`LIQUIDITY_SWEEP`s, and HL/LH labels.
+
 Confirmation is *persistence*-based rather than volume-based (see
 `_common.is_sustained_break`): the breaking candle must close beyond the
 reference AND the `persistence_candles` candles immediately following it
@@ -88,8 +114,10 @@ class InternalStructureDetector(MarketStructureDetector):
     Swing highs/lows are sourced from `SwingHighDetector`/`SwingLowDetector`
     using `swing_lookback`, then walked in chronological order maintaining
     `active_high`/`active_low` (trailing references, normally the most
-    recently formed pivot of that kind) and `pending_high`/`pending_low`
-    (the most extreme pivot of that kind accumulated for a future promotion).
+    recently formed pivot of that kind), `pending_high`/`pending_low` (the
+    most extreme pivot of that kind accumulated for a future promotion), and
+    `choch_candidate_high`/`choch_candidate_low` (the level a CHoCH on that
+    side must clear -- see module docstring).
 
     For each new pivot, it is compared against the *current* `active_high`/
     `active_low`:
@@ -97,23 +125,33 @@ class InternalStructureDetector(MarketStructureDetector):
     - If `active_<side>` is `None`, this pivot bootstraps it: `active_<side>
       = pivot`, with no event. If the opposite side is already active,
       `pending_<side>` is also seeded with this pivot.
+      `choch_candidate_<side>` is left untouched.
     - A high pivot above `active_high` (a low pivot below `active_low`) in
       the direction of `trend` (or the first such break while `trend` is
       `NEUTRAL`) is a `BREAK_OF_STRUCTURE`; against `trend`, it is a
       `CHANGE_OF_CHARACTER` if the break is sustained -- the candle that
       formed it AND the `persistence_candles` candles immediately following
       it all close beyond the reference (see `_common.is_sustained_break`)
-      -- otherwise a `LIQUIDITY_SWEEP`.
-      - On a confirmed BOS/CHoCH, `trend` is updated and the *opposite*
-        side's `pending_<side>` is promoted to `active_<side>` (or `None`
-        if `pending_<side>` is empty), then cleared.
+      -- AND, if `choch_candidate_<side>` has been recorded, the pivot also
+      clears `choch_candidate_<side>`. Otherwise it is a `LIQUIDITY_SWEEP`.
+      - On a confirmed BOS/CHoCH, `trend` is updated; if the *opposite*
+        side's `active_<side>` is not `None`, it is saved as that side's
+        `choch_candidate_<side>` (it was the extreme of the leg this
+        BOS/CHoCH just ended), then `pending_<side>` is promoted to
+        `active_<side>` (or `None` if `pending_<side>` is empty) and
+        cleared. A confirmed `CHANGE_OF_CHARACTER`'s `reference_price_level`
+        is `choch_candidate_<side>` (the same side as the breaking pivot) if
+        recorded, else the max/min-of-active/pending fallback; a
+        `BREAK_OF_STRUCTURE`'s is always `active_<side>`.
       - On a `LIQUIDITY_SWEEP`, the opposite side's current `active_<side>`
-        is folded into its `pending_<side>` via `_extreme` instead.
+        is folded into its `pending_<side>` via `_extreme` instead, and
+        `choch_candidate_<side>` (either side) is untouched.
     - A high pivot below `active_high` (a low pivot above `active_low`) is a
       descriptive `LOWER_HIGH`/`HIGHER_LOW` label, and also folds the
       opposite side's `active_<side>` into its `pending_<side>`.
+      `choch_candidate_<side>` is untouched.
     - A pivot exactly equal to `active_<side>` produces no event and does
-      not touch either `pending_<side>`.
+      not touch either `pending_<side>` or `choch_candidate_<side>`.
 
     In every case, `active_<side>` is then set to this pivot (the trailing
     update). Every `MarketStructure` emitted has `scope =
@@ -155,6 +193,15 @@ class InternalStructureDetector(MarketStructureDetector):
         active_low: Pivot | None = None
         pending_high: Pivot | None = None
         pending_low: Pivot | None = None
+        # The swing high/low that defined the leg leading to the most recent
+        # confirmed BOS/CHoCH on the *opposite* side -- the level a CHoCH must
+        # clear to represent a real change of character, as opposed to an
+        # internal bounce within the still-active leg. Persists across
+        # active_<side> resets to `None`; only updated when a confirmed
+        # bearish/bullish BOS or CHoCH on the opposite side "spends" the
+        # current active_<side>.
+        choch_candidate_high: Pivot | None = None
+        choch_candidate_low: Pivot | None = None
         trend = MarketDirection.NEUTRAL
 
         def emit(
@@ -186,9 +233,41 @@ class InternalStructureDetector(MarketStructureDetector):
                         pending_high = pivot
                 elif price > active_high.price:
                     is_reversal = trend is MarketDirection.BEARISH
-                    if not is_reversal or confirms_break(
-                        timestamp, active_high.price, bullish=True
-                    ):
+                    if is_reversal:
+                        # A CHoCH is only structurally valid if it clears
+                        # choch_candidate_high -- the swing high that defined
+                        # the bearish leg leading to the current lows (the LH
+                        # the bearish structure last "spent"). Clearing the
+                        # trailing active_high with a sustained break is not
+                        # enough on its own: a pivot that does so but doesn't
+                        # also clear choch_candidate_high is just an internal
+                        # bounce within the still-active bearish leg, reported
+                        # as a LIQUIDITY_SWEEP with trend left unchanged.
+                        confirmed = confirms_break(
+                            timestamp, active_high.price, bullish=True
+                        ) and (
+                            choch_candidate_high is None or price > choch_candidate_high.price
+                        )
+                    else:
+                        confirmed = True
+                    if confirmed:
+                        if is_reversal:
+                            # The CHoCH's reference is the level that defined
+                            # the leg it just broke: choch_candidate_high if
+                            # one has been recorded, else fall back to the
+                            # more extreme of active_high/pending_high (no
+                            # bearish BOS/CHoCH has "spent" a high yet).
+                            if choch_candidate_high is not None:
+                                reference = choch_candidate_high
+                            else:
+                                reference = active_high
+                                if (
+                                    pending_high is not None
+                                    and pending_high.price > active_high.price
+                                ):
+                                    reference = pending_high
+                        else:
+                            reference = active_high
                         emit(
                             timestamp,
                             StructureEvent.CHANGE_OF_CHARACTER
@@ -196,9 +275,11 @@ class InternalStructureDetector(MarketStructureDetector):
                             else StructureEvent.BREAK_OF_STRUCTURE,
                             MarketDirection.BULLISH,
                             price,
-                            active_high.price,
+                            reference.price,
                         )
                         trend = MarketDirection.BULLISH
+                        if active_low is not None:
+                            choch_candidate_low = active_low
                         active_low = pending_low
                         pending_low = None
                     else:
@@ -226,9 +307,34 @@ class InternalStructureDetector(MarketStructureDetector):
                         pending_low = pivot
                 elif price < active_low.price:
                     is_reversal = trend is MarketDirection.BULLISH
-                    if not is_reversal or confirms_break(
-                        timestamp, active_low.price, bullish=False
-                    ):
+                    if is_reversal:
+                        # Mirror of the bullish case above: a bearish CHoCH
+                        # must also clear choch_candidate_low -- the swing low
+                        # that defined the bullish leg leading to the current
+                        # highs -- not just the trailing active_low, else it
+                        # is an internal bounce (LIQUIDITY_SWEEP, trend
+                        # unchanged).
+                        confirmed = confirms_break(
+                            timestamp, active_low.price, bullish=False
+                        ) and (choch_candidate_low is None or price < choch_candidate_low.price)
+                    else:
+                        confirmed = True
+                    if confirmed:
+                        if is_reversal:
+                            # Mirror of the bullish case: the reference is
+                            # choch_candidate_low if recorded, else the more
+                            # extreme of active_low/pending_low.
+                            if choch_candidate_low is not None:
+                                reference = choch_candidate_low
+                            else:
+                                reference = active_low
+                                if (
+                                    pending_low is not None
+                                    and pending_low.price < active_low.price
+                                ):
+                                    reference = pending_low
+                        else:
+                            reference = active_low
                         emit(
                             timestamp,
                             StructureEvent.CHANGE_OF_CHARACTER
@@ -236,9 +342,11 @@ class InternalStructureDetector(MarketStructureDetector):
                             else StructureEvent.BREAK_OF_STRUCTURE,
                             MarketDirection.BEARISH,
                             price,
-                            active_low.price,
+                            reference.price,
                         )
                         trend = MarketDirection.BEARISH
+                        if active_high is not None:
+                            choch_candidate_high = active_high
                         active_high = pending_high
                         pending_high = None
                     else:

@@ -156,7 +156,10 @@ def test_internal_structure_detector_stamps_internal_scope() -> None:
 #                                 CHoCH-candidate. Close (55) and the
 #                                 following candle's close (92) both clear
 #                                 100 -> CHANGE_OF_CHARACTER bearish; trend
-#                                 becomes BEARISH; active_high is promoted
+#                                 becomes BEARISH; choch_candidate_high is set
+#                                 to the current active_high (210, the top
+#                                 before this LL=50 -- it defines the down-leg
+#                                 that created it); active_high is promoted
 #                                 from pending_high (None, never accumulated)
 #                                 -> active_high = None; active_low = 50
 #   index  9: swing high 205 -> active_high is None, so this pivot silently
@@ -170,8 +173,14 @@ def test_internal_structure_detector_stamps_internal_scope() -> None:
 #   index 13: swing high 215 -> above active_high (205); trend BEARISH ->
 #                                 CHoCH-candidate. Close (212) and the
 #                                 following candle's close (208) both clear
-#                                 205 -> CHANGE_OF_CHARACTER bullish; trend
-#                                 becomes BULLISH; active_low is promoted from
+#                                 205 -- and 215 also clears
+#                                 choch_candidate_high (210) -> CHANGE_OF_CHARACTER
+#                                 bullish with reference_price_level=210
+#                                 (choch_candidate_high, the top before LL=50
+#                                 -- not active_high=205, a pullback top formed
+#                                 after that low); trend becomes BULLISH;
+#                                 choch_candidate_low is set to the current
+#                                 active_low (70); active_low is promoted from
 #                                 pending_low (None, never re-accumulated
 #                                 since index 5) -> active_low = None;
 #                                 active_high = 215
@@ -214,7 +223,7 @@ def test_active_references_recover_after_retirement_to_none() -> None:
         (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 210.0, 200.0),
         (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, 50.0, 100.0),
         (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 70.0, 50.0),
-        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, 215.0, 205.0),
+        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, 215.0, 210.0),
         (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 225.0, 215.0),
     ]
     # index 9 and index 15 silently re-bootstrap a retired (`None`) active
@@ -223,15 +232,16 @@ def test_active_references_recover_after_retirement_to_none() -> None:
     assert candles[9].timestamp not in timestamps
     assert candles[15].timestamp not in timestamps
     # active_high never gets stuck on the pre-drop high (200): the
-    # bullish BOS/CHoCH events reference the recent highs (200, 205, 215)
-    # in turn.
+    # bullish BOS/CHoCH events reference 200, then choch_candidate_high
+    # (210, the top before the LL=50 -- not the post-low pullback top 205),
+    # then 215 in turn.
     bullish_refs = [
         e.reference_price_level
         for e in events
         if e.event in (StructureEvent.BREAK_OF_STRUCTURE, StructureEvent.CHANGE_OF_CHARACTER)
         and e.direction is MarketDirection.BULLISH
     ]
-    assert bullish_refs == [200.0, 205.0, 215.0]
+    assert bullish_refs == [200.0, 210.0, 215.0]
 
 
 def test_internal_structure_detector_returns_empty_for_short_series() -> None:
