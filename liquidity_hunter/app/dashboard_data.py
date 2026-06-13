@@ -86,9 +86,11 @@ def load_dashboard_data(
     finer_candles = (
         provider.get_ohlcv(symbol, finer_timeframe, limit) if finer_timeframe is not None else None
     )
-    internal_structure_events = InternalStructureDetector(
-        swing_lookback=internal_swing_lookback, finer_candles=finer_candles
-    ).detect(candles)
+    internal_structure_events = (
+        InternalStructureDetector(swing_lookback=internal_swing_lookback).detect(finer_candles)
+        if finer_candles is not None
+        else []
+    )
     higher_timeframe_direction = _latest_structure_direction(market_structure_events)
 
     retail_bias = RetailTrapAnalyzer().analyze(

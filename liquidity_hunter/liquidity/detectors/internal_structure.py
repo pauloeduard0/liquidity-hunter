@@ -46,24 +46,21 @@ mechanism:
 A pivot that exceeds the active reference on its side, in the direction of
 `trend` (or the first such break while `trend` is still `NEUTRAL`), is a
 `BREAK_OF_STRUCTURE` on price alone. A pivot that exceeds the active
-reference *against* `trend` is a `CHANGE_OF_CHARACTER` if confirmed -- the
-candle closes beyond the reference AND (its `volume_delta` ratio is at least
-`min_volume_delta_ratio` in the breakout direction, the same rule
-`SwingStructureDetector` uses (see `indicators.volume_delta`), OR a
-finer-timeframe volume spike is observed during that candle, see
-`has_volume_spike`) -- or a `LIQUIDITY_SWEEP` otherwise. A pivot that does
-not exceed the active reference is labeled `LOWER_HIGH`/`HIGHER_LOW`.
+reference *against* `trend` is a `CHANGE_OF_CHARACTER` if confirmed, or a
+`LIQUIDITY_SWEEP` otherwise. A pivot that does not exceed the active
+reference is labeled `LOWER_HIGH`/`HIGHER_LOW`.
 
-A `volume_delta` ratio close to zero does not always mean a breakout candle
-lacked conviction -- it can also mean the candle's net taker buy/sell volume
-happened to cancel out at this timeframe despite a real, high-volume move.
-`finer_candles`, if provided (a series of `Candle`s one `TimeFrame` finer
-than `candles`, e.g. M30 candles alongside an H1 `candles` series), lets such
-a candle still be confirmed if any finer candle within its time window shows
-a volume spike (`volume_spike_lookback`, `volume_spike_multiplier`) -- an
-additional, independent way to confirm a break, not a replacement for the
-`volume_delta` check. This alternative applies only to
-`InternalStructureDetector`; `SwingStructureDetector` is unaffected.
+Confirmation is *persistence*-based rather than volume-based (see
+`_common.is_sustained_break`): the breaking candle must close beyond the
+reference AND the `persistence_candles` candles immediately following it
+must also close beyond it. A single high-volume candle that pokes through a
+level and immediately reverts (a "false break") fails this check and is
+reported as a `LIQUIDITY_SWEEP`; a break that *holds* for `persistence_candles`
+candles is reported as a `CHANGE_OF_CHARACTER`. If there are not yet enough
+candles after the pivot to evaluate the window, the break is treated as
+unconfirmed (`LIQUIDITY_SWEEP`). This applies only to
+`InternalStructureDetector`; `SwingStructureDetector`'s `volume_delta`-ratio
+confirmation is unaffected.
 """
 
 from datetime import datetime
@@ -78,8 +75,7 @@ from liquidity_hunter.core.domain import (
 from liquidity_hunter.liquidity.detectors._common import (
     Pivot,
     collect_pivots,
-    has_volume_spike,
-    is_confirmed_break,
+    is_sustained_break,
     validate_candles,
 )
 from liquidity_hunter.liquidity.detectors.base import MarketStructureDetector
@@ -104,11 +100,10 @@ class InternalStructureDetector(MarketStructureDetector):
     - A high pivot above `active_high` (a low pivot below `active_low`) in
       the direction of `trend` (or the first such break while `trend` is
       `NEUTRAL`) is a `BREAK_OF_STRUCTURE`; against `trend`, it is a
-      `CHANGE_OF_CHARACTER` if the candle that formed it closes beyond the
-      reference AND (its `volume_delta` ratio (`abs(volume_delta) /
-      volume`) is at least `min_volume_delta_ratio` in the breakout
-      direction, OR `finer_candles` shows a volume spike during that
-      candle's time window), otherwise a `LIQUIDITY_SWEEP`.
+      `CHANGE_OF_CHARACTER` if the break is sustained -- the candle that
+      formed it AND the `persistence_candles` candles immediately following
+      it all close beyond the reference (see `_common.is_sustained_break`)
+      -- otherwise a `LIQUIDITY_SWEEP`.
       - On a confirmed BOS/CHoCH, `trend` is updated and the *opposite*
         side's `pending_<side>` is promoted to `active_<side>` (or `None`
         if `pending_<side>` is empty), then cleared.
@@ -124,34 +119,18 @@ class InternalStructureDetector(MarketStructureDetector):
     update). Every `MarketStructure` emitted has `scope =
     StructureScope.INTERNAL`.
 
-    `finer_candles`, if given, is a chronologically ordered series of
-    `Candle`s one `TimeFrame` finer than `candles` (see `TimeFrame.finer`),
-    used as the alternative volume-spike confirmation described above.
-    `volume_spike_lookback` is the number of preceding finer candles whose
-    volume is averaged, and `volume_spike_multiplier` is how far above that
-    average a finer candle's volume must be to count as a spike.
+    `persistence_candles` is the number of candles immediately following a
+    counter-trend pivot that must also close beyond the reference for the
+    break to be reported as a `CHANGE_OF_CHARACTER` rather than a
+    `LIQUIDITY_SWEEP`.
     """
 
-    def __init__(
-        self,
-        swing_lookback: int = 10,
-        min_volume_delta_ratio: float = 0.2,
-        finer_candles: list[Candle] | None = None,
-        volume_spike_lookback: int = 20,
-        volume_spike_multiplier: float = 1.5,
-    ) -> None:
-        if not 0.0 <= min_volume_delta_ratio <= 1.0:
-            raise ValueError("min_volume_delta_ratio must be between 0 and 1")
-        if volume_spike_lookback < 1:
-            raise ValueError("volume_spike_lookback must be at least 1")
-        if volume_spike_multiplier <= 0.0:
-            raise ValueError("volume_spike_multiplier must be positive")
+    def __init__(self, swing_lookback: int = 10, persistence_candles: int = 3) -> None:
+        if persistence_candles < 1:
+            raise ValueError("persistence_candles must be at least 1")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
         self._low_detector = SwingLowDetector(lookback=swing_lookback)
-        self._min_volume_delta_ratio = min_volume_delta_ratio
-        self._finer_candles = finer_candles
-        self._volume_spike_lookback = volume_spike_lookback
-        self._volume_spike_multiplier = volume_spike_multiplier
+        self._persistence_candles = persistence_candles
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -160,23 +139,15 @@ class InternalStructureDetector(MarketStructureDetector):
 
         symbol = candles[0].symbol
         timeframe = candles[0].timeframe
-        timeframe_duration = timeframe.to_timedelta()
-        candles_by_timestamp = {candle.timestamp: candle for candle in candles}
+        index_by_timestamp = {candle.timestamp: index for index, candle in enumerate(candles)}
 
         def confirms_break(timestamp: datetime, active_price: float, *, bullish: bool) -> bool:
-            volume_spike = self._finer_candles is not None and has_volume_spike(
-                self._finer_candles,
-                window_start=timestamp,
-                window_end=timestamp + timeframe_duration,
-                lookback=self._volume_spike_lookback,
-                multiplier=self._volume_spike_multiplier,
-            )
-            return is_confirmed_break(
-                candles_by_timestamp[timestamp],
+            return is_sustained_break(
+                candles,
+                index_by_timestamp[timestamp],
                 active_price,
                 bullish=bullish,
-                min_volume_delta_ratio=self._min_volume_delta_ratio,
-                volume_spike=volume_spike,
+                persistence_candles=self._persistence_candles,
             )
 
         events: list[MarketStructure] = []

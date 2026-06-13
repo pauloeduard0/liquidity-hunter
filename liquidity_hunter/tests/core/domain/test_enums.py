@@ -1,16 +1,6 @@
 """Tests for `liquidity_hunter.core.domain.enums.TimeFrame`."""
 
-from datetime import timedelta
-
 from liquidity_hunter.core.domain import TimeFrame
-
-
-def test_to_timedelta() -> None:
-    assert TimeFrame.M1.to_timedelta() == timedelta(minutes=1)
-    assert TimeFrame.M30.to_timedelta() == timedelta(minutes=30)
-    assert TimeFrame.H1.to_timedelta() == timedelta(hours=1)
-    assert TimeFrame.D1.to_timedelta() == timedelta(days=1)
-    assert TimeFrame.W1.to_timedelta() == timedelta(weeks=1)
 
 
 def test_finer_returns_next_finer_timeframe() -> None:

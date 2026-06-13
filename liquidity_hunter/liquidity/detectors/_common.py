@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from liquidity_hunter.core.domain import Candle
-from liquidity_hunter.indicators import volume_delta
 from liquidity_hunter.liquidity.detectors.base import LiquidityZoneDetector
 
 
@@ -52,60 +51,26 @@ def collect_pivots(
     )
 
 
-def is_confirmed_break(
-    candle: Candle,
+def is_sustained_break(
+    candles: Sequence[Candle],
+    pivot_index: int,
     active_price: float,
     *,
     bullish: bool,
-    min_volume_delta_ratio: float,
-    volume_spike: bool = False,
+    persistence_candles: int,
 ) -> bool:
-    """Whether `candle` confirms a counter-trend break of `active_price`.
+    """Whether the break of `active_price` at `candles[pivot_index]` holds.
 
-    Requires `candle.close` to be beyond `active_price` (not just a wick) and
-    either `volume_delta(candle)` to be at least `min_volume_delta_ratio` of
-    `candle.volume` in the breakout direction (`bullish`), or `volume_spike`
-    to be `True` -- a finer-timeframe volume spike observed during `candle`
-    (see `has_volume_spike`), an alternative way to confirm a break whose
-    `volume_delta` is inconclusive at this timeframe.
+    True if `candles[pivot_index]` and the `persistence_candles` candles
+    immediately following it all close beyond `active_price` in the
+    `bullish` direction -- i.e. price did not immediately revert across the
+    level (a "false break"). Returns `False` if there are not yet enough
+    candles after `pivot_index` to evaluate the persistence window.
     """
-    close_beyond = candle.close > active_price if bullish else candle.close < active_price
-    if not close_beyond:
+    window_end = pivot_index + 1 + persistence_candles
+    if window_end > len(candles):
         return False
-    if volume_spike:
-        return True
-    if candle.volume == 0:
-        return False
-
-    delta = volume_delta(candle)
-    delta_in_direction = delta > 0 if bullish else delta < 0
-    delta_ratio = abs(delta) / candle.volume
-    return delta_in_direction and delta_ratio >= min_volume_delta_ratio
-
-
-def has_volume_spike(
-    finer_candles: Sequence[Candle],
-    window_start: datetime,
-    window_end: datetime,
-    *,
-    lookback: int,
-    multiplier: float,
-) -> bool:
-    """Whether any candle in `finer_candles` within `[window_start, window_end)`
-    has a volume spike: `volume >= multiplier * average volume of the
-    `lookback` finer candles immediately preceding it`.
-
-    `finer_candles` must be in chronological order. Used to confirm a break
-    on a coarser timeframe via a volume spike on a finer one, when that
-    coarser candle's own `volume_delta` is inconclusive.
-    """
-    for index, candle in enumerate(finer_candles):
-        if not (window_start <= candle.timestamp < window_end):
-            continue
-        if index < lookback:
-            continue
-        preceding = finer_candles[index - lookback : index]
-        average_volume = sum(c.volume for c in preceding) / lookback
-        if average_volume > 0 and candle.volume >= multiplier * average_volume:
-            return True
-    return False
+    window = candles[pivot_index:window_end]
+    if bullish:
+        return all(candle.close > active_price for candle in window)
+    return all(candle.close < active_price for candle in window)

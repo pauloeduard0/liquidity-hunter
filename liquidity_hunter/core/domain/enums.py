@@ -1,6 +1,5 @@
 """Enumerations shared across domain entities."""
 
-from datetime import timedelta
 from enum import Enum
 
 
@@ -15,10 +14,6 @@ class TimeFrame(str, Enum):
     H4 = "4h"
     D1 = "1d"
     W1 = "1w"
-
-    def to_timedelta(self) -> timedelta:
-        """The duration spanned by one candle of this timeframe."""
-        return _TIMEFRAME_DURATIONS[self]
 
     def finer(self) -> "TimeFrame | None":
         """The next finer (shorter-duration) timeframe, or `None` for `M1`."""
@@ -36,17 +31,6 @@ _TIMEFRAME_ORDER: tuple[TimeFrame, ...] = (
     TimeFrame.D1,
     TimeFrame.W1,
 )
-
-_TIMEFRAME_DURATIONS: dict[TimeFrame, timedelta] = {
-    TimeFrame.M1: timedelta(minutes=1),
-    TimeFrame.M5: timedelta(minutes=5),
-    TimeFrame.M15: timedelta(minutes=15),
-    TimeFrame.M30: timedelta(minutes=30),
-    TimeFrame.H1: timedelta(hours=1),
-    TimeFrame.H4: timedelta(hours=4),
-    TimeFrame.D1: timedelta(days=1),
-    TimeFrame.W1: timedelta(weeks=1),
-}
 
 
 class MarketDirection(str, Enum):

@@ -113,10 +113,10 @@ Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `LiquidityZoneType`, `StructureEvent`, `BiasSource`, `RetailPositioning`)
 live in `core/domain/enums.py`. Extend behavior by adding enum members
 rather than branching logic elsewhere (Open/Closed principle). `TimeFrame`
-also has `to_timedelta()` (the duration of one candle of that timeframe) and
-`finer()` (the next shorter-duration `TimeFrame`, or `None` for `M1`), used
-by `InternalStructureDetector`'s volume-spike confirmation (see the
-`liquidity` layer below).
+also has `finer()` (the next shorter-duration `TimeFrame`, or `None` for
+`M1`), used by `app.dashboard_data.load_dashboard_data` to fetch the candle
+series that `InternalStructureDetector` runs on (see the `liquidity` layer
+below).
 
 Full architecture rationale, including SOLID notes, is documented in
 `liquidity_hunter/docs/architecture.md`.
@@ -217,7 +217,9 @@ Full architecture rationale, including SOLID notes, is documented in
 - **`liquidity/detectors/internal_structure.py`** — `InternalStructureDetector`:
   detects BOS/CHoCH/`LIQUIDITY_SWEEP`/HL/LH on finer-grained, internal/minor
   structure, with `scope = StructureScope.INTERNAL` stamped on every emitted
-  `MarketStructure` (see `app.dashboard_data.load_dashboard_data`). Like
+  `MarketStructure` (see `app.dashboard_data.load_dashboard_data`, which runs
+  it on the candle series one `TimeFrame` finer than `market_structure_events`'
+  series, e.g. M30 pivots alongside H1 major structure). Like
   `SwingStructureDetector`, it sources swing pivots from
   `SwingHighDetector`/`SwingLowDetector` (`swing_lookback`) via the shared
   `_common.collect_pivots`, and maintains `pending_high`/`pending_low`
@@ -229,55 +231,48 @@ Full architecture rationale, including SOLID notes, is documented in
   opposite side breaks. A pivot above `active_high` (below `active_low`), in
   the direction of `trend` (or the first such break while `trend` is
   `NEUTRAL`), is a `BREAK_OF_STRUCTURE` on price alone; against `trend` it is
-  a `CHANGE_OF_CHARACTER` if confirmed — the candle's `close` is beyond the
-  reference AND (the same close+`volume_delta` rule as `SwingStructureDetector`
-  (`min_volume_delta_ratio`, default `0.2`) holds, OR a finer-timeframe volume
-  spike is observed, see below) — else a `LIQUIDITY_SWEEP`. A pivot below
-  `active_high` (above `active_low`) is a
-  descriptive `LOWER_HIGH`/`HIGHER_LOW` label. A purely trailing reference
-  has its own failure mode, though: comparing a CHoCH against the last
-  pivot — possibly a minor retracement rather than the true extreme of the
-  leg that just ended — can spuriously flag a continuation BOS right after
-  the reversal. To avoid that, a confirmed BOS/CHoCH promotes the *opposite*
-  side's `pending_<side>` to `active_<side>` (or to `None`, if nothing has
-  accumulated there yet — the next pivot on that side then silently
-  re-bootstraps with no label, the accepted cost of carrying forward "extreme
-  of the prior leg" semantics). A `LIQUIDITY_SWEEP`, or a pivot that doesn't
-  break the active reference (a HL/LH label), instead folds the *opposite*
-  side's current `active_<side>` into its `pending_<side>` via `_extreme`, so
-  that value isn't lost when `active_<side>` is later overwritten by its own
-  next pivot. Bootstrapping a side (its `active_<side>` was `None`) also
-  seeds `pending_<side>` with the same pivot, if the opposite side is already
-  active. `SwingStructureDetector`'s freeze — an active reference that
-  happens to equal the extreme of the entire remaining candle window can
-  permanently freeze the *opposite* side, since it is only promoted once the
-  opposite side breaks — is acceptable for `StructureScope.MAJOR`'s
-  "significant level" semantics, but would leave `StructureScope.INTERNAL`
-  unable to surface large moves as BOS/CHoCH for long stretches.
-  `InternalStructureDetector` avoids this: both references keep tracking
-  recent pivots (rather than freezing on either an old extreme or a stale
-  promoted value).
+  a `CHANGE_OF_CHARACTER` if confirmed (see below), else a `LIQUIDITY_SWEEP`.
+  A pivot below `active_high` (above `active_low`) is a descriptive
+  `LOWER_HIGH`/`HIGHER_LOW` label. A purely trailing reference has its own
+  failure mode, though: comparing a CHoCH against the last pivot — possibly a
+  minor retracement rather than the true extreme of the leg that just ended —
+  can spuriously flag a continuation BOS right after the reversal. To avoid
+  that, a confirmed BOS/CHoCH promotes the *opposite* side's `pending_<side>`
+  to `active_<side>` (or to `None`, if nothing has accumulated there yet —
+  the next pivot on that side then silently re-bootstraps with no label, the
+  accepted cost of carrying forward "extreme of the prior leg" semantics). A
+  `LIQUIDITY_SWEEP`, or a pivot that doesn't break the active reference (a
+  HL/LH label), instead folds the *opposite* side's current `active_<side>`
+  into its `pending_<side>` via `_extreme`, so that value isn't lost when
+  `active_<side>` is later overwritten by its own next pivot. Bootstrapping a
+  side (its `active_<side>` was `None`) also seeds `pending_<side>` with the
+  same pivot, if the opposite side is already active. `SwingStructureDetector`'s
+  freeze — an active reference that happens to equal the extreme of the
+  entire remaining candle window can permanently freeze the *opposite* side,
+  since it is only promoted once the opposite side breaks — is acceptable for
+  `StructureScope.MAJOR`'s "significant level" semantics, but would leave
+  `StructureScope.INTERNAL` unable to surface large moves as BOS/CHoCH for
+  long stretches. `InternalStructureDetector` avoids this: both references
+  keep tracking recent pivots (rather than freezing on either an old extreme
+  or a stale promoted value).
 
-  A `volume_delta` ratio near zero does not always mean a counter-trend
-  breakout candle lacked conviction — net taker buy/sell volume can cancel
-  out at this timeframe despite a real, high-volume move. The constructor's
-  optional `finer_candles` (a chronologically ordered `Candle` series one
-  `TimeFrame` finer than the detected series, e.g. M30 alongside an H1
-  `candles` series — see `TimeFrame.finer()`) lets such a candle still be
-  confirmed if `_common.has_volume_spike` finds, within that candle's time
-  window (`TimeFrame.to_timedelta()`), a finer candle whose volume is at
-  least `volume_spike_multiplier` (default `1.5`) times the average volume
-  of the `volume_spike_lookback` (default `20`) finer candles preceding it.
-  This is an *additional* way to confirm a break (OR'd with the
-  `volume_delta` check), not a replacement, and applies only to
-  `InternalStructureDetector` — `SwingStructureDetector` is unaffected.
-  `app.dashboard_data.load_dashboard_data` fetches `finer_candles`
-  automatically via `timeframe.finer()` (skipped if the dashboard's
-  `timeframe` is already the finest, `M1`).
+  Confirmation of a counter-trend break is **persistence**-based, not
+  volume-based: a single high-volume candle that pokes through a level and
+  immediately reverts is a "false break", whereas a break that price *holds*
+  beyond for a few candles is "real" — see `_common.is_sustained_break`. The
+  constructor's `persistence_candles` (default `3`) is the number of candles
+  immediately following the breaking pivot's candle that must *also* close
+  beyond the reference, in addition to the pivot's own candle, for the break
+  to be confirmed as a `CHANGE_OF_CHARACTER`; if the window reverts (or there
+  aren't yet enough trailing candles to evaluate it), the pivot is reported
+  as a `LIQUIDITY_SWEEP` instead. This replaces the previous
+  `volume_delta`/volume-spike confirmation for `InternalStructureDetector`
+  entirely — `SwingStructureDetector`'s `volume_delta`-ratio confirmation
+  (`min_volume_delta_ratio`) is unaffected and unchanged.
 - **`liquidity/detectors/_common.py`** — shared `validate_candles`,
-  `price_range`, `Pivot`, `collect_pivots`, `is_confirmed_break`, and
-  `has_volume_spike` helpers (the latter four used by
-  `InternalStructureDetector`).
+  `price_range`, `Pivot`, `collect_pivots`, and `is_sustained_break` helpers
+  (the latter used by `InternalStructureDetector` for persistence-based
+  confirmation).
 
 All detectors are re-exported from `liquidity_hunter.liquidity`.
 
@@ -341,17 +336,18 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=..., swing_lookback=..., internal_swing_lookback=...)`**
   — fetches candles, runs all liquidity detectors, scores the zones via
   `LiquidityScoringEngine`, runs `SwingStructureDetector(swing_lookback=...)`
-  to populate `market_structure_events`, fetches a second candle series one
-  `TimeFrame` finer (via `timeframe.finer()`, `None`/skipped if `timeframe`
-  is already `M1`) and runs `InternalStructureDetector(swing_lookback=
-  internal_swing_lookback, finer_candles=...)` (default
-  `internal_swing_lookback= DEFAULT_INTERNAL_SWING_LOOKBACK = 10`) to
-  populate `internal_structure_events`, and runs `RetailTrapAnalyzer` to
-  produce a `DashboardData`. `higher_timeframe_direction` is the `direction`
-  of the most recent `MarketStructure` event in `market_structure_events`
-  (`_latest_structure_direction`), or `NEUTRAL` if none have been detected
-  yet (e.g. too few candles for `swing_lookback`) — `internal_structure_events`
-  does not affect `higher_timeframe_direction`.
+  on `candles` to populate `market_structure_events`, fetches a second candle
+  series one `TimeFrame` finer (`finer_candles`, via `timeframe.finer()`,
+  `None`/skipped if `timeframe` is already `M1`) and runs
+  `InternalStructureDetector(swing_lookback=internal_swing_lookback)` (default
+  `internal_swing_lookback = DEFAULT_INTERNAL_SWING_LOOKBACK = 10`) **on
+  `finer_candles`** (e.g. M30 pivots when `timeframe` is H1) to populate
+  `internal_structure_events` — `[]` if `timeframe` is already `M1`, and runs
+  `RetailTrapAnalyzer` to produce a `DashboardData`. `higher_timeframe_direction`
+  is the `direction` of the most recent `MarketStructure` event in
+  `market_structure_events` (`_latest_structure_direction`), or `NEUTRAL` if
+  none have been detected yet (e.g. too few candles for `swing_lookback`) —
+  `internal_structure_events` does not affect `higher_timeframe_direction`.
 
 `DashboardData` and `ScoredLiquidityZone` are re-exported from
 `liquidity_hunter.app` for use by `dashboard`.
@@ -459,15 +455,21 @@ volume delta ratio `>= min_volume_delta_ratio` in the breakout direction")
 gates only counter-trend breaks, reported as `CHANGE_OF_CHARACTER` if
 confirmed, with a failed confirmation reported as
 `StructureEvent.LIQUIDITY_SWEEP` instead. `MarketStructure.scope`
-(`StructureScope`: `MAJOR`/`INTERNAL`)
-distinguishes the swing-structure pass (`market_structure_events`,
-`swing_lookback`, also the sole input to `higher_timeframe_direction`) from
-a second, finer-grained pass (`internal_structure_events`,
-`internal_swing_lookback`, default `DEFAULT_INTERNAL_SWING_LOOKBACK = 10`)
-surfacing minor/internal structure on the same candle series.
-`InternalStructureDetector`'s `CHANGE_OF_CHARACTER` confirmation additionally
-accepts a finer-timeframe (`TimeFrame.finer()`) volume spike as an
-alternative to the `volume_delta` ratio check, fetched and wired by
-`load_dashboard_data` (`finer_candles`); `SwingStructureDetector` is
-unaffected. Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
+(`StructureScope`: `MAJOR`/`INTERNAL`) distinguishes the swing-structure pass
+(`market_structure_events`, on `candles`, `swing_lookback`, also the sole
+input to `higher_timeframe_direction`) from a second, finer-grained pass
+(`internal_structure_events`, on `finer_candles` — one `TimeFrame` finer than
+`candles`, `[]` if `timeframe` is already `M1` — `internal_swing_lookback`,
+default `DEFAULT_INTERNAL_SWING_LOOKBACK = 10`) surfacing minor/internal
+structure on that finer series (e.g. M30 pivots when `timeframe` is H1).
+`InternalStructureDetector`'s `CHANGE_OF_CHARACTER` confirmation is
+persistence-based (`_common.is_sustained_break`, `persistence_candles`,
+default `3`): the breaking candle and the `persistence_candles` candles
+following it must all close beyond the reference, else the pivot is reported
+as a `LIQUIDITY_SWEEP` ("false break"). This replaces the previous
+`volume_delta`/finer-timeframe-volume-spike confirmation for
+`InternalStructureDetector` entirely (`TimeFrame.to_timedelta()` and
+`_common.is_confirmed_break`/`has_volume_spike` have been removed);
+`SwingStructureDetector`'s `volume_delta`-ratio confirmation is unaffected.
+Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
 `invalidated_at` for the swept zone is not yet implemented.
