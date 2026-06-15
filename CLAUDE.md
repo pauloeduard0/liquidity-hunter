@@ -302,10 +302,31 @@ Full architecture rationale, including SOLID notes, is documented in
   trailing `active_<side>` it broke. (This validated-reference rule replaces
   the earlier `choch_candidate_<side>` + ratchet + `hl_since_last_ll`/
   `lh_since_last_hh` machinery entirely.)
+
+  The pivot loop above decides *which* event fires and *against which*
+  reference level, but does not itself supply that event's `timestamp` for
+  `BREAK_OF_STRUCTURE`, `LIQUIDITY_SWEEP`, and `CHANGE_OF_CHARACTER` — using
+  the triggering pivot's own timestamp there would plot the marker at the
+  extreme of the *new* leg (where the pivot forms) rather than the candle
+  that actually broke the prior level, visually "lagging" the break. Instead,
+  once a break is decided, a backward scan over the candles between the
+  previous pivot of the same kind (exclusive) and the triggering pivot
+  (inclusive) locates the actual breaking candle: `_common.find_wick_break_index`
+  for `BREAK_OF_STRUCTURE`/`LIQUIDITY_SWEEP` (the first candle whose high/low
+  wick crosses `active_<side>`, price-only), and `_common.find_sustained_break_index`
+  for `CHANGE_OF_CHARACTER` (the first candle at which `is_sustained_break`
+  against `validated_choch_<side>` holds). The emitted event's `timestamp` is
+  that candle's timestamp; `price_level` remains the triggering pivot's own
+  `price` — the true extreme of the move — and `reference_price_level` is
+  unchanged either way (`active_<side>.price` or
+  `validated_choch_<side>.price`). `LOWER_HIGH`/`HIGHER_LOW` labels are
+  unaffected — they describe the pivot itself, not a break, so they keep the
+  pivot's own timestamp/price.
 - **`liquidity/detectors/_common.py`** — shared `validate_candles`,
-  `price_range`, `Pivot`, `collect_pivots`, and `is_sustained_break` helpers
-  (the latter used by `InternalStructureDetector` for persistence-based
-  confirmation).
+  `price_range`, `Pivot`, `collect_pivots`, `is_sustained_break`,
+  `find_wick_break_index`, and `find_sustained_break_index` helpers (the
+  latter three used by `InternalStructureDetector` for persistence-based
+  confirmation and break-candle attribution).
 
 All detectors are re-exported from `liquidity_hunter.liquidity`.
 
@@ -519,5 +540,14 @@ hold) is a `LIQUIDITY_SWEEP` with `trend` unchanged. A confirmed
 a `BREAK_OF_STRUCTURE`'s is the trailing `active_<side>` it broke. This
 validated-reference rule replaced the earlier `choch_candidate_<side>` +
 ratchet + `hl_since_last_ll`/`lh_since_last_hh` machinery entirely.
+For `BREAK_OF_STRUCTURE`, `LIQUIDITY_SWEEP`, and `CHANGE_OF_CHARACTER`, the
+emitted `timestamp` is not the triggering pivot's but the actual breaking
+candle's — found via `_common.find_wick_break_index` (wick vs.
+`active_<side>`, price-only) or `_common.find_sustained_break_index`
+(`is_sustained_break` vs. `validated_choch_<side>`), searched within the leg
+since the previous pivot of the same kind. This avoids plotting BOS/CHoCH at
+the extreme of the new leg (where the confirming pivot forms) instead of the
+candle that actually broke the prior level; `price_level` remains the
+triggering pivot's own `price` (the true extreme of the move).
 Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
 `invalidated_at` for the swept zone is not yet implemented.

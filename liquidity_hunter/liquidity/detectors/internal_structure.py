@@ -89,6 +89,8 @@ from liquidity_hunter.core.domain import (
 from liquidity_hunter.liquidity.detectors._common import (
     Pivot,
     collect_pivots,
+    find_sustained_break_index,
+    find_wick_break_index,
     is_sustained_break,
     validate_candles,
 )
@@ -121,7 +123,7 @@ class InternalStructureDetector(MarketStructureDetector):
     break to be a `CHANGE_OF_CHARACTER` rather than a `LIQUIDITY_SWEEP`.
     """
 
-    def __init__(self, swing_lookback: int = 3, persistence_candles: int = 2) -> None:
+    def __init__(self, swing_lookback: int = 1, persistence_candles: int = 2) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
@@ -172,6 +174,14 @@ class InternalStructureDetector(MarketStructureDetector):
         last_ll: Pivot | None = None
         last_hh: Pivot | None = None
         trend = MarketDirection.NEUTRAL
+        # Candle index of the previous pivot of each kind, used to bound the
+        # break-candle search below to the leg between consecutive pivots of
+        # that kind. -1 (no previous pivot) is never read: every branch below
+        # that performs a search is only reachable once active_<side>/
+        # validated_choch_<side> is set, which happens no earlier than the
+        # first pivot of that kind, i.e. once these are no longer -1.
+        prev_high_pivot_index = -1
+        prev_low_pivot_index = -1
 
         def emit(
             timestamp: datetime,
@@ -195,6 +205,7 @@ class InternalStructureDetector(MarketStructureDetector):
 
         for timestamp, kind, price in pivots:
             pivot = Pivot(price=price, timestamp=timestamp)
+            current_index = index_by_timestamp[timestamp]
 
             if kind == "high":
                 if (
@@ -208,9 +219,22 @@ class InternalStructureDetector(MarketStructureDetector):
                     # reference is validated_choch_high -- never the trailing
                     # active_high, never the breaking pivot. Checked before the
                     # active_high bootstrap so a CHoCH still fires even if
-                    # active_high was retired to `None`.
+                    # active_high was retired to `None`. Timestamped on the
+                    # candle that first sustains the break, not the pivot that
+                    # eventually confirmed it -- price_level remains the
+                    # pivot's price (the extreme of the move).
+                    break_candle = candles[
+                        find_sustained_break_index(
+                            candles,
+                            prev_high_pivot_index + 1,
+                            current_index,
+                            validated_choch_high.price,
+                            bullish=True,
+                            persistence_candles=self._persistence_candles,
+                        )
+                    ]
                     emit(
-                        timestamp,
+                        break_candle.timestamp,
                         StructureEvent.CHANGE_OF_CHARACTER,
                         MarketDirection.BULLISH,
                         price,
@@ -228,12 +252,25 @@ class InternalStructureDetector(MarketStructureDetector):
                     if active_low is not None:
                         pending_high = pivot
                 elif price > active_high.price:
+                    # Timestamped on the candle whose wick first breaks
+                    # active_high, not the pivot that eventually confirmed it
+                    # -- price_level remains the pivot's price (the extreme of
+                    # the move).
+                    break_candle = candles[
+                        find_wick_break_index(
+                            candles,
+                            prev_high_pivot_index + 1,
+                            current_index,
+                            active_high.price,
+                            bullish=True,
+                        )
+                    ]
                     if trend is MarketDirection.BEARISH:
                         # Broke the trailing high but not validated_choch_high
                         # (or the break did not hold): an internal bounce within
                         # the bearish leg, not a reversal.
                         emit(
-                            timestamp,
+                            break_candle.timestamp,
                             StructureEvent.LIQUIDITY_SWEEP,
                             MarketDirection.BULLISH,
                             price,
@@ -243,7 +280,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     else:
                         # BOS bullish (first break from NEUTRAL, or continuation).
                         emit(
-                            timestamp,
+                            break_candle.timestamp,
                             StructureEvent.BREAK_OF_STRUCTURE,
                             MarketDirection.BULLISH,
                             price,
@@ -269,6 +306,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     pending_low = self._extreme(pending_low, active_low, higher=False)
                 active_high = pivot
                 last_high_pivot = pivot
+                prev_high_pivot_index = current_index
                 if validated_choch_high is None and trend is MarketDirection.BEARISH:
                     # Bootstrap fallback: the leg's BOS confirmed a new LL with
                     # no prior high pivot to serve as the CHoCH reference (the
@@ -284,8 +322,18 @@ class InternalStructureDetector(MarketStructureDetector):
                     and confirms_break(timestamp, validated_choch_low.price, bullish=False)
                 ):
                     # Bearish CHoCH (mirror of the bullish case).
+                    break_candle = candles[
+                        find_sustained_break_index(
+                            candles,
+                            prev_low_pivot_index + 1,
+                            current_index,
+                            validated_choch_low.price,
+                            bullish=False,
+                            persistence_candles=self._persistence_candles,
+                        )
+                    ]
                     emit(
-                        timestamp,
+                        break_candle.timestamp,
                         StructureEvent.CHANGE_OF_CHARACTER,
                         MarketDirection.BEARISH,
                         price,
@@ -301,9 +349,22 @@ class InternalStructureDetector(MarketStructureDetector):
                     if active_high is not None:
                         pending_low = pivot
                 elif price < active_low.price:
+                    # Timestamped on the candle whose wick first breaks
+                    # active_low, not the pivot that eventually confirmed it
+                    # -- price_level remains the pivot's price (the extreme of
+                    # the move).
+                    break_candle = candles[
+                        find_wick_break_index(
+                            candles,
+                            prev_low_pivot_index + 1,
+                            current_index,
+                            active_low.price,
+                            bullish=False,
+                        )
+                    ]
                     if trend is MarketDirection.BULLISH:
                         emit(
-                            timestamp,
+                            break_candle.timestamp,
                             StructureEvent.LIQUIDITY_SWEEP,
                             MarketDirection.BEARISH,
                             price,
@@ -313,7 +374,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     else:
                         # BOS bearish (first break from NEUTRAL, or continuation).
                         emit(
-                            timestamp,
+                            break_candle.timestamp,
                             StructureEvent.BREAK_OF_STRUCTURE,
                             MarketDirection.BEARISH,
                             price,
@@ -339,6 +400,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     pending_high = self._extreme(pending_high, active_high, higher=True)
                 active_low = pivot
                 last_low_pivot = pivot
+                prev_low_pivot_index = current_index
                 if validated_choch_low is None and trend is MarketDirection.BULLISH:
                     # Bootstrap fallback, mirroring the high side above.
                     validated_choch_low = pivot

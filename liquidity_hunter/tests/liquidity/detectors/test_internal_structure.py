@@ -180,6 +180,8 @@ def test_bullish_choch_reference_is_last_high_before_new_ll_not_highest() -> Non
     assert choch.event is StructureEvent.CHANGE_OF_CHARACTER
     assert choch.direction is MarketDirection.BULLISH
     assert choch.price_level == 175.0
+    # The break is sustained from this candle onward (no earlier lag here).
+    assert choch.timestamp == candles[13].timestamp
     # 170 (the last high before the final LL), never 190 (the higher bounce).
     assert choch.reference_price_level == 170.0
 
@@ -203,6 +205,8 @@ def test_bearish_choch_reference_is_last_low_before_new_hh_not_lowest() -> None:
     assert choch.event is StructureEvent.CHANGE_OF_CHARACTER
     assert choch.direction is MarketDirection.BEARISH
     assert choch.price_level == 120.0
+    # The break is sustained from this candle onward (no earlier lag here).
+    assert choch.timestamp == candles[13].timestamp
     assert choch.reference_price_level == 130.0
 
 
@@ -269,6 +273,8 @@ def test_persistence_confirms_choch_when_break_holds() -> None:
     assert events[-1].event is StructureEvent.CHANGE_OF_CHARACTER
     assert events[-1].direction is MarketDirection.BEARISH
     assert events[-1].price_level == 60.0
+    # The break is sustained from this candle onward (no earlier lag here).
+    assert events[-1].timestamp == candles[7].timestamp
     assert events[-1].reference_price_level == 90.0
 
 
@@ -307,8 +313,12 @@ def test_insufficient_trailing_candles_yields_liquidity_sweep() -> None:
 # window the bearish leg prints its lowest low (59,131 at 2026-06-05 19:00Z)
 # preceded by the swing high 61,547 (2026-06-05 16:00Z); that high becomes
 # validated_choch_high and stays frozen (no lower low follows), so the break
-# above it at 62,960 (2026-06-07 08:00Z) is a bullish CHoCH referencing
-# 61,547 -- NOT the leg's highest high (~64,495) nor a pullback top.
+# above it at 62,960 (the confirming swing-high pivot) is a bullish CHoCH
+# referencing 61,547 -- NOT the leg's highest high (~64,495) nor a pullback
+# top. The sustained break above 61,547 actually begins three candles before
+# that pivot, at 2026-06-07 03:00Z (close 61,701.07) -- the CHoCH is
+# timestamped there, while price_level remains the confirming pivot's price
+# (62,960).
 #
 # This is a RULE-semantics regression at swing_lookback=2 (the granularity at
 # which this structure's swing highs exist); production defaults to
@@ -348,6 +358,7 @@ def test_real_window_bullish_choch_references_validated_high() -> None:
     assert choch.direction is MarketDirection.BULLISH
     assert choch.price_level == _EXPECTED_CHOCH_PRICE
     assert choch.reference_price_level == _EXPECTED_CHOCH_REFERENCE
+    assert choch.timestamp == datetime(2026, 6, 7, 3, 0, tzinfo=UTC)
 
 
 def test_real_window_production_lookback_emits_no_choch() -> None:

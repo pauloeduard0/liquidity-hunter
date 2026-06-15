@@ -74,3 +74,51 @@ def is_sustained_break(
     if bullish:
         return all(candle.close > active_price for candle in window)
     return all(candle.close < active_price for candle in window)
+
+
+def find_wick_break_index(
+    candles: Sequence[Candle],
+    start_index: int,
+    end_index: int,
+    level_price: float,
+    *,
+    bullish: bool,
+) -> int:
+    """The first index in `candles[start_index:end_index + 1]` whose wick
+    crosses `level_price` (`high > level_price` if `bullish`, else
+    `low < level_price`).
+
+    Falls back to `end_index` if none qualifies in range -- the caller has
+    already established that `candles[end_index]` itself crosses
+    `level_price`.
+    """
+    for index in range(start_index, end_index + 1):
+        candle = candles[index]
+        if bullish and candle.high > level_price:
+            return index
+        if not bullish and candle.low < level_price:
+            return index
+    return end_index
+
+
+def find_sustained_break_index(
+    candles: Sequence[Candle],
+    start_index: int,
+    end_index: int,
+    level_price: float,
+    *,
+    bullish: bool,
+    persistence_candles: int,
+) -> int:
+    """The first index in `candles[start_index:end_index + 1]` at which a
+    sustained break of `level_price` begins (see `is_sustained_break`).
+
+    Falls back to `end_index` if none qualifies in range -- the caller has
+    already established that a sustained break begins at `end_index`.
+    """
+    for index in range(start_index, end_index + 1):
+        if is_sustained_break(
+            candles, index, level_price, bullish=bullish, persistence_candles=persistence_candles
+        ):
+            return index
+    return end_index
