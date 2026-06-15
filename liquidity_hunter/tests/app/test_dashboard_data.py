@@ -33,9 +33,11 @@ class _FakeProvider(OHLCVProvider):
     def __init__(self, candles: list[Candle]) -> None:
         self._candles = candles
         self.requested_timeframes: list[TimeFrame] = []
+        self.requested_limits: list[int] = []
 
     def get_ohlcv(self, symbol: str, timeframe: TimeFrame, limit: int = 500) -> list[Candle]:
         self.requested_timeframes.append(timeframe)
+        self.requested_limits.append(limit)
         return self._candles
 
 
@@ -124,6 +126,27 @@ def test_load_dashboard_data_fetches_finer_timeframe_for_internal_structure() ->
     load_dashboard_data(provider=provider, symbol="BTCUSDT", timeframe=TimeFrame.H1)
 
     assert provider.requested_timeframes == [TimeFrame.H1, TimeFrame.M30]
+
+
+def test_load_dashboard_data_finer_fetch_covers_same_calendar_range() -> None:
+    # M30 candles are half as long as H1 candles, so the finer fetch needs
+    # twice the limit to cover the same calendar range as `candles`.
+    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+    provider = _FakeProvider(candles)
+
+    load_dashboard_data(provider=provider, symbol="BTCUSDT", timeframe=TimeFrame.H1, limit=500)
+
+    assert provider.requested_limits == [500, 1000]
+
+
+def test_load_dashboard_data_finer_fetch_limit_capped_at_klines_max() -> None:
+    # H4 -> H1 is a 4x ratio; at limit=500 that would be 2000, capped to 1000.
+    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+    provider = _FakeProvider(candles)
+
+    load_dashboard_data(provider=provider, symbol="BTCUSDT", timeframe=TimeFrame.H4, limit=500)
+
+    assert provider.requested_limits == [500, 1000]
 
 
 def test_load_dashboard_data_skips_finer_fetch_for_finest_timeframe() -> None:

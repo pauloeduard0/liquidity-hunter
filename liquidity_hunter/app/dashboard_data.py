@@ -28,6 +28,23 @@ from liquidity_hunter.scoring import LiquidityScoringEngine, ScoredLiquidityZone
 DEFAULT_SWING_LOOKBACK = 50
 DEFAULT_INTERNAL_SWING_LOOKBACK = 10
 
+# Binance's `/api/v3/klines` endpoint accepts `limit` values up to 1000.
+_MAX_FETCH_LIMIT = 1000
+
+# Duration of each `TimeFrame` in minutes, used only to size the `finer_candles`
+# fetch (see `load_dashboard_data`) so it covers at least the same calendar
+# range as `candles` -- not a general-purpose `TimeFrame` duration API.
+_TIMEFRAME_MINUTES: dict[TimeFrame, int] = {
+    TimeFrame.M1: 1,
+    TimeFrame.M5: 5,
+    TimeFrame.M15: 15,
+    TimeFrame.M30: 30,
+    TimeFrame.H1: 60,
+    TimeFrame.H4: 240,
+    TimeFrame.D1: 1440,
+    TimeFrame.W1: 10080,
+}
+
 
 @dataclass(frozen=True)
 class DashboardData:
@@ -83,9 +100,11 @@ def load_dashboard_data(
     )
 
     finer_timeframe = timeframe.finer()
-    finer_candles = (
-        provider.get_ohlcv(symbol, finer_timeframe, limit) if finer_timeframe is not None else None
-    )
+    finer_candles = None
+    if finer_timeframe is not None:
+        coverage_ratio = _TIMEFRAME_MINUTES[timeframe] // _TIMEFRAME_MINUTES[finer_timeframe]
+        finer_limit = min(limit * coverage_ratio, _MAX_FETCH_LIMIT)
+        finer_candles = provider.get_ohlcv(symbol, finer_timeframe, finer_limit)
     internal_structure_events = (
         InternalStructureDetector(swing_lookback=internal_swing_lookback).detect(finer_candles)
         if finer_candles is not None
