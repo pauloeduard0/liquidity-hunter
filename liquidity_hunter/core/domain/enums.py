@@ -15,23 +15,6 @@ class TimeFrame(str, Enum):
     D1 = "1d"
     W1 = "1w"
 
-    def finer(self) -> "TimeFrame | None":
-        """The next finer (shorter-duration) timeframe, or `None` for `M1`."""
-        index = _TIMEFRAME_ORDER.index(self)
-        return _TIMEFRAME_ORDER[index - 1] if index > 0 else None
-
-
-_TIMEFRAME_ORDER: tuple[TimeFrame, ...] = (
-    TimeFrame.M1,
-    TimeFrame.M5,
-    TimeFrame.M15,
-    TimeFrame.M30,
-    TimeFrame.H1,
-    TimeFrame.H4,
-    TimeFrame.D1,
-    TimeFrame.W1,
-)
-
 
 class MarketDirection(str, Enum):
     """Generic directional bias of structure or sentiment."""

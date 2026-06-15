@@ -1,7 +1,5 @@
 """Tests for `liquidity_hunter.app.dashboard_data`."""
 
-from datetime import timedelta
-
 from liquidity_hunter.app.dashboard_data import load_dashboard_data
 from liquidity_hunter.core.domain import (
     Candle,
@@ -163,72 +161,47 @@ def test_load_dashboard_data_neutral_trend_with_no_structure_events() -> None:
     assert data.higher_timeframe_direction is MarketDirection.NEUTRAL
 
 
-def test_load_dashboard_data_fetches_finer_timeframe_for_internal_structure() -> None:
-    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
-    provider = _FakeProvider(candles)
-
-    load_dashboard_data(provider=provider, symbol="BTCUSDT", timeframe=TimeFrame.H1)
-
-    assert provider.requested_timeframes == [TimeFrame.H1, TimeFrame.M30]
-
-
-def test_load_dashboard_data_finer_fetch_covers_same_calendar_range() -> None:
-    # M30 candles are half as long as H1 candles, so the finer fetch needs
-    # twice the limit to cover the same calendar range as `candles`.
+def test_load_dashboard_data_fetches_buffered_series_for_internal_structure() -> None:
     candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
     provider = _FakeProvider(candles)
 
     load_dashboard_data(provider=provider, symbol="BTCUSDT", timeframe=TimeFrame.H1, limit=500)
 
-    assert provider.requested_limits == [500, 1000]
+    # InternalStructureDetector runs on the same timeframe as `candles`, with
+    # an extra bootstrap buffer of 300 candles.
+    assert provider.requested_timeframes == [TimeFrame.H1, TimeFrame.H1]
+    assert provider.requested_limits == [500, 800]
 
 
-def test_load_dashboard_data_finer_fetch_limit_capped_at_klines_max() -> None:
-    # H4 -> H1 is a 4x ratio; at limit=500 that would be 2000, capped to 1000.
+def test_load_dashboard_data_internal_structure_fetch_limit_capped_at_klines_max() -> None:
+    # limit=900 + 300 buffer = 1200, capped to Binance's klines max of 1000.
     candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
     provider = _FakeProvider(candles)
 
-    load_dashboard_data(provider=provider, symbol="BTCUSDT", timeframe=TimeFrame.H4, limit=500)
+    load_dashboard_data(provider=provider, symbol="BTCUSDT", timeframe=TimeFrame.H1, limit=900)
 
-    assert provider.requested_limits == [500, 1000]
-
-
-def test_load_dashboard_data_skips_finer_fetch_for_finest_timeframe() -> None:
-    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
-    provider = _FakeProvider(candles)
-
-    load_dashboard_data(provider=provider, symbol="BTCUSDT", timeframe=TimeFrame.M1)
-
-    assert provider.requested_timeframes == [TimeFrame.M1]
+    assert provider.requested_limits == [900, 1000]
 
 
 def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> None:
-    # A long M30 zigzag produces internal structure events spanning over a
-    # week, but only the first ~19 hours fall inside the H1 visible window
-    # (limit=20 -> 20 H1 candles starting at the same `BASE_TIME`).
-    m30_highs, m30_lows = _trending_zigzag(340)
-    m30_candles = make_series(
-        m30_highs,
-        m30_lows,
-        symbol="BTCUSDT",
-        timeframe=TimeFrame.M30,
-        interval=timedelta(minutes=30),
-    )
-    h1_highs, h1_lows = _trending_zigzag(20)
-    h1_candles = make_series(h1_highs, h1_lows, symbol="BTCUSDT", timeframe=TimeFrame.H1)
+    # A long zigzag produces internal structure events spanning the whole
+    # series, but only the visible window (the trailing `limit` candles)
+    # should be reported.
+    highs, lows = _trending_zigzag(340)
+    full_candles = make_series(highs, lows, symbol="BTCUSDT", timeframe=TimeFrame.H1)
 
-    provider = _PerTimeframeFakeProvider({TimeFrame.H1: h1_candles, TimeFrame.M30: m30_candles})
+    provider = _PerTimeframeFakeProvider({TimeFrame.H1: full_candles})
 
     data = load_dashboard_data(
         provider=provider,
         symbol="BTCUSDT",
         timeframe=TimeFrame.H1,
-        limit=20,
+        limit=40,
         internal_swing_lookback=10,
     )
 
-    # H1 limit=20 -> coverage_ratio=2 -> finer_limit=40, +300 buffer = 340.
-    assert provider.requested_limits == [20, 340]
+    # limit=40 + 300 buffer = 340.
+    assert provider.requested_limits == [40, 340]
 
     visible_start = data.candles[0].timestamp
     visible_end = data.candles[-1].timestamp
@@ -241,5 +214,5 @@ def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> N
     # The buffered series produces many more events than fall in the visible
     # window -- proving the buffer/filter actually discards out-of-window
     # events rather than the window happening to cover everything.
-    unfiltered_events = InternalStructureDetector(swing_lookback=10).detect(m30_candles)
+    unfiltered_events = InternalStructureDetector(swing_lookback=10).detect(full_candles)
     assert len(unfiltered_events) > len(data.internal_structure_events)

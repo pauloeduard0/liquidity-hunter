@@ -112,11 +112,7 @@ and `validate_assignment=True`. New entities should follow this pattern.
 Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `LiquidityZoneType`, `StructureEvent`, `BiasSource`, `RetailPositioning`)
 live in `core/domain/enums.py`. Extend behavior by adding enum members
-rather than branching logic elsewhere (Open/Closed principle). `TimeFrame`
-also has `finer()` (the next shorter-duration `TimeFrame`, or `None` for
-`M1`), used by `app.dashboard_data.load_dashboard_data` to fetch the candle
-series that `InternalStructureDetector` runs on (see the `liquidity` layer
-below).
+rather than branching logic elsewhere (Open/Closed principle).
 
 Full architecture rationale, including SOLID notes, is documented in
 `liquidity_hunter/docs/architecture.md`.
@@ -218,8 +214,8 @@ Full architecture rationale, including SOLID notes, is documented in
   detects BOS/CHoCH/`LIQUIDITY_SWEEP`/HL/LH on finer-grained, internal/minor
   structure, with `scope = StructureScope.INTERNAL` stamped on every emitted
   `MarketStructure` (see `app.dashboard_data.load_dashboard_data`, which runs
-  it on the candle series one `TimeFrame` finer than `market_structure_events`'
-  series, e.g. M30 pivots alongside H1 major structure). Like
+  it on the same candle series as `market_structure_events`, with a smaller
+  `internal_swing_lookback` to surface minor pivots within that series). Like
   `SwingStructureDetector`, it sources swing pivots from
   `SwingHighDetector`/`SwingLowDetector` (`swing_lookback`) via the shared
   `_common.collect_pivots`, and maintains `pending_high`/`pending_low`
@@ -446,26 +442,22 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=..., swing_lookback=..., internal_swing_lookback=...)`**
   — fetches candles, runs all liquidity detectors, scores the zones via
   `LiquidityScoringEngine`, runs `SwingStructureDetector(swing_lookback=...)`
-  on `candles` to populate `market_structure_events`, fetches a second candle
-  series one `TimeFrame` finer (`finer_candles`, via `timeframe.finer()`,
-  `None`/skipped if `timeframe` is already `M1`), runs
+  on `candles` to populate `market_structure_events`, fetches a second,
+  larger candle series of the *same* `timeframe` (`internal_candles`), runs
   `InternalStructureDetector(swing_lookback=internal_swing_lookback)` (default
-  `internal_swing_lookback = DEFAULT_INTERNAL_SWING_LOOKBACK = 10`) **on
-  `finer_candles`** (e.g. M30 pivots when `timeframe` is H1), and filters the
-  result to populate `internal_structure_events` — `[]` if `timeframe` is
-  already `M1` — and runs `RetailTrapAnalyzer` to produce a `DashboardData`.
-  `higher_timeframe_direction` is the `direction` of the most recent
-  `MarketStructure` event in `market_structure_events`
+  `internal_swing_lookback = DEFAULT_INTERNAL_SWING_LOOKBACK = 2`) **on
+  `internal_candles`**, and filters the result to populate
+  `internal_structure_events` and runs `RetailTrapAnalyzer` to produce a
+  `DashboardData`. `higher_timeframe_direction` is the `direction` of the most
+  recent `MarketStructure` event in `market_structure_events`
   (`_latest_structure_direction`), or `NEUTRAL` if none have been detected yet
   (e.g. too few candles for `swing_lookback`) — `internal_structure_events`
   does not affect `higher_timeframe_direction`.
 
-  `finer_candles` is fetched with an extra
+  `internal_candles` is fetched with an extra
   `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER = 300` candles of history prepended
-  beyond what's needed to cover `candles`' calendar range
-  (`buffered_finer_limit = min(finer_limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER,
-  _MAX_FETCH_LIMIT)`, where `finer_limit` is the same coverage-based value
-  described above for `_TIMEFRAME_MINUTES`). `InternalStructureDetector` is
+  beyond `limit` (`buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER,
+  _MAX_FETCH_LIMIT)`). `InternalStructureDetector` is
   stateless, but its `trend`/`active_<side>`/`validated_choch_<side>`
   bootstrap depends on the *first* pivots in whatever series it's given — on
   a fixed-size sliding window re-fetched every refresh, that bootstrap shifts
@@ -587,10 +579,11 @@ confirmed, with a failed confirmation reported as
 (`StructureScope`: `MAJOR`/`INTERNAL`) distinguishes the swing-structure pass
 (`market_structure_events`, on `candles`, `swing_lookback`, also the sole
 input to `higher_timeframe_direction`) from a second, finer-grained pass
-(`internal_structure_events`, on `finer_candles` — one `TimeFrame` finer than
-`candles`, `[]` if `timeframe` is already `M1` — `internal_swing_lookback`,
-default `DEFAULT_INTERNAL_SWING_LOOKBACK = 10`) surfacing minor/internal
-structure on that finer series (e.g. M30 pivots when `timeframe` is H1).
+(`internal_structure_events`, on the same `candles` series — a larger,
+buffered fetch of the same `timeframe`, see `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER`
+— with `internal_swing_lookback`, default `DEFAULT_INTERNAL_SWING_LOOKBACK = 2`)
+surfacing minor/internal structure on that series at a finer pivot
+granularity than `swing_lookback`.
 `InternalStructureDetector`'s `CHANGE_OF_CHARACTER` confirmation is
 persistence-based (`_common.is_sustained_break`, `persistence_candles`,
 default `3`): a sustained break is validated if the `persistence_candles`
