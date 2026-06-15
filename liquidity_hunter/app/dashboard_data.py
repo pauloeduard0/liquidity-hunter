@@ -31,6 +31,15 @@ DEFAULT_INTERNAL_SWING_LOOKBACK = 10
 # Binance's `/api/v3/klines` endpoint accepts `limit` values up to 1000.
 _MAX_FETCH_LIMIT = 1000
 
+# Extra finer-timeframe candles fetched before the visible window so
+# InternalStructureDetector's trend/validated_choch_<side> bootstrap (which
+# depends on the *first* pivots in whatever series it's given) has stabilized
+# before reaching the candles actually shown on the dashboard. Without this,
+# a fixed-size sliding window re-fetched on every refresh shifts that
+# bootstrap by one candle each time, causing the same pivot to flip between
+# BREAK_OF_STRUCTURE/CHANGE_OF_CHARACTER/LIQUIDITY_SWEEP across refreshes.
+_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER = 300
+
 # Duration of each `TimeFrame` in minutes, used only to size the `finer_candles`
 # fetch (see `load_dashboard_data`) so it covers at least the same calendar
 # range as `candles` -- not a general-purpose `TimeFrame` duration API.
@@ -100,16 +109,23 @@ def load_dashboard_data(
     )
 
     finer_timeframe = timeframe.finer()
-    finer_candles = None
+    internal_structure_events: list[MarketStructure] = []
     if finer_timeframe is not None:
         coverage_ratio = _TIMEFRAME_MINUTES[timeframe] // _TIMEFRAME_MINUTES[finer_timeframe]
         finer_limit = min(limit * coverage_ratio, _MAX_FETCH_LIMIT)
-        finer_candles = provider.get_ohlcv(symbol, finer_timeframe, finer_limit)
-    internal_structure_events = (
-        InternalStructureDetector(swing_lookback=internal_swing_lookback).detect(finer_candles)
-        if finer_candles is not None
-        else []
-    )
+        buffered_finer_limit = min(
+            finer_limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER, _MAX_FETCH_LIMIT
+        )
+        finer_candles = provider.get_ohlcv(symbol, finer_timeframe, buffered_finer_limit)
+        visible_start = candles[0].timestamp
+        visible_end = candles[-1].timestamp
+        internal_structure_events = [
+            event
+            for event in InternalStructureDetector(
+                swing_lookback=internal_swing_lookback
+            ).detect(finer_candles)
+            if visible_start <= event.timestamp <= visible_end
+        ]
     higher_timeframe_direction = _latest_structure_direction(market_structure_events)
 
     retail_bias = RetailTrapAnalyzer().analyze(

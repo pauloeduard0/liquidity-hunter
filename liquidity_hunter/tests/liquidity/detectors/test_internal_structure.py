@@ -9,6 +9,7 @@ import pytest
 from liquidity_hunter.core.domain import (
     Candle,
     MarketDirection,
+    MarketStructure,
     StructureEvent,
     StructureScope,
     TimeFrame,
@@ -237,17 +238,22 @@ def test_break_above_trailing_high_below_validated_is_a_sweep() -> None:
     assert all(e.event is not StructureEvent.CHANGE_OF_CHARACTER for e in events)
 
 
-# A short sequence (lookback=1) ending in a CHoCH-candidate (swing low 60,
-# breaking validated_choch_low 90 while trend is BULLISH), used to exercise
-# persistence-based confirmation with persistence_candles=2:
+# A short sequence (lookback=1) where the low pivot at index 7 (60) breaks
+# active_low (90) while trend is BULLISH, used to exercise persistence-based
+# confirmation with persistence_candles=2:
 #
 #   index 1: high 200 -> bootstraps active_high
-#   index 3: low   90 -> bootstraps active_low (last_low_pivot = 90)
-#   index 5: high 210 -> BOS bullish (NEUTRAL -> BULLISH); new HH ->
-#                          validated_choch_low = last_low_pivot = 90
-#   index 7: low   60 -> below validated_choch_low (90); trend BULLISH ->
-#                          CHoCH-candidate bearish (confirmed iff the break
-#                          holds for persistence_candles).
+#   index 3: low   90 -> bootstraps active_low; the first low pivot ever, so
+#                          it is never labeled HL and never becomes
+#                          candidate_choch_low
+#   index 5: high 210 -> BOS bullish (NEUTRAL -> BULLISH); new HH, but
+#                          candidate_choch_low is None -> validated_choch_low
+#                          stays None
+#   index 7: low   60 -> breaks active_low (90); with validated_choch_low
+#                          still None there is no CHoCH reference to confirm
+#                          against, so this is always a LIQUIDITY_SWEEP --
+#                          regardless of persistence_candles or trailing
+#                          closes.
 _PERSISTENCE_HIGHS = [150.0, 200.0, 150.0, 150.0, 150.0, 210.0, 150.0, 150.0]
 _PERSISTENCE_LOWS = [140.0, 140.0, 140.0, 90.0, 140.0, 140.0, 140.0, 60.0]
 
@@ -263,18 +269,20 @@ def _persistence_test_series(
     return candles
 
 
-def test_persistence_confirms_choch_when_break_holds() -> None:
-    """The pivot's close (65) and the next 2 candles' closes (75, 80) all
-    clear validated_choch_low (90) -> the break holds -> CHANGE_OF_CHARACTER."""
+def test_persistence_irrelevant_without_validated_choch_reference() -> None:
+    """Even though the pivot's close (65) and the next 2 candles' closes (75,
+    80) would sustain a break of active_low (90), the result is still
+    LIQUIDITY_SWEEP: 90 (index 3) was never labeled HL/candidate_choch_low, so
+    the BOS at index 5 has nothing to promote and validated_choch_low stays
+    None -- there is no CHoCH reference for persistence to confirm a break
+    of."""
     candles = _persistence_test_series(index_8_close=75.0, index_9_close=80.0)
 
     events = InternalStructureDetector(swing_lookback=1, persistence_candles=2).detect(candles)
 
-    assert events[-1].event is StructureEvent.CHANGE_OF_CHARACTER
+    assert events[-1].event is StructureEvent.LIQUIDITY_SWEEP
     assert events[-1].direction is MarketDirection.BEARISH
     assert events[-1].price_level == 60.0
-    # The break is sustained from this candle onward (no earlier lag here).
-    assert events[-1].timestamp == candles[7].timestamp
     assert events[-1].reference_price_level == 90.0
 
 
@@ -369,3 +377,277 @@ def test_real_window_production_lookback_emits_no_choch() -> None:
     events = InternalStructureDetector(swing_lookback=10, persistence_candles=3).detect(candles)
 
     assert all(e.event is not StructureEvent.CHANGE_OF_CHARACTER for e in events)
+
+def test_choch_detected_when_confirmation_extends_beyond_pivot_index() -> None:
+    """
+    Testa a lógica de detecção: Garante que o detector não ignore um CHoCH 
+    se as velas de confirmação (persistence) terminarem após o índice do pivô.
+    """
+    highs = [150.0] * 20
+    lows = [140.0] * 20
+
+    # Setup: Estrutura que força o CHoCH
+    highs[1] = 200.0  # bootstrap active_high
+    lows[3] = 100.0   # bootstrap active_low
+    lows[5] = 80.0    # Novo LL -> validated_choch_high = 200.0
+    highs[7] = 170.0  # LH
+    lows[9] = 60.0    # Novo LL -> validated_choch_high = 170.0
+
+    candles = make_series(highs, lows)
+
+    # O Rompimento começa no índice 12
+    candles[12] = make_candle(12, high=173.0, low=140.0, close=172.0)
+    # O Pivô ocorre no índice 13
+    candles[13] = make_candle(13, high=175.0, low=140.0, close=174.0)
+    # A confirmação (persistence=2) termina no índice 14
+    candles[14] = make_candle(14, high=173.0, low=140.0, close=171.0)
+
+    # Executa o detector com persistência 2
+    detector = InternalStructureDetector(swing_lookback=1, persistence_candles=2)
+    events = detector.detect(candles)
+
+    # Filtra apenas eventos de CHoCH
+    choch_events = [e for e in events if e.event == StructureEvent.CHANGE_OF_CHARACTER]
+
+    # O teste garante que o evento foi capturado (não foi descartado pelo limite de busca)
+    assert len(choch_events) > 0, (
+        "O CHoCH não foi detectado porque a busca parou no índice do pivô."
+    )
+    assert choch_events[0].timestamp == candles[12].timestamp, (
+        "O timestamp deve ser o da vela de rompimento original."
+    )
+
+def test_state_machine_hierarchy_choch_then_bos() -> None:
+    """
+    Garante que a máquina de estados respeite a hierarquia SMC:
+    1. O bootstrap inicial (Bearish) é ignorado na validação.
+    2. O primeiro rompimento de alta confirmado gera um CHoCH Bullish.
+    3. O rompimento seguinte na mesma direção DEVE ser um BOS Bullish (continuação).
+    """
+    highs = [150.0] * 40
+    lows = [140.0] * 40
+
+    # 1. SETUP DA TENDÊNCIA DE BAIXA INICIAL (Gera o BOS Bearish de bootstrap)
+    highs[1] = 200.0
+    lows[3] = 100.0
+    lows[5] = 80.0
+    highs[7] = 170.0  # LH (validated_choch_high)
+    lows[9] = 60.0
+
+    candles = make_series(highs, lows)
+
+    # 2. ROMPIMENTO DO CHOCH (velas com 'close' explícito > 170.0 para garantir persistência)
+    candles[12] = make_candle(12, high=175.0, low=140.0, close=172.0)
+    candles[13] = make_candle(13, high=180.0, low=150.0, close=175.0)  # Pivô do CHoCH
+    candles[14] = make_candle(14, high=178.0, low=150.0, close=171.0)
+
+    # 3. RETRAÇÃO (gera o active_high a ser rompido no BOS)
+    candles[16] = make_candle(16, high=185.0, low=160.0, close=170.0)  # Novo topo
+    candles[18] = make_candle(18, high=175.0, low=165.0, close=168.0)  # Fundo mais alto (HL)
+
+    # 4. ROMPIMENTO DE CONTINUAÇÃO (BOS Bullish com 'close' explícito > 185.0)
+    candles[20] = make_candle(20, high=190.0, low=170.0, close=188.0)
+    candles[21] = make_candle(21, high=195.0, low=170.0, close=192.0)
+    candles[22] = make_candle(22, high=192.0, low=170.0, close=190.0)
+
+    # Executa o detector
+    detector = InternalStructureDetector(swing_lookback=1, persistence_candles=2)
+    events = detector.detect(candles)
+
+    # Filtra apenas eventos Bullish para ignorar o BOS Bearish de inicialização
+    bullish_events = [
+        e
+        for e in events
+        if e.direction == MarketDirection.BULLISH
+        and e.event in (StructureEvent.CHANGE_OF_CHARACTER, StructureEvent.BREAK_OF_STRUCTURE)
+    ]
+
+    assert len(bullish_events) >= 2, "Deveriam ser detectados pelo menos o CHoCH e o BOS de alta."
+
+    first_bullish = bullish_events[0]
+    assert (
+        first_bullish.event is StructureEvent.CHANGE_OF_CHARACTER
+    ), "O primeiro evento de alta DEVE ser um CHoCH."
+    assert first_bullish.reference_price_level == 170.0
+
+    second_bullish = bullish_events[1]
+    assert (
+        second_bullish.event is StructureEvent.BREAK_OF_STRUCTURE
+    ), "O evento seguinte na mesma direção DEVE ser um BOS."
+
+def test_trend_state_does_not_leak_on_liquidity_sweep() -> None:
+    """
+    Garante que a máquina de estados não inverta a tendência durante um
+    Sweep (falso rompimento) do nível de CHoCH. O estado só pode mudar
+    se o rompimento for confirmado (persistence validada).
+    """
+    highs = [150.0] * 30
+    lows = [140.0] * 30
+
+    # 1. SETUP: Tendência de Baixa Inicial (Bootstrap)
+    highs[1] = 200.0
+    lows[3] = 100.0
+    lows[5] = 80.0
+    highs[7] = 170.0  # LH (Pivô de alta que será nossa referência de CHoCH: validated_choch_high)
+    lows[9] = 60.0    # LL 
+
+    candles = make_series(highs, lows)
+
+    # 2. O FALSO ROMPIMENTO (Sweep no CHoCH)
+    # Rompe a máxima (175 > 170), mas o fechamento é abaixo (165), rejeitando o rompimento.
+    candles[12] = make_candle(12, high=175.0, low=140.0, close=165.0)
+
+    # 3. CONTINUAÇÃO DA TENDÊNCIA ORIGINAL (Queda)
+    # O preço rejeita o topo e volta a cair, perdendo o fundo anterior (60.0)
+    candles[15] = make_candle(15, high=100.0, low=50.0, close=55.0) # Rompe o fundo de 60.0
+    candles[16] = make_candle(16, high=90.0, low=40.0, close=45.0)  # Confirma a queda
+    candles[17] = make_candle(17, high=80.0, low=45.0, close=50.0)  # Confirma a queda
+
+    # Executa o detector (exigindo 2 velas de persistência)
+    detector = InternalStructureDetector(swing_lookback=1, persistence_candles=2)
+    events = detector.detect(candles)
+
+    # Coleta todos os eventos
+    sweep_events = [e for e in events if e.event == StructureEvent.LIQUIDITY_SWEEP]
+    bos_events = [e for e in events if e.event == StructureEvent.BREAK_OF_STRUCTURE]
+    choch_events = [e for e in events if e.event == StructureEvent.CHANGE_OF_CHARACTER]
+
+    # Validações Críticas
+    assert len(sweep_events) >= 1, "Um Sweep deveria ser detectado no falso rompimento de 170.0."
+    assert len(choch_events) == 0, (
+        "ERRO: O código emitiu um CHoCH! O Sweep vazou e mudou o estado da tendência."
+    )
+
+    bearish_bos = [e for e in bos_events if e.direction == MarketDirection.BEARISH]
+    assert len(bearish_bos) >= 2, "Deveria ter o BOS inicial de bootstrap e o BOS de continuação."
+
+def test_state_machine_does_not_shift_references_on_multiple_sweeps() -> None:
+    """
+    Garante que múltiplos Sweeps seguidos no mesmo nível de CHoCH não desloquem
+    as referências internas de pivô nem criem CHoCHs fantasmas quando a tendência
+    original for retomada de forma agressiva.
+    """
+    highs = [150.0] * 35
+    lows = [140.0] * 35
+
+    # 1. SETUP: Tendência de Baixa Inicial (Bootstrap)
+    highs[1] = 200.0
+    lows[3] = 100.0
+    lows[5] = 80.0
+    highs[7] = 170.0  # Nosso CHoCH reference inicial (LH)
+    lows[9] = 60.0    # LL
+
+    candles = make_series(highs, lows)
+
+    # 2. PRIMEIRO SWEEP (Preço cutuca 172 e volta para 160)
+    candles[12] = make_candle(12, high=172.0, low=140.0, close=160.0)
+
+    # 3. SEGUNDO SWEEP (Preço vai mais alto em 175, mas fecha abaixo em 155)
+    # Se o código atualizar o CHoCH para 175 ou se perder no estado do pivô, ele vai quebrar aqui
+    candles[15] = make_candle(15, high=175.0, low=135.0, close=155.0)
+
+    # 4. RETOMADA AGRESSIVA DA QUEDA (Derretimento)
+    candles[18] = make_candle(18, high=110.0, low=50.0, close=52.0)  # Quebra o fundo de 60
+    candles[19] = make_candle(19, high=90.0, low=40.0, close=42.0)   # Confirmação 1
+    candles[20] = make_candle(20, high=80.0, low=35.0, close=38.0)   # Confirmação 2
+
+    detector = InternalStructureDetector(swing_lookback=1, persistence_candles=2)
+    events = detector.detect(candles)
+
+    choch_events = [e for e in events if e.event == StructureEvent.CHANGE_OF_CHARACTER]
+    bos_events = [e for e in events if e.event == StructureEvent.BREAK_OF_STRUCTURE]
+
+    # Validações: não pode ter CHoCH, e a continuação tem que ser um BOS Bearish limpo
+    assert len(choch_events) == 0, "ERRO: O acúmulo de Sweeps fakes gerou um CHoCH fantasma!"
+
+    bearish_bos = [e for e in bos_events if e.direction == MarketDirection.BEARISH]
+    assert len(bearish_bos) >= 2, (
+        "A estrutura deveria continuar em BOS Bearish após romper o fundo de 60.0"
+    )
+
+
+# --- Streaming / live-update behavior ---------------------------------------
+#
+# `InternalStructureDetector.detect()` is a pure function of the candle list
+# it is given: all state (active_<side>, pending_<side>, validated_choch_<side>,
+# trend, etc.) is local to a single `detect()` call, and the constructor holds
+# only `_high_detector`/`_low_detector`/`_persistence_candles`, none of which
+# `detect()` mutates. So calling `detect()` repeatedly on the same (or a
+# reused) detector instance cannot leak state between calls.
+#
+# The two scenarios below distinguish:
+# - APPEND-ONLY growth (no candles dropped): the prefix of emitted events is
+#   stable as more candles arrive, because `collect_pivots` only ever
+#   recognizes *new* pivots near the end of the series (a pivot's
+#   lookback-window neighbors don't change once they're all present), so the
+#   pivot sequence walked from the start is unchanged.
+# - SLIDING WINDOW (fixed size, oldest candle dropped as a newest one
+#   arrives) -- the pattern `load_dashboard_data` uses via
+#   `provider.get_ohlcv(symbol, timeframe, limit)` on every refresh: the
+#   window's *first* pivot of each kind seeds the bootstrap (`active_high`/
+#   `active_low`/`trend`/`validated_choch_<side>`), and that first pivot
+#   changes every time the window shifts. The same underlying candle can
+#   therefore be reported as a different event (e.g. BREAK_OF_STRUCTURE vs.
+#   LIQUIDITY_SWEEP) across two windows that differ by just one candle at each
+#   end -- this is the source of "alternating CHoCH/BOS" flicker on live
+#   charts, not state leaking inside `detect()`.
+_STREAM_HIGHS = [150.0] * 30
+_stream_high_overrides = {1: 200.0, 5: 220.0, 9: 210.0, 13: 230.0, 17: 215.0, 21: 240.0, 25: 235.0}
+for _index, _value in _stream_high_overrides.items():
+    _STREAM_HIGHS[_index] = _value
+_STREAM_LOWS = [140.0] * 30
+for _index, _value in {3: 90.0, 7: 100.0, 11: 80.0, 15: 70.0, 19: 60.0, 23: 90.0, 27: 50.0}.items():
+    _STREAM_LOWS[_index] = _value
+
+
+def test_streaming_append_only_growth_is_prefix_stable() -> None:
+    """Simulates streaming with no truncation: `detect()` is called on an
+    ever-growing prefix of the same series. Earlier emitted events must not
+    change (or disappear) as later candles are appended -- there is no
+    instance state to leak, and `collect_pivots` only adds new pivots at the
+    end."""
+    candles = make_series(_STREAM_HIGHS, _STREAM_LOWS)
+
+    detector = InternalStructureDetector(swing_lookback=1)
+    previous_events: list[
+        tuple[datetime, StructureEvent, MarketDirection, float, float | None]
+    ] = []
+    for n in range(10, len(candles) + 1):
+        events = detector.detect(candles[:n])
+        current_events = [
+            (e.timestamp, e.event, e.direction, e.price_level, e.reference_price_level)
+            for e in events
+        ]
+        common_length = min(len(previous_events), len(current_events))
+        assert previous_events[:common_length] == current_events[:common_length], (
+            f"event prefix changed when growing the series to {n} candles"
+        )
+        previous_events = current_events
+
+
+def test_streaming_sliding_window_reclassifies_same_candle() -> None:
+    """A fixed-size sliding window -- one candle dropped from the front, one
+    added at the back, as `load_dashboard_data` does on every refresh --
+    re-bootstraps `active_low`/`trend`/`validated_choch_high` from the new
+    window's first pivots. The candle at index 11 (a low of 80.0, breaking the
+    bootstrap active_low of 100.0) is a LIQUIDITY_SWEEP in the window starting
+    at index 0 (trend still NEUTRAL there) but a BREAK_OF_STRUCTURE in the
+    window starting at index 1 (where it is now the *first* low pivot,
+    breaking nothing yet from NEUTRAL)."""
+    candles = make_series(_STREAM_HIGHS, _STREAM_LOWS)
+    window_size = 15
+
+    window_0 = candles[0:window_size]
+    window_1 = candles[1 : window_size + 1]
+
+    events_0 = InternalStructureDetector(swing_lookback=1).detect(window_0)
+    events_1 = InternalStructureDetector(swing_lookback=1).detect(window_1)
+
+    def find_by_timestamp(events: list[MarketStructure], timestamp: datetime) -> MarketStructure:
+        return next(e for e in events if e.timestamp == timestamp)
+
+    pivot_in_window_0 = find_by_timestamp(events_0, candles[11].timestamp)
+    pivot_in_window_1 = find_by_timestamp(events_1, candles[11].timestamp)
+
+    assert pivot_in_window_0.event is StructureEvent.LIQUIDITY_SWEEP
+    assert pivot_in_window_1.event is StructureEvent.BREAK_OF_STRUCTURE

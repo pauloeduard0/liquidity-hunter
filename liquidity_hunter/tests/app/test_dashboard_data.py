@@ -1,5 +1,7 @@
 """Tests for `liquidity_hunter.app.dashboard_data`."""
 
+from datetime import timedelta
+
 from liquidity_hunter.app.dashboard_data import load_dashboard_data
 from liquidity_hunter.core.domain import (
     Candle,
@@ -10,6 +12,7 @@ from liquidity_hunter.core.domain import (
     TimeFrame,
 )
 from liquidity_hunter.data.providers.base import OHLCVProvider
+from liquidity_hunter.liquidity import InternalStructureDetector
 from liquidity_hunter.tests.liquidity.detectors._factories import make_candle, make_series
 
 HIGHS = [
@@ -39,6 +42,47 @@ class _FakeProvider(OHLCVProvider):
         self.requested_timeframes.append(timeframe)
         self.requested_limits.append(limit)
         return self._candles
+
+
+class _PerTimeframeFakeProvider(OHLCVProvider):
+    """Returns the trailing `limit` candles of a per-timeframe series.
+
+    Models a real provider where a larger `limit` request returns more
+    history ending at the same "now" -- unlike `_FakeProvider`, which
+    ignores `limit`/`timeframe` entirely.
+    """
+
+    def __init__(self, series_by_timeframe: dict[TimeFrame, list[Candle]]) -> None:
+        self._series_by_timeframe = series_by_timeframe
+        self.requested_timeframes: list[TimeFrame] = []
+        self.requested_limits: list[int] = []
+
+    def get_ohlcv(self, symbol: str, timeframe: TimeFrame, limit: int = 500) -> list[Candle]:
+        self.requested_timeframes.append(timeframe)
+        self.requested_limits.append(limit)
+        return self._series_by_timeframe[timeframe][-limit:]
+
+
+def _trending_zigzag(num_candles: int) -> tuple[list[float], list[float]]:
+    """A steadily rising zigzag: repeated higher highs and higher lows.
+
+    Generates a `BREAK_OF_STRUCTURE` roughly every half-period, giving
+    `InternalStructureDetector` a long run of internal structure events to
+    filter down to a visible window.
+    """
+    drift, amplitude, period = 1.0, 15.0, 20
+    highs, lows = [], []
+    for i in range(num_candles):
+        phase = i % period
+        half = period // 2
+        if phase < half:
+            wave = amplitude * (phase / half)
+        else:
+            wave = amplitude * (1 - (phase - half) / half)
+        level = 100.0 + drift * i + wave
+        highs.append(level + 2.0)
+        lows.append(level - 2.0)
+    return highs, lows
 
 
 def test_load_dashboard_data_assembles_research_snapshot() -> None:
@@ -156,3 +200,46 @@ def test_load_dashboard_data_skips_finer_fetch_for_finest_timeframe() -> None:
     load_dashboard_data(provider=provider, symbol="BTCUSDT", timeframe=TimeFrame.M1)
 
     assert provider.requested_timeframes == [TimeFrame.M1]
+
+
+def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> None:
+    # A long M30 zigzag produces internal structure events spanning over a
+    # week, but only the first ~19 hours fall inside the H1 visible window
+    # (limit=20 -> 20 H1 candles starting at the same `BASE_TIME`).
+    m30_highs, m30_lows = _trending_zigzag(340)
+    m30_candles = make_series(
+        m30_highs,
+        m30_lows,
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.M30,
+        interval=timedelta(minutes=30),
+    )
+    h1_highs, h1_lows = _trending_zigzag(20)
+    h1_candles = make_series(h1_highs, h1_lows, symbol="BTCUSDT", timeframe=TimeFrame.H1)
+
+    provider = _PerTimeframeFakeProvider({TimeFrame.H1: h1_candles, TimeFrame.M30: m30_candles})
+
+    data = load_dashboard_data(
+        provider=provider,
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        limit=20,
+        internal_swing_lookback=10,
+    )
+
+    # H1 limit=20 -> coverage_ratio=2 -> finer_limit=40, +300 buffer = 340.
+    assert provider.requested_limits == [20, 340]
+
+    visible_start = data.candles[0].timestamp
+    visible_end = data.candles[-1].timestamp
+    assert data.internal_structure_events
+    assert all(
+        visible_start <= event.timestamp <= visible_end
+        for event in data.internal_structure_events
+    )
+
+    # The buffered series produces many more events than fall in the visible
+    # window -- proving the buffer/filter actually discards out-of-window
+    # events rather than the window happening to cover everything.
+    unfiltered_events = InternalStructureDetector(swing_lookback=10).detect(m30_candles)
+    assert len(unfiltered_events) > len(data.internal_structure_events)

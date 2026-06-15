@@ -29,41 +29,89 @@ The CHoCH reference (`CHANGE_OF_CHARACTER`)
 A change of character is a *reversal*, and the level it must break to count
 as one is tracked explicitly per side as `validated_choch_high` /
 `validated_choch_low` -- distinct from the trailing `active_<side>` and from
-`pending_<side>`. The rule (mirrored for the low side):
+`pending_<side>`. Promotion to `validated_choch_<side>` is a two-step process
+via an intermediate `candidate_choch_<side>` (mirrored for the low side):
 
+- `candidate_choch_high` is the most recent `LOWER_HIGH`-labeled pivot (or a
+  re-bootstrap pivot that is functionally one -- see below), not yet
+  promoted. An LH *alone* is not a CHoCH reference: SMC requires `LL1 -> LH1
+  -> LL2 (confirms LH1) -> break LH1` for a bullish CHoCH, so
+  `candidate_choch_high` is only a placeholder until structure confirms it.
+  Alongside it, `candidate_choch_high_baseline` snapshots `active_low` as it
+  stood at the moment `candidate_choch_high` was set -- the trailing low
+  reference in effect immediately before that LH formed.
 - `validated_choch_high` is the swing high that a *bullish* CHoCH must break.
-  It is **only updated when a new LL is confirmed** -- i.e. a sustained
-  bearish break that prints a low *below the bearish leg's previous lowest
-  low* (`last_ll`), not merely below the trailing `active_low` (which may be a
-  pullback/higher low). At that moment it is set to `last_high_pivot`: the
-  **last swing high before that new LL**. Note "last", not "highest": in a
-  clean alternating high/low staircase the high between the two most recent
-  LLs is unambiguous, but if extraction is non-alternating (two highs between
-  two lows) the *most recent* high before the LL is the reversal-relevant
-  one, not the tallest bounce earlier in the leg.
-- While price makes no new LL (it prints a higher low instead),
-  `validated_choch_high` is **frozen** at the last validated high -- a higher
-  low does not move it.
+  It is **only updated when a bearish BOS occurs after `candidate_choch_high`
+  was set, and that BOS's pivot price is below `candidate_choch_high_baseline`**
+  -- i.e. the bearish leg makes a *new* low relative to the low that preceded
+  the LH (a genuine `LL2 < LL1` for *this* candidate), not merely any
+  continuation of the leg. At that moment, `candidate_choch_high` is
+  **promoted**: `validated_choch_high = candidate_choch_high`, and both
+  `candidate_choch_high` and `candidate_choch_high_baseline` are cleared to
+  `None`. If no candidate has formed since the last promotion/reset,
+  `validated_choch_high` is left unchanged.
+
+  This two-part gate -- "a BOS after the candidate formed" *and* "beyond that
+  candidate's own baseline" -- balances two failure modes seen in earlier
+  iterations:
+    - Gating on a new *absolute* low/high of the *entire* leg (tracked as
+      `last_ll`/`last_hh`) deadlocks: the *first* impulsive BOS right after a
+      CHoCH is often the leg's eventual extreme, after which no later pivot
+      can ever exceed it, permanently starving promotion -- `trend` can get
+      stuck for hundreds of candles through an obvious reversal.
+    - Gating on *any* BOS after the candidate, with no baseline at all,
+      over-promotes: `validated_choch_high` keeps ratcheting toward weaker,
+      more recent LH pivots even after the leg's true reversal point has
+      already been confirmed and should stay frozen.
+  The per-candidate baseline -- "beat the low that immediately preceded
+  *this* LH", not "beat the whole leg's low" -- is both achievable (fixing
+  the deadlock, since each new candidate gets its own, more recent baseline)
+  and selective (preserving the freeze once the leg's true reversal has
+  already been confirmed and a later, weaker LH cannot beat its own
+  baseline).
+- While no qualifying bearish BOS confirms it, `candidate_choch_high`,
+  `candidate_choch_high_baseline`, and `validated_choch_high` are **frozen**.
 - A *bullish CHoCH* fires when, with `trend` BEARISH, a high pivot breaks
   (sustained, see persistence below) **above `validated_choch_high`**; its
   `reference_price_level` is `validated_choch_high` (never the trailing
-  `active_high`, never the breaking pivot). A high pivot that breaks the
-  trailing `active_high` but not `validated_choch_high`, or whose break does
-  not hold, is a `LIQUIDITY_SWEEP` (trend unchanged) -- an internal bounce
-  within the still-intact bearish leg.
+  `active_high`, never `candidate_choch_high`, never the breaking pivot). A
+  high pivot that breaks the trailing `active_high` but not
+  `validated_choch_high` -- including while `validated_choch_high` is still
+  `None` -- or whose break does not hold, is a `LIQUIDITY_SWEEP` (trend
+  unchanged) -- an internal bounce within the still-intact bearish leg.
+- The moment a CHoCH fires, the *opposite* side's `validated_choch_<side>`,
+  `candidate_choch_<side>`, and `candidate_choch_<side>_baseline` are all
+  reset to `None`: the leg that just ended is over, and the new leg's
+  reversal reference must be rebuilt from a fresh LH/HL -> LL/HH confirmation
+  of its own, not seeded from the leg that just ended.
+
+Re-bootstrap and `candidate_choch_<side>`: a BOS/CHoCH on one side retires the
+*opposite* side's `active_<side>` (promoted from `pending_<side>`, or to
+`None` if nothing has accumulated there yet). If `active_<side>` was retired
+to `None`, the next pivot on that side silently re-bootstraps it with no
+HH/HL/LH/LL label (the "accepted cost" described above) -- but if that pivot
+is *worse* than the just-retired `active_<side>` (lower for a high pivot,
+higher for a low pivot -- judged against `last_high_pivot`/`last_low_pivot`,
+which still hold that retired value), it is functionally an LH/HL and still
+becomes `candidate_choch_<opposite-side>` (with `candidate_choch_<opposite-
+side>_baseline` set from `active_<side>` on the *other* side, same as a
+labeled LH/HL would), even though no label is emitted. Without this, a real
+LH/HL that happens to land on a re-bootstrap pivot would never become a CHoCH
+candidate, permanently freezing `validated_choch_<opposite>` at `None`.
 
 `last_high_pivot`/`last_low_pivot` track the most recent swing high/low pivot
-*regardless* of the `active_<side>`/`pending_<side>` promotion machinery (so
-the CHoCH reference is sourced from the real last pivot, never from a value
-that was retired to `None`). `last_ll`/`last_hh` are the running extremes of
-the current leg, so a "new LL/HH" is judged against the leg's true extreme
-rather than the trailing reference.
+*regardless* of the `active_<side>`/`pending_<side>` promotion machinery.
+They no longer drive `validated_choch_<side>` directly -- that role now
+belongs to `candidate_choch_<side>` -- but feed the re-bootstrap check above
+and remain otherwise unused.
 
-The symmetric machinery on the bullish side: a new HH (a sustained bullish
-break above `last_hh`) sets `validated_choch_low = last_low_pivot` (the last
-low before that HH); a bearish CHoCH fires on a sustained break below
-`validated_choch_low`. A confirmed reversal resets the opposite leg's running
-extreme (`last_ll`/`last_hh`) so the next leg re-initialises cleanly.
+The symmetric machinery on the bullish side: `candidate_choch_low` is the
+most recent `HIGHER_LOW`-labeled pivot (or re-bootstrap equivalent), with
+`candidate_choch_low_baseline` snapshotting `active_high` at the moment it
+was set. `validated_choch_low` is promoted from it when a bullish BOS occurs
+after that HL formed *and* its pivot price is above
+`candidate_choch_low_baseline` (a genuine `HH2 > HH1` for this candidate); a
+bearish CHoCH fires on a sustained break below `validated_choch_low`.
 
 Confirmation is *persistence*-based (see `_common.is_sustained_break`): the
 breaking candle AND the `persistence_candles` candles immediately following
@@ -112,11 +160,15 @@ class InternalStructureDetector(MarketStructureDetector):
       `BREAK_OF_STRUCTURE`; one that does not break it is a `LOWER_HIGH`/
       `HIGHER_LOW` label.
     - The reversal (`CHANGE_OF_CHARACTER`) reference is `validated_choch_high`/
-      `validated_choch_low`: the last swing high/low before the most recent
-      *new LL/HH* (a break beyond the leg's running extreme `last_ll`/`last_hh`,
-      not merely the trailing reference). A counter-trend break of the
-      validated reference is a CHoCH if sustained for `persistence_candles`,
-      else a `LIQUIDITY_SWEEP`.
+      `validated_choch_low`, promoted from `candidate_choch_high`/
+      `candidate_choch_low` (the most recent LH/HL) on the next BOS in that
+      leg's direction whose pivot price also surpasses
+      `candidate_choch_high_baseline`/`candidate_choch_low_baseline` (a
+      snapshot of the opposite side's trailing reference taken when the
+      candidate was set) -- a genuine `LL2 < LL1`/`HH2 > HH1` relative to the
+      leg containing the candidate, not necessarily a new absolute extreme of
+      the whole leg. A counter-trend break of the validated reference is a
+      CHoCH if sustained for `persistence_candles`, else a `LIQUIDITY_SWEEP`.
 
     `persistence_candles` is the number of candles immediately following a
     counter-trend pivot that must also close beyond the reference for the
@@ -139,13 +191,18 @@ class InternalStructureDetector(MarketStructureDetector):
         timeframe = candles[0].timeframe
         index_by_timestamp = {candle.timestamp: index for index, candle in enumerate(candles)}
 
-        def confirms_break(timestamp: datetime, level_price: float, *, bullish: bool) -> bool:
-            return is_sustained_break(
-                candles,
-                index_by_timestamp[timestamp],
-                level_price,
-                bullish=bullish,
-                persistence_candles=self._persistence_candles,
+        def confirms_break(
+            start_index: int, end_index: int, level_price: float, *, bullish: bool
+        ) -> bool:
+            return any(
+                is_sustained_break(
+                    candles,
+                    index,
+                    level_price,
+                    bullish=bullish,
+                    persistence_candles=self._persistence_candles,
+                )
+                for index in range(start_index, end_index + 1)
             )
 
         events: list[MarketStructure] = []
@@ -163,16 +220,27 @@ class InternalStructureDetector(MarketStructureDetector):
         last_high_pivot: Pivot | None = None
         last_low_pivot: Pivot | None = None
         # The CHoCH reference levels. validated_choch_high is the swing high a
-        # bullish CHoCH must break; set to last_high_pivot when a *new LL* is
-        # confirmed and frozen otherwise. Mirror for validated_choch_low.
+        # bullish CHoCH must break; promoted from candidate_choch_high on the
+        # next bearish BOS (structural continuation confirming that LH), and
+        # frozen otherwise. Mirror for validated_choch_low / candidate_choch_low.
         validated_choch_high: Pivot | None = None
         validated_choch_low: Pivot | None = None
-        # Running extremes of the current leg: a break is only a "new LL/HH"
-        # (and only then moves the validated CHoCH reference) if it beats
-        # last_ll/last_hh -- breaking a merely trailing pullback low/high does
-        # not.
-        last_ll: Pivot | None = None
-        last_hh: Pivot | None = None
+        # The most recent LH/HL pivot (LOWER_HIGH/HIGHER_LOW label) not yet
+        # promoted to validated_choch_<side>. A LH/HL alone does not become a
+        # CHoCH reference -- only once a BOS in that leg's direction confirms
+        # it does the pending candidate get promoted (and cleared).
+        candidate_choch_high: Pivot | None = None
+        candidate_choch_low: Pivot | None = None
+        # The active_<opposite-side> snapshot captured when candidate_choch_<side>
+        # was set -- the swing extreme that immediately preceded that LH/HL.
+        # Promotion to validated_choch_<side> requires a BOS in that leg's
+        # direction to surpass this snapshot (a genuine "HH2 > HH1" / "LL2 <
+        # LL1" relative to the leg containing the candidate), not merely any
+        # continuation BOS -- otherwise validated_choch_<side> would keep
+        # ratcheting toward weaker, more recent LH/HL pivots even after the
+        # leg's true reversal point has already been confirmed and frozen.
+        candidate_choch_high_baseline: Pivot | None = None
+        candidate_choch_low_baseline: Pivot | None = None
         trend = MarketDirection.NEUTRAL
         # Candle index of the previous pivot of each kind, used to bound the
         # break-candle search below to the leg between consecutive pivots of
@@ -212,7 +280,12 @@ class InternalStructureDetector(MarketStructureDetector):
                     trend is MarketDirection.BEARISH
                     and validated_choch_high is not None
                     and price > validated_choch_high.price
-                    and confirms_break(timestamp, validated_choch_high.price, bullish=True)
+                    and confirms_break(
+                        prev_high_pivot_index + 1,
+                        current_index,
+                        validated_choch_high.price,
+                        bullish=True,
+                    )
                 ):
                     # Bullish CHoCH: a sustained break above validated_choch_high
                     # (the last high before the bearish leg's lowest low). The
@@ -243,14 +316,24 @@ class InternalStructureDetector(MarketStructureDetector):
                     trend = MarketDirection.BULLISH
                     active_low = pending_low
                     pending_low = None
-                    # The bullish leg begins: this high is its first HH, and the
-                    # last low before it becomes the bearish CHoCH reference.
-                    last_hh = pivot
-                    validated_choch_low = last_low_pivot
-                    last_ll = None
+                    # The bearish CHoCH reference must be rebuilt from a fresh
+                    # HL -> BOS confirmation in this new leg, not seeded from
+                    # the leg that just ended.
+                    validated_choch_low = None
+                    candidate_choch_low = None
+                    candidate_choch_low_baseline = None
                 elif active_high is None:
                     if active_low is not None:
                         pending_high = pivot
+                    if last_high_pivot is not None and price < last_high_pivot.price:
+                        # A re-bootstrap pivot lower than the just-retired
+                        # active_high is functionally a LOWER_HIGH (no label
+                        # emitted, per the "silent re-bootstrap" rule), but it
+                        # still becomes the candidate reference a future
+                        # bullish CHoCH must break, once a bearish BOS beyond
+                        # active_low confirms it.
+                        candidate_choch_high = pivot
+                        candidate_choch_high_baseline = active_low
                 elif price > active_high.price:
                     # Timestamped on the candle whose wick first breaks
                     # active_high, not the pivot that eventually confirmed it
@@ -289,12 +372,18 @@ class InternalStructureDetector(MarketStructureDetector):
                         trend = MarketDirection.BULLISH
                         active_low = pending_low
                         pending_low = None
-                        if last_hh is None or price > last_hh.price:
-                            # A new HH: the last low before it is the level a
-                            # bearish CHoCH must break.
-                            validated_choch_low = last_low_pivot
-                            last_hh = pivot
-                        last_ll = None
+                        if candidate_choch_low is not None and (
+                            candidate_choch_low_baseline is None
+                            or price > candidate_choch_low_baseline.price
+                        ):
+                            # This BOS confirms the most recent HL as the
+                            # level a future bearish CHoCH must break: it
+                            # surpasses the swing high that preceded that HL
+                            # (a genuine HH2 > HH1), not merely any
+                            # continuation.
+                            validated_choch_low = candidate_choch_low
+                            candidate_choch_low = None
+                            candidate_choch_low_baseline = None
                 elif price < active_high.price:
                     emit(
                         timestamp,
@@ -304,22 +393,28 @@ class InternalStructureDetector(MarketStructureDetector):
                         active_high.price,
                     )
                     pending_low = self._extreme(pending_low, active_low, higher=False)
+                    # This LH is the candidate reference a future bullish CHoCH
+                    # must break, once a bearish BOS beyond active_low confirms
+                    # it.
+                    candidate_choch_high = pivot
+                    candidate_choch_high_baseline = active_low
                 active_high = pivot
-                last_high_pivot = pivot
+                # Tracked for now (unused by the candidate_choch_<side> logic
+                # above) to ease before/after comparison with the prior
+                # last_high_pivot-based promotion rule.
+                last_high_pivot = pivot  # noqa: F841
                 prev_high_pivot_index = current_index
-                if validated_choch_high is None and trend is MarketDirection.BEARISH:
-                    # Bootstrap fallback: the leg's BOS confirmed a new LL with
-                    # no prior high pivot to serve as the CHoCH reference (the
-                    # leg started at/before the window's first pivot). The next
-                    # high pivot becomes that reference instead, frozen from
-                    # here per the normal rule.
-                    validated_choch_high = pivot
             else:
                 if (
                     trend is MarketDirection.BULLISH
                     and validated_choch_low is not None
                     and price < validated_choch_low.price
-                    and confirms_break(timestamp, validated_choch_low.price, bullish=False)
+                    and confirms_break(
+                        prev_low_pivot_index + 1,
+                        current_index,
+                        validated_choch_low.price,
+                        bullish=False,
+                    )
                 ):
                     # Bearish CHoCH (mirror of the bullish case).
                     break_candle = candles[
@@ -342,12 +437,24 @@ class InternalStructureDetector(MarketStructureDetector):
                     trend = MarketDirection.BEARISH
                     active_high = pending_high
                     pending_high = None
-                    last_ll = pivot
-                    validated_choch_high = last_high_pivot
-                    last_hh = None
+                    # The bullish CHoCH reference must be rebuilt from a fresh
+                    # LH -> BOS confirmation in this new leg, not seeded from
+                    # the leg that just ended.
+                    validated_choch_high = None
+                    candidate_choch_high = None
+                    candidate_choch_high_baseline = None
                 elif active_low is None:
                     if active_high is not None:
                         pending_low = pivot
+                    if last_low_pivot is not None and price > last_low_pivot.price:
+                        # A re-bootstrap pivot higher than the just-retired
+                        # active_low is functionally a HIGHER_LOW (no label
+                        # emitted, per the "silent re-bootstrap" rule), but it
+                        # still becomes the candidate reference a future
+                        # bearish CHoCH must break, once a bullish BOS beyond
+                        # active_high confirms it.
+                        candidate_choch_low = pivot
+                        candidate_choch_low_baseline = active_high
                 elif price < active_low.price:
                     # Timestamped on the candle whose wick first breaks
                     # active_low, not the pivot that eventually confirmed it
@@ -383,12 +490,18 @@ class InternalStructureDetector(MarketStructureDetector):
                         trend = MarketDirection.BEARISH
                         active_high = pending_high
                         pending_high = None
-                        if last_ll is None or price < last_ll.price:
-                            # A new LL: the last high before it is the level a
-                            # bullish CHoCH must break.
-                            validated_choch_high = last_high_pivot
-                            last_ll = pivot
-                        last_hh = None
+                        if candidate_choch_high is not None and (
+                            candidate_choch_high_baseline is None
+                            or price < candidate_choch_high_baseline.price
+                        ):
+                            # This BOS confirms the most recent LH as the
+                            # level a future bullish CHoCH must break: it
+                            # surpasses the swing low that preceded that LH
+                            # (a genuine LL2 < LL1), not merely any
+                            # continuation.
+                            validated_choch_high = candidate_choch_high
+                            candidate_choch_high = None
+                            candidate_choch_high_baseline = None
                 elif price > active_low.price:
                     emit(
                         timestamp,
@@ -398,12 +511,17 @@ class InternalStructureDetector(MarketStructureDetector):
                         active_low.price,
                     )
                     pending_high = self._extreme(pending_high, active_high, higher=True)
+                    # This HL is the candidate reference a future bearish CHoCH
+                    # must break, once a bullish BOS beyond active_high
+                    # confirms it.
+                    candidate_choch_low = pivot
+                    candidate_choch_low_baseline = active_high
                 active_low = pivot
-                last_low_pivot = pivot
+                # Tracked for now (unused by the candidate_choch_<side> logic
+                # above) to ease before/after comparison with the prior
+                # last_low_pivot-based promotion rule.
+                last_low_pivot = pivot  # noqa: F841
                 prev_low_pivot_index = current_index
-                if validated_choch_low is None and trend is MarketDirection.BULLISH:
-                    # Bootstrap fallback, mirroring the high side above.
-                    validated_choch_low = pivot
 
         return events
 
