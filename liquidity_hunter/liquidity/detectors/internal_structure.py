@@ -121,7 +121,7 @@ class InternalStructureDetector(MarketStructureDetector):
     break to be a `CHANGE_OF_CHARACTER` rather than a `LIQUIDITY_SWEEP`.
     """
 
-    def __init__(self, swing_lookback: int = 10, persistence_candles: int = 3) -> None:
+    def __init__(self, swing_lookback: int = 3, persistence_candles: int = 2) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
@@ -269,6 +269,13 @@ class InternalStructureDetector(MarketStructureDetector):
                     pending_low = self._extreme(pending_low, active_low, higher=False)
                 active_high = pivot
                 last_high_pivot = pivot
+                if validated_choch_high is None and trend is MarketDirection.BEARISH:
+                    # Bootstrap fallback: the leg's BOS confirmed a new LL with
+                    # no prior high pivot to serve as the CHoCH reference (the
+                    # leg started at/before the window's first pivot). The next
+                    # high pivot becomes that reference instead, frozen from
+                    # here per the normal rule.
+                    validated_choch_high = pivot
             else:
                 if (
                     trend is MarketDirection.BULLISH
@@ -332,6 +339,9 @@ class InternalStructureDetector(MarketStructureDetector):
                     pending_high = self._extreme(pending_high, active_high, higher=True)
                 active_low = pivot
                 last_low_pivot = pivot
+                if validated_choch_low is None and trend is MarketDirection.BULLISH:
+                    # Bootstrap fallback, mirroring the high side above.
+                    validated_choch_low = pivot
 
         return events
 
