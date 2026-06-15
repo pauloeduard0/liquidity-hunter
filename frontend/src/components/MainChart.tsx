@@ -59,11 +59,6 @@ function lineFrom(startTime: UTCTimestamp, lastCandleTime: UTCTimestamp, value: 
     : [{ time: lastCandleTime, value }]
 }
 
-/** The midpoint in time between `start` and `end`, used to anchor a line's label along its middle. */
-function midTime(start: UTCTimestamp, end: UTCTimestamp): UTCTimestamp {
-  return ((start + end) / 2) as UTCTimestamp
-}
-
 /**
  * Whether `event` reports the same pivot as one in `majorEvents`. The
  * internal-scope detector can re-detect the same swing pivot as the
@@ -209,7 +204,7 @@ export function MainChart({ data }: MainChartProps) {
       })
       zoneSeries.setData(lineFrom(startTime, lastCandleTime, price))
       overlaySeriesRef.current.push(zoneSeries)
-      labels.push({ time: midTime(startTime, lastCandleTime), price, color, text: title })
+      labels.push({ time: startTime, price, color, text: title })
     }
 
     // BOS/CHoCH/liquidity-sweep levels, major and internal (deduped against
@@ -250,7 +245,7 @@ export function MainChart({ data }: MainChartProps) {
       overlaySeriesRef.current.push(structureSeries)
 
       labels.push({
-        time: midTime(startTime, endTime),
+        time: startTime,
         price: event.price_level,
         color: style.color,
         text: `${style.label}${isInternal ? ' (Internal)' : ''} ${directionIcon} · ${formatPrice(event.price_level)}`,

@@ -117,13 +117,7 @@ def liquidity_zones_chart(
         if zone in scores:
             label += f" · {scores[zone]:.0f}"
         if zone.price_high == zone.price_low:
-            fig.add_hline(
-                y=zone.price_high,
-                line={"color": color, "width": 1, "dash": "dot"},
-                annotation_text=label,
-                annotation_position="right",
-                annotation_font={"color": color, "size": 10},
-            )
+            fig.add_hline(y=zone.price_high, line={"color": color, "width": 1, "dash": "dot"})
         else:
             fig.add_hrect(
                 y0=zone.price_low,
@@ -131,10 +125,16 @@ def liquidity_zones_chart(
                 line_width=0,
                 fillcolor=color,
                 opacity=0.2,
-                annotation_text=label,
-                annotation_position="right",
-                annotation_font={"color": color, "size": 10},
             )
+        fig.add_annotation(
+            x=zone.formed_at,
+            y=zone.price_high,
+            text=label,
+            showarrow=False,
+            xanchor="left",
+            yanchor="bottom",
+            font={"color": color, "size": 10},
+        )
     return fig
 
 
@@ -192,7 +192,10 @@ def _add_structure_events(
     Each line spans from the event's timestamp to where its level was
     superseded (see `_structure_line_end_time`), so a historical level that
     has since been overtaken doesn't visually extend across the most recent
-    price action as if it were still the active reference.
+    price action as if it were still the active reference. The label is
+    anchored at the line's start (`event.timestamp`, where the structure
+    actually occurred) rather than its end, so it doesn't drift to the right
+    edge of the chart for levels that are still active.
     """
     major_events = [event for event in events if event.scope is StructureScope.MAJOR]
     last_candle_time = candles[-1].timestamp
@@ -220,7 +223,7 @@ def _add_structure_events(
             opacity=0.5 if is_internal else 1.0,
         )
         fig.add_annotation(
-            x=end_time,
+            x=event.timestamp,
             y=event.price_level,
             text=f"{label} {icon} · {event.price_level:,.2f}",
             showarrow=False,
