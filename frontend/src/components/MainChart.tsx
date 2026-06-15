@@ -10,6 +10,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 
+import { LineLabelsPrimitive, type LineLabel } from '../charting/LineLabelsPrimitive'
 import type { DashboardData, MarketStructure } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
@@ -31,6 +32,15 @@ import {
  */
 const TOP_N_ZONES = 5
 
+/**
+ * Internal-scope liquidity sweeps accumulate quickly (every failed pivot
+ * break against the trailing reference is one), and since an unsuperseded
+ * sweep's line always extends to the latest candle, they pile up near the
+ * current price -- only the most recent ones are kept, mirroring
+ * `TOP_N_ZONES` for liquidity zones.
+ */
+const MAX_INTERNAL_SWEEPS = 3
+
 function toUtcTimestamp(isoTimestamp: string): UTCTimestamp {
   return (Date.parse(isoTimestamp) / 1000) as UTCTimestamp
 }
@@ -47,6 +57,11 @@ function lineFrom(startTime: UTCTimestamp, lastCandleTime: UTCTimestamp, value: 
         { time: lastCandleTime, value },
       ]
     : [{ time: lastCandleTime, value }]
+}
+
+/** The midpoint in time between `start` and `end`, used to anchor a line's label along its middle. */
+function midTime(start: UTCTimestamp, end: UTCTimestamp): UTCTimestamp {
+  return ((start + end) / 2) as UTCTimestamp
 }
 
 /**
@@ -101,6 +116,7 @@ export function MainChart({ data }: MainChartProps) {
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const overlaySeriesRef = useRef<ISeriesApi<'Line'>[]>([])
+  const labelsPrimitiveRef = useRef<LineLabelsPrimitive | null>(null)
   const hasFittedRef = useRef(false)
 
   useEffect(() => {
@@ -131,6 +147,10 @@ export function MainChart({ data }: MainChartProps) {
     })
     seriesRef.current = series
 
+    const labelsPrimitive = new LineLabelsPrimitive()
+    series.attachPrimitive(labelsPrimitive)
+    labelsPrimitiveRef.current = labelsPrimitive
+
     const handleResize = () => chart.applyOptions({ width: container.clientWidth })
     window.addEventListener('resize', handleResize)
 
@@ -140,6 +160,7 @@ export function MainChart({ data }: MainChartProps) {
       chartRef.current = null
       seriesRef.current = null
       overlaySeriesRef.current = []
+      labelsPrimitiveRef.current = null
       hasFittedRef.current = false
     }
   }, [])
@@ -166,6 +187,10 @@ export function MainChart({ data }: MainChartProps) {
 
     const lastCandleTime = toUtcTimestamp(data.candles[data.candles.length - 1].timestamp)
 
+    // Labels are drawn on the chart pane itself, anchored to each line's own
+    // position, instead of stacking as titles on the right price axis.
+    const labels: LineLabel[] = []
+
     for (const scored of data.ranked_zones.slice(0, TOP_N_ZONES)) {
       const { zone, score } = scored
       const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
@@ -178,30 +203,38 @@ export function MainChart({ data }: MainChartProps) {
         color,
         lineWidth: 1,
         lineStyle: LineStyle.Dotted,
-        lastValueVisible: true,
+        lastValueVisible: false,
         priceLineVisible: false,
         crosshairMarkerVisible: false,
-        title,
       })
       zoneSeries.setData(lineFrom(startTime, lastCandleTime, price))
       overlaySeriesRef.current.push(zoneSeries)
+      labels.push({ time: midTime(startTime, lastCandleTime), price, color, text: title })
     }
 
     // BOS/CHoCH/liquidity-sweep levels, major and internal (deduped against
     // major). HH/HL/LH/LL pivot events are not rendered on this chart.
     const majorEvents = data.market_structure_events
     const allEvents = [...majorEvents, ...data.internal_structure_events]
+
+    const recentInternalSweeps = new Set(
+      allEvents
+        .filter((event) => event.scope === 'internal' && event.event === 'liquidity_sweep')
+        .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
+        .slice(0, MAX_INTERNAL_SWEEPS),
+    )
+
     const structureEvents = allEvents.filter(
       (event) =>
         event.event in STRUCTURE_EVENT_STYLES &&
-        !(event.scope === 'internal' && isDuplicateOfMajor(event, majorEvents)),
+        !(event.scope === 'internal' && isDuplicateOfMajor(event, majorEvents)) &&
+        (event.event !== 'liquidity_sweep' || event.scope !== 'internal' || recentInternalSweeps.has(event)),
     )
 
     for (const event of structureEvents) {
       const style = STRUCTURE_EVENT_STYLES[event.event]
       const isInternal = event.scope === 'internal'
       const directionIcon = TREND_ICONS[event.direction] ?? ''
-      const title = `${style.label}${isInternal ? ' (Internal)' : ''} ${directionIcon} · ${formatPrice(event.price_level)}`
       const startTime = toUtcTimestamp(event.timestamp)
       const endTime = structureLineEndTime(event, allEvents, lastCandleTime)
 
@@ -209,14 +242,22 @@ export function MainChart({ data }: MainChartProps) {
         color: isInternal ? `${style.color}80` : style.color,
         lineWidth: 1,
         lineStyle: isInternal ? LineStyle.Dotted : LineStyle.Dashed,
-        lastValueVisible: true,
+        lastValueVisible: false,
         priceLineVisible: false,
         crosshairMarkerVisible: false,
-        title,
       })
       structureSeries.setData(lineFrom(startTime, endTime, event.price_level))
       overlaySeriesRef.current.push(structureSeries)
+
+      labels.push({
+        time: midTime(startTime, endTime),
+        price: event.price_level,
+        color: style.color,
+        text: `${style.label}${isInternal ? ' (Internal)' : ''} ${directionIcon} · ${formatPrice(event.price_level)}`,
+      })
     }
+
+    labelsPrimitiveRef.current?.setLabels(labels)
 
     // Only auto-fit on the first load -- later refreshes shouldn't reset the user's zoom/pan.
     if (!hasFittedRef.current) {
