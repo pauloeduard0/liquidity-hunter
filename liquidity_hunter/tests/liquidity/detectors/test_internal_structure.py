@@ -798,6 +798,93 @@ def test_bullish_choch_uses_last_confirmed_lh_before_final_ll() -> None:
     # último LH confirmado
     assert choch.reference_price_level == 160.0
 
+def test_sweep_below_candidate_choch_low_updates_candidate() -> None:
+    """A SWEEP that breaks below candidate_choch_low while it is still
+    unvalidated replaces the phantom candidate with the sweep pivot.  The
+    subsequent BOS therefore promotes the sweep low, so the CHoCH fires
+    against the actual structure low (80), not the phantom level (100) that
+    was already violated before validation.
+
+    Sequence (lookback=1):
+      index 1: high 200 → bootstrap active_high
+      index 3: low   90 → bootstrap active_low
+      index 5: high 210 → BOS bullish; trend BULLISH
+      index 7: low  100 → HIGHER_LOW → candidate_choch_low=100, baseline=210
+      index 9: low   80 → SWEEP (below active_low=100)
+                           fix: candidate_choch_low updated to 80
+      index 11: high 220 → BOS bullish; 220 > baseline 210 → promotes
+                           fix: validated_choch_low = 80 (not phantom 100)
+      index 13: low   75 → CHoCH bearish, ref = 80
+    """
+    highs = [150.0] * 16
+    lows = [140.0] * 16
+    highs[1] = 200.0
+    lows[3] = 90.0
+    highs[5] = 210.0
+    lows[7] = 100.0
+    lows[9] = 80.0
+    highs[11] = 220.0
+    lows[13] = 75.0
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 210.0, 140.0, close=205.0)   # BOS bullish: close > 200
+    candles[11] = make_candle(11, 220.0, 140.0, close=215.0)  # BOS bullish: close > 210
+    candles[13] = make_candle(13, 150.0, 75.0, close=78.0)   # CHoCH: close < 80
+    candles[14] = make_candle(14, 150.0, 78.0, close=79.0)   # persistence
+
+    events = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
+
+    chochs = [e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
+    assert len(chochs) == 1
+    assert chochs[0].direction is MarketDirection.BEARISH
+    assert chochs[0].reference_price_level == 80.0
+
+
+def test_sweep_above_candidate_choch_high_updates_candidate() -> None:
+    """Bearish mirror of the above: a SWEEP that breaks above
+    candidate_choch_high while unvalidated replaces it with the sweep pivot.
+    The CHoCH fires against the actual structure high (185), not the phantom
+    level (175) that was already violated.
+
+    Sequence (lookback=1):
+      index 1: low  90  → bootstrap active_low
+      index 3: high 200 → bootstrap active_high
+      index 5: low   80 → BOS bearish; trend BEARISH
+      index 7: high 175 → re-bootstrap; functional LH → candidate_choch_high=175, baseline=80
+      index 9: high 185 → SWEEP (above active_high=175, trend BEARISH)
+                           fix: candidate_choch_high updated to 185
+      index 11: low  65 → BOS bearish; 65 < baseline 80 → promotes
+                           fix: validated_choch_high = 185 (not phantom 175)
+      index 13: high 190 → CHoCH bullish, ref = 185
+    """
+    highs = [150.0] * 16
+    lows = [140.0] * 16
+    lows[1] = 90.0
+    highs[3] = 200.0
+    lows[5] = 80.0
+    highs[7] = 175.0
+    highs[9] = 185.0
+    lows[11] = 65.0
+    highs[13] = 190.0
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 150.0, 80.0, close=85.0)     # BOS bearish: close < 90
+    candles[11] = make_candle(11, 150.0, 65.0, close=70.0)   # BOS bearish: close < 80
+    candles[13] = make_candle(13, 190.0, 140.0, close=187.0)  # CHoCH: close > 185
+    candles[14] = make_candle(14, 187.0, 140.0, close=186.0)  # persistence
+
+    events = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
+
+    chochs = [e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
+    assert len(chochs) == 1
+    assert chochs[0].direction is MarketDirection.BULLISH
+    assert chochs[0].reference_price_level == 185.0
+
+
 def test_real_window_choch_should_use_last_confirmed_lh_before_final_ll() -> None:
     """
     Regressão do caso BTC observado.

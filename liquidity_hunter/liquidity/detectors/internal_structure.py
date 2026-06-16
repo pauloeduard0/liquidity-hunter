@@ -373,6 +373,9 @@ class InternalStructureDetector(MarketStructureDetector):
                             active_high.price,
                         )
                         pending_low = self._extreme(pending_low, active_low, higher=False)
+                        if candidate_choch_high is not None and price > candidate_choch_high.price:
+                            candidate_choch_high = pivot
+                            candidate_choch_high_baseline = active_low
                     else:
                         # BOS bullish (first break from NEUTRAL, or
                         # continuation): state always advances (trend,
@@ -505,6 +508,9 @@ class InternalStructureDetector(MarketStructureDetector):
                             active_low.price,
                         )
                         pending_high = self._extreme(pending_high, active_high, higher=True)
+                        if candidate_choch_low is not None and price < candidate_choch_low.price:
+                            candidate_choch_low = pivot
+                            candidate_choch_low_baseline = active_high
                     else:
                         # BOS bearish: state always advances (mirror of the
                         # bullish case); only the emitted event is gated on
