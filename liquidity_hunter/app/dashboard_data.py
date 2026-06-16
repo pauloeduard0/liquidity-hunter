@@ -25,7 +25,7 @@ from liquidity_hunter.liquidity import (
 from liquidity_hunter.psychology import RetailBiasEstimate, RetailTrapAnalyzer
 from liquidity_hunter.scoring import LiquidityScoringEngine, ScoredLiquidityZone
 
-DEFAULT_SWING_LOOKBACK = 50
+DEFAULT_SWING_LOOKBACK = 15
 DEFAULT_INTERNAL_SWING_LOOKBACK = 2
 
 # Binance's `/api/v3/klines` endpoint accepts `limit` values up to 1000.
@@ -91,9 +91,9 @@ def load_dashboard_data(
     current_price = candles[-1].close
     ranked_zones = LiquidityScoringEngine().score(liquidity_zones, current_price)
 
-    market_structure_events = SwingStructureDetector(swing_lookback=swing_lookback).detect(
-        candles
-    )
+    market_structure_events = SwingStructureDetector(
+        swing_lookback=swing_lookback, confluence_filter=confluence_filter
+    ).detect(candles)
 
     buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER, _MAX_FETCH_LIMIT)
     internal_candles = provider.get_ohlcv(symbol, timeframe, buffered_limit)

@@ -38,20 +38,26 @@ pending candidate if that opposite side has already been bootstrapped -- it
 chronologically falls within that side's active-creation window, and is
 therefore a legitimate promotion candidate for it later.
 
-Structure (price action) and confirmation (volume) are kept separate:
+Structure (price action) and confirmation are kept separate for both event
+types:
 
 - A pivot that breaks the active reference on its side *in the direction of
   the current `trend`* (a `BREAK_OF_STRUCTURE` -- including the first break
-  while `trend` is still `NEUTRAL`) is reported on price alone: a wick
-  beyond the active reference is sufficient, regardless of where the candle
-  closes or its `volume_delta` (see `indicators.volume_delta`).
+  while `trend` is still `NEUTRAL`) always advances state (trend, active
+  references). An event is only emitted when the first candle in the leg
+  whose *close* crosses the reference also passes the optional LuxAlgo-style
+  shadow-balance confluence filter (see `_common.bos_confluence`); if no
+  such candle exists, or if `confluence_filter` is enabled and the closing
+  candle fails it, the state change is silent. The BOS timestamp is that
+  candle's timestamp rather than the pivot's.
 - A pivot that breaks the active reference *against* the current `trend` is
-  only confirmed as a `CHANGE_OF_CHARACTER` if the candle that formed it
-  also *closes* beyond that reference AND has a `volume_delta` of at least
-  `min_volume_delta_ratio` (relative to its `volume`) in the breakout
-  direction. If either condition fails, the active reference is considered
-  swept rather than broken: it stays unchanged and a
-  `StructureEvent.LIQUIDITY_SWEEP` event is emitted instead.
+  confirmed as a `CHANGE_OF_CHARACTER` when `persistence_candles` closes
+  beyond the reference form a sustained window anywhere within the leg
+  leading up to the pivot (see `_common.is_sustained_break`). If no such
+  window exists, the break is reported as a `StructureEvent.LIQUIDITY_SWEEP`
+  instead and the active reference remains unchanged. The CHoCH timestamp is
+  the first candle at which a sustained window begins; the SWEEP timestamp
+  is the first candle whose wick crosses the reference.
 
 Every pivot that does *not* break the active reference on its side is also
 labeled HH/HL/LH/LL by comparing it to the previous pivot of the same type
@@ -59,7 +65,6 @@ labeled HH/HL/LH/LL by comparing it to the previous pivot of the same type
 state machine.
 """
 
-from dataclasses import dataclass
 from datetime import datetime
 
 from liquidity_hunter.core.domain import (
@@ -68,8 +73,16 @@ from liquidity_hunter.core.domain import (
     MarketStructure,
     StructureEvent,
 )
-from liquidity_hunter.indicators import volume_delta
-from liquidity_hunter.liquidity.detectors._common import validate_candles
+from liquidity_hunter.liquidity.detectors._common import (
+    Pivot,
+    bos_confluence,
+    collect_pivots,
+    find_close_break_index,
+    find_sustained_break_index,
+    find_wick_break_index,
+    is_sustained_break,
+    validate_candles,
+)
 from liquidity_hunter.liquidity.detectors.base import MarketStructureDetector
 from liquidity_hunter.liquidity.detectors.swing_points import SwingHighDetector, SwingLowDetector
 
@@ -83,12 +96,6 @@ _LOW_PIVOT_LABELS: dict[bool, tuple[StructureEvent, MarketDirection]] = {
     True: (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH),
     False: (StructureEvent.LOWER_LOW, MarketDirection.BEARISH),
 }
-
-
-@dataclass(frozen=True)
-class _Pivot:
-    price: float
-    timestamp: datetime
 
 
 class SwingStructureDetector(MarketStructureDetector):
@@ -115,18 +122,18 @@ class SwingStructureDetector(MarketStructureDetector):
       BOS/CHoCH) until the next opposite-side BOS/CHoCH promotes that
       accumulation to active.
 
-    A pivot whose price exceeds the active reference on its side, *in the
-    direction of `trend`* (or the first such break while `trend` is still
-    `NEUTRAL`), is reported as a `BREAK_OF_STRUCTURE` on price alone -- a
-    wick beyond the active reference is enough, regardless of the candle's
-    close or `volume_delta`. A pivot that exceeds the active reference
-    *against* `trend` is only confirmed as a `CHANGE_OF_CHARACTER` if the
-    candle that formed it also closes beyond that reference and its
-    `volume_delta` ratio (`abs(volume_delta) / volume`) is at least
-    `min_volume_delta_ratio` in the breakout direction. Otherwise the active
-    reference is left unchanged and a `StructureEvent.LIQUIDITY_SWEEP` is
-    reported -- the swept pivot becomes the new `pending_high`/`pending_low`,
-    so it can still be promoted to active later if the opposite side breaks.
+    BOS (in-trend break): state always advances on any wick break of the
+    active reference; a BOS event is only emitted when the first candle in
+    the leg whose close crosses the reference also passes the optional
+    `confluence_filter` (shadow-balance check). If no confirming close
+    exists, or if confluence fails, the state change is silent. This matches
+    `InternalStructureDetector`'s BOS confirmation logic.
+
+    CHoCH (counter-trend break): confirmed when `persistence_candles` closes
+    beyond the active reference hold in a sustained window anywhere within
+    the leg leading up to the breaking pivot (see `is_sustained_break`). A
+    break that does not hold is a `LIQUIDITY_SWEEP` instead -- the active
+    reference stays unchanged and the swept pivot folds into `pending`.
 
     In either case (BOS or CHoCH), the new active reference on that side is
     `_extreme(pending_<side>, breaking_pivot)` -- the more extreme of the
@@ -134,47 +141,82 @@ class SwingStructureDetector(MarketStructureDetector):
     any earlier same-side sweep that reached further than the pivot
     confirming the break.
 
-    A pivot that *confirms* a break is, by construction, always higher (for
-    highs) or lower (for lows) than the previous pivot of the same type --
-    so it is reported only as BOS/CHoCH, an HH/LL label would be redundant.
-    A swept pivot is reported only as `LIQUIDITY_SWEEP`, for the same
-    reason. Pivots that do *not* exceed the active reference are reported
-    as HH/LH (highs) or HL/LL (lows) instead.
+    For BOS/CHoCH/SWEEP, the emitted timestamp is the actual breaking
+    candle (first close beyond reference for BOS, first sustained-break
+    window for CHoCH, first wick beyond reference for SWEEP), not the
+    forming pivot -- the pivot's timestamp marks the extreme of the new leg,
+    not where the prior level was actually crossed.
     """
 
-    def __init__(self, swing_lookback: int = 50, min_volume_delta_ratio: float = 0.2) -> None:
-        if not 0.0 <= min_volume_delta_ratio <= 1.0:
-            raise ValueError("min_volume_delta_ratio must be between 0 and 1")
+    def __init__(
+        self,
+        swing_lookback: int = 15,
+        persistence_candles: int = 10,
+        confluence_filter: bool = True,
+    ) -> None:
+        if persistence_candles < 1:
+            raise ValueError("persistence_candles must be at least 1")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
         self._low_detector = SwingLowDetector(lookback=swing_lookback)
-        self._min_volume_delta_ratio = min_volume_delta_ratio
+        self._persistence_candles = persistence_candles
+        self._confluence_filter = confluence_filter
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
 
-        highs = self._high_detector.detect(candles)
-        lows = self._low_detector.detect(candles)
-        pivots = sorted(
-            [(zone.formed_at, "high", zone.price_high) for zone in highs]
-            + [(zone.formed_at, "low", zone.price_low) for zone in lows],
-            key=lambda pivot: pivot[0],
-        )
+        pivots = collect_pivots(candles, self._high_detector, self._low_detector)
 
         symbol = candles[0].symbol
         timeframe = candles[0].timeframe
-        candles_by_timestamp = {candle.timestamp: candle for candle in candles}
+        index_by_timestamp = {candle.timestamp: i for i, candle in enumerate(candles)}
+
+        def confirms_break(
+            start_index: int, end_index: int, level_price: float, *, bullish: bool
+        ) -> bool:
+            return any(
+                is_sustained_break(
+                    candles,
+                    index,
+                    level_price,
+                    bullish=bullish,
+                    persistence_candles=self._persistence_candles,
+                )
+                for index in range(start_index, end_index + 1)
+            )
 
         events: list[MarketStructure] = []
-        active_high: _Pivot | None = None
-        active_low: _Pivot | None = None
-        pending_high: _Pivot | None = None
-        pending_low: _Pivot | None = None
-        last_high: _Pivot | None = None
-        last_low: _Pivot | None = None
+        active_high: Pivot | None = None
+        active_low: Pivot | None = None
+        pending_high: Pivot | None = None
+        pending_low: Pivot | None = None
+        last_high: Pivot | None = None
+        last_low: Pivot | None = None
         trend = MarketDirection.NEUTRAL
+        prev_high_pivot_index = -1
+        prev_low_pivot_index = -1
+
+        def emit(
+            timestamp: datetime,
+            event: StructureEvent,
+            direction: MarketDirection,
+            price_level: float,
+            reference_price_level: float,
+        ) -> None:
+            events.append(
+                MarketStructure(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    timestamp=timestamp,
+                    event=event,
+                    direction=direction,
+                    price_level=price_level,
+                    reference_price_level=reference_price_level,
+                )
+            )
 
         for timestamp, kind, price in pivots:
-            pivot = _Pivot(price=price, timestamp=timestamp)
+            pivot = Pivot(price=price, timestamp=timestamp)
+            current_index = index_by_timestamp[timestamp]
 
             if kind == "high":
                 if active_high is None and last_high is None:
@@ -182,25 +224,48 @@ class SwingStructureDetector(MarketStructureDetector):
                     if last_low is not None:
                         pending_high = pivot
                 elif active_high is not None and price > active_high.price:
+                    ref_price = active_high.price
                     is_reversal = trend is MarketDirection.BEARISH
-                    if not is_reversal or self._is_confirmed(
-                        candles_by_timestamp[timestamp], active_high.price, bullish=True
-                    ):
-                        events.append(
-                            MarketStructure(
-                                symbol=symbol,
-                                timeframe=timeframe,
-                                timestamp=timestamp,
-                                event=(
-                                    StructureEvent.CHANGE_OF_CHARACTER
-                                    if is_reversal
-                                    else StructureEvent.BREAK_OF_STRUCTURE
-                                ),
-                                direction=MarketDirection.BULLISH,
-                                price_level=price,
-                                reference_price_level=active_high.price,
+                    start = prev_high_pivot_index + 1
+
+                    if is_reversal:
+                        if confirms_break(start, current_index, ref_price, bullish=True):
+                            if pending_low is not None:
+                                active_low = pending_low
+                                pending_low = None
+                            else:
+                                active_low = None
+                            active_high = self._extreme(pending_high, pivot, higher=True)
+                            pending_high = None
+                            trend = MarketDirection.BULLISH
+                            break_idx = find_sustained_break_index(
+                                candles,
+                                start,
+                                current_index,
+                                ref_price,
+                                bullish=True,
+                                persistence_candles=self._persistence_candles,
                             )
-                        )
+                            emit(
+                                candles[break_idx].timestamp,
+                                StructureEvent.CHANGE_OF_CHARACTER,
+                                MarketDirection.BULLISH,
+                                price,
+                                ref_price,
+                            )
+                        else:
+                            sweep_idx = find_wick_break_index(
+                                candles, start, current_index, ref_price, bullish=True
+                            )
+                            emit(
+                                candles[sweep_idx].timestamp,
+                                StructureEvent.LIQUIDITY_SWEEP,
+                                MarketDirection.BULLISH,
+                                price,
+                                ref_price,
+                            )
+                            pending_high = self._extreme(pending_high, pivot, higher=True)
+                    else:
                         if pending_low is not None:
                             active_low = pending_low
                             pending_low = None
@@ -209,61 +274,78 @@ class SwingStructureDetector(MarketStructureDetector):
                         active_high = self._extreme(pending_high, pivot, higher=True)
                         pending_high = None
                         trend = MarketDirection.BULLISH
-                    else:
-                        events.append(
-                            MarketStructure(
-                                symbol=symbol,
-                                timeframe=timeframe,
-                                timestamp=timestamp,
-                                event=StructureEvent.LIQUIDITY_SWEEP,
-                                direction=MarketDirection.BULLISH,
-                                price_level=price,
-                                reference_price_level=active_high.price,
-                            )
+                        close_idx = find_close_break_index(
+                            candles, start, current_index, ref_price, bullish=True
                         )
-                        pending_high = self._extreme(pending_high, pivot, higher=True)
+                        if close_idx is not None and (
+                            not self._confluence_filter
+                            or bos_confluence(candles[close_idx], bullish=True)
+                        ):
+                            emit(
+                                candles[close_idx].timestamp,
+                                StructureEvent.BREAK_OF_STRUCTURE,
+                                MarketDirection.BULLISH,
+                                price,
+                                ref_price,
+                            )
                 else:
                     label = self._label(price, last_high, _HIGH_PIVOT_LABELS)
                     if label is not None:
                         event_type, direction, reference_price = label
-                        events.append(
-                            MarketStructure(
-                                symbol=symbol,
-                                timeframe=timeframe,
-                                timestamp=timestamp,
-                                event=event_type,
-                                direction=direction,
-                                price_level=price,
-                                reference_price_level=reference_price,
-                            )
-                        )
+                        emit(timestamp, event_type, direction, price, reference_price)
                     pending_high = self._extreme(pending_high, pivot, higher=True)
+
                 last_high = pivot
+                prev_high_pivot_index = current_index
+
             else:
                 if active_low is None and last_low is None:
                     active_low = pivot
                     if last_high is not None:
                         pending_low = pivot
                 elif active_low is not None and price < active_low.price:
+                    ref_price = active_low.price
                     is_reversal = trend is MarketDirection.BULLISH
-                    if not is_reversal or self._is_confirmed(
-                        candles_by_timestamp[timestamp], active_low.price, bullish=False
-                    ):
-                        events.append(
-                            MarketStructure(
-                                symbol=symbol,
-                                timeframe=timeframe,
-                                timestamp=timestamp,
-                                event=(
-                                    StructureEvent.CHANGE_OF_CHARACTER
-                                    if is_reversal
-                                    else StructureEvent.BREAK_OF_STRUCTURE
-                                ),
-                                direction=MarketDirection.BEARISH,
-                                price_level=price,
-                                reference_price_level=active_low.price,
+                    start = prev_low_pivot_index + 1
+
+                    if is_reversal:
+                        if confirms_break(start, current_index, ref_price, bullish=False):
+                            if pending_high is not None:
+                                active_high = pending_high
+                                pending_high = None
+                            else:
+                                active_high = None
+                            active_low = self._extreme(pending_low, pivot, higher=False)
+                            pending_low = None
+                            trend = MarketDirection.BEARISH
+                            break_idx = find_sustained_break_index(
+                                candles,
+                                start,
+                                current_index,
+                                ref_price,
+                                bullish=False,
+                                persistence_candles=self._persistence_candles,
                             )
-                        )
+                            emit(
+                                candles[break_idx].timestamp,
+                                StructureEvent.CHANGE_OF_CHARACTER,
+                                MarketDirection.BEARISH,
+                                price,
+                                ref_price,
+                            )
+                        else:
+                            sweep_idx = find_wick_break_index(
+                                candles, start, current_index, ref_price, bullish=False
+                            )
+                            emit(
+                                candles[sweep_idx].timestamp,
+                                StructureEvent.LIQUIDITY_SWEEP,
+                                MarketDirection.BEARISH,
+                                price,
+                                ref_price,
+                            )
+                            pending_low = self._extreme(pending_low, pivot, higher=False)
+                    else:
                         if pending_high is not None:
                             active_high = pending_high
                             pending_high = None
@@ -272,60 +354,34 @@ class SwingStructureDetector(MarketStructureDetector):
                         active_low = self._extreme(pending_low, pivot, higher=False)
                         pending_low = None
                         trend = MarketDirection.BEARISH
-                    else:
-                        events.append(
-                            MarketStructure(
-                                symbol=symbol,
-                                timeframe=timeframe,
-                                timestamp=timestamp,
-                                event=StructureEvent.LIQUIDITY_SWEEP,
-                                direction=MarketDirection.BEARISH,
-                                price_level=price,
-                                reference_price_level=active_low.price,
-                            )
+                        close_idx = find_close_break_index(
+                            candles, start, current_index, ref_price, bullish=False
                         )
-                        pending_low = self._extreme(pending_low, pivot, higher=False)
+                        if close_idx is not None and (
+                            not self._confluence_filter
+                            or bos_confluence(candles[close_idx], bullish=False)
+                        ):
+                            emit(
+                                candles[close_idx].timestamp,
+                                StructureEvent.BREAK_OF_STRUCTURE,
+                                MarketDirection.BEARISH,
+                                price,
+                                ref_price,
+                            )
                 else:
                     label = self._label(price, last_low, _LOW_PIVOT_LABELS)
                     if label is not None:
                         event_type, direction, reference_price = label
-                        events.append(
-                            MarketStructure(
-                                symbol=symbol,
-                                timeframe=timeframe,
-                                timestamp=timestamp,
-                                event=event_type,
-                                direction=direction,
-                                price_level=price,
-                                reference_price_level=reference_price,
-                            )
-                        )
+                        emit(timestamp, event_type, direction, price, reference_price)
                     pending_low = self._extreme(pending_low, pivot, higher=False)
+
                 last_low = pivot
+                prev_low_pivot_index = current_index
 
         return events
 
-    def _is_confirmed(self, candle: Candle, active_price: float, *, bullish: bool) -> bool:
-        """Whether `candle` confirms a counter-trend break of `active_price` as a CHoCH.
-
-        Requires `candle.close` to be beyond `active_price` (not just a
-        wick) and `volume_delta(candle)` to be at least
-        `min_volume_delta_ratio` of `candle.volume`, in the breakout
-        direction (`bullish`). Only called for breaks against the current
-        `trend`; breaks in the direction of `trend` (BOS) are confirmed by
-        price alone.
-        """
-        close_beyond = candle.close > active_price if bullish else candle.close < active_price
-        if not close_beyond or candle.volume == 0:
-            return False
-
-        delta = volume_delta(candle)
-        delta_in_direction = delta > 0 if bullish else delta < 0
-        delta_ratio = abs(delta) / candle.volume
-        return delta_in_direction and delta_ratio >= self._min_volume_delta_ratio
-
     @staticmethod
-    def _extreme(current: "_Pivot | None", candidate: "_Pivot", *, higher: bool) -> "_Pivot":
+    def _extreme(current: "Pivot | None", candidate: "Pivot", *, higher: bool) -> "Pivot":
         """The more extreme of `current` and `candidate`.
 
         Used to accumulate `pending_high`/`pending_low` as the highest high
@@ -343,7 +399,7 @@ class SwingStructureDetector(MarketStructureDetector):
     @staticmethod
     def _label(
         price: float,
-        last_pivot: _Pivot | None,
+        last_pivot: "Pivot | None",
         labels: dict[bool, tuple[StructureEvent, MarketDirection]],
     ) -> tuple[StructureEvent, MarketDirection, float] | None:
         """HH/LH (or HL/LL) label for `price` vs. the previous same-type pivot.

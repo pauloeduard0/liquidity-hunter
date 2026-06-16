@@ -107,18 +107,21 @@ def test_load_dashboard_data_assembles_research_snapshot() -> None:
 def test_load_dashboard_data_derives_trend_from_market_structure() -> None:
     candles = make_series(STRUCTURE_HIGHS, STRUCTURE_LOWS, symbol="BTCUSDT")
     # Index 12 breaks active_low (140 from index 7): give it a close beyond
-    # 140 and a strong bearish volume delta so the break is confirmed as a
-    # BOS rather than a liquidity sweep.
+    # 140 so the break is confirmed as a BOS rather than a liquidity sweep.
     candles[12] = make_candle(
         12,
         STRUCTURE_HIGHS[12],
         STRUCTURE_LOWS[12],
         symbol="BTCUSDT",
         close=135.0,
-        taker_buy_volume=0.3,
     )
 
-    data = load_dashboard_data(provider=_FakeProvider(candles), symbol="BTCUSDT", swing_lookback=2)
+    data = load_dashboard_data(
+        provider=_FakeProvider(candles),
+        symbol="BTCUSDT",
+        swing_lookback=2,
+        confluence_filter=False,
+    )
 
     assert len(data.market_structure_events) == 1
     event = data.market_structure_events[0]
