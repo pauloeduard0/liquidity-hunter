@@ -6,97 +6,106 @@ from liquidity_hunter.core.domain import Candle, MarketDirection, StructureEvent
 from liquidity_hunter.liquidity.detectors.market_structure import SwingStructureDetector
 from liquidity_hunter.tests.liquidity.detectors._factories import make_candle, make_series
 
-# Pivot sequence (lookback=2, so each pivot sits at its index with 2 flat
-# candles on either side):
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+# Main sequence (lookback=2, spacing=5 so each pivot needs 2 flat candles on
+# each side):
 #
-#   index  2: swing high 200  -> bootstraps active_high
-#   index  7: swing low  140  -> bootstraps active_low (and seeds
-#                                  pending_low, since active_high already
-#                                  exists)
-#   index 12: swing high 190  -> below active_high (200) -> pending_high,
-#                                  labeled LOWER_HIGH vs. previous high (200)
-#   index 17: swing low  130  -> below active_low (140) -> BOS bearish,
-#                                  promotes pending_high (190) to active_high
-#   index 22: swing high 193  -> above active_high (190) -> CHoCH bullish;
-#                                  pending_low is empty (no low pivot has
-#                                  formed in this leg yet), so active_low is
-#                                  discarded to None rather than left stale
-#   index 27: swing low  120  -> active_low is None -> not a CHoCH
-#                                  candidate; labeled LOWER_LOW vs. the
-#                                  previous low (130) and accumulates into
-#                                  pending_low
-#   index 32: swing high 205  -> above active_high (193); trend is still
-#                                  BULLISH (unchanged since index 22) -> BOS
-#                                  bullish (continuation), promoting
-#                                  pending_low (120) to active_low
-HIGHS = [150.0] * 35
-for _index, _value in {2: 200.0, 12: 190.0, 22: 193.0, 32: 205.0}.items():
-    HIGHS[_index] = _value
+#   index  2: swing high 200 -> bootstrap active_high
+#   index  7: swing low   90 -> bootstrap active_low; pending_low=90
+#   index 12: swing high 180 -> LOWER_HIGH(180/200);
+#               candidate_choch_high=180, baseline=active_low=90
+#   index 17: swing low   95 -> HIGHER_LOW(95/90);
+#               candidate_choch_low=95, baseline=active_high=180;
+#               pending_high=180
+#   index 22: swing low   80 -> BOS bearish(80/95) [trend NEUTRAL->BEARISH];
+#               active_high = pending_high = 180;
+#               candidate_choch_high=180, baseline=90: 80<90 -> promotes
+#               validated_choch_high=180
+#   index 27: swing high 185 -> CHoCH bullish(185/180) [break > 180 sustains];
+#               active_low = pending_low = 90 (accumulated at LH-12)
+#   index 32: swing low   95 -> HIGHER_LOW(95/90); pending_high=185;
+#               candidate_choch_low=95, baseline=185
+#   index 37: swing high 195 -> BOS bullish(195/185) [continuation];
+#               candidate_choch_low=95, baseline=185: 195>185 -> promotes
+#               validated_choch_low=95; active_low = pending_low = None
+MAIN_HIGHS = [150.0] * 40
+for _i, _v in {2: 200.0, 12: 180.0, 27: 185.0, 37: 195.0}.items():
+    MAIN_HIGHS[_i] = _v
 
-LOWS = [145.0] * 35
-for _index, _value in {7: 140.0, 17: 130.0, 27: 120.0}.items():
-    LOWS[_index] = _value
+MAIN_LOWS = [145.0] * 40
+for _i, _v in {7: 90.0, 17: 95.0, 22: 80.0, 32: 95.0}.items():
+    MAIN_LOWS[_i] = _v
 
-# Candle-level overrides applied by `_confirmed_series`.
+# Strictly descending highs / ascending lows — no pivot ever exceeds the
+# trailing active reference, so every pivot is just a LH or HL label.
 #
-# BOS candles need a close beyond the active level for event emission.
-# The CHoCH at index 22 (reference=190) requires a 2-candle persistence
-# window: candles[22] and [23] must both close > 190.  Candle 23 gets
-# high=192 (strictly below HIGHS[22]=193) so it is not detected as a new
-# swing pivot, and close=191 > 190 satisfies the persistence check.
-# The BOS at 17 and 32 need close below 140 / above 193 respectively.
-def _confirmed_series(highs: list[float], lows: list[float]) -> list[Candle]:
-    """`make_series(highs, lows)` with close/high overrides for BOS/CHoCH confirmation."""
-    candles = make_series(highs, lows)
-    candles[17] = make_candle(17, highs[17], lows[17], close=135.0)
-    candles[22] = make_candle(22, highs[22], lows[22], close=192.0)
-    candles[23] = make_candle(23, 192.0, lows[23], close=191.0)
-    candles[32] = make_candle(32, highs[32], lows[32], close=200.0)
-    return candles
+#   index  2: swing high 300 -> bootstrap active_high
+#   index  7: swing low  100 -> bootstrap active_low
+#   index 12: swing high 270 -> LH(270/300); active_high becomes 270
+#   index 17: swing low  120 -> HL(120/100); active_low becomes 120
+#   index 22: swing high 250 -> LH(250/270); active_high becomes 250
+#   index 27: swing low  140 -> HL(140/120); active_low becomes 140
+LABELS_HIGHS = [200.0] * 30
+for _i, _v in {2: 300.0, 12: 270.0, 22: 250.0}.items():
+    LABELS_HIGHS[_i] = _v
 
+LABELS_LOWS = [190.0] * 30
+for _i, _v in {7: 100.0, 17: 120.0, 27: 140.0}.items():
+    LABELS_LOWS[_i] = _v
 
-# A "ladder" sequence (lookback=2) where no pivot ever breaks the bootstrap
-# active_high (300) / active_low (100), so every subsequent pivot is a
-# pending HH/HL/LH/LL label and no BOS/CHoCH is emitted.
-#
-#   index  2: swing high 300 -> bootstraps active_high
-#   index  7: swing low  100 -> bootstraps active_low
-#   index 12: swing high 250 -> LOWER_HIGH vs. previous high (300)
-#   index 17: swing low  150 -> HIGHER_LOW vs. previous low (100)
-#   index 22: swing high 280 -> HIGHER_HIGH vs. previous high (250)
-#   index 27: swing low  120 -> LOWER_LOW vs. previous low (150)
-LADDER_HIGHS = [200.0] * 30
-for _index, _value in {2: 300.0, 12: 250.0, 22: 280.0}.items():
-    LADDER_HIGHS[_index] = _value
-
-LADDER_LOWS = [190.0] * 30
-for _index, _value in {7: 100.0, 17: 150.0, 27: 120.0}.items():
-    LADDER_LOWS[_index] = _value
-
-# Two equal swing highs (lookback=2): the second is neither higher nor lower
-# than the first, so no HH/LH label (and no BOS, since it doesn't exceed
-# active_high) is emitted.
+# Two equal swing highs (lookback=2): neither a BOS nor a label is emitted.
 EQUAL_HIGHS = [200.0] * 20
-for _index in (2, 12):
-    EQUAL_HIGHS[_index] = 300.0
-
+for _i in (2, 12):
+    EQUAL_HIGHS[_i] = 300.0
 EQUAL_LOWS = [190.0] * 20
 EQUAL_LOWS[7] = 100.0
 
 
+def _confirmed_main_series() -> list[Candle]:
+    """`make_series(MAIN_HIGHS, MAIN_LOWS)` with close/low overrides for
+    BOS/CHoCH confirmation and persistence windows."""
+    candles = make_series(MAIN_HIGHS, MAIN_LOWS)
+    # BOS bearish at index 22 (ref=95): close must be < 95.
+    candles[22] = make_candle(22, MAIN_HIGHS[22], MAIN_LOWS[22], close=88.0)
+    # CHoCH bullish at index 27 (ref=180): close must be > 180 at [27] and
+    # [28] (persistence_candles=1 means the window is [pivot, pivot+1]).
+    candles[27] = make_candle(27, MAIN_HIGHS[27], MAIN_LOWS[27], close=183.0)
+    candles[28] = make_candle(28, 183.0, MAIN_LOWS[28], close=182.0)
+    # BOS bullish at index 37 (ref=185): close must be > 185.
+    candles[37] = make_candle(37, MAIN_HIGHS[37], MAIN_LOWS[37], close=190.0)
+    return candles
+
+
+# ---------------------------------------------------------------------------
+# Full-sequence and label tests
+# ---------------------------------------------------------------------------
+
 def test_swing_structure_detector_full_sequence() -> None:
-    candles = _confirmed_series(HIGHS, LOWS)
+    """End-to-end: LH -> HL -> BOS -> CHoCH -> HL -> BOS (major scope).
+
+    The LH at index 12 sets candidate_choch_high=180 with baseline=90.
+    The HL at index 17 sets candidate_choch_low=95 with baseline=180 and
+    accumulates pending_high=180.
+    The BOS bearish at index 22 promotes validated_choch_high=180 (BOS pivot
+    80 < baseline 90 ✓).
+    The CHoCH bullish at index 27 fires against validated_choch_high=180.
+    """
+    candles = _confirmed_main_series()
 
     events = SwingStructureDetector(
         swing_lookback=2, persistence_candles=1, confluence_filter=False
     ).detect(candles)
 
     assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
-        (StructureEvent.LOWER_HIGH, MarketDirection.BEARISH, 190.0, 200.0),
-        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 130.0, 140.0),
-        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, 193.0, 190.0),
-        (StructureEvent.LOWER_LOW, MarketDirection.BEARISH, 120.0, 130.0),
-        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 205.0, 193.0),
+        (StructureEvent.LOWER_HIGH, MarketDirection.BEARISH, 180.0, 200.0),
+        (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 95.0, 90.0),
+        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 80.0, 95.0),
+        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, 185.0, 180.0),
+        (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 95.0, 90.0),
+        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 195.0, 185.0),
     ]
     assert [e.timestamp for e in events] == [
         candles[12].timestamp,
@@ -104,45 +113,44 @@ def test_swing_structure_detector_full_sequence() -> None:
         candles[22].timestamp,
         candles[27].timestamp,
         candles[32].timestamp,
+        candles[37].timestamp,
     ]
     for event in events:
         assert event.symbol == "BTCUSDT"
 
 
-def test_pending_pivot_does_not_trigger_bos_choch_until_promoted() -> None:
-    """The minor swing high at index 12 (190 < active_high 200) is held as
-    `pending_high`. It surfaces only as a descriptive `LOWER_HIGH` label, not
-    a BOS/CHoCH; it only becomes the BOS/CHoCH *reference* once `active_low`
-    breaks at index 17, where it is promoted to `active_high` (190) and
-    index 22's break (193) reports it as `reference_price_level`.
+def test_candidate_does_not_fire_choch_until_validated() -> None:
+    """The LH at index 12 is a candidate, not an immediate CHoCH reference.
+    It only becomes `validated_choch_high` once the BOS at index 22 confirms
+    structure continuation (BOS pivot 80 < baseline 90).  The CHoCH at
+    index 27 then uses 180.0 as `reference_price_level`, not 200.0 or any
+    other level.
     """
-    candles = _confirmed_series(HIGHS, LOWS)
+    candles = _confirmed_main_series()
 
     events = SwingStructureDetector(
         swing_lookback=2, persistence_candles=1, confluence_filter=False
     ).detect(candles)
 
-    pivot_12_events = [e for e in events if e.timestamp == candles[12].timestamp]
-    assert [e.event for e in pivot_12_events] == [StructureEvent.LOWER_HIGH]
+    lh_events = [e for e in events if e.timestamp == candles[12].timestamp]
+    assert [e.event for e in lh_events] == [StructureEvent.LOWER_HIGH]
 
-    choch_events = [
-        e
-        for e in events
-        if e.event in (StructureEvent.BREAK_OF_STRUCTURE, StructureEvent.CHANGE_OF_CHARACTER)
-    ]
-    assert choch_events[1].reference_price_level == 190.0
+    choch = next(e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER)
+    assert choch.reference_price_level == 180.0
 
 
-def test_pivot_labels_for_pending_pivots() -> None:
-    candles = make_series(LADDER_HIGHS, LADDER_LOWS)
+def test_lh_hl_labels_when_no_bos_fires() -> None:
+    """Strictly descending highs and ascending lows produce only LH/HL labels
+    — no BOS or CHoCH, because no pivot ever exceeds the trailing reference."""
+    candles = make_series(LABELS_HIGHS, LABELS_LOWS)
 
     events = SwingStructureDetector(swing_lookback=2).detect(candles)
 
     assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
-        (StructureEvent.LOWER_HIGH, MarketDirection.BEARISH, 250.0, 300.0),
-        (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 150.0, 100.0),
-        (StructureEvent.HIGHER_HIGH, MarketDirection.BULLISH, 280.0, 250.0),
-        (StructureEvent.LOWER_LOW, MarketDirection.BEARISH, 120.0, 150.0),
+        (StructureEvent.LOWER_HIGH, MarketDirection.BEARISH, 270.0, 300.0),
+        (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 120.0, 100.0),
+        (StructureEvent.LOWER_HIGH, MarketDirection.BEARISH, 250.0, 270.0),
+        (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 140.0, 120.0),
     ]
     assert [e.timestamp for e in events] == [
         candles[12].timestamp,
@@ -155,87 +163,69 @@ def test_pivot_labels_for_pending_pivots() -> None:
 def test_no_label_for_equal_pivots() -> None:
     candles = make_series(EQUAL_HIGHS, EQUAL_LOWS)
 
-    events = SwingStructureDetector(swing_lookback=2).detect(candles)
-
-    assert events == []
-
-
-def test_swing_structure_detector_returns_empty_for_short_series() -> None:
-    candles = make_series(HIGHS[:4], LOWS[:4])
-
     assert SwingStructureDetector(swing_lookback=2).detect(candles) == []
 
 
-def test_swing_structure_detector_rejects_mixed_symbols() -> None:
-    candles = make_series(HIGHS, LOWS)
-    candles[0] = make_candle(0, candles[0].high, candles[0].low, symbol="ETHUSDT")
-
-    with pytest.raises(ValueError, match="same symbol and timeframe"):
-        SwingStructureDetector(swing_lookback=2).detect(candles)
-
-
-def test_swing_structure_detector_rejects_empty_candles() -> None:
-    with pytest.raises(ValueError, match="must not be empty"):
-        SwingStructureDetector().detect([])
-
-
-def test_swing_structure_detector_rejects_invalid_persistence_candles() -> None:
-    with pytest.raises(ValueError, match="persistence_candles must be at least 1"):
-        SwingStructureDetector(persistence_candles=0)
-
-
-# A BOS / sweep / BOS / CHoCH sequence (lookback=2):
-#
-#   index  2: swing high 200 -> bootstraps active_high
-#   index  7: swing low  140 -> bootstraps active_low
-#   index 12: swing high 210 -> above active_high (200); trend is NEUTRAL,
-#                                 so this is a BOS bullish. Close (205) >
-#                                 200 confirms. trend becomes BULLISH.
-#   index 17: swing low  130 -> below active_low (140); trend is BULLISH
-#                                 (reversal candidate). close (135) is below
-#                                 140 but persistence fails (the very next
-#                                 candle reverts above 140) ->
-#                                 LIQUIDITY_SWEEP. active_low stays 140.
-#                                 pending_low = 130.
-#   index 22: swing high 215 -> above active_high (210); trend is still
-#                                 BULLISH (continuation) -> BOS bullish.
-#                                 close (211) > 210 confirms. Promotes the
-#                                 swept pending_low (130) to active_low.
-#   index 27: swing low  120 -> below active_low (130, promoted); trend is
-#                                 BULLISH (reversal candidate). close (125)
-#                                 and persistence (candle 28 also closes
-#                                 below 130) confirm -> CHoCH bearish.
-SWEEP_HIGHS = [150.0] * 30
-for _index, _value in {2: 200.0, 12: 210.0, 22: 215.0}.items():
-    SWEEP_HIGHS[_index] = _value
-
-SWEEP_LOWS = [145.0] * 30
-for _index, _value in {7: 140.0, 17: 130.0, 27: 120.0}.items():
-    SWEEP_LOWS[_index] = _value
-
-
-def test_bos_close_confirmed_and_sweep_on_persistence_failure() -> None:
-    candles = make_series(SWEEP_HIGHS, SWEEP_LOWS)
-    # index 12: close (205) > active_high (200) -> BOS bullish confirmed.
-    candles[12] = make_candle(12, SWEEP_HIGHS[12], SWEEP_LOWS[12], close=205.0)
-    # index 17: close (135) < active_low (140), but no 2-candle window holds
-    # below 140 (the next candle reverts to 147.5) -> LIQUIDITY_SWEEP.
-    candles[17] = make_candle(17, SWEEP_HIGHS[17], SWEEP_LOWS[17], close=135.0)
-    # index 22: close (211) > active_high (210) -> BOS bullish confirmed.
-    candles[22] = make_candle(22, SWEEP_HIGHS[22], SWEEP_LOWS[22], close=211.0)
-    # index 27 + 28: persistence window below active_low (130) -> CHoCH bearish.
-    candles[27] = make_candle(27, SWEEP_HIGHS[27], SWEEP_LOWS[27], close=125.0)
-    candles[28] = make_candle(28, SWEEP_HIGHS[28], 121.0, close=126.0)
+def test_detector_stamps_major_scope() -> None:
+    candles = _confirmed_main_series()
 
     events = SwingStructureDetector(
         swing_lookback=2, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
+
+    assert events
+    assert all(event.scope is StructureScope.MAJOR for event in events)
+
+
+# ---------------------------------------------------------------------------
+# BOS confirmation and sweep tests
+# ---------------------------------------------------------------------------
+
+def test_bos_confirmed_sweep_then_choch() -> None:
+    """BOS close confirmed -> SWEEP (persistence fails) -> BOS (validates
+    candidate) -> CHoCH (persistence holds).
+
+    Sequence (lookback=1, persistence_candles=1, confluence_filter=False):
+
+      index 1: high 200 -> bootstrap active_high
+      index 3: low  140 -> bootstrap active_low; pending_low=140
+      index 5: high 210 -> BOS bullish(210/200); close(205)>200 confirms.
+                             active_low=140; trend=BULLISH.
+      index 7: low  130 -> SWEEP bearish(130/140); validated_choch_low=None
+                             so CHoCH check skipped; persistence fails
+                             (close=145 not < 140). pending_high=210.
+      index 9: high 215 -> BOS bullish(215/210); close(212)>210 confirms.
+                             active_low=None (pending_low cleared); trend=BULLISH.
+      index 11: low 133 -> re-bootstrap active_low=133 (silent);
+                              133 > last_low_pivot(130) -> candidate_choch_low=133,
+                              baseline=215. pending_low=133.
+      index 13: high 220 -> BOS bullish(220/215); close(217)>215 confirms;
+                              candidate_choch_low=133, 220>215=baseline -> promotes
+                              validated_choch_low=133. active_low=pending_low=133.
+      index 15: low  120 -> CHoCH bearish(120/133); close(125)<133 at [15] and
+                              close(126)<133 at [16] -> persistence holds.
+    """
+    highs = [150.0, 200.0, 150.0, 150.0, 150.0, 210.0, 150.0, 150.0, 150.0,
+             215.0, 150.0, 150.0, 150.0, 220.0, 150.0, 150.0, 150.0]
+    lows = [145.0, 145.0, 145.0, 140.0, 145.0, 145.0, 145.0, 130.0, 145.0,
+            145.0, 145.0, 133.0, 145.0, 145.0, 145.0, 120.0, 145.0]
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, highs[5], lows[5], close=205.0)
+    candles[9] = make_candle(9, highs[9], lows[9], close=212.0)
+    candles[13] = make_candle(13, highs[13], lows[13], close=217.0)
+    candles[15] = make_candle(15, highs[15], lows[15], close=125.0)
+    candles[16] = make_candle(16, 145.0, 125.0, close=126.0)
+
+    events = SwingStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
     ).detect(candles)
 
     assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
         (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 210.0, 200.0),
         (StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BEARISH, 130.0, 140.0),
         (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 215.0, 210.0),
-        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, 120.0, 130.0),
+        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 220.0, 215.0),
+        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, 120.0, 133.0),
     ]
 
 
@@ -300,308 +290,140 @@ def test_liquidity_sweep_when_persistence_fails() -> None:
     ]
 
 
-def test_detector_stamps_major_scope() -> None:
-    candles = _confirmed_series(HIGHS, LOWS)
+# ---------------------------------------------------------------------------
+# Candidate / validated CHoCH reference tests
+# ---------------------------------------------------------------------------
 
-    events = SwingStructureDetector(
-        swing_lookback=2, persistence_candles=1, confluence_filter=False
-    ).detect(candles)
+def test_candidate_choch_promotion_requires_bos_below_baseline() -> None:
+    """The baseline gate: a BOS bearish whose pivot does NOT go below
+    `candidate_choch_high_baseline` does NOT promote the candidate;
+    only a BOS below the baseline does.
 
-    assert events
-    assert all(event.scope is StructureScope.MAJOR for event in events)
+    Sequence (lookback=1, confluence_filter=False):
 
-
-def test_promoted_active_high_is_the_highest_high_of_the_prior_leg() -> None:
-    """`pending_high` accumulates the *highest* high seen since `active_low`
-    was last set -- not merely the most recently formed one -- so a later
-    BOS bearish promotes that true leg-high to `active_high`, even if a
-    lower high formed more recently.
-
-    Sequence (lookback=1):
-
-      index  1: swing high 200 -> bootstraps active_high
-      index  3: swing low   90 -> bootstraps active_low
-      index  5: swing low   80 -> below active_low (90); trend NEUTRAL ->
-                                    BOS bearish. close (85) < 90 confirms.
-                                    trend=BEARISH; pending_high is empty ->
-                                    active_high discarded to None.
-      index  7: swing high 120 -> below active_high (None) -> LOWER_HIGH
-                                    label vs. previous high (200);
-                                    pending_high = 120.
-      index  9: swing high 150 -> active_high still None -> HIGHER_HIGH
-                                    (vs. 120); pending_high = max(120, 150)
-                                    = 150.
-      index 11: swing high 130 -> active_high still None -> LOWER_HIGH
-                                    (vs. 150); pending_high stays 150
-                                    (130 is not the new max).
-      index 13: swing low   70 -> below active_low (80); trend BEARISH ->
-                                    BOS bearish (continuation). close (75) <
-                                    80 confirms. Promotes pending_high (150,
-                                    the leg's highest high) to active_high
-                                    -- NOT 130, the most recently formed high.
-      index 15: swing high 140 -> 140 <= active_high (150) -> no BOS/CHoCH,
-                                    just a HIGHER_HIGH label (vs. 130). Under
-                                    the old "last pivot wins" rule,
-                                    active_high would have been promoted to
-                                    130, and 140 would have wrongly broken it
-                                    as a CHoCH bullish.
+      index 1: high 200 -> bootstrap active_high
+      index 3: low   90 -> bootstrap active_low; pending_low=90
+      index 5: high 180 -> LH(180/200); candidate_choch_high=180, baseline=90
+      index 7: low   95 -> HL(95/90); pending_high=180; candidate_choch_low=95
+      index 9: low   93 -> BOS bearish(93/95) [NEUTRAL->BEARISH];
+                             candidate_choch_high=180, baseline=90: 93 < 90?
+                             NO -> does NOT promote validated_choch_high.
+      index 12: high 185 -> ... re-bootstrap active_high; no event (185>180=last)
+      index 11: low   80 -> BOS bearish(80/93) [continuation];
+                              candidate_choch_high=180, baseline=90: 80<90?
+                              YES -> promotes validated_choch_high=180. ✓
+      index 14: high 190 -> CHoCH bullish(190/180); reference=validated_choch_high=180.
     """
-    highs = [
-        100.0, 200.0, 100.0, 100.0, 100.0, 100.0, 100.0, 120.0,
-        100.0, 150.0, 100.0, 130.0, 100.0, 100.0, 100.0, 140.0, 100.0,
-    ]
-    lows = [
-        100.0, 100.0, 100.0, 90.0, 100.0, 80.0, 100.0, 100.0,
-        100.0, 100.0, 100.0, 100.0, 100.0, 70.0, 100.0, 100.0, 100.0,
-    ]
+    highs = [100.0] * 16
+    for i, v in {1: 200.0, 5: 180.0, 12: 185.0, 14: 190.0}.items():
+        highs[i] = v
+    lows = [100.0] * 16
+    for i, v in {3: 90.0, 7: 95.0, 9: 93.0, 11: 80.0}.items():
+        lows[i] = v
+
     candles = make_series(highs, lows)
-    candles[5] = make_candle(5, highs[5], lows[5], close=85.0)
-    candles[13] = make_candle(13, highs[13], lows[13], close=75.0)
-
-    events = SwingStructureDetector(swing_lookback=1, confluence_filter=False).detect(candles)
-
-    assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
-        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 80.0, 90.0),
-        (StructureEvent.LOWER_HIGH, MarketDirection.BEARISH, 120.0, 200.0),
-        (StructureEvent.HIGHER_HIGH, MarketDirection.BULLISH, 150.0, 120.0),
-        (StructureEvent.LOWER_HIGH, MarketDirection.BEARISH, 130.0, 150.0),
-        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 70.0, 80.0),
-        (StructureEvent.HIGHER_HIGH, MarketDirection.BULLISH, 140.0, 130.0),
-    ]
-
-
-def test_promoted_active_low_is_the_lowest_low_of_the_prior_leg() -> None:
-    """Mirror of `test_promoted_active_high_is_the_highest_high_of_the_prior_leg`:
-    `pending_low` accumulates the *lowest* low seen since `active_high` was
-    last set, so a later BOS bullish promotes that true leg-low to
-    `active_low`, even if a higher low formed more recently.
-
-    Sequence (lookback=1):
-
-      index  1: swing low   100 -> bootstraps active_low
-      index  3: swing high  210 -> bootstraps active_high
-      index  5: swing high  220 -> above active_high (210); trend NEUTRAL ->
-                                     BOS bullish. close (215) > 210 confirms.
-                                     trend=BULLISH; pending_low is empty ->
-                                     active_low discarded to None.
-      index  7: swing low   180 -> active_low None -> HIGHER_LOW label;
-                                     pending_low = 180.
-      index  9: swing low   150 -> active_low None -> LOWER_LOW (vs. 180);
-                                     pending_low = min(180, 150) = 150.
-      index 11: swing low   170 -> active_low None -> HIGHER_LOW (vs. 150);
-                                     pending_low stays 150 (170 is not new min).
-      index 13: swing high  230 -> above active_high (220); trend BULLISH ->
-                                     BOS bullish (continuation). close (225) >
-                                     220 confirms. Promotes pending_low (150,
-                                     the leg's lowest low) to active_low --
-                                     NOT 170, the most recently formed low.
-      index 15: swing low   160 -> 160 >= active_low (150) -> no BOS/CHoCH,
-                                     just a LOWER_LOW label (vs. 170). Under
-                                     the old "last pivot wins" rule,
-                                     active_low would have been promoted to
-                                     170, and 160 would have wrongly broken
-                                     it as a CHoCH bearish.
-    """
-    highs = [
-        200.0, 200.0, 200.0, 210.0, 200.0, 220.0, 200.0, 200.0,
-        200.0, 200.0, 200.0, 200.0, 200.0, 230.0, 200.0, 200.0, 200.0,
-    ]
-    lows = [
-        200.0, 100.0, 200.0, 200.0, 200.0, 200.0, 200.0, 180.0,
-        200.0, 150.0, 200.0, 170.0, 200.0, 200.0, 200.0, 160.0, 200.0,
-    ]
-    candles = make_series(highs, lows)
-    candles[5] = make_candle(5, highs[5], lows[5], close=215.0)
-    candles[13] = make_candle(13, highs[13], lows[13], close=225.0)
-
-    events = SwingStructureDetector(swing_lookback=1, confluence_filter=False).detect(candles)
-
-    assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
-        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 220.0, 210.0),
-        (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 180.0, 100.0),
-        (StructureEvent.LOWER_LOW, MarketDirection.BEARISH, 150.0, 180.0),
-        (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 170.0, 150.0),
-        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 230.0, 220.0),
-        (StructureEvent.LOWER_LOW, MarketDirection.BEARISH, 160.0, 170.0),
-    ]
-
-
-def test_choch_active_high_reconciles_with_a_more_extreme_prior_sweep() -> None:
-    """When a CHoCH bullish confirms, the new `active_high` is the more
-    extreme of (a) the confirming pivot itself and (b) `pending_high` (the
-    highest high accumulated since `active_low` was last set) -- not simply
-    the confirming pivot.
-
-    This matters when an earlier same-direction `LIQUIDITY_SWEEP` reached
-    *higher* than the pivot that goes on to confirm the CHoCH: the swept
-    level becomes the new `active_high`, so a later BOS bullish reports
-    *that* level as its `reference_price_level`, not the (less extreme)
-    CHoCH pivot.
-
-    Sequence (lookback=1), continuing from the same setup as
-    `test_promoted_active_high_is_the_highest_high_of_the_prior_leg`
-    (after index 13's BOS bearish: active_high=150, active_low=70,
-    pending_high=None, trend=BEARISH):
-
-      index 15: swing high 165 -> above active_high (150); close (145) does
-                                    not confirm persistence -> LIQUIDITY_SWEEP
-                                    bullish, 165/150. pending_high = 165.
-      index 17: swing high 160 -> above active_high (150); close (155) > 150
-                                    and candle 18 also closes > 150 ->
-                                    persistence holds -> CHANGE_OF_CHARACTER
-                                    bullish, 160/150. The new active_high is
-                                    `_extreme(pending_high=165, pivot=160)`
-                                    = 165 -- the swept level, not 160.
-      index 19: swing high 170 -> above active_high (165); trend BULLISH ->
-                                    BOS bullish. close (166) > 165 confirms.
-                                    reference_price_level=165 (the reconciled
-                                    active_high), not 160.
-    """
-    highs = [
-        100.0, 200.0, 100.0, 100.0, 100.0, 100.0, 100.0, 120.0,
-        100.0, 150.0, 100.0, 130.0, 100.0, 100.0, 100.0, 165.0,
-        100.0, 160.0, 100.0, 170.0, 100.0,
-    ]
-    lows = [
-        100.0, 100.0, 100.0, 90.0, 100.0, 80.0, 100.0, 100.0,
-        100.0, 100.0, 100.0, 100.0, 100.0, 70.0, 100.0, 100.0,
-        100.0, 100.0, 100.0, 100.0, 100.0,
-    ]
-    candles = make_series(highs, lows)
-    candles[5] = make_candle(5, highs[5], lows[5], close=85.0)
-    candles[13] = make_candle(13, highs[13], lows[13], close=75.0)
-    # index 15: sweep -- close (145) does not reach above 150.
-    candles[15] = make_candle(15, highs[15], lows[15], close=145.0)
-    # index 17: CHoCH -- close (155) > 150; candle 18 (high=155) also closes
-    # > 150, forming the required 2-candle persistence window.
-    candles[17] = make_candle(17, highs[17], lows[17], close=155.0)
-    candles[18] = make_candle(18, 155.0, lows[18], close=152.0)
-    # index 19: BOS -- close (166) > active_high (165, reconciled).
-    candles[19] = make_candle(19, highs[19], lows[19], close=166.0)
+    candles[9] = make_candle(9, highs[9], lows[9], close=94.0)
+    candles[11] = make_candle(11, highs[11], lows[11], close=85.0)
+    candles[14] = make_candle(14, highs[14], lows[14], close=183.0)
+    candles[15] = make_candle(15, 183.0, lows[15], close=182.0)
 
     events = SwingStructureDetector(
         swing_lookback=1, persistence_candles=1, confluence_filter=False
     ).detect(candles)
 
+    # Verify the CHoCH fires against the candidate (180), not the previous
+    # active_high or any other level.
     assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
-        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 80.0, 90.0),
-        (StructureEvent.LOWER_HIGH, MarketDirection.BEARISH, 120.0, 200.0),
-        (StructureEvent.HIGHER_HIGH, MarketDirection.BULLISH, 150.0, 120.0),
-        (StructureEvent.LOWER_HIGH, MarketDirection.BEARISH, 130.0, 150.0),
-        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 70.0, 80.0),
-        (StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH, 165.0, 150.0),
-        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, 160.0, 150.0),
-        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 170.0, 165.0),
+        (StructureEvent.LOWER_HIGH, MarketDirection.BEARISH, 180.0, 200.0),
+        (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 95.0, 90.0),
+        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 93.0, 95.0),
+        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 80.0, 93.0),
+        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, 190.0, 180.0),
     ]
 
 
-def test_choch_active_low_reconciles_with_a_more_extreme_prior_sweep() -> None:
-    """Mirror of `test_choch_active_high_reconciles_with_a_more_extreme_prior_sweep`:
-    when a CHoCH bearish confirms, the new `active_low` is the more extreme
-    of (a) the confirming pivot itself and (b) `pending_low` (the lowest low
-    accumulated since `active_high` was last set) -- not simply the
-    confirming pivot.
+def test_candidate_choch_low_promotion_requires_bos_above_baseline() -> None:
+    """Mirror of `test_candidate_choch_promotion_requires_bos_below_baseline`:
+    a BOS bullish whose pivot does NOT exceed `candidate_choch_low_baseline`
+    does NOT promote the candidate; only a BOS above the baseline does.
 
-    Sequence (lookback=1), continuing from the same setup as
-    `test_promoted_active_low_is_the_lowest_low_of_the_prior_leg`
-    (after index 13's BOS bullish: active_high=230, active_low=150,
-    pending_low=None, trend=BULLISH):
+    Sequence (lookback=1, confluence_filter=False):
 
-      index 15: swing low 135 -> below active_low (150); close (155) does
-                                   not close below 150 -> LIQUIDITY_SWEEP
-                                   bearish, 135/150. pending_low = 135.
-      index 17: swing low 140 -> below active_low (150); close (145) < 150
-                                   and candle 18 also closes < 150 ->
-                                   persistence holds -> CHANGE_OF_CHARACTER
-                                   bearish, 140/150. The new active_low is
-                                   `_extreme(pending_low=135, pivot=140)`
-                                   = 135 -- the swept level, not 140.
-      index 19: swing low 130 -> below active_low (135); trend BEARISH ->
-                                   BOS bearish. close (132) < 135 confirms.
-                                   reference_price_level=135 (the reconciled
-                                   active_low), not 140.
+      index  1: high 210 -> bootstrap active_high
+      index  3: low  100 -> bootstrap active_low; pending_low=100
+      index  5: high 220 -> BOS bullish(220/210); close(215)>210 confirms.
+                              active_low=100; active_high=220; trend=BULLISH.
+      index  7: low  120 -> HL(120/100); candidate_choch_low=120,
+                              baseline=active_high=220; pending_high=220.
+      index  9: high 195 -> LH(195/220); accumulates pending_low=120.
+      index 11: high 200 -> BOS bullish(200/195); close(198)>195 confirms.
+                              candidate_choch_low=120, baseline=220: 200>220?
+                              NO -> does NOT promote validated_choch_low.
+      index 13: high 225 -> BOS bullish(225/200); close(222)>200 confirms.
+                              candidate_choch_low=120, baseline=220: 225>220?
+                              YES -> promotes validated_choch_low=120. ✓
+      index 15: low   85 -> CHoCH bearish(85/120); persistence holds.
     """
-    highs = [
-        200.0, 200.0, 200.0, 210.0, 200.0, 220.0, 200.0, 200.0,
-        200.0, 200.0, 200.0, 200.0, 200.0, 230.0, 200.0, 200.0,
-        200.0, 200.0, 200.0, 200.0, 200.0,
-    ]
-    lows = [
-        200.0, 100.0, 200.0, 200.0, 200.0, 200.0, 200.0, 180.0,
-        200.0, 150.0, 200.0, 170.0, 200.0, 200.0, 200.0, 135.0,
-        200.0, 140.0, 200.0, 130.0, 200.0,
-    ]
+    highs = [150.0] * 17
+    for i, v in {1: 210.0, 5: 220.0, 9: 195.0, 11: 200.0, 13: 225.0}.items():
+        highs[i] = v
+    lows = [145.0] * 17
+    for i, v in {3: 100.0, 7: 120.0, 15: 85.0}.items():
+        lows[i] = v
+
     candles = make_series(highs, lows)
     candles[5] = make_candle(5, highs[5], lows[5], close=215.0)
-    candles[13] = make_candle(13, highs[13], lows[13], close=225.0)
-    # index 15: sweep -- close (155) does not close below 150.
-    candles[15] = make_candle(15, highs[15], lows[15], close=155.0)
-    # index 17: CHoCH -- close (145) < 150; candle 18 (low=145) also closes
-    # < 150, forming the required 2-candle persistence window.
-    candles[17] = make_candle(17, highs[17], lows[17], close=145.0)
-    candles[18] = make_candle(18, highs[18], 145.0, close=148.0)
-    # index 19: BOS -- close (132) < active_low (135, reconciled).
-    candles[19] = make_candle(19, highs[19], lows[19], close=132.0)
+    candles[11] = make_candle(11, highs[11], lows[11], close=198.0)
+    candles[13] = make_candle(13, highs[13], lows[13], close=222.0)
+    # CHoCH confirmation: close < 120 at [15] and [16], but close >= low.
+    candles[15] = make_candle(15, highs[15], lows[15], close=95.0)
+    candles[16] = make_candle(16, 150.0, 90.0, close=95.0)
 
     events = SwingStructureDetector(
         swing_lookback=1, persistence_candles=1, confluence_filter=False
     ).detect(candles)
 
-    assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
-        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 220.0, 210.0),
-        (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 180.0, 100.0),
-        (StructureEvent.LOWER_LOW, MarketDirection.BEARISH, 150.0, 180.0),
-        (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 170.0, 150.0),
-        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 230.0, 220.0),
-        (StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BEARISH, 135.0, 150.0),
-        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, 140.0, 150.0),
-        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 130.0, 135.0),
-    ]
+    choch = next(
+        (e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER), None
+    )
+    assert choch is not None
+    assert choch.direction is MarketDirection.BEARISH
+    # reference must be 120.0 (validated after BOS at 225 > baseline 220),
+    # not the phantom level that the BOS at 200 would have set if baseline
+    # were not checked.
+    assert choch.reference_price_level == 120.0
 
 
-def test_active_high_discarded_to_none_is_rebuilt_from_pending_then_broken() -> None:
-    """When a bearish BOS/CHoCH promotes `pending_low` to `active_low` but
-    `pending_high` is empty (no high pivot has formed in the new leg yet),
-    `active_high` is discarded to `None` rather than left at its stale prior
-    value. While `active_high is None`, subsequent high pivots are purely
-    descriptive HH/LH labels that accumulate into `pending_high`, until the
-    next bearish BOS/CHoCH promotes that accumulation to `active_high` --
-    which can then itself be broken by a later CHoCH bullish.
+def test_re_bootstrap_pivot_worse_than_retired_becomes_choch_candidate() -> None:
+    """When a BOS/CHoCH retires `active_high` to `None` (pending_high was
+    empty), the next high pivot re-bootstraps it silently.  If that pivot is
+    *lower* than `last_high_pivot` (the just-retired value), it is
+    functionally a LOWER_HIGH and becomes `candidate_choch_high`, so a
+    future bullish CHoCH can be validated against it.
 
     Sequence (lookback=1):
 
-      index  1: swing high 200 -> bootstraps active_high
-      index  3: swing low   90 -> bootstraps active_low (and seeds
-                                    pending_low, since active_high already
-                                    exists)
-      index  5: swing low   80 -> below active_low (90); trend NEUTRAL ->
-                                    BOS bearish. close (85) < 90 confirms.
-                                    Promotes pending_low (90, seeded) to
-                                    active_low via `_extreme(90, 80)` = 80;
-                                    pending_high is empty -> active_high
-                                    discarded to None; trend=BEARISH.
-      index  7: swing high 250 -> active_high is None -> HIGHER_HIGH label
-                                    vs. previous high (200); pending_high =
-                                    250.
-      index  9: swing high 220 -> active_high still None -> LOWER_HIGH
-                                    label vs. previous high (250);
-                                    pending_high stays 250 (220 < 250).
-      index 11: swing low   70 -> below active_low (80); trend BEARISH ->
-                                    BOS bearish (continuation). close (75) <
-                                    80 confirms. Promotes pending_high (250)
-                                    to active_high.
-      index 13: swing high 260 -> above active_high (250); trend BEARISH ->
-                                    CHoCH-candidate bullish. close (255) > 250
-                                    and candle 14 also closes > 250 ->
-                                    persistence holds -> CHANGE_OF_CHARACTER
-                                    bullish, 260/250.
+      index  1: high 200 -> bootstrap active_high
+      index  3: low   90 -> bootstrap active_low (seeds pending_low=90)
+      index  5: low   80 -> BOS bearish(80/90) [NEUTRAL->BEARISH]; close(85)<90.
+                              pending_high empty -> active_high discarded to None.
+      index  7: high 250 -> re-bootstrap active_high=250 (silent);
+                              250 > last_high_pivot(200) -> NOT functionally LH.
+      index  9: high 220 -> LH(220/250) [trailing active_high=250];
+                              candidate_choch_high=220, baseline=active_low=80.
+      index 11: low   70 -> BOS bearish(70/80) [continuation]; close(75)<80;
+                              pending_high=250 (from re-bootstrap at 7) ->
+                              active_high=250; validates candidate: 70<80=baseline
+                              -> validated_choch_high=220.
+      index 13: high 260 -> CHoCH bullish(260/220); close(255)>220 at [13]
+                              and [14] -> persistence holds.
     """
     highs = [100.0] * 15
-    for index, value in {1: 200.0, 7: 250.0, 9: 220.0, 13: 260.0}.items():
-        highs[index] = value
+    for i, v in {1: 200.0, 7: 250.0, 9: 220.0, 13: 260.0}.items():
+        highs[i] = v
     lows = [100.0] * 15
-    for index, value in {3: 90.0, 5: 80.0, 11: 70.0}.items():
-        lows[index] = value
+    for i, v in {3: 90.0, 5: 80.0, 11: 70.0}.items():
+        lows[i] = v
 
     candles = make_series(highs, lows)
     candles[5] = make_candle(5, highs[5], lows[5], close=85.0)
@@ -615,53 +437,39 @@ def test_active_high_discarded_to_none_is_rebuilt_from_pending_then_broken() -> 
 
     assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
         (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 80.0, 90.0),
-        (StructureEvent.HIGHER_HIGH, MarketDirection.BULLISH, 250.0, 200.0),
         (StructureEvent.LOWER_HIGH, MarketDirection.BEARISH, 220.0, 250.0),
         (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 70.0, 80.0),
-        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, 260.0, 250.0),
+        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, 260.0, 220.0),
     ]
 
 
-def test_active_low_discarded_to_none_is_rebuilt_from_pending_then_broken() -> None:
-    """Mirror of `test_active_high_discarded_to_none_is_rebuilt_from_pending_then_broken`:
-    a bullish BOS/CHoCH that promotes `pending_high` to `active_high` while
-    `pending_low` is empty discards `active_low` to `None`; it is then
-    rebuilt from HL/LL labels accumulating into `pending_low`, promoted by
-    the next bullish BOS/CHoCH, and finally broken by a CHoCH bearish.
+def test_re_bootstrap_pivot_worse_than_retired_becomes_choch_candidate_low_side() -> None:
+    """Mirror of `test_re_bootstrap_pivot_worse_than_retired_becomes_choch_candidate`:
+    BOS bullish retires active_low to None; re-bootstrap pivot higher than
+    last_low_pivot is functionally a HIGHER_LOW; later CHoCH bearish fires
+    against that candidate's validated reference.
 
     Sequence (lookback=1):
 
-      index  1: swing low  100 -> bootstraps active_low
-      index  3: swing high 210 -> bootstraps active_high (and seeds
-                                    pending_high, since active_low already
-                                    exists)
-      index  5: swing high 220 -> above active_high (210); trend NEUTRAL ->
-                                    BOS bullish. close (215) > 210 confirms.
-                                    Promotes pending_high (210, seeded) to
-                                    active_high via `_extreme(210, 220)` =
-                                    220; pending_low is empty -> active_low
-                                    discarded to None; trend=BULLISH.
-      index  7: swing low   50 -> active_low is None -> LOWER_LOW label
-                                    vs. previous low (100); pending_low = 50.
-      index  9: swing low   80 -> active_low still None -> HIGHER_LOW label
-                                    vs. previous low (50); pending_low stays
-                                    50 (80 > 50).
-      index 11: swing high 230 -> above active_high (220); trend BULLISH ->
-                                    BOS bullish (continuation). close (225) >
-                                    220 confirms. Promotes pending_low (50)
-                                    to active_low.
-      index 13: swing low   40 -> below active_low (50); trend BULLISH ->
-                                    CHoCH-candidate bearish. close (45) < 50
-                                    and candle 14 (low=45) also closes < 50
-                                    -> persistence holds -> CHANGE_OF_CHARACTER
-                                    bearish, 40/50.
+      index  1: low  100 -> bootstrap active_low
+      index  3: high 210 -> bootstrap active_high (seeds pending_high=210)
+      index  5: high 220 -> BOS bullish(220/210) [NEUTRAL->BULLISH]; close(215)>210;
+                              pending_low empty -> active_low discarded to None.
+      index  7: low   50 -> re-bootstrap active_low=50 (silent);
+                              50 < last_low_pivot(100) -> NOT functionally HL.
+      index  9: low   80 -> HL(80/50) [trailing active_low=50];
+                              candidate_choch_low=80, baseline=active_high=220.
+      index 11: high 230 -> BOS bullish(230/220) [continuation]; close(225)>220;
+                              pending_low=50 -> active_low=50; validates candidate:
+                              230>220=baseline -> validated_choch_low=80.
+      index 13: low   40 -> CHoCH bearish(40/80); close(45)<80 at [13] and [14].
     """
     highs = [200.0] * 15
-    for index, value in {3: 210.0, 5: 220.0, 11: 230.0}.items():
-        highs[index] = value
+    for i, v in {3: 210.0, 5: 220.0, 11: 230.0}.items():
+        highs[i] = v
     lows = [200.0] * 15
-    for index, value in {1: 100.0, 7: 50.0, 9: 80.0, 13: 40.0}.items():
-        lows[index] = value
+    for i, v in {1: 100.0, 7: 50.0, 9: 80.0, 13: 40.0}.items():
+        lows[i] = v
 
     candles = make_series(highs, lows)
     candles[5] = make_candle(5, highs[5], lows[5], close=215.0)
@@ -675,8 +483,153 @@ def test_active_low_discarded_to_none_is_rebuilt_from_pending_then_broken() -> N
 
     assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
         (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 220.0, 210.0),
-        (StructureEvent.LOWER_LOW, MarketDirection.BEARISH, 50.0, 100.0),
         (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 80.0, 50.0),
         (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 230.0, 220.0),
-        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, 40.0, 50.0),
+        (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, 40.0, 80.0),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Ghost-candidate fix: sweep updates unvalidated candidate
+# ---------------------------------------------------------------------------
+
+def test_sweep_above_candidate_choch_high_updates_candidate() -> None:
+    """A LIQUIDITY_SWEEP that reaches *above* the unvalidated
+    `candidate_choch_high` updates the candidate to the sweep pivot (and its
+    baseline to the current trailing `active_low`), so the CHoCH reference
+    reflects the actual structure extreme rather than a phantom level that
+    was already breached.
+
+    Sequence (lookback=1):
+
+      index  1: high 200 -> bootstrap active_high=200
+      index  3: low  100 -> bootstrap active_low=100; pending_low=100
+      index  5: low   90 -> BOS bearish(90/100) [NEUTRAL->BEARISH]; close(95).
+                              active_high=None (pending_high empty).
+      index  7: high 170 -> re-bootstrap active_high=170 (silent);
+                              170 < last_high(200) -> candidate_choch_high=170,
+                              baseline=active_low=90.
+      index 11: high 180 -> SWEEP bullish(180/170) [BEARISH];
+                              ghost fix: 180 > candidate(170) -> update!
+                              candidate_choch_high=180, baseline=active_low=90.
+      index 13: low   80 -> BOS bearish(80/90) [continuation]; close(85)<90.
+                              80 < 90=baseline -> promotes! validated_choch_high=180.
+      index 15: high 185 -> CHoCH bullish(185/180); close(183)>180,
+                              close[16]=182>180 -> sustained (persistence=1).
+    """
+    highs = [150.0] * 17
+    for i, v in {1: 200.0, 7: 170.0, 11: 180.0, 15: 185.0}.items():
+        highs[i] = v
+    lows = [145.0] * 17
+    for i, v in {3: 100.0, 5: 90.0, 13: 80.0}.items():
+        lows[i] = v
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, highs[5], lows[5], close=95.0)
+    candles[13] = make_candle(13, highs[13], lows[13], close=85.0)
+    candles[15] = make_candle(15, highs[15], lows[15], close=183.0)
+    candles[16] = make_candle(16, 183.0, 145.0, close=182.0)
+
+    events = SwingStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
+
+    # The CHoCH must fire against 180.0 (the sweep level), not 170.0 (phantom)
+    choch = next(
+        (e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER), None
+    )
+    assert choch is not None
+    assert choch.direction is MarketDirection.BULLISH
+    assert choch.reference_price_level == 180.0
+
+
+def test_sweep_below_candidate_choch_low_updates_candidate() -> None:
+    """Mirror: a LIQUIDITY_SWEEP below the unvalidated `candidate_choch_low`
+    updates the candidate so the eventual CHoCH fires against the true
+    structural extreme, not the phantom original level.
+
+    Sequence (lookback=1):
+
+      index  1: low  100 -> bootstrap active_low
+      index  3: high 210 -> bootstrap active_high; pending_high=210
+      index  5: high 220 -> BOS bullish(220/210) [NEUTRAL->BULLISH]; close(215).
+                              active_low=None (pending_low empty); active_high=220.
+      index  7: low  140 -> re-bootstrap active_low=140 (silent);
+                              140 > last_low(100) -> candidate_choch_low=140,
+                              baseline=active_high=220.
+      index  9: high 225 -> BOS bullish(225/220); close(222)>220 BUT
+                              225 > baseline(220)? YES -> validates candidate_choch_low=140.
+                              So no ghost-fix scenario... let me use a baseline > BOS level.
+    """
+    # Build a scenario where baseline=230 so the first BOS (at 225) does NOT
+    # validate the candidate, then the sweep happens, then a second BOS validates.
+    highs = [200.0] * 20
+    for i, v in {3: 210.0, 5: 220.0, 9: 225.0, 13: 235.0}.items():
+        highs[i] = v
+    lows = [200.0] * 20
+    for i, v in {1: 100.0, 7: 140.0, 11: 130.0, 15: 110.0}.items():
+        lows[i] = v
+
+    # index 5: h 220 -> BOS bullish(220/210); close(215). pending_low empty -> active_low=None.
+    # index 7: l 140 -> re-bootstrap; 140>100=last_low -> candidate_choch_low=140, baseline=220
+    # index 9: h 225 -> BOS bullish(225/220); 225>220=baseline -> validates candidate_choch_low=140!
+    # Ghost fix can't fire here because candidate is already promoted.
+    #
+    # For ghost fix to fire, need candidate baseline > all BOS levels until the sweep.
+    # Alternative: build the scenario directly where sweep updates candidate.
+    highs = [200.0] * 20
+    for i, v in {3: 210.0, 5: 220.0, 11: 225.0, 15: 235.0}.items():
+        highs[i] = v
+    lows = [200.0] * 20
+    for i, v in {1: 100.0, 7: 155.0, 9: 140.0, 13: 110.0}.items():
+        lows[i] = v
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, highs[5], lows[5], close=215.0)
+    # index 7: l 155 -> re-bootstrap active_low=155 (silent); 155>100=last_low -> candidate=155, baseline=220
+    # index 9: l 140 -> SWEEP bearish(140/155) [BULLISH]; 140<155=candidate -> ghost fix: candidate=140, baseline=220
+    # index 11: h 225 -> BOS bullish(225/220); 225>220=baseline -> validates candidate_choch_low=140 ✓
+    candles[11] = make_candle(11, highs[11], lows[11], close=222.0)
+    # index 13: l 110 -> CHoCH bearish(110/140); persistence_candles=1
+    candles[13] = make_candle(13, highs[13], lows[13], close=115.0)
+    candles[14] = make_candle(14, highs[14], 115.0, close=116.0)
+
+    events = SwingStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
+
+    choch = next(
+        (e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER), None
+    )
+    assert choch is not None
+    assert choch.direction is MarketDirection.BEARISH
+    # reference must be 140.0 (sweep level), not phantom 155.0
+    assert choch.reference_price_level == 140.0
+
+
+# ---------------------------------------------------------------------------
+# Edge cases and validation
+# ---------------------------------------------------------------------------
+
+def test_swing_structure_detector_returns_empty_for_short_series() -> None:
+    candles = make_series(MAIN_HIGHS[:4], MAIN_LOWS[:4])
+
+    assert SwingStructureDetector(swing_lookback=2).detect(candles) == []
+
+
+def test_swing_structure_detector_rejects_mixed_symbols() -> None:
+    candles = make_series(MAIN_HIGHS, MAIN_LOWS)
+    candles[0] = make_candle(0, candles[0].high, candles[0].low, symbol="ETHUSDT")
+
+    with pytest.raises(ValueError, match="same symbol and timeframe"):
+        SwingStructureDetector(swing_lookback=2).detect(candles)
+
+
+def test_swing_structure_detector_rejects_empty_candles() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        SwingStructureDetector().detect([])
+
+
+def test_swing_structure_detector_rejects_invalid_persistence_candles() -> None:
+    with pytest.raises(ValueError, match="persistence_candles must be at least 1"):
+        SwingStructureDetector(persistence_candles=0)

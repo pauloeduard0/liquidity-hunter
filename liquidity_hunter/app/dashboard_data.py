@@ -25,7 +25,7 @@ from liquidity_hunter.liquidity import (
 from liquidity_hunter.psychology import RetailBiasEstimate, RetailTrapAnalyzer
 from liquidity_hunter.scoring import LiquidityScoringEngine, ScoredLiquidityZone
 
-DEFAULT_SWING_LOOKBACK = 15
+DEFAULT_SWING_LOOKBACK = 10
 DEFAULT_INTERNAL_SWING_LOOKBACK = 2
 
 # Binance's `/api/v3/klines` endpoint accepts `limit` values up to 1000.
