@@ -136,7 +136,9 @@ from liquidity_hunter.core.domain import (
 )
 from liquidity_hunter.liquidity.detectors._common import (
     Pivot,
+    bos_confluence,
     collect_pivots,
+    find_close_break_index,
     find_sustained_break_index,
     find_wick_break_index,
     is_sustained_break,
@@ -173,14 +175,27 @@ class InternalStructureDetector(MarketStructureDetector):
     `persistence_candles` is the number of candles immediately following a
     counter-trend pivot that must also close beyond the reference for the
     break to be a `CHANGE_OF_CHARACTER` rather than a `LIQUIDITY_SWEEP`.
+
+    `confluence_filter` (default `True`) applies LuxAlgo's internal-structure
+    confluence filter to in-trend BOS candles: the breaking candle (the first
+    one whose close crosses the level) must also have a larger upper shadow
+    than lower shadow for a bullish BOS (or larger lower shadow for a bearish
+    BOS), confirming directional price expansion beyond the level. When
+    `False`, the filter is skipped and only the close requirement is checked.
     """
 
-    def __init__(self, swing_lookback: int = 2, persistence_candles: int = 5) -> None:
+    def __init__(
+        self,
+        swing_lookback: int = 2,
+        persistence_candles: int = 5,
+        confluence_filter: bool = True,
+    ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
         self._low_detector = SwingLowDetector(lookback=swing_lookback)
         self._persistence_candles = persistence_candles
+        self._confluence_filter = confluence_filter
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -335,25 +350,23 @@ class InternalStructureDetector(MarketStructureDetector):
                         candidate_choch_high = pivot
                         candidate_choch_high_baseline = active_low
                 elif price > active_high.price:
-                    # Timestamped on the candle whose wick first breaks
-                    # active_high, not the pivot that eventually confirmed it
-                    # -- price_level remains the pivot's price (the extreme of
-                    # the move).
-                    break_candle = candles[
-                        find_wick_break_index(
-                            candles,
-                            prev_high_pivot_index + 1,
-                            current_index,
-                            active_high.price,
-                            bullish=True,
-                        )
-                    ]
                     if trend is MarketDirection.BEARISH:
-                        # Broke the trailing high but not validated_choch_high
-                        # (or the break did not hold): an internal bounce within
-                        # the bearish leg, not a reversal.
+                        # Counter-trend: swept the trailing high but not the
+                        # validated CHoCH level (or it didn't hold) -- an
+                        # internal bounce within the bearish leg. Sweeps are
+                        # wick-based by design; only BOS requires a closing
+                        # confirmation.
+                        sweep_candle = candles[
+                            find_wick_break_index(
+                                candles,
+                                prev_high_pivot_index + 1,
+                                current_index,
+                                active_high.price,
+                                bullish=True,
+                            )
+                        ]
                         emit(
-                            break_candle.timestamp,
+                            sweep_candle.timestamp,
                             StructureEvent.LIQUIDITY_SWEEP,
                             MarketDirection.BULLISH,
                             price,
@@ -361,14 +374,18 @@ class InternalStructureDetector(MarketStructureDetector):
                         )
                         pending_low = self._extreme(pending_low, active_low, higher=False)
                     else:
-                        # BOS bullish (first break from NEUTRAL, or continuation).
-                        emit(
-                            break_candle.timestamp,
-                            StructureEvent.BREAK_OF_STRUCTURE,
-                            MarketDirection.BULLISH,
-                            price,
-                            active_high.price,
-                        )
+                        # BOS bullish (first break from NEUTRAL, or
+                        # continuation): state always advances (trend,
+                        # active_low, validated_choch_low) so that the CHoCH
+                        # reference system is unaffected by the BOS emission
+                        # filter. The emitted BOS event is separately gated on
+                        # a candle in the leg closing beyond active_high, plus
+                        # the optional LuxAlgo confluence shadow-balance check.
+                        # A wick-only break with no confirming close (or one
+                        # that fails confluence) still advances the trend and
+                        # promotes validated_choch_low -- it just doesn't
+                        # appear as a BOS marker on the chart.
+                        ref_price = active_high.price
                         trend = MarketDirection.BULLISH
                         active_low = pending_low
                         pending_low = None
@@ -376,14 +393,27 @@ class InternalStructureDetector(MarketStructureDetector):
                             candidate_choch_low_baseline is None
                             or price > candidate_choch_low_baseline.price
                         ):
-                            # This BOS confirms the most recent HL as the
-                            # level a future bearish CHoCH must break: it
-                            # surpasses the swing high that preceded that HL
-                            # (a genuine HH2 > HH1), not merely any
-                            # continuation.
                             validated_choch_low = candidate_choch_low
                             candidate_choch_low = None
                             candidate_choch_low_baseline = None
+                        close_idx = find_close_break_index(
+                            candles,
+                            prev_high_pivot_index + 1,
+                            current_index,
+                            ref_price,
+                            bullish=True,
+                        )
+                        if close_idx is not None and (
+                            not self._confluence_filter
+                            or bos_confluence(candles[close_idx], bullish=True)
+                        ):
+                            emit(
+                                candles[close_idx].timestamp,
+                                StructureEvent.BREAK_OF_STRUCTURE,
+                                MarketDirection.BULLISH,
+                                price,
+                                ref_price,
+                            )
                 elif price < active_high.price:
                     emit(
                         timestamp,
@@ -456,22 +486,19 @@ class InternalStructureDetector(MarketStructureDetector):
                         candidate_choch_low = pivot
                         candidate_choch_low_baseline = active_high
                 elif price < active_low.price:
-                    # Timestamped on the candle whose wick first breaks
-                    # active_low, not the pivot that eventually confirmed it
-                    # -- price_level remains the pivot's price (the extreme of
-                    # the move).
-                    break_candle = candles[
-                        find_wick_break_index(
-                            candles,
-                            prev_low_pivot_index + 1,
-                            current_index,
-                            active_low.price,
-                            bullish=False,
-                        )
-                    ]
                     if trend is MarketDirection.BULLISH:
+                        # Counter-trend sweep (mirror of the bullish case).
+                        sweep_candle = candles[
+                            find_wick_break_index(
+                                candles,
+                                prev_low_pivot_index + 1,
+                                current_index,
+                                active_low.price,
+                                bullish=False,
+                            )
+                        ]
                         emit(
-                            break_candle.timestamp,
+                            sweep_candle.timestamp,
                             StructureEvent.LIQUIDITY_SWEEP,
                             MarketDirection.BEARISH,
                             price,
@@ -479,14 +506,10 @@ class InternalStructureDetector(MarketStructureDetector):
                         )
                         pending_high = self._extreme(pending_high, active_high, higher=True)
                     else:
-                        # BOS bearish (first break from NEUTRAL, or continuation).
-                        emit(
-                            break_candle.timestamp,
-                            StructureEvent.BREAK_OF_STRUCTURE,
-                            MarketDirection.BEARISH,
-                            price,
-                            active_low.price,
-                        )
+                        # BOS bearish: state always advances (mirror of the
+                        # bullish case); only the emitted event is gated on
+                        # close + optional confluence check.
+                        ref_price = active_low.price
                         trend = MarketDirection.BEARISH
                         active_high = pending_high
                         pending_high = None
@@ -494,14 +517,27 @@ class InternalStructureDetector(MarketStructureDetector):
                             candidate_choch_high_baseline is None
                             or price < candidate_choch_high_baseline.price
                         ):
-                            # This BOS confirms the most recent LH as the
-                            # level a future bullish CHoCH must break: it
-                            # surpasses the swing low that preceded that LH
-                            # (a genuine LL2 < LL1), not merely any
-                            # continuation.
                             validated_choch_high = candidate_choch_high
                             candidate_choch_high = None
                             candidate_choch_high_baseline = None
+                        close_idx = find_close_break_index(
+                            candles,
+                            prev_low_pivot_index + 1,
+                            current_index,
+                            ref_price,
+                            bullish=False,
+                        )
+                        if close_idx is not None and (
+                            not self._confluence_filter
+                            or bos_confluence(candles[close_idx], bullish=False)
+                        ):
+                            emit(
+                                candles[close_idx].timestamp,
+                                StructureEvent.BREAK_OF_STRUCTURE,
+                                MarketDirection.BEARISH,
+                                price,
+                                ref_price,
+                            )
                 elif price > active_low.price:
                     emit(
                         timestamp,

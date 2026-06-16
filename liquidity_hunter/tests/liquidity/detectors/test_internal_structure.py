@@ -49,8 +49,11 @@ for _index, _value in {3: 90.0, 7: 100.0, 11: 80.0, 15: 70.0, 19: 60.0}.items():
 
 def test_internal_structure_detector_full_sequence() -> None:
     candles = make_series(HIGHS, LOWS)
+    # BOS candles need a closing price beyond the active level.
+    candles[5] = make_candle(5, 220.0, 140.0, close=205.0)   # close > active_high 200
+    candles[13] = make_candle(13, 230.0, 140.0, close=215.0)  # close > active_high 210
 
-    events = InternalStructureDetector(swing_lookback=1).detect(candles)
+    events = InternalStructureDetector(swing_lookback=1, confluence_filter=False).detect(candles)
 
     assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
         (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 220.0, 200.0),
@@ -96,12 +99,15 @@ def test_pivot_equal_to_active_reference_produces_no_event() -> None:
     highs = [150.0, 200.0, 150.0, 150.0, 150.0, 200.0, 150.0, 150.0, 150.0]
     lows = [140.0, 140.0, 140.0, 100.0, 140.0, 140.0, 140.0, 90.0, 140.0]
     candles = make_series(highs, lows)
+    # index 5 equals active_high -> no event; index 7 breaks active_low (100)
+    # and needs close < 100 to fire BOS.
+    candles[7] = make_candle(7, 150.0, 90.0, close=95.0)
 
-    events = InternalStructureDetector(swing_lookback=1).detect(candles)
+    events = InternalStructureDetector(swing_lookback=1, confluence_filter=False).detect(candles)
 
     # index 5's high (200) equals active_high (200, from index 1) -> no event.
     # index 7's low (90) breaks active_low (100); trend is still NEUTRAL ->
-    # BREAK_OF_STRUCTURE bearish (price-only).
+    # BREAK_OF_STRUCTURE bearish; close=95 < 100 confirms it.
     assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
         (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 90.0, 100.0),
     ]
@@ -172,10 +178,16 @@ for _index, _value in {3: 100.0, 5: 80.0, 11: 60.0}.items():
 
 def test_bullish_choch_reference_is_last_high_before_new_ll_not_highest() -> None:
     candles = make_series(_TIEBREAK_HIGH_HIGHS, _TIEBREAK_HIGH_LOWS)
+    # BOS at index 5 (low 80, ref 100): close must be < 100 to confirm.
+    candles[5] = make_candle(5, 150.0, 80.0, close=90.0)
+    # BOS continuation at index 11 (low 60, ref 80): close must be < 80.
+    candles[11] = make_candle(11, 150.0, 60.0, close=70.0)
     candles[13] = make_candle(13, 175.0, 140.0, close=174.0)
     candles[14] = make_candle(14, 174.0, 171.0, close=173.0)
 
-    events = InternalStructureDetector(swing_lookback=1, persistence_candles=1).detect(candles)
+    events = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
 
     choch = events[-1]
     assert choch.event is StructureEvent.CHANGE_OF_CHARACTER
@@ -197,10 +209,16 @@ def test_bearish_choch_reference_is_last_low_before_new_hh_not_lowest() -> None:
     for index, value in {1: 100.0, 7: 110.0, 9: 130.0, 13: 120.0}.items():
         lows[index] = value
     candles = make_series(highs, lows)
+    # BOS at index 5 (high 250, ref 200): close must be > 200 to confirm.
+    candles[5] = make_candle(5, 250.0, 140.0, close=210.0)
+    # BOS continuation at index 11 (high 280, ref 250): close must be > 250.
+    candles[11] = make_candle(11, 280.0, 140.0, close=260.0)
     candles[13] = make_candle(13, 150.0, 120.0, close=125.0)
     candles[14] = make_candle(14, 150.0, 121.0, close=124.0)
 
-    events = InternalStructureDetector(swing_lookback=1, persistence_candles=1).detect(candles)
+    events = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
 
     choch = events[-1]
     assert choch.event is StructureEvent.CHANGE_OF_CHARACTER
@@ -226,8 +244,12 @@ def test_break_above_trailing_high_below_validated_is_a_sweep() -> None:
     for index, value in {3: 120.0, 5: 90.0}.items():
         lows[index] = value
     candles = make_series(highs, lows)
+    # BOS at index 5 (low 90, ref 120): close must be < 120 to confirm.
+    candles[5] = make_candle(5, 150.0, 90.0, close=110.0)
 
-    events = InternalStructureDetector(swing_lookback=1, persistence_candles=1).detect(candles)
+    events = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
 
     sweep = events[-1]
     assert sweep.event is StructureEvent.LIQUIDITY_SWEEP
@@ -262,6 +284,8 @@ def _persistence_test_series(
     *, index_8_close: float, index_9_close: float | None
 ) -> list[Candle]:
     candles = make_series(_PERSISTENCE_HIGHS, _PERSISTENCE_LOWS)
+    # BOS at index 5 (high 210, ref 200): close must be > 200 to confirm.
+    candles[5] = make_candle(5, 210.0, 140.0, close=205.0)
     candles[7] = make_candle(7, 150.0, 60.0, close=65.0)
     candles.append(make_candle(8, 85.0, 70.0, close=index_8_close))
     if index_9_close is not None:
@@ -278,7 +302,9 @@ def test_persistence_irrelevant_without_validated_choch_reference() -> None:
     of."""
     candles = _persistence_test_series(index_8_close=75.0, index_9_close=80.0)
 
-    events = InternalStructureDetector(swing_lookback=1, persistence_candles=2).detect(candles)
+    events = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=2, confluence_filter=False
+    ).detect(candles)
 
     assert events[-1].event is StructureEvent.LIQUIDITY_SWEEP
     assert events[-1].direction is MarketDirection.BEARISH
@@ -292,7 +318,9 @@ def test_reversal_within_persistence_window_yields_liquidity_sweep() -> None:
     LIQUIDITY_SWEEP."""
     candles = _persistence_test_series(index_8_close=75.0, index_9_close=92.0)
 
-    events = InternalStructureDetector(swing_lookback=1, persistence_candles=2).detect(candles)
+    events = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=2, confluence_filter=False
+    ).detect(candles)
 
     assert events[-1].event is StructureEvent.LIQUIDITY_SWEEP
     assert events[-1].direction is MarketDirection.BEARISH
@@ -306,7 +334,9 @@ def test_insufficient_trailing_candles_yields_liquidity_sweep() -> None:
     treated as unconfirmed regardless of its own close."""
     candles = _persistence_test_series(index_8_close=75.0, index_9_close=None)
 
-    events = InternalStructureDetector(swing_lookback=1, persistence_candles=2).detect(candles)
+    events = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=2, confluence_filter=False
+    ).detect(candles)
 
     assert events[-1].event is StructureEvent.LIQUIDITY_SWEEP
     assert events[-1].direction is MarketDirection.BEARISH
@@ -358,7 +388,9 @@ def _load_window_candles() -> list[Candle]:
 def test_real_window_bullish_choch_references_validated_high() -> None:
     candles = _load_window_candles()
 
-    events = InternalStructureDetector(swing_lookback=2, persistence_candles=3).detect(candles)
+    events = InternalStructureDetector(
+        swing_lookback=2, persistence_candles=3, confluence_filter=False
+    ).detect(candles)
 
     chochs = [e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
     assert len(chochs) == 1
@@ -394,6 +426,10 @@ def test_choch_detected_when_confirmation_extends_beyond_pivot_index() -> None:
     lows[9] = 60.0    # Novo LL -> validated_choch_high = 170.0
 
     candles = make_series(highs, lows)
+    # BOS bearish at index 5 (low 80, ref 100): close must be < 100 to confirm.
+    candles[5] = make_candle(5, 150.0, 80.0, close=90.0)
+    # BOS bearish at index 9 (low 60, ref 80): close must be < 80 to confirm.
+    candles[9] = make_candle(9, 150.0, 60.0, close=70.0)
 
     # O Rompimento começa no índice 12
     candles[12] = make_candle(12, high=173.0, low=140.0, close=172.0)
@@ -403,7 +439,9 @@ def test_choch_detected_when_confirmation_extends_beyond_pivot_index() -> None:
     candles[14] = make_candle(14, high=173.0, low=140.0, close=171.0)
 
     # Executa o detector com persistência 2
-    detector = InternalStructureDetector(swing_lookback=1, persistence_candles=2)
+    detector = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=2, confluence_filter=False
+    )
     events = detector.detect(candles)
 
     # Filtra apenas eventos de CHoCH
@@ -435,6 +473,10 @@ def test_state_machine_hierarchy_choch_then_bos() -> None:
     lows[9] = 60.0
 
     candles = make_series(highs, lows)
+    # BOS bearish at index 5 (low 80, ref 100): close must be < 100.
+    candles[5] = make_candle(5, 150.0, 80.0, close=90.0)
+    # BOS bearish at index 9 (low 60, ref 80): close must be < 80.
+    candles[9] = make_candle(9, 150.0, 60.0, close=70.0)
 
     # 2. ROMPIMENTO DO CHOCH (velas com 'close' explícito > 170.0 para garantir persistência)
     candles[12] = make_candle(12, high=175.0, low=140.0, close=172.0)
@@ -451,7 +493,9 @@ def test_state_machine_hierarchy_choch_then_bos() -> None:
     candles[22] = make_candle(22, high=192.0, low=170.0, close=190.0)
 
     # Executa o detector
-    detector = InternalStructureDetector(swing_lookback=1, persistence_candles=2)
+    detector = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=2, confluence_filter=False
+    )
     events = detector.detect(candles)
 
     # Filtra apenas eventos Bullish para ignorar o BOS Bearish de inicialização
@@ -492,6 +536,10 @@ def test_trend_state_does_not_leak_on_liquidity_sweep() -> None:
     lows[9] = 60.0    # LL 
 
     candles = make_series(highs, lows)
+    # BOS bearish at index 5 (low 80, ref 100): close must be < 100.
+    candles[5] = make_candle(5, 150.0, 80.0, close=90.0)
+    # BOS bearish at index 9 (low 60, ref 80): close must be < 80.
+    candles[9] = make_candle(9, 150.0, 60.0, close=70.0)
 
     # 2. O FALSO ROMPIMENTO (Sweep no CHoCH)
     # Rompe a máxima (175 > 170), mas o fechamento é abaixo (165), rejeitando o rompimento.
@@ -499,12 +547,14 @@ def test_trend_state_does_not_leak_on_liquidity_sweep() -> None:
 
     # 3. CONTINUAÇÃO DA TENDÊNCIA ORIGINAL (Queda)
     # O preço rejeita o topo e volta a cair, perdendo o fundo anterior (60.0)
-    candles[15] = make_candle(15, high=100.0, low=50.0, close=55.0) # Rompe o fundo de 60.0
-    candles[16] = make_candle(16, high=90.0, low=40.0, close=45.0)  # Confirma a queda
-    candles[17] = make_candle(17, high=80.0, low=45.0, close=50.0)  # Confirma a queda
+    candles[15] = make_candle(15, high=100.0, low=50.0, close=55.0)  # Rompe o fundo de 60.0
+    candles[16] = make_candle(16, high=90.0, low=40.0, close=45.0)   # Confirma a queda
+    candles[17] = make_candle(17, high=80.0, low=45.0, close=50.0)   # Confirma a queda
 
     # Executa o detector (exigindo 2 velas de persistência)
-    detector = InternalStructureDetector(swing_lookback=1, persistence_candles=2)
+    detector = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=2, confluence_filter=False
+    )
     events = detector.detect(candles)
 
     # Coleta todos os eventos
@@ -538,6 +588,10 @@ def test_state_machine_does_not_shift_references_on_multiple_sweeps() -> None:
     lows[9] = 60.0    # LL
 
     candles = make_series(highs, lows)
+    # BOS bearish at index 5 (low 80, ref 100): close must be < 100.
+    candles[5] = make_candle(5, 150.0, 80.0, close=90.0)
+    # BOS bearish at index 9 (low 60, ref 80): close must be < 80.
+    candles[9] = make_candle(9, 150.0, 60.0, close=70.0)
 
     # 2. PRIMEIRO SWEEP (Preço cutuca 172 e volta para 160)
     candles[12] = make_candle(12, high=172.0, low=140.0, close=160.0)
@@ -551,7 +605,9 @@ def test_state_machine_does_not_shift_references_on_multiple_sweeps() -> None:
     candles[19] = make_candle(19, high=90.0, low=40.0, close=42.0)   # Confirmação 1
     candles[20] = make_candle(20, high=80.0, low=35.0, close=38.0)   # Confirmação 2
 
-    detector = InternalStructureDetector(swing_lookback=1, persistence_candles=2)
+    detector = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=2, confluence_filter=False
+    )
     events = detector.detect(candles)
 
     choch_events = [e for e in events if e.event == StructureEvent.CHANGE_OF_CHARACTER]
@@ -629,19 +685,30 @@ def test_streaming_sliding_window_reclassifies_same_candle() -> None:
     """A fixed-size sliding window -- one candle dropped from the front, one
     added at the back, as `load_dashboard_data` does on every refresh --
     re-bootstraps `active_low`/`trend`/`validated_choch_high` from the new
-    window's first pivots. The candle at index 11 (a low of 80.0, breaking the
-    bootstrap active_low of 100.0) is a LIQUIDITY_SWEEP in the window starting
-    at index 0 (trend still NEUTRAL there) but a BREAK_OF_STRUCTURE in the
-    window starting at index 1 (where it is now the *first* low pivot,
-    breaking nothing yet from NEUTRAL)."""
+    window's first pivots. The candle at index 11 (a low of 80.0) is a
+    LIQUIDITY_SWEEP in window_0 -- trend is BULLISH after the BOS at index 5,
+    so the index-11 break is counter-trend with no validated_choch_low to
+    confirm a CHoCH -- but a BREAK_OF_STRUCTURE in window_1, where candles[1]
+    (high 200) is no longer the leftmost candle so it cannot form a pivot, 220
+    at index 5 becomes the bootstrap active_high instead, no BOS fires before
+    index 11, trend stays NEUTRAL, and the break registers as a neutral-direction
+    BOS."""
     candles = make_series(_STREAM_HIGHS, _STREAM_LOWS)
+    # BOS bullish at index 5 (high 220, ref 200): close must be > 200 to confirm
+    # in window_0 (where 200 is the bootstrap active_high). Not needed in window_1
+    # (220 is the bootstrap there, so no BOS fires at index 5 regardless).
+    candles[5] = make_candle(5, 220.0, 140.0, close=205.0)
+    # BOS bearish at index 11 (low 80, ref active_low=100 in window_1): close
+    # must be < 100. In window_0 this candle is a SWEEP (counter-trend in
+    # BULLISH), so the close value doesn't affect its classification there.
+    candles[11] = make_candle(11, 150.0, 80.0, close=85.0)
     window_size = 15
 
     window_0 = candles[0:window_size]
     window_1 = candles[1 : window_size + 1]
 
-    events_0 = InternalStructureDetector(swing_lookback=1).detect(window_0)
-    events_1 = InternalStructureDetector(swing_lookback=1).detect(window_1)
+    events_0 = InternalStructureDetector(swing_lookback=1, confluence_filter=False).detect(window_0)
+    events_1 = InternalStructureDetector(swing_lookback=1, confluence_filter=False).detect(window_1)
 
     def find_by_timestamp(events: list[MarketStructure], timestamp: datetime) -> MarketStructure:
         return next(e for e in events if e.timestamp == timestamp)
@@ -683,6 +750,10 @@ def test_bullish_choch_uses_last_confirmed_lh_before_final_ll() -> None:
     lows[15] = 50.0
 
     candles = make_series(highs, lows)
+    # BOS bearish events need close < active_low to confirm.
+    candles[7] = make_candle(7, 150.0, 80.0, close=90.0)    # close < active_low 100
+    candles[11] = make_candle(11, 150.0, 60.0, close=70.0)  # close < active_low 80
+    candles[15] = make_candle(15, 150.0, 50.0, close=55.0)  # close < active_low 60
 
     # rompimento acima do LH3
     candles[18] = make_candle(
@@ -709,6 +780,7 @@ def test_bullish_choch_uses_last_confirmed_lh_before_final_ll() -> None:
     events = InternalStructureDetector(
         swing_lookback=1,
         persistence_candles=2,
+        confluence_filter=False,
     ).detect(candles)
 
     chochs = [
@@ -751,6 +823,7 @@ def test_real_window_choch_should_use_last_confirmed_lh_before_final_ll() -> Non
     events = InternalStructureDetector(
         swing_lookback=2,
         persistence_candles=3,
+        confluence_filter=False,
     ).detect(candles)
 
     chochs = [

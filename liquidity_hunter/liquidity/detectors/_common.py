@@ -101,6 +101,51 @@ def find_wick_break_index(
     return end_index
 
 
+def find_close_break_index(
+    candles: Sequence[Candle],
+    start_index: int,
+    end_index: int,
+    level_price: float,
+    *,
+    bullish: bool,
+) -> int | None:
+    """The first index in `candles[start_index:end_index + 1]` where the
+    candle's close crosses `level_price` (`close > level_price` if `bullish`,
+    else `close < level_price`).
+
+    Returns `None` if no candle in the range closes beyond the level -- a
+    wick-only break that immediately reverted without a confirming close.
+    """
+    for index in range(start_index, end_index + 1):
+        candle = candles[index]
+        if bullish and candle.close > level_price:
+            return index
+        if not bullish and candle.close < level_price:
+            return index
+    return None
+
+
+def bos_confluence(candle: Candle, *, bullish: bool) -> bool:
+    """LuxAlgo-style confluence filter for internal BOS candles.
+
+    For a bullish BOS the breaking candle must have a larger upper shadow
+    than lower shadow (upward price expansion beyond the level, even if the
+    close pulled back inside the body); for a bearish BOS the reverse. This
+    mirrors the 'Confluence Filter' option in LuxAlgo's Smart Money Concepts
+    indicator (`bullishBar`/`bearishBar` in its Pine source).
+
+    upper_shadow = high - max(close, open)
+    lower_shadow = min(close, open) - low
+    bullish: upper_shadow > lower_shadow
+    bearish: upper_shadow < lower_shadow
+    """
+    upper_shadow = candle.high - max(candle.close, candle.open)
+    lower_shadow = min(candle.close, candle.open) - candle.low
+    if bullish:
+        return upper_shadow > lower_shadow
+    return upper_shadow < lower_shadow
+
+
 def find_sustained_break_index(
     candles: Sequence[Candle],
     start_index: int,

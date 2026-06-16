@@ -139,7 +139,10 @@ def test_load_dashboard_data_internal_structure_events_use_internal_scope() -> N
     )
 
     data = load_dashboard_data(
-        provider=_FakeProvider(candles), symbol="BTCUSDT", internal_swing_lookback=2
+        provider=_FakeProvider(candles),
+        symbol="BTCUSDT",
+        internal_swing_lookback=2,
+        confluence_filter=False,
     )
 
     assert data.internal_structure_events

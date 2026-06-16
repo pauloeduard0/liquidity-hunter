@@ -75,6 +75,7 @@ def load_dashboard_data(
     limit: int = 500,
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
     internal_swing_lookback: int = DEFAULT_INTERNAL_SWING_LOOKBACK,
+    confluence_filter: bool = True,
 ) -> DashboardData:
     """Fetch candles and assemble liquidity, ranking, and retail bias data."""
     provider = provider if provider is not None else BinanceDataProvider()
@@ -100,9 +101,10 @@ def load_dashboard_data(
     visible_end = candles[-1].timestamp
     internal_structure_events = [
         event
-        for event in InternalStructureDetector(swing_lookback=internal_swing_lookback).detect(
-            internal_candles
-        )
+        for event in InternalStructureDetector(
+            swing_lookback=internal_swing_lookback,
+            confluence_filter=confluence_filter,
+        ).detect(internal_candles)
         if visible_start <= event.timestamp <= visible_end
     ]
     higher_timeframe_direction = _latest_structure_direction(market_structure_events)
