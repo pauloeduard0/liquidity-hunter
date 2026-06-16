@@ -233,6 +233,16 @@ export function MainChart({ data }: MainChartProps) {
       const startTime = toUtcTimestamp(event.timestamp)
       const endTime = structureLineEndTime(event, allEvents, lastCandleTime)
 
+      // For CHoCH, anchor on `reference_price_level` (the validated level
+      // that was broken) rather than `price_level` (the confirming pivot's
+      // own extreme, which can be far beyond the level it confirmed) -- so
+      // the marker sits on the structural level that flipped. BOS and Sweep
+      // keep `price_level`, where it coincides with the breaking level.
+      const linePrice =
+        event.event === 'change_of_character' && event.reference_price_level != null
+          ? event.reference_price_level
+          : event.price_level
+
       const structureSeries = chart.addSeries(LineSeries, {
         color: isInternal ? `${style.color}80` : style.color,
         lineWidth: 1,
@@ -241,14 +251,14 @@ export function MainChart({ data }: MainChartProps) {
         priceLineVisible: false,
         crosshairMarkerVisible: false,
       })
-      structureSeries.setData(lineFrom(startTime, endTime, event.price_level))
+      structureSeries.setData(lineFrom(startTime, endTime, linePrice))
       overlaySeriesRef.current.push(structureSeries)
 
       labels.push({
         time: startTime,
-        price: event.price_level,
+        price: linePrice,
         color: style.color,
-        text: `${style.label}${isInternal ? ' (Internal)' : ''} ${directionIcon} · ${formatPrice(event.price_level)}`,
+        text: `${style.label}${isInternal ? ' (Internal)' : ''} ${directionIcon} · ${formatPrice(linePrice)}`,
       })
     }
 

@@ -196,6 +196,14 @@ def _add_structure_events(
     anchored at the line's start (`event.timestamp`, where the structure
     actually occurred) rather than its end, so it doesn't drift to the right
     edge of the chart for levels that are still active.
+
+    For `CHANGE_OF_CHARACTER`, the line/label is drawn at
+    `reference_price_level` (the validated level that was broken) rather
+    than `price_level` (the confirming pivot's own extreme, which can be far
+    beyond the level it confirmed) -- so the marker sits on the structural
+    level that flipped, not on the wick that happened to confirm it. BOS and
+    Sweep keep using `price_level`, where it coincides with the breaking
+    level.
     """
     major_events = [event for event in events if event.scope is StructureScope.MAJOR]
     last_candle_time = candles[-1].timestamp
@@ -213,19 +221,25 @@ def _add_structure_events(
             label = f"{label} (Internal)"
         icon = _DIRECTION_ICONS[event.direction]
         end_time = _structure_line_end_time(event, events, last_candle_time)
+        line_price = (
+            event.reference_price_level
+            if event.event is StructureEvent.CHANGE_OF_CHARACTER
+            and event.reference_price_level is not None
+            else event.price_level
+        )
         fig.add_shape(
             type="line",
             x0=event.timestamp,
             x1=end_time,
-            y0=event.price_level,
-            y1=event.price_level,
+            y0=line_price,
+            y1=line_price,
             line={"color": color, "width": 1, "dash": "dot" if is_internal else "dash"},
             opacity=0.5 if is_internal else 1.0,
         )
         fig.add_annotation(
             x=event.timestamp,
-            y=event.price_level,
-            text=f"{label} {icon} · {event.price_level:,.2f}",
+            y=line_price,
+            text=f"{label} {icon} · {line_price:,.2f}",
             showarrow=False,
             xanchor="left",
             yanchor="bottom",

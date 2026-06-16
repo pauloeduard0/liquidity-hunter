@@ -651,3 +651,117 @@ def test_streaming_sliding_window_reclassifies_same_candle() -> None:
 
     assert pivot_in_window_0.event is StructureEvent.LIQUIDITY_SWEEP
     assert pivot_in_window_1.event is StructureEvent.BREAK_OF_STRUCTURE
+
+def test_bullish_choch_uses_last_confirmed_lh_before_final_ll() -> None:
+    """
+    LL1 confirma LH1
+    LL2 confirma LH2
+    LL3 confirma LH3
+
+    Após LL3 não existe novo LL.
+
+    Portanto o CHOCH deve usar LH3 como referência.
+    """
+
+    highs = [150.0] * 25
+    lows = [140.0] * 25
+
+    # bootstrap
+    highs[1] = 200.0
+    lows[3] = 100.0
+
+    # LH1
+    highs[5] = 180.0
+    lows[7] = 80.0
+
+    # LH2
+    highs[9] = 170.0
+    lows[11] = 60.0
+
+    # LH3 (último LH confirmado)
+    highs[13] = 160.0
+    lows[15] = 50.0
+
+    candles = make_series(highs, lows)
+
+    # rompimento acima do LH3
+    candles[18] = make_candle(
+        18,
+        high=165.0,
+        low=145.0,
+        close=162.0,
+    )
+
+    candles[19] = make_candle(
+        19,
+        high=170.0,
+        low=150.0,
+        close=165.0,
+    )
+
+    candles[20] = make_candle(
+        20,
+        high=168.0,
+        low=152.0,
+        close=164.0,
+    )
+
+    events = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=2,
+    ).detect(candles)
+
+    chochs = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+    ]
+
+    assert len(chochs) == 1
+
+    choch = chochs[0]
+
+    assert choch.direction is MarketDirection.BULLISH
+
+    # último LH confirmado
+    assert choch.reference_price_level == 160.0
+
+def test_real_window_choch_should_use_last_confirmed_lh_before_final_ll() -> None:
+    """
+    Regressão do caso BTC observado.
+
+    O objetivo é validar qual swing high foi promovido
+    para validated_choch_high imediatamente antes do CHOCH bullish.
+
+    Pela leitura estrutural:
+
+        64739 -> confirmado
+        63232 -> confirmado
+        61547 -> confirmado
+        59131 -> LL final
+
+    Após esse LL final não houve novo LL.
+
+    Portanto o CHOCH deveria utilizar 61547
+    (último LH confirmado) como referência.
+    """
+
+    candles = _load_window_candles()
+
+    events = InternalStructureDetector(
+        swing_lookback=2,
+        persistence_candles=3,
+    ).detect(candles)
+
+    chochs = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+    ]
+
+    assert len(chochs) == 1
+
+    choch = chochs[0]
+
+    assert choch.reference_price_level == 61547.24

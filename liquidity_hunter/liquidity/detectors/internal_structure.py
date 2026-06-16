@@ -175,7 +175,7 @@ class InternalStructureDetector(MarketStructureDetector):
     break to be a `CHANGE_OF_CHARACTER` rather than a `LIQUIDITY_SWEEP`.
     """
 
-    def __init__(self, swing_lookback: int = 1, persistence_candles: int = 2) -> None:
+    def __init__(self, swing_lookback: int = 2, persistence_candles: int = 5) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
