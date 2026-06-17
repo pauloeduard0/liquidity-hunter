@@ -10,8 +10,8 @@ export const GRID_COLOR = '#1f2430'
 export const FONT_COLOR = '#d1d4dc'
 export const ACCENT_COLOR = '#2962ff'
 
-export const CANDLE_UP_COLOR = '#26a69a'
-export const CANDLE_DOWN_COLOR = '#ef5350'
+export const CANDLE_UP_COLOR = '#26c6da'
+export const CANDLE_DOWN_COLOR = '#b8b8b8'
 
 export const ZONE_COLORS: Record<string, string> = {
   equal_highs: '#ef553b',
