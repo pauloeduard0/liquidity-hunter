@@ -78,3 +78,11 @@ class RetailPositioning(str, Enum):
     LONG = "long"
     SHORT = "short"
     NEUTRAL = "neutral"
+
+
+class POIZoneStatus(str, Enum):
+    """Lifecycle state of a POI (order block) zone."""
+
+    ACTIVE = "active"
+    MITIGATED = "mitigated"
+    INVALIDATED = "invalidated"

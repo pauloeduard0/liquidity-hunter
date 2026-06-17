@@ -11,6 +11,7 @@ from liquidity_hunter.core.domain.enums import (
     LiquiditySide,
     LiquidityZoneType,
     MarketDirection,
+    POIZoneStatus,
     RetailPositioning,
     StructureEvent,
     StructureScope,
@@ -18,6 +19,7 @@ from liquidity_hunter.core.domain.enums import (
 )
 from liquidity_hunter.core.domain.liquidity_zone import LiquidityZone
 from liquidity_hunter.core.domain.market_structure import MarketStructure
+from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
 from liquidity_hunter.core.domain.retail_bias import RetailBias
 
 __all__ = [
@@ -28,6 +30,9 @@ __all__ = [
     "LiquidityZoneType",
     "MarketDirection",
     "MarketStructure",
+    "POIZone",
+    "POIZoneStatus",
+    "RTOSweepEvent",
     "RetailBias",
     "RetailPositioning",
     "StructureEvent",

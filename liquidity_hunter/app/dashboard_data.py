@@ -13,11 +13,13 @@ from liquidity_hunter.core.domain import (
     MarketStructure,
     TimeFrame,
 )
+from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
 from liquidity_hunter.data import BinanceDataProvider, OHLCVProvider
 from liquidity_hunter.liquidity import (
     EqualHighDetector,
     EqualLowDetector,
     InternalStructureDetector,
+    POIDetector,
     SwingHighDetector,
     SwingLowDetector,
     SwingStructureDetector,
@@ -54,6 +56,8 @@ class DashboardData:
     market_structure_events: list[MarketStructure]
     internal_structure_events: list[MarketStructure]
     retail_bias: RetailBiasEstimate
+    poi_zones: list[POIZone]
+    poi_sweep_events: list[RTOSweepEvent]
 
 
 def _latest_structure_direction(events: list[MarketStructure]) -> MarketDirection:
@@ -98,14 +102,25 @@ def load_dashboard_data(
     internal_candles = provider.get_ohlcv(symbol, timeframe, buffered_limit)
     visible_start = candles[0].timestamp
     visible_end = candles[-1].timestamp
+
+    # Run InternalStructureDetector once on the full buffered series; reuse
+    # the result for both the display window filter and POI detection (which
+    # needs the unfiltered set so CHoCH anchors from the buffer can produce
+    # zones visible in the display window).
+    all_internal_events = InternalStructureDetector(
+        swing_lookback=internal_swing_lookback,
+        confluence_filter=confluence_filter,
+    ).detect(internal_candles)
     internal_structure_events = [
-        event
-        for event in InternalStructureDetector(
-            swing_lookback=internal_swing_lookback,
-            confluence_filter=confluence_filter,
-        ).detect(internal_candles)
-        if visible_start <= event.timestamp <= visible_end
+        e for e in all_internal_events if visible_start <= e.timestamp <= visible_end
     ]
+
+    poi_result = POIDetector().detect(internal_candles, all_internal_events)
+    poi_zones = [z for z in poi_result.zones if visible_start <= z.created_at <= visible_end]
+    poi_sweep_events = [
+        e for e in poi_result.sweep_events if visible_start <= e.timestamp <= visible_end
+    ]
+
     higher_timeframe_direction = _latest_structure_direction(market_structure_events)
 
     retail_bias = RetailTrapAnalyzer().analyze(
@@ -127,4 +142,6 @@ def load_dashboard_data(
         market_structure_events=market_structure_events,
         internal_structure_events=internal_structure_events,
         retail_bias=retail_bias,
+        poi_zones=poi_zones,
+        poi_sweep_events=poi_sweep_events,
     )

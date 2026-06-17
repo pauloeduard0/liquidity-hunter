@@ -20,6 +20,7 @@ from liquidity_hunter.core.domain import (
     StructureEvent,
     StructureScope,
 )
+from liquidity_hunter.core.domain.poi_zone import POIZone
 
 _ZONE_COLORS: dict[LiquidityZoneType, str] = {
     LiquidityZoneType.EQUAL_HIGHS: "#EF553B",
@@ -249,7 +250,60 @@ def _add_structure_events(
     return fig
 
 
+_POI_COLORS: dict[str, str] = {
+    "bullish": "#26A69A",  # demand zone — teal
+    "bearish": "#EF5350",  # supply zone — red
+    "mitigated": "#888888",
+}
+
 DEFAULT_TOP_N_ZONES = 5
+
+
+def _add_poi_zones(fig: go.Figure, candles: list[Candle], poi_zones: list[POIZone]) -> go.Figure:
+    """Overlay POI order block zones as filled rectangles on `fig`.
+
+    Each ACTIVE zone is drawn as a semi-transparent filled box spanning
+    from `created_at` to the last candle. MITIGATED zones are drawn dimmer
+    and end at their `mitigated_at` timestamp. INVALIDATED zones are hidden.
+    """
+    last_candle_time = candles[-1].timestamp
+
+    for zone in poi_zones:
+        if zone.status.value == "invalidated":
+            continue
+
+        is_mitigated = zone.status.value == "mitigated"
+        color = (
+            _POI_COLORS["mitigated"]
+            if is_mitigated
+            else _POI_COLORS.get(zone.direction.value, "#888888")
+        )
+        opacity = 0.12 if is_mitigated else 0.25
+        end_time = zone.mitigated_at if (is_mitigated and zone.mitigated_at) else last_candle_time
+
+        fig.add_shape(
+            type="rect",
+            x0=zone.created_at,
+            x1=end_time,
+            y0=zone.price_low,
+            y1=zone.price_high,
+            line={"color": color, "width": 1, "dash": "dot" if is_mitigated else "solid"},
+            fillcolor=color,
+            opacity=opacity,
+        )
+        direction_icon = "▲" if zone.direction.value == "bullish" else "▼"
+        status_suffix = " ✓" if is_mitigated else ""
+        fig.add_annotation(
+            x=zone.created_at,
+            y=zone.price_high,
+            text=f"OB {direction_icon}{status_suffix} · {zone.price_low:,.2f}–{zone.price_high:,.2f}",  # noqa: E501
+            showarrow=False,
+            xanchor="left",
+            yanchor="bottom",
+            font={"color": color, "size": 10},
+        )
+
+    return fig
 
 
 def main_chart(
@@ -257,22 +311,21 @@ def main_chart(
     ranked_zones: list[ScoredLiquidityZone],
     structure_events: list[MarketStructure],
     *,
+    poi_zones: list[POIZone] | None = None,
     top_n_zones: int = DEFAULT_TOP_N_ZONES,
     title: str = "",
 ) -> go.Figure:
     """Build the primary chart: candlesticks with the top `top_n_zones`
-    liquidity zones by score (matching the "Liquidity Targets" panel) and
-    market structure (BOS/CHoCH/liquidity-sweep) annotations.
-
-    Plotting every detected zone (there can be dozens of swing points)
-    makes the chart unreadable, so only the highest-ranked zones are
-    overlaid here; the full list remains available in the detected
-    liquidity zones table.
+    liquidity zones by score (matching the "Liquidity Targets" panel),
+    market structure annotations, and POI order block zones.
     """
     top = ranked_zones[:top_n_zones]
     zones = [scored.zone for scored in top]
     fig = liquidity_zones_chart(candles, zones, ranked_zones=top, title=title)
-    return _add_structure_events(fig, candles, structure_events)
+    fig = _add_structure_events(fig, candles, structure_events)
+    if poi_zones:
+        fig = _add_poi_zones(fig, candles, poi_zones)
+    return fig
 
 
 def ranking_chart(ranked_zones: list[ScoredLiquidityZone], *, top_n: int = 10) -> go.Figure:

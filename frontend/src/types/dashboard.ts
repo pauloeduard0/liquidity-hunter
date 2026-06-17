@@ -35,6 +35,8 @@ export type StructureScope = 'major' | 'internal'
 
 export type RetailPositioning = 'long' | 'short' | 'neutral'
 
+export type POIZoneStatus = 'active' | 'mitigated' | 'invalidated'
+
 export interface Candle {
   symbol: string
   timeframe: TimeFrame
@@ -88,6 +90,31 @@ export interface RetailBiasEstimate {
   explanation: string
 }
 
+export interface POIZone {
+  symbol: string
+  timeframe: TimeFrame
+  direction: MarketDirection
+  price_low: number
+  price_high: number
+  created_at: string
+  origin_choch_timestamp: string
+  origin_bos_timestamp: string
+  extreme_candle_timestamp: string
+  status: POIZoneStatus
+  invalidated_at: string | null
+  mitigated_at: string | null
+}
+
+export interface RTOSweepEvent {
+  symbol: string
+  timeframe: TimeFrame
+  direction: MarketDirection
+  timestamp: string
+  zone_price_low: number
+  zone_price_high: number
+  sweep_extreme: number
+}
+
 export interface DashboardData {
   symbol: string
   timeframe: TimeFrame
@@ -99,4 +126,6 @@ export interface DashboardData {
   market_structure_events: MarketStructure[]
   internal_structure_events: MarketStructure[]
   retail_bias: RetailBiasEstimate
+  poi_zones: POIZone[]
+  poi_sweep_events: RTOSweepEvent[]
 }

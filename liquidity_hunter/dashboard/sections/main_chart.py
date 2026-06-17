@@ -12,6 +12,7 @@ def render(data: DashboardData) -> None:
         data.candles,
         data.ranked_zones,
         [*data.market_structure_events, *data.internal_structure_events],
+        poi_zones=data.poi_zones,
         title=f"{data.symbol} · {data.timeframe.value.upper()}",
     )
     st.plotly_chart(fig, theme=None)

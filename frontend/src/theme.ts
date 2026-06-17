@@ -46,3 +46,10 @@ export const TREND_ICONS: Record<string, string> = {
   bearish: '▼',
   neutral: '▬',
 }
+
+/** POI order block zone colors by direction. */
+export const POI_COLORS: Record<string, string> = {
+  bullish: '#26a69a', // demand zone — teal
+  bearish: '#ef5350', // supply zone — red
+  mitigated: '#888888',
+}

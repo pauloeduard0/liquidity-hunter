@@ -19,6 +19,7 @@ import {
   DEFAULT_ZONE_COLOR,
   FONT_COLOR,
   GRID_COLOR,
+  POI_COLORS,
   STRUCTURE_EVENT_STYLES,
   TREND_ICONS,
   ZONE_COLORS,
@@ -285,6 +286,59 @@ export function MainChart({ data }: MainChartProps) {
         price: linePrice,
         color: style.color,
         text: `${style.label}${isInternal ? ' (Internal)' : ''} ${directionIcon} · ${formatPrice(linePrice)}`,
+      })
+    }
+
+    // POI order block zones: two horizontal lines (price_high and price_low)
+    // bracketing the box, extending from creation to mitigation/invalidation
+    // (or to the last candle for ACTIVE zones). Invalidated zones are hidden.
+    for (const zone of data.poi_zones ?? []) {
+      if (zone.status === 'invalidated') continue
+
+      const isMitigated = zone.status === 'mitigated'
+      const baseColor = isMitigated ? POI_COLORS.mitigated : POI_COLORS[zone.direction] ?? POI_COLORS.mitigated
+      const alpha = isMitigated ? '66' : 'cc'
+      const color = `${baseColor}${alpha}`
+      const lineStyle = isMitigated ? LineStyle.Dashed : LineStyle.Solid
+      const startTime = toUtcTimestamp(zone.created_at)
+      const endTime = isMitigated && zone.mitigated_at
+        ? toUtcTimestamp(zone.mitigated_at)
+        : lastCandleTime
+
+      const seriesOpts = {
+        color,
+        lineWidth: 1 as const,
+        lineStyle,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      }
+
+      const topSeries = chart.addSeries(LineSeries, seriesOpts)
+      topSeries.setData(lineFrom(startTime, endTime, zone.price_high))
+      overlaySeriesRef.current.push(topSeries)
+
+      const bottomSeries = chart.addSeries(LineSeries, seriesOpts)
+      bottomSeries.setData(lineFrom(startTime, endTime, zone.price_low))
+      overlaySeriesRef.current.push(bottomSeries)
+
+      labels.push({
+        time: startTime,
+        price: (zone.price_high + zone.price_low) / 2,
+        color: baseColor,
+        text: `OB ${zone.direction === 'bullish' ? '▲' : '▼'}${isMitigated ? ' ✓' : ''} · ${formatPrice(zone.price_low)}–${formatPrice(zone.price_high)}`,
+      })
+    }
+
+    // RTO sweep events: a small label at the recovery candle's price.
+    for (const rto of data.poi_sweep_events ?? []) {
+      const color = POI_COLORS[rto.direction] ?? POI_COLORS.mitigated
+      const midPrice = (rto.zone_price_low + rto.zone_price_high) / 2
+      labels.push({
+        time: toUtcTimestamp(rto.timestamp),
+        price: midPrice,
+        color,
+        text: `RTO ${rto.direction === 'bullish' ? '▲' : '▼'} · ${formatPrice(midPrice)}`,
       })
     }
 

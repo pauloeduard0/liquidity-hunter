@@ -16,6 +16,7 @@ from liquidity_hunter.core.domain import (
     MarketStructure,
     TimeFrame,
 )
+from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
 from liquidity_hunter.psychology import RetailBiasEstimate
 from liquidity_hunter.scoring import ScoredLiquidityZone
 
@@ -35,3 +36,5 @@ class DashboardDataResponse(BaseModel):
     market_structure_events: list[MarketStructure]
     internal_structure_events: list[MarketStructure]
     retail_bias: RetailBiasEstimate
+    poi_zones: list[POIZone]
+    poi_sweep_events: list[RTOSweepEvent]
