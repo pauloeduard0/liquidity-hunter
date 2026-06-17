@@ -336,7 +336,7 @@ export function MainChart({ data }: MainChartProps) {
       const dirStyle = POI_BOX_STYLES[zone.direction] ?? POI_BOX_STYLES.mitigated
       // Mitigated: same directional color, dimmer border + fainter fill.
       const style = isMitigated
-        ? { border: dirStyle.border + '66', fill: dirStyle.border + '08' }
+        ? { border: dirStyle.border + 'aa', fill: dirStyle.border + '18' }
         : dirStyle
       const endTime = poiBoxEndTime(zone, data.internal_structure_events, lastCandleTime)
       const dirIcon = zone.direction === 'bullish' ? '▲' : '▼'

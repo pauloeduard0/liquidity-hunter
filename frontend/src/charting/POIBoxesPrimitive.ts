@@ -53,10 +53,10 @@ class POIBoxesRenderer implements IPrimitivePaneRenderer {
         context.fillStyle = box.fillColor
         context.fillRect(left, top, right - left, bottom - top)
 
-        // Border drawn inside the fill (0.5 offset keeps it crisp at 1px)
+        // Border drawn inside the fill
         context.strokeStyle = box.borderColor
-        context.lineWidth = 1
-        context.strokeRect(left + 0.5, top + 0.5, right - left - 1, bottom - top - 1)
+        context.lineWidth = 1.5
+        context.strokeRect(left + 0.75, top + 0.75, right - left - 1.5, bottom - top - 1.5)
 
         // Small label in the top-left corner of the box
         if (box.label) {

@@ -49,8 +49,8 @@ export const TREND_ICONS: Record<string, string> = {
 
 /** POI order block box colors — border and fill (TradingView style). */
 export const POI_BOX_STYLES: Record<string, { border: string; fill: string }> = {
-  bullish: { border: '#64b5f6', fill: '#64b5f614' },   // light blue demand zone
-  bearish: { border: '#ef5350', fill: '#ef535014' },   // red supply zone
+  bullish: { border: '#2979ff', fill: '#2979ff2e' },   // vivid blue demand zone
+  bearish: { border: '#ef5350', fill: '#ef53502e' },   // red supply zone
   mitigated: { border: '#88888866', fill: '#8888880a' },
 }
 
