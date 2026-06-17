@@ -76,7 +76,7 @@ class SwingStructureDetector(MarketStructureDetector):
 
     def __init__(
         self,
-        swing_lookback: int = 15,
+        swing_lookback: int = 10,
         persistence_candles: int = 10,
         confluence_filter: bool = True,
     ) -> None:
@@ -133,6 +133,7 @@ class SwingStructureDetector(MarketStructureDetector):
             direction: MarketDirection,
             price_level: float,
             reference_price_level: float,
+            reference_timestamp: datetime | None = None,
         ) -> None:
             events.append(
                 MarketStructure(
@@ -143,6 +144,7 @@ class SwingStructureDetector(MarketStructureDetector):
                     direction=direction,
                     price_level=price_level,
                     reference_price_level=reference_price_level,
+                    reference_timestamp=reference_timestamp,
                 )
             )
 
@@ -178,6 +180,7 @@ class SwingStructureDetector(MarketStructureDetector):
                         MarketDirection.BULLISH,
                         price,
                         validated_choch_high.price,
+                        reference_timestamp=validated_choch_high.timestamp,
                     )
                     trend = MarketDirection.BULLISH
                     active_low = pending_low
@@ -286,6 +289,7 @@ class SwingStructureDetector(MarketStructureDetector):
                         MarketDirection.BEARISH,
                         price,
                         validated_choch_low.price,
+                        reference_timestamp=validated_choch_low.timestamp,
                     )
                     trend = MarketDirection.BEARISH
                     active_high = pending_high

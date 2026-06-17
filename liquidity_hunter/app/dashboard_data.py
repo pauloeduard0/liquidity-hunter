@@ -40,7 +40,6 @@ _MAX_FETCH_LIMIT = 1000
 # BREAK_OF_STRUCTURE/CHANGE_OF_CHARACTER/LIQUIDITY_SWEEP across refreshes.
 _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER = 300
 
-
 @dataclass(frozen=True)
 class DashboardData:
     """A snapshot of research data for a single symbol/timeframe."""

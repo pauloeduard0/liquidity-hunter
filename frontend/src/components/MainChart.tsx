@@ -76,11 +76,13 @@ function isDuplicateOfMajor(event: MarketStructure, majorEvents: MarketStructure
 }
 
 /**
- * Where `event`'s line should stop: a BOS/CHoCH/Sweep marks the active
- * level on its `direction` side as of `event.timestamp`. Only a *later*
- * BOS or CHoCH of the same scope and direction moves that active level (a
- * Sweep, by definition, leaves it unchanged), so the line is bounded there
- * -- otherwise it extends to `lastCandleTime` as the current active level.
+ * Where `event`'s line should stop.
+ *
+ * - BOS / Sweep: ends at the next BOS or CHoCH of the same scope and direction
+ *   (moves that active level), otherwise extends to `lastCandleTime`.
+ * - CHoCH: extends until the *opposite*-direction CHoCH of the same scope
+ *   supersedes it (the new trend nullifies the prior reversal reference);
+ *   a same-direction BOS does not end a CHoCH line.
  */
 function structureLineEndTime(
   event: MarketStructure,
@@ -88,13 +90,30 @@ function structureLineEndTime(
   lastCandleTime: UTCTimestamp,
 ): UTCTimestamp {
   const eventTime = toUtcTimestamp(event.timestamp)
+
+  if (event.event === 'change_of_character') {
+    const oppositeDirection = event.direction === 'bullish' ? 'bearish' : 'bullish'
+    const supersededAt = allEvents
+      .filter(
+        (other) =>
+          other.scope === event.scope &&
+          other.direction === oppositeDirection &&
+          other.event === 'change_of_character' &&
+          toUtcTimestamp(other.timestamp) > eventTime,
+      )
+      .map((other) => toUtcTimestamp(other.timestamp))
+    return supersededAt.length > 0 ? (Math.min(...supersededAt) as UTCTimestamp) : lastCandleTime
+  }
+
+  const oppositeDirection = event.direction === 'bullish' ? 'bearish' : 'bullish'
   const supersededAt = allEvents
     .filter(
       (other) =>
         other.scope === event.scope &&
-        other.direction === event.direction &&
-        (other.event === 'break_of_structure' || other.event === 'change_of_character') &&
-        toUtcTimestamp(other.timestamp) > eventTime,
+        toUtcTimestamp(other.timestamp) > eventTime &&
+        ((other.direction === event.direction &&
+          (other.event === 'break_of_structure' || other.event === 'change_of_character')) ||
+          (other.direction === oppositeDirection && other.event === 'change_of_character')),
     )
     .map((other) => toUtcTimestamp(other.timestamp))
 
@@ -243,6 +262,13 @@ export function MainChart({ data }: MainChartProps) {
           ? event.reference_price_level
           : event.price_level
 
+      // CHoCH lines originate from the validated_choch pivot (the LH/HL that
+      // was promoted to the reversal reference), not the candle that broke it.
+      const lineStartTime =
+        event.event === 'change_of_character' && event.reference_timestamp != null
+          ? toUtcTimestamp(event.reference_timestamp)
+          : startTime
+
       const structureSeries = chart.addSeries(LineSeries, {
         color: isInternal ? `${style.color}80` : style.color,
         lineWidth: 1,
@@ -251,7 +277,7 @@ export function MainChart({ data }: MainChartProps) {
         priceLineVisible: false,
         crosshairMarkerVisible: false,
       })
-      structureSeries.setData(lineFrom(startTime, endTime, linePrice))
+      structureSeries.setData(lineFrom(lineStartTime, endTime, linePrice))
       overlaySeriesRef.current.push(structureSeries)
 
       labels.push({

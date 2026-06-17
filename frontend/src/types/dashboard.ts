@@ -68,6 +68,7 @@ export interface MarketStructure {
   direction: MarketDirection
   price_level: number
   reference_price_level: number | null
+  reference_timestamp: string | null
   scope: StructureScope
 }
 
