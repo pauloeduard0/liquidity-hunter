@@ -63,22 +63,6 @@ function lineFrom(startTime: UTCTimestamp, lastCandleTime: UTCTimestamp, value: 
 }
 
 /**
- * Whether `event` reports the same pivot as one in `majorEvents`. The
- * internal-scope detector can re-detect the same swing pivot as the
- * major-scope detector (a major extreme is, by construction, also a local
- * extreme at a smaller lookback), so such duplicates are skipped to avoid
- * rendering the same level twice.
- */
-function isDuplicateOfMajor(event: MarketStructure, majorEvents: MarketStructure[]): boolean {
-  return majorEvents.some(
-    (major) =>
-      major.timestamp === event.timestamp &&
-      major.event === event.event &&
-      major.price_level === event.price_level,
-  )
-}
-
-/**
  * Where `event`'s line should stop.
  *
  * - BOS / Sweep: ends at the next BOS or CHoCH of the same scope and direction
@@ -263,53 +247,47 @@ export function MainChart({ data }: MainChartProps) {
       labels.push({ time: startTime, price, color, text: title })
     }
 
-    // BOS/CHoCH/liquidity-sweep levels, major and internal (deduped against
-    // major). HH/HL/LH/LL pivot events are not rendered on this chart.
-    const majorEvents = data.market_structure_events
-    const allEvents = [...majorEvents, ...data.internal_structure_events]
+    // Single-scope structure events: 4H shows only major, 1H shows only internal.
+    const isMajorView = data.timeframe === '4h'
+    const scopeEvents = isMajorView
+      ? data.market_structure_events
+      : data.internal_structure_events
 
-    const recentInternalSweeps = new Set(
-      allEvents
-        .filter((event) => event.scope === 'internal' && event.event === 'liquidity_sweep')
-        .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
-        .slice(0, MAX_INTERNAL_SWEEPS),
-    )
+    const recentSweeps = !isMajorView
+      ? new Set(
+          scopeEvents
+            .filter((e) => e.event === 'liquidity_sweep')
+            .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
+            .slice(0, MAX_INTERNAL_SWEEPS),
+        )
+      : null
 
-    const structureEvents = allEvents.filter(
+    const structureEvents = scopeEvents.filter(
       (event) =>
         event.event in STRUCTURE_EVENT_STYLES &&
-        !(event.scope === 'internal' && isDuplicateOfMajor(event, majorEvents)) &&
-        (event.event !== 'liquidity_sweep' || event.scope !== 'internal' || recentInternalSweeps.has(event)),
+        (isMajorView || event.event !== 'liquidity_sweep' || recentSweeps!.has(event)),
     )
 
     for (const event of structureEvents) {
       const style = STRUCTURE_EVENT_STYLES[event.event]
-      const isInternal = event.scope === 'internal'
       const directionIcon = TREND_ICONS[event.direction] ?? ''
       const startTime = toUtcTimestamp(event.timestamp)
-      const endTime = structureLineEndTime(event, allEvents, lastCandleTime)
+      const endTime = structureLineEndTime(event, scopeEvents, lastCandleTime)
 
-      // For CHoCH, anchor on `reference_price_level` (the validated level
-      // that was broken) rather than `price_level` (the confirming pivot's
-      // own extreme, which can be far beyond the level it confirmed) -- so
-      // the marker sits on the structural level that flipped. BOS and Sweep
-      // keep `price_level`, where it coincides with the breaking level.
       const linePrice =
         event.event === 'change_of_character' && event.reference_price_level != null
           ? event.reference_price_level
           : event.price_level
 
-      // CHoCH lines originate from the validated_choch pivot (the LH/HL that
-      // was promoted to the reversal reference), not the candle that broke it.
       const lineStartTime =
         event.event === 'change_of_character' && event.reference_timestamp != null
           ? toUtcTimestamp(event.reference_timestamp)
           : startTime
 
       const structureSeries = chart.addSeries(LineSeries, {
-        color: isInternal ? `${style.color}80` : style.color,
+        color: style.color,
         lineWidth: 1,
-        lineStyle: isInternal ? LineStyle.Dotted : LineStyle.Dashed,
+        lineStyle: LineStyle.Dashed,
         lastValueVisible: false,
         priceLineVisible: false,
         crosshairMarkerVisible: false,
@@ -321,48 +299,48 @@ export function MainChart({ data }: MainChartProps) {
         time: startTime,
         price: linePrice,
         color: style.color,
-        text: `${style.label}${isInternal ? ' (Internal)' : ''} ${directionIcon} · ${formatPrice(linePrice)}`,
+        text: `${style.label} ${directionIcon} · ${formatPrice(linePrice)}`,
       })
     }
 
-    // POI order block zones: TradingView-style filled rectangles via
-    // POIBoxesPrimitive. Invalidated zones are not rendered. Mitigated zones
-    // keep their directional color but at lower opacity (not gray).
-    const poiBoxes: POIBox[] = []
-    for (const zone of data.poi_zones ?? []) {
-      if (zone.status === 'invalidated') continue
+    // POI order block zones and RTO sweeps: only in internal (1H) view.
+    if (!isMajorView) {
+      const poiBoxes: POIBox[] = []
+      for (const zone of data.poi_zones ?? []) {
+        if (zone.status === 'invalidated') continue
 
-      const isMitigated = zone.status === 'mitigated'
-      const dirStyle = POI_BOX_STYLES[zone.direction] ?? POI_BOX_STYLES.mitigated
-      // Mitigated: same directional color, dimmer border + fainter fill.
-      const style = isMitigated
-        ? { border: dirStyle.border + 'aa', fill: dirStyle.border + '18' }
-        : dirStyle
-      const endTime = poiBoxEndTime(zone, data.internal_structure_events, lastCandleTime)
-      const dirIcon = zone.direction === 'bullish' ? '▲' : '▼'
+        const isMitigated = zone.status === 'mitigated'
+        const dirStyle = POI_BOX_STYLES[zone.direction] ?? POI_BOX_STYLES.mitigated
+        const style = isMitigated
+          ? { border: dirStyle.border + 'aa', fill: dirStyle.border + '18' }
+          : dirStyle
+        const endTime = poiBoxEndTime(zone, data.internal_structure_events, lastCandleTime)
+        const dirIcon = zone.direction === 'bullish' ? '▲' : '▼'
 
-      poiBoxes.push({
-        x0: toUtcTimestamp(zone.created_at),
-        x1: endTime,
-        priceLow: zone.price_low,
-        priceHigh: zone.price_high,
-        borderColor: style.border,
-        fillColor: style.fill,
-        label: `OB ${dirIcon}${isMitigated ? ' ✓' : ''}`,
-      })
-    }
-    poiBoxesPrimitiveRef.current?.setBoxes(poiBoxes)
+        poiBoxes.push({
+          x0: toUtcTimestamp(zone.created_at),
+          x1: endTime,
+          priceLow: zone.price_low,
+          priceHigh: zone.price_high,
+          borderColor: style.border,
+          fillColor: style.fill,
+          label: `OB ${dirIcon}${isMitigated ? ' ✓' : ''}`,
+        })
+      }
+      poiBoxesPrimitiveRef.current?.setBoxes(poiBoxes)
 
-    // RTO sweep events: label at the recovery candle's midpoint.
-    for (const rto of data.poi_sweep_events ?? []) {
-      const color = RTO_COLORS[rto.direction] ?? '#888888'
-      const midPrice = (rto.zone_price_low + rto.zone_price_high) / 2
-      labels.push({
-        time: toUtcTimestamp(rto.timestamp),
-        price: midPrice,
-        color,
-        text: `RTO ${rto.direction === 'bullish' ? '▲' : '▼'} · ${formatPrice(midPrice)}`,
-      })
+      for (const rto of data.poi_sweep_events ?? []) {
+        const color = RTO_COLORS[rto.direction] ?? '#888888'
+        const midPrice = (rto.zone_price_low + rto.zone_price_high) / 2
+        labels.push({
+          time: toUtcTimestamp(rto.timestamp),
+          price: midPrice,
+          color,
+          text: `RTO ${rto.direction === 'bullish' ? '▲' : '▼'} · ${formatPrice(midPrice)}`,
+        })
+      }
+    } else {
+      poiBoxesPrimitiveRef.current?.setBoxes([])
     }
 
     labelsPrimitiveRef.current?.setLabels(labels)
