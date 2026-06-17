@@ -78,7 +78,7 @@ def load_dashboard_data(
     limit: int = 500,
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
     internal_swing_lookback: int = DEFAULT_INTERNAL_SWING_LOOKBACK,
-    confluence_filter: bool = True,
+    confluence_filter: bool = False,
 ) -> DashboardData:
     """Fetch candles and assemble liquidity, ranking, and retail bias data."""
     provider = provider if provider is not None else BinanceDataProvider()

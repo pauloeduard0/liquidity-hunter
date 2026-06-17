@@ -131,11 +131,18 @@ def test_load_dashboard_data_derives_trend_from_market_structure() -> None:
 
 
 def test_load_dashboard_data_internal_structure_events_use_internal_scope() -> None:
-    candles = make_series(STRUCTURE_HIGHS, STRUCTURE_LOWS, symbol="BTCUSDT")
+    # Extended series: bearish BOS at L130 confirmed by LH pullback at H180.
+    int_highs = [150.0] * 20
+    int_highs[2] = 200.0
+    int_highs[17] = 180.0
+    int_lows = [145.0] * 20
+    int_lows[7] = 140.0
+    int_lows[12] = 130.0
+    candles = make_series(int_highs, int_lows, symbol="BTCUSDT")
     candles[12] = make_candle(
         12,
-        STRUCTURE_HIGHS[12],
-        STRUCTURE_LOWS[12],
+        int_highs[12],
+        int_lows[12],
         symbol="BTCUSDT",
         close=135.0,
         taker_buy_volume=0.3,
@@ -152,8 +159,6 @@ def test_load_dashboard_data_internal_structure_events_use_internal_scope() -> N
     assert all(
         event.scope is StructureScope.INTERNAL for event in data.internal_structure_events
     )
-    # `higher_timeframe_direction` still reflects only `market_structure_events`
-    # (empty here, since `swing_lookback` keeps its default of 50).
     assert data.market_structure_events == []
     assert data.higher_timeframe_direction is MarketDirection.NEUTRAL
 

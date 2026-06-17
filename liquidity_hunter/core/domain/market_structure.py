@@ -24,4 +24,5 @@ class MarketStructure(DomainModel):
     price_level: float = Field(gt=0)
     reference_price_level: float | None = Field(default=None, gt=0)
     reference_timestamp: datetime | None = None
+    origin_price_level: float | None = Field(default=None, gt=0)
     scope: StructureScope = StructureScope.MAJOR

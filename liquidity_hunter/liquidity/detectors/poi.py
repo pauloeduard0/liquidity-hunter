@@ -245,7 +245,12 @@ class POIDetector:
         bullish: bool,
     ) -> _ZoneState | None:
         choch_idx = timestamp_to_index.get(choch_event.timestamp)
-        bos_idx = timestamp_to_index.get(bos_event.timestamp)
+        bos_ts = (
+            bos_event.reference_timestamp
+            if bos_event.reference_timestamp is not None
+            else bos_event.timestamp
+        )
+        bos_idx = timestamp_to_index.get(bos_ts)
         if choch_idx is None or bos_idx is None or choch_idx >= bos_idx:
             return None
 
