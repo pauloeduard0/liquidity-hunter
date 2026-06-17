@@ -47,9 +47,15 @@ export const TREND_ICONS: Record<string, string> = {
   neutral: '▬',
 }
 
-/** POI order block zone colors by direction. */
-export const POI_COLORS: Record<string, string> = {
-  bullish: '#26a69a', // demand zone — teal
-  bearish: '#ef5350', // supply zone — red
-  mitigated: '#888888',
+/** POI order block box colors — border and fill (TradingView style). */
+export const POI_BOX_STYLES: Record<string, { border: string; fill: string }> = {
+  bullish: { border: '#64b5f6', fill: '#64b5f614' },   // light blue demand zone
+  bearish: { border: '#ef5350', fill: '#ef535014' },   // red supply zone
+  mitigated: { border: '#88888866', fill: '#8888880a' },
+}
+
+/** RTO sweep signal label colors — slightly different shade from the OB box. */
+export const RTO_COLORS: Record<string, string> = {
+  bullish: '#2962ff',  // darker blue — distinct from the lighter OB box
+  bearish: '#ff5252',
 }

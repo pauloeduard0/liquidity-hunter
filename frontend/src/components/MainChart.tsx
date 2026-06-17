@@ -11,7 +11,8 @@ import {
 } from 'lightweight-charts'
 
 import { LineLabelsPrimitive, type LineLabel } from '../charting/LineLabelsPrimitive'
-import type { DashboardData, MarketStructure } from '../types/dashboard'
+import { POIBoxesPrimitive, type POIBox } from '../charting/POIBoxesPrimitive'
+import type { DashboardData, MarketStructure, POIZone } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -19,7 +20,8 @@ import {
   DEFAULT_ZONE_COLOR,
   FONT_COLOR,
   GRID_COLOR,
-  POI_COLORS,
+  POI_BOX_STYLES,
+  RTO_COLORS,
   STRUCTURE_EVENT_STYLES,
   TREND_ICONS,
   ZONE_COLORS,
@@ -121,6 +123,34 @@ function structureLineEndTime(
   return supersededAt.length > 0 ? (Math.min(...supersededAt) as UTCTimestamp) : lastCandleTime
 }
 
+/**
+ * The right edge of a POI box.
+ *
+ * Always extends to the first *internal* BOS of the same direction that fires
+ * after the zone was created -- regardless of mitigation status (mitigation
+ * only affects the box style, not its end point). If no such BOS exists yet,
+ * returns a far-future sentinel so the box reaches the right pane edge: LWC
+ * returns null from `timeToCoordinate` for out-of-range times, and the
+ * primitive clamps null to `mediaSize.width`.
+ */
+function poiBoxEndTime(
+  zone: POIZone,
+  internalEvents: MarketStructure[],
+  lastCandleTime: UTCTimestamp,
+): UTCTimestamp {
+  const zoneTime = toUtcTimestamp(zone.created_at)
+  const nextBos = internalEvents
+    .filter(
+      (e) =>
+        e.scope === 'internal' &&
+        e.event === 'break_of_structure' &&
+        e.direction === zone.direction &&
+        toUtcTimestamp(e.timestamp) > zoneTime,
+    )
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))[0]
+  return nextBos ? toUtcTimestamp(nextBos.timestamp) : ((lastCandleTime + 9_999_999) as UTCTimestamp)
+}
+
 interface MainChartProps {
   data: DashboardData
 }
@@ -132,6 +162,7 @@ export function MainChart({ data }: MainChartProps) {
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const overlaySeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const labelsPrimitiveRef = useRef<LineLabelsPrimitive | null>(null)
+  const poiBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const hasFittedRef = useRef(false)
 
   useEffect(() => {
@@ -166,6 +197,10 @@ export function MainChart({ data }: MainChartProps) {
     series.attachPrimitive(labelsPrimitive)
     labelsPrimitiveRef.current = labelsPrimitive
 
+    const poiBoxesPrimitive = new POIBoxesPrimitive()
+    series.attachPrimitive(poiBoxesPrimitive)
+    poiBoxesPrimitiveRef.current = poiBoxesPrimitive
+
     const handleResize = () => chart.applyOptions({ width: container.clientWidth })
     window.addEventListener('resize', handleResize)
 
@@ -176,6 +211,7 @@ export function MainChart({ data }: MainChartProps) {
       seriesRef.current = null
       overlaySeriesRef.current = []
       labelsPrimitiveRef.current = null
+      poiBoxesPrimitiveRef.current = null
       hasFittedRef.current = false
     }
   }, [])
@@ -289,50 +325,37 @@ export function MainChart({ data }: MainChartProps) {
       })
     }
 
-    // POI order block zones: two horizontal lines (price_high and price_low)
-    // bracketing the box, extending from creation to mitigation/invalidation
-    // (or to the last candle for ACTIVE zones). Invalidated zones are hidden.
+    // POI order block zones: TradingView-style filled rectangles via
+    // POIBoxesPrimitive. Invalidated zones are not rendered. Mitigated zones
+    // keep their directional color but at lower opacity (not gray).
+    const poiBoxes: POIBox[] = []
     for (const zone of data.poi_zones ?? []) {
       if (zone.status === 'invalidated') continue
 
       const isMitigated = zone.status === 'mitigated'
-      const baseColor = isMitigated ? POI_COLORS.mitigated : POI_COLORS[zone.direction] ?? POI_COLORS.mitigated
-      const alpha = isMitigated ? '66' : 'cc'
-      const color = `${baseColor}${alpha}`
-      const lineStyle = isMitigated ? LineStyle.Dashed : LineStyle.Solid
-      const startTime = toUtcTimestamp(zone.created_at)
-      const endTime = isMitigated && zone.mitigated_at
-        ? toUtcTimestamp(zone.mitigated_at)
-        : lastCandleTime
+      const dirStyle = POI_BOX_STYLES[zone.direction] ?? POI_BOX_STYLES.mitigated
+      // Mitigated: same directional color, dimmer border + fainter fill.
+      const style = isMitigated
+        ? { border: dirStyle.border + '66', fill: dirStyle.border + '08' }
+        : dirStyle
+      const endTime = poiBoxEndTime(zone, data.internal_structure_events, lastCandleTime)
+      const dirIcon = zone.direction === 'bullish' ? '▲' : '▼'
 
-      const seriesOpts = {
-        color,
-        lineWidth: 1 as const,
-        lineStyle,
-        lastValueVisible: false,
-        priceLineVisible: false,
-        crosshairMarkerVisible: false,
-      }
-
-      const topSeries = chart.addSeries(LineSeries, seriesOpts)
-      topSeries.setData(lineFrom(startTime, endTime, zone.price_high))
-      overlaySeriesRef.current.push(topSeries)
-
-      const bottomSeries = chart.addSeries(LineSeries, seriesOpts)
-      bottomSeries.setData(lineFrom(startTime, endTime, zone.price_low))
-      overlaySeriesRef.current.push(bottomSeries)
-
-      labels.push({
-        time: startTime,
-        price: (zone.price_high + zone.price_low) / 2,
-        color: baseColor,
-        text: `OB ${zone.direction === 'bullish' ? '▲' : '▼'}${isMitigated ? ' ✓' : ''} · ${formatPrice(zone.price_low)}–${formatPrice(zone.price_high)}`,
+      poiBoxes.push({
+        x0: toUtcTimestamp(zone.created_at),
+        x1: endTime,
+        priceLow: zone.price_low,
+        priceHigh: zone.price_high,
+        borderColor: style.border,
+        fillColor: style.fill,
+        label: `OB ${dirIcon}${isMitigated ? ' ✓' : ''}`,
       })
     }
+    poiBoxesPrimitiveRef.current?.setBoxes(poiBoxes)
 
-    // RTO sweep events: a small label at the recovery candle's price.
+    // RTO sweep events: label at the recovery candle's midpoint.
     for (const rto of data.poi_sweep_events ?? []) {
-      const color = POI_COLORS[rto.direction] ?? POI_COLORS.mitigated
+      const color = RTO_COLORS[rto.direction] ?? '#888888'
       const midPrice = (rto.zone_price_low + rto.zone_price_high) / 2
       labels.push({
         time: toUtcTimestamp(rto.timestamp),
