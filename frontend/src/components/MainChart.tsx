@@ -23,6 +23,8 @@ import {
   FONT_COLOR,
   GRID_COLOR,
   POI_BOX_STYLES,
+  RSI_DIV_BEARISH_COLOR,
+  RSI_DIV_BULLISH_COLOR,
   RSI_LINE_COLOR,
   RSI_OVERBOUGHT_COLOR,
   RSI_OVERSOLD_COLOR,
@@ -41,6 +43,9 @@ const DELTA_CHART_RATIO = 0.16
 const MIN_TOTAL_HEIGHT = 500
 
 const RSI_PERIOD = 14
+const DIV_PIVOT_LOOKBACK = 5
+const DIV_RANGE_LOWER = 5
+const DIV_RANGE_UPPER = 60
 
 function computeRSI(closes: number[], period: number): (number | null)[] {
   const rsi: (number | null)[] = []
@@ -71,6 +76,73 @@ function computeRSI(closes: number[], period: number): (number | null)[] {
   }
 
   return rsi
+}
+
+interface Divergence {
+  type: 'bullish' | 'bearish'
+  startIndex: number
+  endIndex: number
+  startRSI: number
+  endRSI: number
+}
+
+function findPivots(
+  values: (number | null)[],
+  lookback: number,
+  comparator: (val: number, neighbor: number) => boolean,
+): number[] {
+  const pivots: number[] = []
+  for (let i = lookback; i < values.length - lookback; i++) {
+    const v = values[i]
+    if (v === null) continue
+    let isPivot = true
+    for (let j = 1; j <= lookback; j++) {
+      const left = values[i - j]
+      const right = values[i + j]
+      if (left === null || right === null || !comparator(v, left) || !comparator(v, right)) {
+        isPivot = false
+        break
+      }
+    }
+    if (isPivot) pivots.push(i)
+  }
+  return pivots
+}
+
+function detectDivergences(
+  closes: number[],
+  rsiValues: (number | null)[],
+): Divergence[] {
+  const divergences: Divergence[] = []
+
+  const pivotHighs = findPivots(rsiValues, DIV_PIVOT_LOOKBACK, (v, n) => v > n)
+  const pivotLows = findPivots(rsiValues, DIV_PIVOT_LOOKBACK, (v, n) => v < n)
+
+  // Bearish: price HH + RSI LH, RSI > 50
+  for (let i = 1; i < pivotHighs.length; i++) {
+    const curr = pivotHighs[i]
+    const prev = pivotHighs[i - 1]
+    if (curr - prev < DIV_RANGE_LOWER || curr - prev > DIV_RANGE_UPPER) continue
+    const currRSI = rsiValues[curr]!
+    const prevRSI = rsiValues[prev]!
+    if (closes[curr] > closes[prev] && currRSI < prevRSI && currRSI > 50) {
+      divergences.push({ type: 'bearish', startIndex: prev, endIndex: curr, startRSI: prevRSI, endRSI: currRSI })
+    }
+  }
+
+  // Bullish: price LL + RSI HL, RSI < 50
+  for (let i = 1; i < pivotLows.length; i++) {
+    const curr = pivotLows[i]
+    const prev = pivotLows[i - 1]
+    if (curr - prev < DIV_RANGE_LOWER || curr - prev > DIV_RANGE_UPPER) continue
+    const currRSI = rsiValues[curr]!
+    const prevRSI = rsiValues[prev]!
+    if (closes[curr] < closes[prev] && currRSI > prevRSI && currRSI < 50) {
+      divergences.push({ type: 'bullish', startIndex: prev, endIndex: curr, startRSI: prevRSI, endRSI: currRSI })
+    }
+  }
+
+  return divergences
 }
 
 function toUtcTimestamp(isoTimestamp: string): UTCTimestamp {
@@ -180,6 +252,7 @@ export function MainChart({ data }: MainChartProps) {
   const rsiSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const overlaySeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const rsiOverlaySeriesRef = useRef<ISeriesApi<'Line'>[]>([])
+  const rsiDivSeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const labelsPrimitiveRef = useRef<LineLabelsPrimitive | null>(null)
   const poiBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const hasFittedRef = useRef(false)
@@ -365,6 +438,7 @@ export function MainChart({ data }: MainChartProps) {
       rsiSeriesRef.current = null
       overlaySeriesRef.current = []
       rsiOverlaySeriesRef.current = []
+      rsiDivSeriesRef.current = []
       labelsPrimitiveRef.current = null
       poiBoxesPrimitiveRef.current = null
       hasFittedRef.current = false
@@ -436,6 +510,29 @@ export function MainChart({ data }: MainChartProps) {
         { time: firstTime, value: 30 },
         { time: lastTime, value: 30 },
       ])
+    }
+
+    // RSI divergence lines
+    for (const s of rsiDivSeriesRef.current) {
+      rsiChart.removeSeries(s)
+    }
+    rsiDivSeriesRef.current = []
+
+    const divergences = detectDivergences(closes, rsiValues)
+    for (const div of divergences) {
+      const color = div.type === 'bullish' ? RSI_DIV_BULLISH_COLOR : RSI_DIV_BEARISH_COLOR
+      const divSeries = rsiChart.addSeries(LineSeries, {
+        color,
+        lineWidth: 2,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      })
+      divSeries.setData([
+        { time: toUtcTimestamp(data.candles[div.startIndex].timestamp), value: div.startRSI },
+        { time: toUtcTimestamp(data.candles[div.endIndex].timestamp), value: div.endRSI },
+      ])
+      rsiDivSeriesRef.current.push(divSeries)
     }
 
     for (const overlaySeries of overlaySeriesRef.current) {
