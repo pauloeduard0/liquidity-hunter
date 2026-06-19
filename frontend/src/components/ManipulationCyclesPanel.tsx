@@ -1,16 +1,15 @@
 import type { ManipulationCycle } from '../types/dashboard'
-import { TREND_ICONS } from '../theme'
 
-const PHASE_STYLES: Record<string, { label: string; color: string }> = {
-  accumulation: { label: 'ACCUMULATION', color: '#ffb74d' },
-  manipulation: { label: 'MANIPULATION', color: '#ef5350' },
-  expansion: { label: 'EXPANSION', color: '#26a69a' },
+const PHASE_STYLES: Record<string, { label: string; color: string; bg: string }> = {
+  accumulation: { label: 'ACC', color: '#ffb74d', bg: '#ffb74d15' },
+  manipulation: { label: 'MANIP', color: '#ef5350', bg: '#ef535015' },
+  expansion: { label: 'EXP', color: '#26a69a', bg: '#26a69a15' },
 }
 
 const STATUS_STYLES: Record<string, { label: string; color: string; pulse: boolean }> = {
-  in_progress: { label: 'Active', color: '#ffb74d', pulse: true },
-  confirmed: { label: 'Confirmed', color: '#26a69a', pulse: false },
-  failed: { label: 'Failed', color: '#8a8f9c', pulse: false },
+  in_progress: { label: 'LIVE', color: '#ffb74d', pulse: true },
+  confirmed: { label: 'CONFIRMED', color: '#26a69a', pulse: false },
+  failed: { label: 'FAILED', color: '#5d6477', pulse: false },
 }
 
 const ZONE_LABELS: Record<string, string> = {
@@ -35,107 +34,108 @@ function formatTimestamp(ts: string): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+function DataRow({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
+  return (
+    <div className="flex items-center justify-between py-[3px]">
+      <span className="text-[10px] text-[#5d6477]">{label}</span>
+      <span className="font-mono text-[11px]" style={{ color: valueColor ?? '#9ca3b4' }}>
+        {value}
+      </span>
+    </div>
+  )
+}
+
+function VolumeDelta({ label, value }: { label: string; value: number }) {
+  const color = value >= 0 ? '#26a69a' : '#ef5350'
+  return (
+    <span className="text-[10px] text-[#5d6477]">
+      {label}{' '}
+      <span className="font-mono font-medium" style={{ color }}>
+        {value >= 0 ? '+' : ''}{value.toFixed(1)}
+      </span>
+    </span>
+  )
+}
+
 function CycleCard({ cycle }: { cycle: ManipulationCycle }) {
   const phase = PHASE_STYLES[cycle.phase] ?? PHASE_STYLES.accumulation
   const status = STATUS_STYLES[cycle.status] ?? STATUS_STYLES.in_progress
-  const arrow = TREND_ICONS[cycle.direction] ?? '▬'
   const dirColor = cycle.direction === 'bullish' ? '#26a69a' : '#ef5350'
+  const dirIcon = cycle.direction === 'bullish' ? '▲' : '▼'
   const zoneLabel = ZONE_LABELS[cycle.target_zone_type] ?? cycle.target_zone_type
   const zonePrice = formatPrice(
     (cycle.target_zone_price_high + cycle.target_zone_price_low) / 2,
   )
 
   return (
-    <div className="rounded-md border border-[#1f2430] bg-[#0e1117] p-3">
-      {/* Header: direction + phase badge + status */}
-      <div className="mb-2 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span style={{ color: dirColor }} className="text-base font-bold">
-            {arrow}
-          </span>
-          <span
-            style={{ color: phase.color, borderColor: phase.color }}
-            className="rounded border px-1.5 py-0.5 text-[10px] font-bold tracking-wider"
-          >
-            {phase.label}
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {status.pulse && (
-            <span
-              className="inline-block h-2 w-2 animate-pulse rounded-full"
-              style={{ backgroundColor: status.color }}
-            />
-          )}
-          <span style={{ color: status.color }} className="text-xs font-medium">
-            {status.label}
-          </span>
-        </div>
-      </div>
+    <div
+      className="overflow-hidden rounded-md border transition-colors duration-200"
+      style={{ borderColor: `${phase.color}20`, backgroundColor: '#0a0d14' }}
+    >
+      {/* Subtle top accent line */}
+      <div className="h-[2px]" style={{ background: `linear-gradient(90deg, ${phase.color}60, transparent)` }} />
 
-      {/* Target zone */}
-      <div className="mb-1.5 flex items-center justify-between text-xs">
-        <span className="text-[#8a8f9c]">Target Zone</span>
-        <span className="font-mono text-[#d1d4dc]">
-          {zoneLabel} @ {zonePrice}
-        </span>
-      </div>
-
-      {/* Consolidation */}
-      <div className="mb-1.5 flex items-center justify-between text-xs">
-        <span className="text-[#8a8f9c]">Consolidation</span>
-        <span className="font-mono text-[#d1d4dc]">{cycle.consolidation_candles} candles</span>
-      </div>
-
-      {/* Sweep info (if reached manipulation phase) */}
-      {cycle.sweep_timestamp && (
-        <div className="mb-1.5 flex items-center justify-between text-xs">
-          <span className="text-[#8a8f9c]">Sweep</span>
-          <span className="font-mono text-[#d1d4dc]">
-            {formatPrice(cycle.sweep_extreme!)} @ {formatTimestamp(cycle.sweep_timestamp)}
-          </span>
-        </div>
-      )}
-
-      {/* Expansion info (if confirmed) */}
-      {cycle.expansion_timestamp && (
-        <div className="mb-1.5 flex items-center justify-between text-xs">
-          <span className="text-[#8a8f9c]">Expansion BOS</span>
-          <span className="font-mono text-[#d1d4dc]">
-            {formatPrice(cycle.expansion_price!)} @ {formatTimestamp(cycle.expansion_timestamp)}
-          </span>
-        </div>
-      )}
-
-      {/* Volume delta summary */}
-      {cycle.sweep_volume_delta != null && (
-        <div className="mt-2 border-t border-[#1f2430] pt-1.5">
-          <div className="flex gap-3 text-[10px]">
-            <span className="text-[#8a8f9c]">
-              Sweep VD:{' '}
-              <span
-                className="font-mono font-medium"
-                style={{ color: cycle.sweep_volume_delta >= 0 ? '#26a69a' : '#ef5350' }}
-              >
-                {cycle.sweep_volume_delta >= 0 ? '+' : ''}
-                {cycle.sweep_volume_delta.toFixed(1)}
-              </span>
+      <div className="p-3">
+        {/* Header */}
+        <div className="mb-2.5 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold" style={{ color: dirColor }}>
+              {dirIcon}
             </span>
-            {cycle.expansion_volume_delta != null && (
-              <span className="text-[#8a8f9c]">
-                Exp VD:{' '}
+            <span
+              className="rounded-sm px-1.5 py-[2px] text-[9px] font-bold tracking-widest"
+              style={{ color: phase.color, backgroundColor: phase.bg }}
+            >
+              {phase.label}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {status.pulse && (
+              <span className="relative flex h-2 w-2">
                 <span
-                  className="font-mono font-medium"
-                  style={{ color: cycle.expansion_volume_delta >= 0 ? '#26a69a' : '#ef5350' }}
-                >
-                  {cycle.expansion_volume_delta >= 0 ? '+' : ''}
-                  {cycle.expansion_volume_delta.toFixed(1)}
-                </span>
+                  className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-50"
+                  style={{ backgroundColor: status.color }}
+                />
+                <span
+                  className="relative inline-flex h-2 w-2 rounded-full"
+                  style={{ backgroundColor: status.color }}
+                />
               </span>
             )}
+            <span className="text-[9px] font-bold tracking-wider" style={{ color: status.color }}>
+              {status.label}
+            </span>
           </div>
         </div>
-      )}
+
+        {/* Data rows */}
+        <DataRow label="Target" value={`${zoneLabel} @ ${zonePrice}`} />
+        <DataRow label="Consolidation" value={`${cycle.consolidation_candles} candles`} />
+        {cycle.sweep_timestamp && (
+          <DataRow
+            label="Sweep"
+            value={`${formatPrice(cycle.sweep_extreme!)} @ ${formatTimestamp(cycle.sweep_timestamp)}`}
+            valueColor="#ef5350"
+          />
+        )}
+        {cycle.expansion_timestamp && (
+          <DataRow
+            label="Expansion BOS"
+            value={`${formatPrice(cycle.expansion_price!)} @ ${formatTimestamp(cycle.expansion_timestamp)}`}
+            valueColor="#26a69a"
+          />
+        )}
+
+        {/* Volume delta */}
+        {cycle.sweep_volume_delta != null && (
+          <div className="mt-2 flex gap-3 border-t border-[#1a1f2e] pt-2">
+            <VolumeDelta label="Sweep" value={cycle.sweep_volume_delta} />
+            {cycle.expansion_volume_delta != null && (
+              <VolumeDelta label="Exp" value={cycle.expansion_volume_delta} />
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -163,24 +163,31 @@ export function ManipulationCyclesPanel({
 
   return (
     <div className="flex flex-col">
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-[#8a8f9c]">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-[10px] font-semibold uppercase tracking-[0.15em] text-[#5d6477]">
           Manipulation Cycles
         </h2>
         <button
           onClick={onToggleChart}
           title={chartVisible ? 'Hide chart overlay' : 'Show chart overlay'}
-          className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-            chartVisible
-              ? 'bg-[#ffb74d33] text-[#ffb74d]'
-              : 'bg-[#1f2430] text-[#8a8f9c] hover:text-[#d1d4dc]'
-          }`}
+          className="group/btn flex items-center gap-1 rounded-sm px-1.5 py-[3px] text-[9px] font-bold tracking-wider transition-all duration-200"
+          style={{
+            color: chartVisible ? '#2962ff' : '#5d6477',
+            backgroundColor: chartVisible ? '#2962ff12' : '#0f1319',
+          }}
         >
-          {chartVisible ? 'CHART ON' : 'CHART OFF'}
+          <span
+            className="inline-block h-1.5 w-1.5 rounded-full transition-colors"
+            style={{ backgroundColor: chartVisible ? '#2962ff' : '#5d6477' }}
+          />
+          {chartVisible ? 'OVERLAY' : 'HIDDEN'}
         </button>
       </div>
       {sorted.length === 0 ? (
-        <p className="text-xs text-[#8a8f9c]">No cycles detected</p>
+        <div className="flex flex-col items-center gap-2 py-6 text-center">
+          <div className="text-lg text-[#1f2430]">◇</div>
+          <p className="text-[10px] text-[#3d4455]">No cycles detected</p>
+        </div>
       ) : (
         <div className="flex flex-col gap-2">
           {sorted.map((cycle, i) => (

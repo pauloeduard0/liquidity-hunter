@@ -1,16 +1,50 @@
 import type { DashboardData } from '../types/dashboard'
-import { TREND_ICONS } from '../theme'
+import type { MarketDirection, RetailPositioning } from '../types/dashboard'
+
+const DIRECTION_CONFIG: Record<MarketDirection, { color: string; icon: string }> = {
+  bullish: { color: '#26a69a', icon: '▲' },
+  bearish: { color: '#ef5350', icon: '▼' },
+  neutral: { color: '#8a8f9c', icon: '◆' },
+}
+
+const BIAS_CONFIG: Record<RetailPositioning, { color: string }> = {
+  long: { color: '#26a69a' },
+  short: { color: '#ef5350' },
+  neutral: { color: '#8a8f9c' },
+}
 
 interface KpiCardProps {
   label: string
   value: string
+  accent?: string
+  sub?: string
 }
 
-function KpiCard({ label, value }: KpiCardProps) {
+function KpiCard({ label, value, accent, sub }: KpiCardProps) {
   return (
-    <div className="rounded-lg border border-[#1f2430] bg-[#161a25] px-4 py-3">
-      <div className="text-xs uppercase tracking-wide text-[#8a8f9c]">{label}</div>
-      <div className="mt-1 text-xl font-semibold text-[#d1d4dc]">{value}</div>
+    <div className="group relative overflow-hidden rounded-lg border border-[#1a1f2e] bg-[#0f1319] p-4 transition-all duration-200 hover:border-[#252b3d]">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+        style={{
+          background: accent
+            ? `radial-gradient(ellipse at 50% 0%, ${accent}08, transparent 70%)`
+            : undefined,
+        }}
+      />
+      <div className="relative">
+        <div className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#5d6477]">
+          {label}
+        </div>
+        <div
+          className="font-mono text-lg font-semibold tracking-tight"
+          style={{ color: accent ?? '#d1d4dc' }}
+        >
+          {value}
+        </div>
+        {sub && (
+          <div className="mt-1 text-[10px] text-[#5d6477]">{sub}</div>
+        )}
+      </div>
     </div>
   )
 }
@@ -19,10 +53,16 @@ interface KpiRowProps {
   data: DashboardData
 }
 
-/** Top KPI row: price, retail bias, dominant liquidity, and trend. */
 export function KpiRow({ data }: KpiRowProps) {
   const bias = data.retail_bias
   const direction = data.higher_timeframe_direction
+  const dirCfg = DIRECTION_CONFIG[direction]
+  const biasCfg = BIAS_CONFIG[bias.dominant_side]
+
+  const price = data.current_price.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
 
   const dominantLiquidity = data.ranked_zones.length
     ? (
@@ -31,23 +71,29 @@ export function KpiRow({ data }: KpiRowProps) {
       ).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : '—'
 
+  const topZoneType = data.ranked_zones.length
+    ? data.ranked_zones[0].zone.zone_type.replace(/_/g, ' ')
+    : undefined
+
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-      <KpiCard
-        label={`${data.symbol} Price`}
-        value={data.current_price.toLocaleString(undefined, {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })}
-      />
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+      <KpiCard label={`${data.symbol} Price`} value={price} />
       <KpiCard
         label="Retail Bias"
         value={`${bias.dominant_side.toUpperCase()} ${bias.confidence.toFixed(0)}%`}
+        accent={biasCfg.color}
+        sub={bias.confidence >= 70 ? 'High conviction' : bias.confidence >= 40 ? 'Moderate' : 'Low conviction'}
       />
-      <KpiCard label="Dominant Liquidity" value={dominantLiquidity} />
       <KpiCard
-        label="Trend"
-        value={`${TREND_ICONS[direction]} ${direction.charAt(0).toUpperCase()}${direction.slice(1)}`}
+        label="Dominant Liquidity"
+        value={dominantLiquidity}
+        accent="#ab63fa"
+        sub={topZoneType}
+      />
+      <KpiCard
+        label="HTF Trend"
+        value={`${dirCfg.icon} ${direction.charAt(0).toUpperCase()}${direction.slice(1)}`}
+        accent={dirCfg.color}
       />
     </div>
   )

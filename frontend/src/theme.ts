@@ -4,9 +4,9 @@
  * the existing Streamlit dashboard.
  */
 
-export const DARK_BG = '#0e1117'
-export const PANEL_BG = '#161a25'
-export const GRID_COLOR = '#1f2430'
+export const DARK_BG = '#0a0d14'
+export const PANEL_BG = '#0f1319'
+export const GRID_COLOR = '#1a1f2e'
 export const FONT_COLOR = '#d1d4dc'
 export const ACCENT_COLOR = '#2962ff'
 
