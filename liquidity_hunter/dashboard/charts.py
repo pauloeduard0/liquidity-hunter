@@ -102,12 +102,14 @@ def liquidity_zones_chart(
     zones: list[LiquidityZone],
     *,
     ranked_zones: list[ScoredLiquidityZone] | None = None,
+    mitigated_zones: list[LiquidityZone] | None = None,
     title: str = "",
 ) -> go.Figure:
     """Build a candlestick chart with `zones` overlaid as price levels/bands.
 
     If `ranked_zones` is given, each zone's composite score (see
-    `LiquidityScoringEngine`) is appended to its label.
+    `LiquidityScoringEngine`) is appended to its label. `mitigated_zones`
+    are rendered at lower opacity with a dotted border.
     """
     fig = candlestick_chart(candles, title=title)
     scores = {scored.zone: scored.score for scored in ranked_zones or []}
@@ -136,6 +138,43 @@ def liquidity_zones_chart(
             yanchor="bottom",
             font={"color": color, "size": 10},
         )
+
+    for zone in mitigated_zones or []:
+        color = _ZONE_COLORS.get(zone.zone_type, _DEFAULT_ZONE_COLOR)
+        zone_label = _ZONE_TYPE_LABELS.get(zone.zone_type, zone.zone_type.value)
+        end_time = zone.invalidated_at or candles[-1].timestamp
+        if zone.price_high == zone.price_low:
+            fig.add_shape(
+                type="line",
+                x0=zone.formed_at,
+                x1=end_time,
+                y0=zone.price_high,
+                y1=zone.price_high,
+                line={"color": color, "width": 1, "dash": "dot"},
+                opacity=0.3,
+            )
+        else:
+            fig.add_shape(
+                type="rect",
+                x0=zone.formed_at,
+                x1=end_time,
+                y0=zone.price_low,
+                y1=zone.price_high,
+                line={"color": color, "width": 1, "dash": "dot"},
+                fillcolor=color,
+                opacity=0.08,
+            )
+        fig.add_annotation(
+            x=zone.formed_at,
+            y=zone.price_high,
+            text=f"{zone_label} (swept)",
+            showarrow=False,
+            xanchor="left",
+            yanchor="bottom",
+            font={"color": color, "size": 10},
+            opacity=0.4,
+        )
+
     return fig
 
 
@@ -312,16 +351,20 @@ def main_chart(
     structure_events: list[MarketStructure],
     *,
     poi_zones: list[POIZone] | None = None,
+    mitigated_zones: list[LiquidityZone] | None = None,
     top_n_zones: int = DEFAULT_TOP_N_ZONES,
     title: str = "",
 ) -> go.Figure:
     """Build the primary chart: candlesticks with the top `top_n_zones`
     liquidity zones by score (matching the "Liquidity Targets" panel),
-    market structure annotations, and POI order block zones.
+    market structure annotations, and POI order block zones. Swept zones
+    are rendered at lower opacity.
     """
     top = ranked_zones[:top_n_zones]
     zones = [scored.zone for scored in top]
-    fig = liquidity_zones_chart(candles, zones, ranked_zones=top, title=title)
+    fig = liquidity_zones_chart(
+        candles, zones, ranked_zones=top, mitigated_zones=mitigated_zones, title=title
+    )
     fig = _add_structure_events(fig, candles, structure_events)
     if poi_zones:
         fig = _add_poi_zones(fig, candles, poi_zones)

@@ -23,6 +23,7 @@ from liquidity_hunter.liquidity import (
     SwingHighDetector,
     SwingLowDetector,
     SwingStructureDetector,
+    mark_swept_zones,
 )
 from liquidity_hunter.psychology import RetailBiasEstimate, RetailTrapAnalyzer
 from liquidity_hunter.scoring import LiquidityScoringEngine, ScoredLiquidityZone
@@ -84,15 +85,19 @@ def load_dashboard_data(
     provider = provider if provider is not None else BinanceDataProvider()
     candles = provider.get_ohlcv(symbol, timeframe, limit)
 
-    liquidity_zones = [
-        *SwingHighDetector().detect(candles),
-        *SwingLowDetector().detect(candles),
-        *EqualHighDetector().detect(candles),
-        *EqualLowDetector().detect(candles),
-    ]
+    liquidity_zones = mark_swept_zones(
+        [
+            *SwingHighDetector().detect(candles),
+            *SwingLowDetector().detect(candles),
+            *EqualHighDetector().detect(candles),
+            *EqualLowDetector().detect(candles),
+        ],
+        candles,
+    )
 
     current_price = candles[-1].close
-    ranked_zones = LiquidityScoringEngine().score(liquidity_zones, current_price)
+    active_zones = [z for z in liquidity_zones if not z.is_mitigated]
+    ranked_zones = LiquidityScoringEngine().score(active_zones, current_price)
 
     market_structure_events = SwingStructureDetector(
         swing_lookback=swing_lookback, confluence_filter=confluence_filter

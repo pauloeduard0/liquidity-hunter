@@ -17,6 +17,7 @@ from liquidity_hunter.liquidity.detectors import (
     SwingLowDetector,
     SwingStructureDetector,
 )
+from liquidity_hunter.liquidity.mitigation import mark_swept_zones
 
 __all__ = [
     "EqualHighDetector",
@@ -29,4 +30,5 @@ __all__ = [
     "SwingHighDetector",
     "SwingLowDetector",
     "SwingStructureDetector",
+    "mark_swept_zones",
 ]

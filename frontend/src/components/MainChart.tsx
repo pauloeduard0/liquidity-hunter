@@ -111,12 +111,12 @@ function structureLineEndTime(
 /**
  * The right edge of a POI box.
  *
- * Always extends to the first *internal* BOS of the same direction that fires
- * after the zone was created -- regardless of mitigation status (mitigation
- * only affects the box style, not its end point). If no such BOS exists yet,
- * returns a far-future sentinel so the box reaches the right pane edge: LWC
- * returns null from `timeToCoordinate` for out-of-range times, and the
- * primitive clamps null to `mediaSize.width`.
+ * Whichever comes first:
+ * 1. The second *internal* BOS in the same direction (the leg continued).
+ * 2. An *internal* CHoCH in the opposite direction (the leg reversed).
+ *
+ * If neither exists yet, returns a far-future sentinel so the box reaches the
+ * right pane edge (LWC clamps null `timeToCoordinate` to `mediaSize.width`).
  */
 function poiBoxEndTime(
   zone: POIZone,
@@ -124,7 +124,8 @@ function poiBoxEndTime(
   lastCandleTime: UTCTimestamp,
 ): UTCTimestamp {
   const zoneTime = toUtcTimestamp(zone.created_at)
-  const nextBos = internalEvents
+
+  const secondBosTime = internalEvents
     .filter(
       (e) =>
         e.scope === 'internal' &&
@@ -132,8 +133,26 @@ function poiBoxEndTime(
         e.direction === zone.direction &&
         toUtcTimestamp(e.timestamp) > zoneTime,
     )
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))[1]
+
+  const oppositeDirection = zone.direction === 'bullish' ? 'bearish' : 'bullish'
+  const oppositeChoch = internalEvents
+    .filter(
+      (e) =>
+        e.scope === 'internal' &&
+        e.event === 'change_of_character' &&
+        e.direction === oppositeDirection &&
+        toUtcTimestamp(e.timestamp) > zoneTime,
+    )
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))[0]
-  return nextBos ? toUtcTimestamp(nextBos.timestamp) : ((lastCandleTime + 9_999_999) as UTCTimestamp)
+
+  const candidates: UTCTimestamp[] = []
+  if (secondBosTime) candidates.push(toUtcTimestamp(secondBosTime.timestamp))
+  if (oppositeChoch) candidates.push(toUtcTimestamp(oppositeChoch.timestamp))
+
+  return candidates.length > 0
+    ? (Math.min(...candidates) as UTCTimestamp)
+    : ((lastCandleTime + 9_999_999) as UTCTimestamp)
 }
 
 interface MainChartProps {
@@ -247,6 +266,50 @@ export function MainChart({ data }: MainChartProps) {
       zoneSeries.setData(lineFrom(startTime, lastCandleTime, price))
       overlaySeriesRef.current.push(zoneSeries)
       labels.push({ time: startTime, price, color, text: title })
+    }
+
+    // Swept (mitigated) zones: only EQH/EQL, max 5, within last 50 candles.
+    const SWEPT_TTL_CANDLES = 100
+    const MAX_SWEPT_ZONES = 10
+    const ttlCutoff =
+      data.candles.length >= SWEPT_TTL_CANDLES
+        ? toUtcTimestamp(data.candles[data.candles.length - SWEPT_TTL_CANDLES].timestamp)
+        : toUtcTimestamp(data.candles[0].timestamp)
+    const mitigatedZones = data.liquidity_zones
+      .filter(
+        (z) =>
+          z.is_mitigated &&
+          (z.zone_type === 'equal_highs' || z.zone_type === 'equal_lows') &&
+          z.invalidated_at != null &&
+          toUtcTimestamp(z.invalidated_at) >= ttlCutoff,
+      )
+      .sort((a, b) => Date.parse(b.invalidated_at!) - Date.parse(a.invalidated_at!))
+      .slice(0, MAX_SWEPT_ZONES)
+    for (const zone of mitigatedZones) {
+      const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
+      const label = ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type
+      const price = (zone.price_high + zone.price_low) / 2
+      const startTime = toUtcTimestamp(zone.formed_at)
+      const endTime = zone.invalidated_at
+        ? toUtcTimestamp(zone.invalidated_at)
+        : lastCandleTime
+
+      const sweptSeries = chart.addSeries(LineSeries, {
+        color: color + '4d',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      })
+      sweptSeries.setData(lineFrom(startTime, endTime, price))
+      overlaySeriesRef.current.push(sweptSeries)
+      labels.push({
+        time: startTime,
+        price,
+        color: color + '66',
+        text: `${label} (swept)`,
+      })
     }
 
     // Single-scope structure events: 4H shows only major, 1H shows only internal.
