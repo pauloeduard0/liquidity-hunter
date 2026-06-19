@@ -21,7 +21,6 @@ import {
   DARK_BG,
   DEFAULT_ZONE_COLOR,
   FONT_COLOR,
-  GRID_COLOR,
   POI_BOX_STYLES,
   RSI_DIV_BEARISH_COLOR,
   RSI_DIV_BULLISH_COLOR,
@@ -149,10 +148,6 @@ function toUtcTimestamp(isoTimestamp: string): UTCTimestamp {
   return (Date.parse(isoTimestamp) / 1000) as UTCTimestamp
 }
 
-function formatPrice(price: number): string {
-  return price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-
 function lineFrom(startTime: UTCTimestamp, lastCandleTime: UTCTimestamp, value: number) {
   return startTime < lastCandleTime
     ? [
@@ -276,8 +271,8 @@ export function MainChart({ data }: MainChartProps) {
         textColor: FONT_COLOR,
       },
       grid: {
-        vertLines: { color: GRID_COLOR },
-        horzLines: { color: GRID_COLOR },
+        vertLines: { visible: false },
+        horzLines: { visible: false },
       },
       crosshair: { mode: CrosshairMode.Normal },
       timeScale: { timeVisible: true, secondsVisible: false },
@@ -659,7 +654,7 @@ export function MainChart({ data }: MainChartProps) {
         time: startTime,
         price: linePrice,
         color: style.color,
-        text: `${style.label} ${directionIcon} · ${formatPrice(linePrice)}`,
+        text: `${style.label} ${directionIcon}`,
       })
     }
 
@@ -696,7 +691,7 @@ export function MainChart({ data }: MainChartProps) {
           time: toUtcTimestamp(rto.timestamp),
           price: midPrice,
           color,
-          text: `RTO ${rto.direction === 'bullish' ? '▲' : '▼'} · ${formatPrice(midPrice)}`,
+          text: `RTO ${rto.direction === 'bullish' ? '▲' : '▼'}`,
         })
       }
     } else {
