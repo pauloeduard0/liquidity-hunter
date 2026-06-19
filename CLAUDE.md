@@ -332,9 +332,17 @@ Full architecture rationale, including SOLID notes, is documented in
   unchanged) — an internal bounce in the still-intact bearish leg. The moment
   a CHoCH fires, the *opposite* side's `validated_choch_<side>`,
   `candidate_choch_<side>`, and `candidate_choch_<side>_baseline` are all
-  reset to `None`: the new leg's reversal reference must be rebuilt from a
-  fresh LH/HL -> LL/HH confirmation of its own, not seeded from the leg that
-  just ended.
+  reset to `None`. A **one-shot origin** (`choch_origin_<side>`) mechanism
+  prevents the "blind spot" after a CHoCH: if the CHoCH was triggered via a
+  *validated* reference, `choch_origin_<opposite>` is set to the
+  just-promoted `active_<side>` (the extreme of the leg that just reversed),
+  frozen at that value. The CHoCH check uses
+  `validated_choch_<side> or choch_origin_<side>`, so the origin serves as
+  fallback when validated has not been rebuilt yet. An origin-triggered CHoCH
+  does **not** set `choch_origin` on the opposite side (one-shot), breaking
+  any ping-pong chain: validated CHoCH → origin CHoCH → (must rebuild
+  validated normally). When a candidate is normally promoted to
+  `validated_choch_<side>`, `choch_origin_<side>` is cleared (redundant).
 
   Re-bootstrap and `candidate_choch_<side>`: a BOS/CHoCH on one side retires
   the *opposite* side's `active_<side>` (promoted from `pending_<side>`, or to
@@ -682,7 +690,18 @@ beats `candidate_choch_<side>_baseline` (the opposite trailing reference at
 the moment the candidate formed). A bullish CHoCH fires on a sustained break
 above `validated_choch_high`; any break that doesn't clear the validated
 reference, or doesn't hold, is a `LIQUIDITY_SWEEP`. The moment a CHoCH fires,
-the opposite side's validated/candidate/baseline state is reset to `None`.
+the opposite side's validated/candidate/baseline state is reset to `None`. A
+`choch_origin_<side>` mechanism prevents the blind spot: the CHoCH check uses
+`validated_choch_<side> or choch_origin_<side>`, so the origin serves as
+fallback when validated has not been rebuilt yet. `InternalStructureDetector`
+uses **one-shot** origin (only a *validated* CHoCH sets the opposite origin;
+an origin-triggered CHoCH does not, breaking ping-pong chains — acceptable
+because the short blind spot closes quickly with frequent pivots).
+`SwingStructureDetector` **always sets** origin (every CHoCH, validated or
+origin-triggered, sets `choch_origin_<opposite> = active_<side>`): with
+`persistence_candles=10` the ping-pong risk is negligible, while the higher
+lookback makes the blind-spot window long enough that one-shot would
+re-introduce the stuck-trend bug.
 
 **Phantom candidate invalidation**: if a `candidate_choch_<side>` is swept by
 price before promotion, it is replaced by the sweep pivot (with a fresh

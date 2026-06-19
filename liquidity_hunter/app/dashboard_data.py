@@ -34,6 +34,15 @@ DEFAULT_INTERNAL_SWING_LOOKBACK = 2
 # Binance's `/api/v3/klines` endpoint accepts `limit` values up to 1000.
 _MAX_FETCH_LIMIT = 1000
 
+_HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
+    TimeFrame.M1: TimeFrame.H1,
+    TimeFrame.M5: TimeFrame.H1,
+    TimeFrame.M15: TimeFrame.H1,
+    TimeFrame.M30: TimeFrame.H1,
+}
+
+_HIGHER_TIMEFRAME_CANDLE_LIMIT = 100
+
 # Extra candles fetched before the visible window so
 # InternalStructureDetector's trend/validated_choch_<side> bootstrap (which
 # depends on the *first* pivots in whatever series it's given) has stabilized
@@ -126,7 +135,15 @@ def load_dashboard_data(
         e for e in poi_result.sweep_events if visible_start <= e.timestamp <= visible_end
     ]
 
-    higher_timeframe_direction = _latest_structure_direction(market_structure_events)
+    htf = _HIGHER_TIMEFRAME_MAP.get(timeframe)
+    if htf is not None:
+        htf_candles = provider.get_ohlcv(symbol, htf, _HIGHER_TIMEFRAME_CANDLE_LIMIT)
+        htf_events = SwingStructureDetector(
+            swing_lookback=swing_lookback, confluence_filter=confluence_filter
+        ).detect(htf_candles)
+        higher_timeframe_direction = _latest_structure_direction(htf_events)
+    else:
+        higher_timeframe_direction = _latest_structure_direction(market_structure_events)
 
     retail_bias = RetailTrapAnalyzer().analyze(
         symbol=symbol,

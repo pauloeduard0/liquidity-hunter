@@ -86,9 +86,17 @@ via an intermediate `candidate_choch_<side>` (mirrored for the low side):
   unchanged) -- an internal bounce within the still-intact bearish leg.
 - The moment a CHoCH fires, the *opposite* side's `validated_choch_<side>`,
   `candidate_choch_<side>`, and `candidate_choch_<side>_baseline` are all
-  reset to `None`: the leg that just ended is over, and the new leg's
-  reversal reference must be rebuilt from a fresh LH/HL -> LL/HH confirmation
-  of its own, not seeded from the leg that just ended.
+  reset to `None`. A **one-shot origin** mechanism prevents the "blind spot"
+  after a CHoCH: if the CHoCH was triggered via a *validated* reference,
+  `choch_origin_<opposite>` is set to the just-promoted `active_<side>`
+  (the extreme of the leg that just reversed), frozen at that value. The
+  CHoCH check uses `validated_choch_<side> or choch_origin_<side>`, so the
+  origin serves as fallback when validated has not been rebuilt yet. An
+  origin-triggered CHoCH does **not** set `choch_origin` on the opposite
+  side (one-shot), breaking any ping-pong chain: validated CHoCH -> origin
+  CHoCH -> (no further origin, must rebuild validated). When a candidate is
+  normally promoted to `validated_choch_<side>`, the corresponding
+  `choch_origin_<side>` is cleared (redundant).
 
 Re-bootstrap and `candidate_choch_<side>`: a BOS/CHoCH on one side retires the
 *opposite* side's `active_<side>` (promoted from `pending_<side>`, or to
@@ -273,6 +281,13 @@ class InternalStructureDetector(MarketStructureDetector):
         # leg's true reversal point has already been confirmed and frozen.
         candidate_choch_high_baseline: Pivot | None = None
         candidate_choch_low_baseline: Pivot | None = None
+        # One-shot CHoCH origin: a frozen snapshot of the leg's extreme at the
+        # moment a *validated* CHoCH fires. Used as a fallback reference when
+        # validated_choch_<side> is None (the blind spot right after a CHoCH).
+        # An origin-triggered CHoCH does NOT set the opposite side's origin,
+        # breaking the ping-pong chain.
+        choch_origin_high: Pivot | None = None
+        choch_origin_low: Pivot | None = None
         pending_bos: _PendingBOS | None = None
         last_bullish_bos_price: float | None = None
         last_bullish_bos_origin: float | None = None
@@ -337,14 +352,15 @@ class InternalStructureDetector(MarketStructureDetector):
                         last_bearish_bos_origin = price
                     pending_bos = None
 
+                choch_high_ref = validated_choch_high or choch_origin_high
                 if (
                     trend is MarketDirection.BEARISH
-                    and validated_choch_high is not None
-                    and price > validated_choch_high.price
+                    and choch_high_ref is not None
+                    and price > choch_high_ref.price
                     and confirms_break(
                         prev_high_pivot_index + 1,
                         current_index,
-                        validated_choch_high.price,
+                        choch_high_ref.price,
                         bullish=True,
                     )
                 ):
@@ -353,7 +369,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             candles,
                             prev_high_pivot_index + 1,
                             current_index,
-                            validated_choch_high.price,
+                            choch_high_ref.price,
                             bullish=True,
                             persistence_candles=self._persistence_candles,
                         )
@@ -363,13 +379,16 @@ class InternalStructureDetector(MarketStructureDetector):
                         StructureEvent.CHANGE_OF_CHARACTER,
                         MarketDirection.BULLISH,
                         price,
-                        validated_choch_high.price,
-                        reference_timestamp=validated_choch_high.timestamp,
+                        choch_high_ref.price,
+                        reference_timestamp=choch_high_ref.timestamp,
                     )
+                    used_validated = validated_choch_high is not None
                     trend = MarketDirection.BULLISH
                     active_low = pending_low
                     pending_low = None
                     validated_choch_low = None
+                    choch_origin_high = None
+                    choch_origin_low = active_low if used_validated else None
                     candidate_choch_low = None
                     candidate_choch_low_baseline = None
                     pending_bos = None
@@ -418,6 +437,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             or price > candidate_choch_low_baseline.price
                         ):
                             validated_choch_low = candidate_choch_low
+                            choch_origin_low = None
                             candidate_choch_low = None
                             candidate_choch_low_baseline = None
                         close_idx = find_close_break_index(
@@ -482,14 +502,15 @@ class InternalStructureDetector(MarketStructureDetector):
                         last_bullish_bos_origin = price
                     pending_bos = None
 
+                choch_low_ref = validated_choch_low or choch_origin_low
                 if (
                     trend is MarketDirection.BULLISH
-                    and validated_choch_low is not None
-                    and price < validated_choch_low.price
+                    and choch_low_ref is not None
+                    and price < choch_low_ref.price
                     and confirms_break(
                         prev_low_pivot_index + 1,
                         current_index,
-                        validated_choch_low.price,
+                        choch_low_ref.price,
                         bullish=False,
                     )
                 ):
@@ -498,7 +519,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             candles,
                             prev_low_pivot_index + 1,
                             current_index,
-                            validated_choch_low.price,
+                            choch_low_ref.price,
                             bullish=False,
                             persistence_candles=self._persistence_candles,
                         )
@@ -508,13 +529,16 @@ class InternalStructureDetector(MarketStructureDetector):
                         StructureEvent.CHANGE_OF_CHARACTER,
                         MarketDirection.BEARISH,
                         price,
-                        validated_choch_low.price,
-                        reference_timestamp=validated_choch_low.timestamp,
+                        choch_low_ref.price,
+                        reference_timestamp=choch_low_ref.timestamp,
                     )
+                    used_validated = validated_choch_low is not None
                     trend = MarketDirection.BEARISH
                     active_high = pending_high
                     pending_high = None
                     validated_choch_high = None
+                    choch_origin_low = None
+                    choch_origin_high = active_high if used_validated else None
                     candidate_choch_high = None
                     candidate_choch_high_baseline = None
                     pending_bos = None
@@ -561,6 +585,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             or price < candidate_choch_high_baseline.price
                         ):
                             validated_choch_high = candidate_choch_high
+                            choch_origin_high = None
                             candidate_choch_high = None
                             candidate_choch_high_baseline = None
                         close_idx = find_close_break_index(

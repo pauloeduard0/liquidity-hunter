@@ -10,6 +10,7 @@ const SYMBOL = 'BTCUSDT'
 const REFRESH_INTERVAL_MS = 5_000
 
 const TIMEFRAME_OPTIONS: { value: TimeFrame; label: string }[] = [
+  { value: '5m', label: '5M' },
   { value: '1h', label: '1H' },
   { value: '4h', label: '4H' },
 ]

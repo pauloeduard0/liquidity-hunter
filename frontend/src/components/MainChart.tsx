@@ -560,50 +560,54 @@ export function MainChart({ data }: MainChartProps) {
       labels.push({ time: startTime, price, color, text: title })
     }
 
-    // Swept (mitigated) zones
-    const SWEPT_TTL_CANDLES = 200
-    const MAX_SWEPT_ZONES = 20
-    const ttlCutoff =
-      data.candles.length >= SWEPT_TTL_CANDLES
-        ? toUtcTimestamp(data.candles[data.candles.length - SWEPT_TTL_CANDLES].timestamp)
-        : toUtcTimestamp(data.candles[0].timestamp)
-    const mitigatedZones = data.liquidity_zones
-      .filter(
-        (z) =>
-          z.is_mitigated &&
-          (z.zone_type === 'equal_highs' || z.zone_type === 'equal_lows') &&
-          z.invalidated_at != null &&
-          toUtcTimestamp(z.invalidated_at) >= ttlCutoff,
-      )
-      .sort((a, b) => Date.parse(b.invalidated_at!) - Date.parse(a.invalidated_at!))
-      .slice(0, MAX_SWEPT_ZONES)
-    for (const zone of mitigatedZones) {
-      const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
-      const label = ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type
-      const price = (zone.price_high + zone.price_low) / 2
-      const startTime = toUtcTimestamp(zone.formed_at)
-      const endTime = zone.invalidated_at ? toUtcTimestamp(zone.invalidated_at) : lastCandleTime
+    // Structure scope: 4H shows major events, lower timeframes show internal
+    const isMajorView = data.timeframe === '4h'
 
-      const sweptSeries = chart.addSeries(LineSeries, {
-        color: color + '4d',
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        lastValueVisible: false,
-        priceLineVisible: false,
-        crosshairMarkerVisible: false,
-      })
-      sweptSeries.setData(lineFrom(startTime, endTime, price))
-      overlaySeriesRef.current.push(sweptSeries)
-      labels.push({
-        time: startTime,
-        price,
-        color: color + '66',
-        text: `${label} (swept)`,
-      })
+    // Swept (mitigated) zones — hidden on M5 to reduce clutter
+    if (data.timeframe !== '5m') {
+      const SWEPT_TTL_CANDLES = 200
+      const MAX_SWEPT_ZONES = 20
+      const ttlCutoff =
+        data.candles.length >= SWEPT_TTL_CANDLES
+          ? toUtcTimestamp(data.candles[data.candles.length - SWEPT_TTL_CANDLES].timestamp)
+          : toUtcTimestamp(data.candles[0].timestamp)
+      const mitigatedZones = data.liquidity_zones
+        .filter(
+          (z) =>
+            z.is_mitigated &&
+            (z.zone_type === 'equal_highs' || z.zone_type === 'equal_lows') &&
+            z.invalidated_at != null &&
+            toUtcTimestamp(z.invalidated_at) >= ttlCutoff,
+        )
+        .sort((a, b) => Date.parse(b.invalidated_at!) - Date.parse(a.invalidated_at!))
+        .slice(0, MAX_SWEPT_ZONES)
+      for (const zone of mitigatedZones) {
+        const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
+        const label = ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type
+        const price = (zone.price_high + zone.price_low) / 2
+        const startTime = toUtcTimestamp(zone.formed_at)
+        const endTime = zone.invalidated_at ? toUtcTimestamp(zone.invalidated_at) : lastCandleTime
+
+        const sweptSeries = chart.addSeries(LineSeries, {
+          color: color + '4d',
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        })
+        sweptSeries.setData(lineFrom(startTime, endTime, price))
+        overlaySeriesRef.current.push(sweptSeries)
+        labels.push({
+          time: startTime,
+          price,
+          color: color + '66',
+          text: `${label} (swept)`,
+        })
+      }
     }
 
     // Structure events
-    const isMajorView = data.timeframe === '4h'
     const scopeEvents = isMajorView
       ? data.market_structure_events
       : data.internal_structure_events

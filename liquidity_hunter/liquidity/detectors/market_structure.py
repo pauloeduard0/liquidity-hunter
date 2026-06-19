@@ -10,6 +10,11 @@ Architecture is identical to `InternalStructureDetector` (see
   CHoCH.
 - Emitted events carry `scope = StructureScope.MAJOR` (the domain
   default), distinguishing them from `StructureScope.INTERNAL` events.
+- `choch_origin_<side>` is **always set** on CHoCH (not one-shot like
+  `InternalStructureDetector`): with `persistence_candles=10` the risk of
+  origin-driven ping-pong is negligible, while the higher lookback makes
+  the blind-spot window long enough that a one-shot would re-introduce the
+  stuck-trend bug on the third event.
 
 The CHoCH reference is `validated_choch_high`/`validated_choch_low`,
 promoted from a `candidate_choch_*` (the most recent LOWER_HIGH /
@@ -123,6 +128,8 @@ class SwingStructureDetector(MarketStructureDetector):
         candidate_choch_low: Pivot | None = None
         candidate_choch_high_baseline: Pivot | None = None
         candidate_choch_low_baseline: Pivot | None = None
+        choch_origin_high: Pivot | None = None
+        choch_origin_low: Pivot | None = None
         trend = MarketDirection.NEUTRAL
         prev_high_pivot_index = -1
         prev_low_pivot_index = -1
@@ -153,14 +160,15 @@ class SwingStructureDetector(MarketStructureDetector):
             current_index = index_by_timestamp[timestamp]
 
             if kind == "high":
+                choch_high_ref = validated_choch_high or choch_origin_high
                 if (
                     trend is MarketDirection.BEARISH
-                    and validated_choch_high is not None
-                    and price > validated_choch_high.price
+                    and choch_high_ref is not None
+                    and price > choch_high_ref.price
                     and confirms_break(
                         prev_high_pivot_index + 1,
                         current_index,
-                        validated_choch_high.price,
+                        choch_high_ref.price,
                         bullish=True,
                     )
                 ):
@@ -169,7 +177,7 @@ class SwingStructureDetector(MarketStructureDetector):
                             candles,
                             prev_high_pivot_index + 1,
                             current_index,
-                            validated_choch_high.price,
+                            choch_high_ref.price,
                             bullish=True,
                             persistence_candles=self._persistence_candles,
                         )
@@ -179,13 +187,15 @@ class SwingStructureDetector(MarketStructureDetector):
                         StructureEvent.CHANGE_OF_CHARACTER,
                         MarketDirection.BULLISH,
                         price,
-                        validated_choch_high.price,
-                        reference_timestamp=validated_choch_high.timestamp,
+                        choch_high_ref.price,
+                        reference_timestamp=choch_high_ref.timestamp,
                     )
                     trend = MarketDirection.BULLISH
                     active_low = pending_low
                     pending_low = None
                     validated_choch_low = None
+                    choch_origin_high = None
+                    choch_origin_low = active_low
                     candidate_choch_low = None
                     candidate_choch_low_baseline = None
                 elif active_high is None:
@@ -226,6 +236,7 @@ class SwingStructureDetector(MarketStructureDetector):
                             or price > candidate_choch_low_baseline.price
                         ):
                             validated_choch_low = candidate_choch_low
+                            choch_origin_low = None
                             candidate_choch_low = None
                             candidate_choch_low_baseline = None
                         close_idx = find_close_break_index(
@@ -262,14 +273,15 @@ class SwingStructureDetector(MarketStructureDetector):
                 prev_high_pivot_index = current_index
 
             else:
+                choch_low_ref = validated_choch_low or choch_origin_low
                 if (
                     trend is MarketDirection.BULLISH
-                    and validated_choch_low is not None
-                    and price < validated_choch_low.price
+                    and choch_low_ref is not None
+                    and price < choch_low_ref.price
                     and confirms_break(
                         prev_low_pivot_index + 1,
                         current_index,
-                        validated_choch_low.price,
+                        choch_low_ref.price,
                         bullish=False,
                     )
                 ):
@@ -278,7 +290,7 @@ class SwingStructureDetector(MarketStructureDetector):
                             candles,
                             prev_low_pivot_index + 1,
                             current_index,
-                            validated_choch_low.price,
+                            choch_low_ref.price,
                             bullish=False,
                             persistence_candles=self._persistence_candles,
                         )
@@ -288,13 +300,15 @@ class SwingStructureDetector(MarketStructureDetector):
                         StructureEvent.CHANGE_OF_CHARACTER,
                         MarketDirection.BEARISH,
                         price,
-                        validated_choch_low.price,
-                        reference_timestamp=validated_choch_low.timestamp,
+                        choch_low_ref.price,
+                        reference_timestamp=choch_low_ref.timestamp,
                     )
                     trend = MarketDirection.BEARISH
                     active_high = pending_high
                     pending_high = None
                     validated_choch_high = None
+                    choch_origin_low = None
+                    choch_origin_high = active_high
                     candidate_choch_high = None
                     candidate_choch_high_baseline = None
                 elif active_low is None:
@@ -335,6 +349,7 @@ class SwingStructureDetector(MarketStructureDetector):
                             or price < candidate_choch_high_baseline.price
                         ):
                             validated_choch_high = candidate_choch_high
+                            choch_origin_high = None
                             candidate_choch_high = None
                             candidate_choch_high_baseline = None
                         close_idx = find_close_break_index(
