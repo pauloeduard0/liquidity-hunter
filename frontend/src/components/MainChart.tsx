@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import {
   CandlestickSeries,
   ColorType,
+  HistogramSeries,
   LineSeries,
   LineStyle,
   CrosshairMode,
@@ -22,6 +23,9 @@ import {
   FONT_COLOR,
   GRID_COLOR,
   POI_BOX_STYLES,
+  RSI_LINE_COLOR,
+  RSI_OVERBOUGHT_COLOR,
+  RSI_OVERSOLD_COLOR,
   RTO_COLORS,
   STRUCTURE_EVENT_STYLES,
   TREND_ICONS,
@@ -29,21 +33,45 @@ import {
   ZONE_TYPE_LABELS,
 } from '../theme'
 
-/**
- * Plotting every detected zone (there can be dozens of swing points) makes
- * the chart unreadable, so only the highest-ranked zones are overlaid here
- * -- mirroring `dashboard.charts.main_chart`'s `DEFAULT_TOP_N_ZONES`.
- */
 const TOP_N_ZONES = 5
-
-/**
- * Internal-scope liquidity sweeps accumulate quickly (every failed pivot
- * break against the trailing reference is one), and since an unsuperseded
- * sweep's line always extends to the latest candle, they pile up near the
- * current price -- only the most recent ones are kept, mirroring
- * `TOP_N_ZONES` for liquidity zones.
- */
 const MAX_INTERNAL_SWEEPS = 3
+
+const MAIN_CHART_RATIO = 0.68
+const DELTA_CHART_RATIO = 0.16
+const MIN_TOTAL_HEIGHT = 500
+
+const RSI_PERIOD = 14
+
+function computeRSI(closes: number[], period: number): (number | null)[] {
+  const rsi: (number | null)[] = []
+  if (closes.length < period + 1) {
+    return closes.map(() => null)
+  }
+
+  let avgGain = 0
+  let avgLoss = 0
+  for (let i = 1; i <= period; i++) {
+    const change = closes[i] - closes[i - 1]
+    if (change > 0) avgGain += change
+    else avgLoss -= change
+  }
+  avgGain /= period
+  avgLoss /= period
+
+  for (let i = 0; i < period; i++) rsi.push(null)
+  rsi.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss))
+
+  for (let i = period + 1; i < closes.length; i++) {
+    const change = closes[i] - closes[i - 1]
+    const gain = change > 0 ? change : 0
+    const loss = change < 0 ? -change : 0
+    avgGain = (avgGain * (period - 1) + gain) / period
+    avgLoss = (avgLoss * (period - 1) + loss) / period
+    rsi.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss))
+  }
+
+  return rsi
+}
 
 function toUtcTimestamp(isoTimestamp: string): UTCTimestamp {
   return (Date.parse(isoTimestamp) / 1000) as UTCTimestamp
@@ -53,7 +81,6 @@ function formatPrice(price: number): string {
   return price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-/** A horizontal line from `startTime` to `lastCandleTime` at `value`, collapsing to a single point if `startTime` is at or after `lastCandleTime`. */
 function lineFrom(startTime: UTCTimestamp, lastCandleTime: UTCTimestamp, value: number) {
   return startTime < lastCandleTime
     ? [
@@ -63,15 +90,6 @@ function lineFrom(startTime: UTCTimestamp, lastCandleTime: UTCTimestamp, value: 
     : [{ time: lastCandleTime, value }]
 }
 
-/**
- * Where `event`'s line should stop.
- *
- * - BOS / Sweep: ends at the next BOS or CHoCH of the same scope and direction
- *   (moves that active level), otherwise extends to `lastCandleTime`.
- * - CHoCH: extends until the *opposite*-direction CHoCH of the same scope
- *   supersedes it (the new trend nullifies the prior reversal reference);
- *   a same-direction BOS does not end a CHoCH line.
- */
 function structureLineEndTime(
   event: MarketStructure,
   allEvents: MarketStructure[],
@@ -108,16 +126,6 @@ function structureLineEndTime(
   return supersededAt.length > 0 ? (Math.min(...supersededAt) as UTCTimestamp) : lastCandleTime
 }
 
-/**
- * The right edge of a POI box.
- *
- * Whichever comes first:
- * 1. The second *internal* BOS in the same direction (the leg continued).
- * 2. An *internal* CHoCH in the opposite direction (the leg reversed).
- *
- * If neither exists yet, returns a far-future sentinel so the box reaches the
- * right pane edge (LWC clamps null `timeToCoordinate` to `mediaSize.width`).
- */
 function poiBoxEndTime(
   zone: POIZone,
   internalEvents: MarketStructure[],
@@ -159,23 +167,39 @@ interface MainChartProps {
   data: DashboardData
 }
 
-/** Primary chart: candlesticks with the top-ranked liquidity zones and market structure events. */
 export function MainChart({ data }: MainChartProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const mainContainerRef = useRef<HTMLDivElement>(null)
+  const deltaContainerRef = useRef<HTMLDivElement>(null)
+  const rsiContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
+  const deltaChartRef = useRef<IChartApi | null>(null)
+  const rsiChartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const deltaSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const rsiSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const overlaySeriesRef = useRef<ISeriesApi<'Line'>[]>([])
+  const rsiOverlaySeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const labelsPrimitiveRef = useRef<LineLabelsPrimitive | null>(null)
   const poiBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const hasFittedRef = useRef(false)
+  const isSyncingRef = useRef(false)
 
   useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
+    const wrapper = wrapperRef.current
+    const mainContainer = mainContainerRef.current
+    const deltaContainer = deltaContainerRef.current
+    const rsiContainer = rsiContainerRef.current
+    if (!wrapper || !mainContainer || !deltaContainer || !rsiContainer) return
 
-    const chart = createChart(container, {
+    const totalHeight = Math.max(wrapper.clientHeight, MIN_TOTAL_HEIGHT)
+    const mainHeight = Math.round(totalHeight * MAIN_CHART_RATIO)
+    const deltaHeight = Math.round(totalHeight * DELTA_CHART_RATIO)
+    const rsiHeight = totalHeight - mainHeight - deltaHeight
+
+    const chartOptions = {
       layout: {
-        background: { type: ColorType.Solid, color: DARK_BG },
+        background: { type: ColorType.Solid as const, color: DARK_BG },
         textColor: FONT_COLOR,
       },
       grid: {
@@ -183,11 +207,33 @@ export function MainChart({ data }: MainChartProps) {
         horzLines: { color: GRID_COLOR },
       },
       crosshair: { mode: CrosshairMode.Normal },
-      width: container.clientWidth,
-      height: 550,
       timeScale: { timeVisible: true, secondsVisible: false },
+    }
+
+    const chart = createChart(mainContainer, {
+      ...chartOptions,
+      width: mainContainer.clientWidth,
+      height: mainHeight,
+      timeScale: { ...chartOptions.timeScale, visible: false },
     })
     chartRef.current = chart
+
+    const deltaChart = createChart(deltaContainer, {
+      ...chartOptions,
+      width: deltaContainer.clientWidth,
+      height: deltaHeight,
+      timeScale: { ...chartOptions.timeScale, visible: false },
+      rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 } },
+    })
+    deltaChartRef.current = deltaChart
+
+    const rsiChart = createChart(rsiContainer, {
+      ...chartOptions,
+      width: rsiContainer.clientWidth,
+      height: rsiHeight,
+      rightPriceScale: { scaleMargins: { top: 0.05, bottom: 0.05 } },
+    })
+    rsiChartRef.current = rsiChart
 
     const series = chart.addSeries(CandlestickSeries, {
       upColor: CANDLE_UP_COLOR,
@@ -198,6 +244,42 @@ export function MainChart({ data }: MainChartProps) {
     })
     seriesRef.current = series
 
+    const deltaSeries = deltaChart.addSeries(HistogramSeries, {
+      priceLineVisible: false,
+      lastValueVisible: false,
+    })
+    deltaSeriesRef.current = deltaSeries
+
+    const rsiSeries = rsiChart.addSeries(LineSeries, {
+      color: RSI_LINE_COLOR,
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+    })
+    rsiSeriesRef.current = rsiSeries
+
+    // RSI reference lines (70 overbought, 30 oversold)
+    const rsiOverbought = rsiChart.addSeries(LineSeries, {
+      color: RSI_OVERBOUGHT_COLOR,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    })
+    rsiOverlaySeriesRef.current.push(rsiOverbought)
+
+    const rsiOversold = rsiChart.addSeries(LineSeries, {
+      color: RSI_OVERSOLD_COLOR,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    })
+    rsiOverlaySeriesRef.current.push(rsiOversold)
+
     const labelsPrimitive = new LineLabelsPrimitive()
     series.attachPrimitive(labelsPrimitive)
     labelsPrimitiveRef.current = labelsPrimitive
@@ -206,15 +288,83 @@ export function MainChart({ data }: MainChartProps) {
     series.attachPrimitive(poiBoxesPrimitive)
     poiBoxesPrimitiveRef.current = poiBoxesPrimitive
 
-    const handleResize = () => chart.applyOptions({ width: container.clientWidth })
-    window.addEventListener('resize', handleResize)
+    // Sync time scales across all three charts
+    const charts = [chart, deltaChart, rsiChart]
+    for (const src of charts) {
+      src.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+        if (isSyncingRef.current || !range) return
+        isSyncingRef.current = true
+        for (const dst of charts) {
+          if (dst !== src) dst.timeScale().setVisibleLogicalRange(range)
+        }
+        isSyncingRef.current = false
+      })
+    }
+
+    // Sync crosshairs
+    chart.subscribeCrosshairMove((param) => {
+      if (isSyncingRef.current) return
+      isSyncingRef.current = true
+      if (param.time) {
+        deltaChart.setCrosshairPosition(0, param.time, deltaSeries)
+        rsiChart.setCrosshairPosition(NaN, param.time, rsiSeries)
+      } else {
+        deltaChart.clearCrosshairPosition()
+        rsiChart.clearCrosshairPosition()
+      }
+      isSyncingRef.current = false
+    })
+
+    deltaChart.subscribeCrosshairMove((param) => {
+      if (isSyncingRef.current) return
+      isSyncingRef.current = true
+      if (param.time) {
+        chart.setCrosshairPosition(NaN, param.time, series)
+        rsiChart.setCrosshairPosition(NaN, param.time, rsiSeries)
+      } else {
+        chart.clearCrosshairPosition()
+        rsiChart.clearCrosshairPosition()
+      }
+      isSyncingRef.current = false
+    })
+
+    rsiChart.subscribeCrosshairMove((param) => {
+      if (isSyncingRef.current) return
+      isSyncingRef.current = true
+      if (param.time) {
+        chart.setCrosshairPosition(NaN, param.time, series)
+        deltaChart.setCrosshairPosition(0, param.time, deltaSeries)
+      } else {
+        chart.clearCrosshairPosition()
+        deltaChart.clearCrosshairPosition()
+      }
+      isSyncingRef.current = false
+    })
+
+    const ro = new ResizeObserver(() => {
+      const h = Math.max(wrapper.clientHeight, MIN_TOTAL_HEIGHT)
+      const mh = Math.round(h * MAIN_CHART_RATIO)
+      const dh = Math.round(h * DELTA_CHART_RATIO)
+      const rh = h - mh - dh
+      chart.applyOptions({ width: mainContainer.clientWidth, height: mh })
+      deltaChart.applyOptions({ width: deltaContainer.clientWidth, height: dh })
+      rsiChart.applyOptions({ width: rsiContainer.clientWidth, height: rh })
+    })
+    ro.observe(wrapper)
 
     return () => {
-      window.removeEventListener('resize', handleResize)
+      ro.disconnect()
       chart.remove()
+      deltaChart.remove()
+      rsiChart.remove()
       chartRef.current = null
+      deltaChartRef.current = null
+      rsiChartRef.current = null
       seriesRef.current = null
+      deltaSeriesRef.current = null
+      rsiSeriesRef.current = null
       overlaySeriesRef.current = []
+      rsiOverlaySeriesRef.current = []
       labelsPrimitiveRef.current = null
       poiBoxesPrimitiveRef.current = null
       hasFittedRef.current = false
@@ -223,8 +373,21 @@ export function MainChart({ data }: MainChartProps) {
 
   useEffect(() => {
     const chart = chartRef.current
+    const deltaChart = deltaChartRef.current
+    const rsiChart = rsiChartRef.current
     const series = seriesRef.current
-    if (!chart || !series || data.candles.length === 0) return
+    const deltaSeries = deltaSeriesRef.current
+    const rsiSeries = rsiSeriesRef.current
+    if (
+      !chart ||
+      !deltaChart ||
+      !rsiChart ||
+      !series ||
+      !deltaSeries ||
+      !rsiSeries ||
+      data.candles.length === 0
+    )
+      return
 
     series.setData(
       data.candles.map((candle) => ({
@@ -236,6 +399,45 @@ export function MainChart({ data }: MainChartProps) {
       })),
     )
 
+    // Volume delta histogram
+    deltaSeries.setData(
+      data.candles.map((candle) => {
+        const delta = 2 * candle.taker_buy_volume - candle.volume
+        return {
+          time: toUtcTimestamp(candle.timestamp),
+          value: delta,
+          color: candle.close >= candle.open ? CANDLE_UP_COLOR : CANDLE_DOWN_COLOR,
+        }
+      }),
+    )
+
+    // RSI
+    const closes = data.candles.map((c) => c.close)
+    const rsiValues = computeRSI(closes, RSI_PERIOD)
+    const rsiData: { time: UTCTimestamp; value: number }[] = []
+    for (let i = 0; i < data.candles.length; i++) {
+      const v = rsiValues[i]
+      if (v !== null) {
+        rsiData.push({ time: toUtcTimestamp(data.candles[i].timestamp), value: v })
+      }
+    }
+    rsiSeries.setData(rsiData)
+
+    // RSI 70/30 reference lines
+    const [overboughtSeries, oversoldSeries] = rsiOverlaySeriesRef.current
+    if (overboughtSeries && oversoldSeries && rsiData.length >= 2) {
+      const firstTime = rsiData[0].time
+      const lastTime = rsiData[rsiData.length - 1].time
+      overboughtSeries.setData([
+        { time: firstTime, value: 70 },
+        { time: lastTime, value: 70 },
+      ])
+      oversoldSeries.setData([
+        { time: firstTime, value: 30 },
+        { time: lastTime, value: 30 },
+      ])
+    }
+
     for (const overlaySeries of overlaySeriesRef.current) {
       chart.removeSeries(overlaySeries)
     }
@@ -243,8 +445,6 @@ export function MainChart({ data }: MainChartProps) {
 
     const lastCandleTime = toUtcTimestamp(data.candles[data.candles.length - 1].timestamp)
 
-    // Labels are drawn on the chart pane itself, anchored to each line's own
-    // position, instead of stacking as titles on the right price axis.
     const labels: LineLabel[] = []
 
     for (const scored of data.ranked_zones.slice(0, TOP_N_ZONES)) {
@@ -268,9 +468,9 @@ export function MainChart({ data }: MainChartProps) {
       labels.push({ time: startTime, price, color, text: title })
     }
 
-    // Swept (mitigated) zones: only EQH/EQL, max 5, within last 50 candles.
-    const SWEPT_TTL_CANDLES = 100
-    const MAX_SWEPT_ZONES = 10
+    // Swept (mitigated) zones
+    const SWEPT_TTL_CANDLES = 200
+    const MAX_SWEPT_ZONES = 20
     const ttlCutoff =
       data.candles.length >= SWEPT_TTL_CANDLES
         ? toUtcTimestamp(data.candles[data.candles.length - SWEPT_TTL_CANDLES].timestamp)
@@ -290,9 +490,7 @@ export function MainChart({ data }: MainChartProps) {
       const label = ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type
       const price = (zone.price_high + zone.price_low) / 2
       const startTime = toUtcTimestamp(zone.formed_at)
-      const endTime = zone.invalidated_at
-        ? toUtcTimestamp(zone.invalidated_at)
-        : lastCandleTime
+      const endTime = zone.invalidated_at ? toUtcTimestamp(zone.invalidated_at) : lastCandleTime
 
       const sweptSeries = chart.addSeries(LineSeries, {
         color: color + '4d',
@@ -312,7 +510,7 @@ export function MainChart({ data }: MainChartProps) {
       })
     }
 
-    // Single-scope structure events: 4H shows only major, 1H shows only internal.
+    // Structure events
     const isMajorView = data.timeframe === '4h'
     const scopeEvents = isMajorView
       ? data.market_structure_events
@@ -368,7 +566,7 @@ export function MainChart({ data }: MainChartProps) {
       })
     }
 
-    // POI order block zones and RTO sweeps: only in internal (1H) view.
+    // POI order block zones and RTO sweeps
     if (!isMajorView) {
       const poiBoxes: POIBox[] = []
       for (const zone of data.poi_zones ?? []) {
@@ -410,12 +608,29 @@ export function MainChart({ data }: MainChartProps) {
 
     labelsPrimitiveRef.current?.setLabels(labels)
 
-    // Only auto-fit on the first load -- later refreshes shouldn't reset the user's zoom/pan.
     if (!hasFittedRef.current) {
       chart.timeScale().fitContent()
+      deltaChart.timeScale().fitContent()
+      rsiChart.timeScale().fitContent()
       hasFittedRef.current = true
     }
   }, [data])
 
-  return <div ref={containerRef} className="w-full" />
+  return (
+    <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">
+      <div ref={mainContainerRef} className="w-full" />
+      <div className="relative w-full">
+        <span className="pointer-events-none absolute left-2 top-1 z-10 text-xs text-[#8a8f9c]">
+          Volume Delta
+        </span>
+        <div ref={deltaContainerRef} className="w-full" />
+      </div>
+      <div className="relative w-full">
+        <span className="pointer-events-none absolute left-2 top-1 z-10 text-xs text-[#8a8f9c]">
+          RSI ({RSI_PERIOD})
+        </span>
+        <div ref={rsiContainerRef} className="w-full" />
+      </div>
+    </div>
+  )
 }

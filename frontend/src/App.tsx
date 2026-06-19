@@ -48,13 +48,9 @@ function App() {
   }, [timeframe])
 
   return (
-    <div className="min-h-screen bg-[#0e1117] p-4 text-[#d1d4dc] md:p-6">
-      <header className="mb-4">
-        <h1 className="text-2xl font-semibold">Liquidity Hunter</h1>
-        <p className="text-sm text-[#8a8f9c]">
-          Liquidity intelligence and retail crowd psychology research -- descriptive only, not
-          trading advice.
-        </p>
+    <div className="flex h-screen flex-col bg-[#0e1117] px-3 py-2 text-[#d1d4dc]">
+      <header className="mb-2 flex-none">
+        <h1 className="text-lg font-semibold">Liquidity Hunter</h1>
       </header>
 
       {error && (
@@ -66,10 +62,10 @@ function App() {
       {!error && !data && <p className="text-[#8a8f9c]">Loading...</p>}
 
       {data && (
-        <div className="flex flex-col gap-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
           <KpiRow data={data} />
-          <div className="rounded-lg border border-[#1f2430] bg-[#161a25] p-2">
-            <div className="mb-2 flex gap-1">
+          <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-[#1f2430] bg-[#161a25] p-2">
+            <div className="mb-1 flex gap-1">
               {TIMEFRAME_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}

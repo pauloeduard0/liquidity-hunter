@@ -59,3 +59,12 @@ export const RTO_COLORS: Record<string, string> = {
   bullish: '#2962ff',  // darker blue — distinct from the lighter OB box
   bearish: '#ff5252',
 }
+
+/** Volume delta histogram bar colors. */
+export const VOLUME_DELTA_UP_COLOR = '#26a69a'
+export const VOLUME_DELTA_DOWN_COLOR = '#ef5350'
+
+/** RSI indicator colors. */
+export const RSI_LINE_COLOR = '#ab63fa'
+export const RSI_OVERBOUGHT_COLOR = '#26c6da66'
+export const RSI_OVERSOLD_COLOR = '#b8b8b866'

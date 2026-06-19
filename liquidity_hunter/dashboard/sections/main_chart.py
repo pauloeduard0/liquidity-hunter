@@ -7,8 +7,8 @@ from liquidity_hunter.core.domain import LiquidityZoneType
 from liquidity_hunter.dashboard.charts import main_chart
 
 _SWEPT_ZONE_TYPES = {LiquidityZoneType.EQUAL_HIGHS, LiquidityZoneType.EQUAL_LOWS}
-_MAX_SWEPT_ZONES = 10
-_SWEPT_TTL_CANDLES = 100
+_MAX_SWEPT_ZONES = 20
+_SWEPT_TTL_CANDLES = 200
 
 
 def render(data: DashboardData) -> None:
