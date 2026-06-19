@@ -37,6 +37,10 @@ export type RetailPositioning = 'long' | 'short' | 'neutral'
 
 export type POIZoneStatus = 'active' | 'mitigated' | 'invalidated'
 
+export type ManipulationPhase = 'accumulation' | 'manipulation' | 'expansion'
+
+export type ManipulationCycleStatus = 'in_progress' | 'confirmed' | 'failed'
+
 export interface Candle {
   symbol: string
   timeframe: TimeFrame
@@ -116,6 +120,28 @@ export interface RTOSweepEvent {
   sweep_extreme: number
 }
 
+export interface ManipulationCycle {
+  symbol: string
+  timeframe: TimeFrame
+  direction: MarketDirection
+  phase: ManipulationPhase
+  status: ManipulationCycleStatus
+  target_zone_price_low: number
+  target_zone_price_high: number
+  target_zone_type: LiquidityZoneType
+  target_zone_side: LiquiditySide
+  accumulation_start: string
+  accumulation_end: string
+  consolidation_candles: number
+  accumulation_avg_volume_delta: number
+  sweep_timestamp: string | null
+  sweep_extreme: number | null
+  sweep_volume_delta: number | null
+  expansion_timestamp: string | null
+  expansion_price: number | null
+  expansion_volume_delta: number | null
+}
+
 export interface DashboardData {
   symbol: string
   timeframe: TimeFrame
@@ -129,4 +155,5 @@ export interface DashboardData {
   retail_bias: RetailBiasEstimate
   poi_zones: POIZone[]
   poi_sweep_events: RTOSweepEvent[]
+  manipulation_cycles: ManipulationCycle[]
 }

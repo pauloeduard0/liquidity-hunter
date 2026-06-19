@@ -9,12 +9,14 @@ from dataclasses import dataclass
 from liquidity_hunter.core.domain import (
     Candle,
     LiquidityZone,
+    ManipulationCycle,
     MarketDirection,
     MarketStructure,
     TimeFrame,
 )
 from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
 from liquidity_hunter.data import BinanceDataProvider, OHLCVProvider
+from liquidity_hunter.indicators import volume_delta_series
 from liquidity_hunter.liquidity import (
     EqualHighDetector,
     EqualLowDetector,
@@ -25,7 +27,11 @@ from liquidity_hunter.liquidity import (
     SwingStructureDetector,
     mark_swept_zones,
 )
-from liquidity_hunter.psychology import RetailBiasEstimate, RetailTrapAnalyzer
+from liquidity_hunter.psychology import (
+    ManipulationCycleDetector,
+    RetailBiasEstimate,
+    RetailTrapAnalyzer,
+)
 from liquidity_hunter.scoring import LiquidityScoringEngine, ScoredLiquidityZone
 
 DEFAULT_SWING_LOOKBACK = 10
@@ -68,6 +74,7 @@ class DashboardData:
     retail_bias: RetailBiasEstimate
     poi_zones: list[POIZone]
     poi_sweep_events: list[RTOSweepEvent]
+    manipulation_cycles: list[ManipulationCycle]
 
 
 def _latest_structure_direction(events: list[MarketStructure]) -> MarketDirection:
@@ -85,7 +92,7 @@ def load_dashboard_data(
     provider: OHLCVProvider | None = None,
     symbol: str = "BTCUSDT",
     timeframe: TimeFrame = TimeFrame.H1,
-    limit: int = 500,
+    limit: int = 700,
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
     internal_swing_lookback: int = DEFAULT_INTERNAL_SWING_LOOKBACK,
     confluence_filter: bool = False,
@@ -153,6 +160,16 @@ def load_dashboard_data(
         current_price=current_price,
     )
 
+    all_structure = market_structure_events + internal_structure_events
+    vd = volume_delta_series(candles)
+    manipulation_cycles = ManipulationCycleDetector().detect(
+        candles=candles,
+        structure_events=all_structure,
+        liquidity_zones=liquidity_zones,
+        poi_sweep_events=poi_sweep_events,
+        volume_deltas=vd,
+    )
+
     return DashboardData(
         symbol=symbol,
         timeframe=timeframe,
@@ -166,4 +183,5 @@ def load_dashboard_data(
         retail_bias=retail_bias,
         poi_zones=poi_zones,
         poi_sweep_events=poi_sweep_events,
+        manipulation_cycles=manipulation_cycles,
     )

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from liquidity_hunter.core.domain import (
     Candle,
     LiquidityZone,
+    ManipulationCycle,
     MarketDirection,
     MarketStructure,
     TimeFrame,
@@ -38,3 +39,4 @@ class DashboardDataResponse(BaseModel):
     retail_bias: RetailBiasEstimate
     poi_zones: list[POIZone]
     poi_sweep_events: list[RTOSweepEvent]
+    manipulation_cycles: list[ManipulationCycle]

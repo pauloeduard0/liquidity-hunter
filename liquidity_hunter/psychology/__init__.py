@@ -4,7 +4,16 @@ Analyzes sentiment, positioning, and behavioral data to describe crowd
 psychology. Depends on `core` and `data`.
 """
 
-from liquidity_hunter.psychology.analyzers import RetailBiasEstimator, RetailTrapAnalyzer
+from liquidity_hunter.psychology.analyzers import (
+    ManipulationCycleDetector,
+    RetailBiasEstimator,
+    RetailTrapAnalyzer,
+)
 from liquidity_hunter.psychology.models import RetailBiasEstimate
 
-__all__ = ["RetailBiasEstimate", "RetailBiasEstimator", "RetailTrapAnalyzer"]
+__all__ = [
+    "ManipulationCycleDetector",
+    "RetailBiasEstimate",
+    "RetailBiasEstimator",
+    "RetailTrapAnalyzer",
+]

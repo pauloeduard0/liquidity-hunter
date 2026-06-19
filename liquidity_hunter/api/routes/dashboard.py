@@ -25,7 +25,7 @@ _cache: TTLCache[DashboardData] = TTLCache(ttl_seconds=10.0)
 def get_dashboard(
     symbol: str = "BTCUSDT",
     timeframe: TimeFrame = TimeFrame.H1,
-    limit: Annotated[int, Query(gt=0, le=1000)] = 500,
+    limit: Annotated[int, Query(gt=0, le=1000)] = 700,
     swing_lookback: Annotated[int, Query(gt=0)] = DEFAULT_SWING_LOOKBACK,
     internal_swing_lookback: Annotated[int, Query(gt=0)] = DEFAULT_INTERNAL_SWING_LOOKBACK,
 ) -> DashboardDataResponse:
