@@ -400,8 +400,9 @@ class InternalStructureDetector(MarketStructureDetector):
                     if active_low is not None:
                         pending_high = pivot
                     if last_high_pivot is not None and price < last_high_pivot.price:
+                        if candidate_choch_high is None or price > candidate_choch_high.price:
+                            candidate_choch_high_baseline = active_low
                         candidate_choch_high = pivot
-                        candidate_choch_high_baseline = active_low
                 elif price > active_high.price:
                     if trend is MarketDirection.BEARISH:
                         sweep_candle = candles[
@@ -476,8 +477,9 @@ class InternalStructureDetector(MarketStructureDetector):
                         active_high.price,
                     )
                     pending_low = self._extreme(pending_low, active_low, higher=False)
+                    if candidate_choch_high is None or price > candidate_choch_high.price:
+                        candidate_choch_high_baseline = active_low
                     candidate_choch_high = pivot
-                    candidate_choch_high_baseline = active_low
                 active_high = pivot
                 last_high_pivot = pivot  # noqa: F841
                 prev_high_pivot_index = current_index
@@ -548,8 +550,9 @@ class InternalStructureDetector(MarketStructureDetector):
                     if active_high is not None:
                         pending_low = pivot
                     if last_low_pivot is not None and price > last_low_pivot.price:
+                        if candidate_choch_low is None or price < candidate_choch_low.price:
+                            candidate_choch_low_baseline = active_high
                         candidate_choch_low = pivot
-                        candidate_choch_low_baseline = active_high
                 elif price < active_low.price:
                     if trend is MarketDirection.BULLISH:
                         sweep_candle = candles[
@@ -624,8 +627,9 @@ class InternalStructureDetector(MarketStructureDetector):
                         active_low.price,
                     )
                     pending_high = self._extreme(pending_high, active_high, higher=True)
+                    if candidate_choch_low is None or price < candidate_choch_low.price:
+                        candidate_choch_low_baseline = active_high
                     candidate_choch_low = pivot
-                    candidate_choch_low_baseline = active_high
                 active_low = pivot
                 last_low_pivot = pivot  # noqa: F841
                 prev_low_pivot_index = current_index

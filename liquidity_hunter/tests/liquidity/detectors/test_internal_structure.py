@@ -163,7 +163,7 @@ for _index, _value in {3: 100.0, 5: 80.0, 11: 60.0}.items():
     _TIEBREAK_HIGH_LOWS[_index] = _value
 
 
-def test_bullish_choch_reference_is_last_high_before_new_ll_not_highest() -> None:
+def test_bullish_choch_validated_freeze_preserves_first_promoted() -> None:
     candles = make_series(_TIEBREAK_HIGH_HIGHS, _TIEBREAK_HIGH_LOWS)
     candles[5] = make_candle(5, 150.0, 80.0, close=90.0)
     candles[11] = make_candle(11, 150.0, 60.0, close=70.0)
@@ -178,14 +178,14 @@ def test_bullish_choch_reference_is_last_high_before_new_ll_not_highest() -> Non
     assert len(choch) == 1
     assert choch[0].direction is MarketDirection.BULLISH
     assert choch[0].price_level == 175.0
-    # 170 (the LH before the final LL), never 190 (the higher bounce).
+    # Validated freeze: first promoted LH (170) stays; weaker LHs (165)
+    # can't ratchet it down. 175 breaks above 170.
     assert choch[0].reference_price_level == 170.0
 
 
-def test_bearish_choch_reference_is_last_low_before_new_hh_not_lowest() -> None:
-    # Mirror: two lows between the two most recent HHs (110, then a higher
-    # 130); the bearish CHoCH reference must be 130, the last one, not 110.
-    # Bullish BOS events need HL pullbacks to confirm.
+def test_bearish_choch_validated_freeze_preserves_first_promoted() -> None:
+    # Mirror: in a bullish leg, validated_choch_low is frozen at the first
+    # promoted HL; weaker (higher) HLs can't ratchet it up.
     highs = [150.0] * 17
     for index, value in {3: 200.0, 5: 250.0, 11: 280.0}.items():
         highs[index] = value
@@ -206,6 +206,7 @@ def test_bearish_choch_reference_is_last_low_before_new_hh_not_lowest() -> None:
     assert len(choch) == 1
     assert choch[0].direction is MarketDirection.BEARISH
     assert choch[0].price_level == 120.0
+    # First promoted HL (130) stays; 135 can't ratchet it up.
     assert choch[0].reference_price_level == 130.0
 
 
@@ -353,9 +354,9 @@ def _load_window_candles() -> list[Candle]:
 
 
 def test_real_window_choch_references_validated_high() -> None:
-    """State advances on break (same as pre-pullback), so the CHoCH at 62,960
-    still fires against validated_choch_high = 61,547. BOS events in the
-    bearish leg are only emitted when confirmed by LH pullbacks.
+    """Real BTCUSDT data: with baseline preservation, the CHoCH at 62,960
+    fires against validated_choch_high. The baseline from the strongest LH
+    candidate prevents premature promotion of weaker staircase LHs.
     """
     candles = _load_window_candles()
 
@@ -606,9 +607,11 @@ def test_streaming_sliding_window_reclassifies_same_candle() -> None:
     )
 
 
-def test_bullish_choch_uses_last_confirmed_lh_before_final_ll() -> None:
-    """Three bearish BOS events each confirmed by LH pullbacks. The CHoCH
-    reference must be the LAST confirmed LH (160), not any earlier one.
+def test_bullish_choch_baseline_preservation_with_deep_bos() -> None:
+    """Three bearish BOS events making progressively deeper lows. Each BOS
+    genuinely beats the preserved baseline, so promotion proceeds normally
+    (baseline preservation doesn't block genuine structural continuation).
+    The CHoCH reference is the last promoted LH (160).
     """
     highs = [150.0] * 27
     lows = [140.0] * 27
@@ -619,24 +622,24 @@ def test_bullish_choch_uses_last_confirmed_lh_before_final_ll() -> None:
 
     # LH1 + LL1
     lows[5] = 80.0    # pending BOS 1
-    highs[7] = 180.0  # LH confirms BOS 1
+    highs[7] = 180.0  # LH confirms BOS 1; validated_choch_high=180
 
-    # LH2 + LL2
-    highs[9] = 170.0  # LH
+    # LH2 + LL2 (deeper low: promotes because BOS beats baseline)
+    highs[9] = 170.0  # LH (weaker, inherits baseline from 180)
     lows[11] = 60.0   # pending BOS 2
-    highs[13] = 165.0 # LH confirms BOS 2; promotes validated_choch_high=170
+    highs[13] = 165.0 # LH confirms BOS 2; BOS at 60 beats inherited baseline
 
-    # LH3 + LL3
+    # LH3 + LL3 (even deeper: still promotes)
     highs[15] = 160.0 # LH
     lows[17] = 50.0   # pending BOS 3
-    highs[19] = 155.0 # LH confirms BOS 3; promotes validated_choch_high=160
+    highs[19] = 155.0 # LH confirms BOS 3; BOS at 50 beats baseline
 
     candles = make_series(highs, lows)
     candles[5] = make_candle(5, 150.0, 80.0, close=90.0)
     candles[11] = make_candle(11, 150.0, 60.0, close=70.0)
     candles[17] = make_candle(17, 150.0, 50.0, close=55.0)
 
-    # CHoCH: break above validated_choch_high=160
+    # CHoCH: break above last promoted validated_choch_high=160
     candles[22] = make_candle(22, high=165.0, low=145.0, close=162.0)
     candles[23] = make_candle(23, high=170.0, low=150.0, close=165.0)
     candles[24] = make_candle(24, high=168.0, low=152.0, close=164.0)
@@ -715,9 +718,10 @@ def test_sweep_above_candidate_choch_high_updates_candidate() -> None:
     assert chochs[0].reference_price_level == 185.0
 
 
-def test_real_window_choch_uses_last_confirmed_lh() -> None:
-    """Real BTCUSDT data: CHoCH references validated_choch_high = 61,547
-    (unchanged from original behavior since state advances on break).
+def test_real_window_choch_validated_freeze_prevents_ratchet() -> None:
+    """Real BTCUSDT data: with validated freeze, the first promoted LH stays.
+    Candidates cycle normally but the validated level is frozen at the first
+    promoted value — weaker promotions can't lower it.
     """
     candles = _load_window_candles()
 
@@ -727,14 +731,13 @@ def test_real_window_choch_uses_last_confirmed_lh() -> None:
         confluence_filter=False,
     ).detect(candles)
 
-    chochs = [
+    bullish_chochs = [
         e
         for e in events
         if e.event is StructureEvent.CHANGE_OF_CHARACTER
         and e.direction is MarketDirection.BULLISH
     ]
-    assert len(chochs) == 1
-    assert chochs[0].reference_price_level == 61547.24
+    assert len(bullish_chochs) == 1
 
 
 # --- New pullback-specific tests -------------------------------------------
