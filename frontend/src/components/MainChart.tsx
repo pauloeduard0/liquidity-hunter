@@ -14,13 +14,14 @@ import {
 
 import { LineLabelsPrimitive, type LineLabel } from '../charting/LineLabelsPrimitive'
 import { POIBoxesPrimitive, type POIBox } from '../charting/POIBoxesPrimitive'
-import type { DashboardData, MarketStructure, POIZone } from '../types/dashboard'
+import type { DashboardData, ManipulationCycle, MarketStructure, POIZone } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
   DARK_BG,
   DEFAULT_ZONE_COLOR,
   FONT_COLOR,
+  MANIPULATION_BOX_STYLES,
   POI_BOX_STYLES,
   RSI_DIV_BEARISH_COLOR,
   RSI_DIV_BULLISH_COLOR,
@@ -230,11 +231,72 @@ function poiBoxEndTime(
     : ((lastCandleTime + 9_999_999) as UTCTimestamp)
 }
 
-interface MainChartProps {
-  data: DashboardData
+const MAX_MANIP_BOXES = 3
+const ZONE_PRICE_BUFFER_PCT = 0.003
+
+function buildManipulationBoxes(
+  cycles: ManipulationCycle[],
+  lastCandleTime: UTCTimestamp,
+): POIBox[] {
+  const boxes: POIBox[] = []
+
+  const statusOrder: Record<string, number> = { in_progress: 0, confirmed: 1, failed: 2 }
+  const sorted = [...cycles].sort((a, b) => {
+    const sa = statusOrder[a.status] ?? 2
+    const sb = statusOrder[b.status] ?? 2
+    if (sa !== sb) return sa - sb
+    return new Date(b.accumulation_start).getTime() - new Date(a.accumulation_start).getTime()
+  }).slice(0, MAX_MANIP_BOXES)
+
+  for (const cycle of sorted) {
+    const style = MANIPULATION_BOX_STYLES[cycle.status] ?? MANIPULATION_BOX_STYLES.failed
+
+    const zoneMid = (cycle.target_zone_price_high + cycle.target_zone_price_low) / 2
+    const buffer = zoneMid * ZONE_PRICE_BUFFER_PCT
+    const priceLow =
+      cycle.target_zone_price_low === cycle.target_zone_price_high
+        ? cycle.target_zone_price_low - buffer
+        : cycle.target_zone_price_low
+    const priceHigh =
+      cycle.target_zone_price_low === cycle.target_zone_price_high
+        ? cycle.target_zone_price_high + buffer
+        : cycle.target_zone_price_high
+
+    const x0 = toUtcTimestamp(cycle.accumulation_start)
+    const x1 = cycle.sweep_timestamp
+      ? toUtcTimestamp(cycle.sweep_timestamp)
+      : cycle.phase === 'accumulation'
+        ? ((lastCandleTime + 9_999_999) as UTCTimestamp)
+        : toUtcTimestamp(cycle.accumulation_end)
+
+    const dirIcon = cycle.direction === 'bullish' ? '▲' : '▼'
+    const phaseLabel =
+      cycle.phase === 'accumulation'
+        ? 'ACC'
+        : cycle.phase === 'manipulation'
+          ? 'MANIP'
+          : 'CONF'
+
+    boxes.push({
+      x0,
+      x1,
+      priceLow,
+      priceHigh,
+      borderColor: style.border,
+      fillColor: style.fill,
+      label: `${phaseLabel} ${dirIcon}`,
+    })
+  }
+
+  return boxes
 }
 
-export function MainChart({ data }: MainChartProps) {
+interface MainChartProps {
+  data: DashboardData
+  showManipulationBoxes?: boolean
+}
+
+export function MainChart({ data, showManipulationBoxes = true }: MainChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const mainContainerRef = useRef<HTMLDivElement>(null)
   const deltaContainerRef = useRef<HTMLDivElement>(null)
@@ -250,6 +312,7 @@ export function MainChart({ data }: MainChartProps) {
   const rsiDivSeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const labelsPrimitiveRef = useRef<LineLabelsPrimitive | null>(null)
   const poiBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
+  const manipBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const hasFittedRef = useRef(false)
   const isSyncingRef = useRef(false)
 
@@ -356,6 +419,10 @@ export function MainChart({ data }: MainChartProps) {
     series.attachPrimitive(poiBoxesPrimitive)
     poiBoxesPrimitiveRef.current = poiBoxesPrimitive
 
+    const manipBoxesPrimitive = new POIBoxesPrimitive()
+    series.attachPrimitive(manipBoxesPrimitive)
+    manipBoxesPrimitiveRef.current = manipBoxesPrimitive
+
     // Sync time scales across all three charts
     const charts = [chart, deltaChart, rsiChart]
     for (const src of charts) {
@@ -436,6 +503,7 @@ export function MainChart({ data }: MainChartProps) {
       rsiDivSeriesRef.current = []
       labelsPrimitiveRef.current = null
       poiBoxesPrimitiveRef.current = null
+      manipBoxesPrimitiveRef.current = null
       hasFittedRef.current = false
     }
   }, [])
@@ -702,6 +770,12 @@ export function MainChart({ data }: MainChartProps) {
       poiBoxesPrimitiveRef.current?.setBoxes([])
     }
 
+    // Manipulation cycle accumulation boxes
+    const manipBoxes = showManipulationBoxes
+      ? buildManipulationBoxes(data.manipulation_cycles ?? [], lastCandleTime)
+      : []
+    manipBoxesPrimitiveRef.current?.setBoxes(manipBoxes)
+
     labelsPrimitiveRef.current?.setLabels(labels)
 
     if (!hasFittedRef.current) {
@@ -710,7 +784,7 @@ export function MainChart({ data }: MainChartProps) {
       rsiChart.timeScale().fitContent()
       hasFittedRef.current = true
     }
-  }, [data])
+  }, [data, showManipulationBoxes])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

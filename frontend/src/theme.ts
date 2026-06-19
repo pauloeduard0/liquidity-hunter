@@ -60,6 +60,13 @@ export const RTO_COLORS: Record<string, string> = {
   bearish: '#ff5252',
 }
 
+/** Manipulation cycle accumulation box colors by status. */
+export const MANIPULATION_BOX_STYLES: Record<string, { border: string; fill: string }> = {
+  in_progress: { border: '#ffb74d', fill: '#ffb74d1a' },
+  confirmed: { border: '#26a69a', fill: '#26a69a1a' },
+  failed: { border: '#8a8f9c', fill: '#8a8f9c12' },
+}
+
 /** Volume delta histogram bar colors. */
 export const VOLUME_DELTA_UP_COLOR = '#26a69a'
 export const VOLUME_DELTA_DOWN_COLOR = '#ef5350'

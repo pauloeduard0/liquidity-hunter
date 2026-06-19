@@ -338,6 +338,41 @@ class ManipulationCycleDetector:
     # Prospective accumulation (no sweep yet)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _cluster_zones(
+        zones: list[LiquidityZone],
+        cluster_pct: float,
+    ) -> list[LiquidityZone]:
+        if not zones:
+            return []
+
+        by_side: dict[LiquiditySide, list[LiquidityZone]] = {}
+        for z in zones:
+            by_side.setdefault(z.side, []).append(z)
+
+        result: list[LiquidityZone] = []
+        for side_zones in by_side.values():
+            sorted_zones = sorted(
+                side_zones,
+                key=lambda z: (z.price_high + z.price_low) / 2,
+            )
+            clusters: list[list[LiquidityZone]] = []
+            for z in sorted_zones:
+                z_mid = (z.price_high + z.price_low) / 2
+                if clusters:
+                    last_mid = (
+                        clusters[-1][-1].price_high + clusters[-1][-1].price_low
+                    ) / 2
+                    if abs(z_mid - last_mid) / last_mid <= cluster_pct:
+                        clusters[-1].append(z)
+                        continue
+                clusters.append([z])
+
+            for cluster in clusters:
+                result.append(max(cluster, key=lambda z: z.strength))
+
+        return result
+
     def _find_prospective_accumulations(
         self,
         candles: list[Candle],
@@ -346,9 +381,10 @@ class ManipulationCycleDetector:
         used_zones: set[tuple[float, float, datetime]],
     ) -> list[ManipulationCycle]:
         active_zones = [z for z in zones if not z.is_mitigated]
+        clustered = self._cluster_zones(active_zones, self._proximity_pct)
         results: list[ManipulationCycle] = []
 
-        for zone in active_zones:
+        for zone in clustered:
             zone_key = (zone.price_low, zone.price_high, zone.formed_at)
             if zone_key in used_zones:
                 continue
@@ -372,7 +408,9 @@ class ManipulationCycleDetector:
                 continue
 
             vd_slice = list(volume_deltas[start_idx:])
-            avg_vd = sum(abs(v) for v in vd_slice) / len(vd_slice) if vd_slice else 0.0
+            avg_vd = (
+                sum(abs(v) for v in vd_slice) / len(vd_slice) if vd_slice else 0.0
+            )
 
             expansion_dir = (
                 MarketDirection.BULLISH

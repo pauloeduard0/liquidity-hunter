@@ -21,6 +21,7 @@ function App() {
   const [timeframe, setTimeframe] = useState<TimeFrame>('1h')
   const [data, setData] = useState<DashboardData | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [manipChartVisible, setManipChartVisible] = useState(true)
 
   const switchTimeframe = (tf: TimeFrame) => {
     setData(null)
@@ -85,12 +86,16 @@ function App() {
                   </button>
                 ))}
               </div>
-              <MainChart key={timeframe} data={data} />
+              <MainChart key={timeframe} data={data} showManipulationBoxes={manipChartVisible} />
             </div>
 
             {/* Sidebar */}
             <div className="w-72 flex-none overflow-y-auto rounded-lg border border-[#1f2430] bg-[#161a25] p-3">
-              <ManipulationCyclesPanel cycles={data.manipulation_cycles} />
+              <ManipulationCyclesPanel
+                cycles={data.manipulation_cycles}
+                chartVisible={manipChartVisible}
+                onToggleChart={() => setManipChartVisible((v) => !v)}
+              />
             </div>
           </div>
         </div>

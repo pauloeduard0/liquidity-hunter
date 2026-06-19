@@ -142,22 +142,43 @@ function CycleCard({ cycle }: { cycle: ManipulationCycle }) {
 
 interface ManipulationCyclesPanelProps {
   cycles: ManipulationCycle[]
+  chartVisible: boolean
+  onToggleChart: () => void
 }
 
-export function ManipulationCyclesPanel({ cycles }: ManipulationCyclesPanelProps) {
+const MAX_DISPLAY = 5
+
+export function ManipulationCyclesPanel({
+  cycles,
+  chartVisible,
+  onToggleChart,
+}: ManipulationCyclesPanelProps) {
   const sorted = [...cycles].sort((a, b) => {
     const statusOrder: Record<string, number> = { in_progress: 0, confirmed: 1, failed: 2 }
     const sa = statusOrder[a.status] ?? 1
     const sb = statusOrder[b.status] ?? 1
     if (sa !== sb) return sa - sb
     return new Date(b.accumulation_start).getTime() - new Date(a.accumulation_start).getTime()
-  })
+  }).slice(0, MAX_DISPLAY)
 
   return (
     <div className="flex flex-col">
-      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#8a8f9c]">
-        Manipulation Cycles
-      </h2>
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-[#8a8f9c]">
+          Manipulation Cycles
+        </h2>
+        <button
+          onClick={onToggleChart}
+          title={chartVisible ? 'Hide chart overlay' : 'Show chart overlay'}
+          className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+            chartVisible
+              ? 'bg-[#ffb74d33] text-[#ffb74d]'
+              : 'bg-[#1f2430] text-[#8a8f9c] hover:text-[#d1d4dc]'
+          }`}
+        >
+          {chartVisible ? 'CHART ON' : 'CHART OFF'}
+        </button>
+      </div>
       {sorted.length === 0 ? (
         <p className="text-xs text-[#8a8f9c]">No cycles detected</p>
       ) : (
