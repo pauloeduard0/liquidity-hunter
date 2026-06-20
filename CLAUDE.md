@@ -75,7 +75,7 @@ liquidity  psychology │
          │
         core (domain)
 
-dashboard, api ── both depend on app, core (alternative presentation layers)
+api ── depends on app, core (presentation layer)
 ```
 
 | Layer        | Responsibility                                                              | May depend on                     |
@@ -87,7 +87,6 @@ dashboard, api ── both depend on app, core (alternative presentation layers)
 | `psychology` | Modeling of `RetailBias` from sentiment/positioning data                     | `core`, `data`                      |
 | `scoring`    | Composite, descriptive scoring combining `liquidity` and `psychology` output | `core`, `liquidity`, `psychology`   |
 | `app`        | Composition root and orchestration                                           | all of the above                    |
-| `dashboard`  | Presentation/visualization of `app` output (Streamlit)                      | `app`, `core`                       |
 | `api`        | Presentation of `app` output as JSON over HTTP (FastAPI)                    | `app`, `core`                       |
 | `config`     | Application settings (environment-driven, via `pydantic-settings`)          | nothing                             |
 
@@ -566,62 +565,6 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 `DashboardData` and `ScoredLiquidityZone` are re-exported from
 `liquidity_hunter.app` for use by `dashboard`.
 
-### Dashboard layer (`liquidity_hunter/dashboard`)
-
-A modular Streamlit app, depending only on `app` and `core`, styled as a
-dark, multi-column "trading intelligence" layout (institutional look and
-feel inspired by TradingView/Bloomberg-style terminals):
-
-- **`dashboard/app.py`** — entrypoint; loads a cached `DashboardData` (via
-  `liquidity_hunter.app.load_dashboard_data`), injects the custom theme
-  (`dashboard.styles`), and assembles the layout: a top KPI row, a main
-  area (chart + right sidebar panels), and a bottom tab group. Run with:
-
-  ```bash
-  poetry run streamlit run liquidity_hunter/dashboard/app.py
-  ```
-
-- **`dashboard/styles.py`** — `inject()` injects custom CSS (card styling,
-  spacing, section titles) on top of the dark theme defined in
-  `.streamlit/config.toml`.
-- **`dashboard/charts.py`** — pure Plotly figure builders (no Streamlit
-  dependency), all sharing an institutional dark theme
-  (`_apply_dark_theme`): `candlestick_chart`, `liquidity_zones_chart`
-  (zone overlays, optionally annotated with `ScoredLiquidityZone` scores
-  via `ranked_zones`), `main_chart` (zones + BOS/CHoCH/`LIQUIDITY_SWEEP`
-  markers via `_add_structure_events` + POI order block rectangles via
-  `_add_poi_zones`), `ranking_chart`, `confidence_gauge`.
-  `_add_structure_events` renders `StructureScope.MAJOR` events as labeled
-  triangle markers and overlays any `StructureScope.INTERNAL` events of the
-  same `StructureEvent` type as smaller, textless, semi-transparent markers
-  (trace name suffixed `" (Internal)"`). `_add_poi_zones` renders `POIZone`
-  objects as filled Plotly rectangles (`add_shape`): light blue for bullish
-  demand zones, red for supply zones; mitigated zones are shown at lower
-  opacity.
-- **`dashboard/sections/`** — one module per section, each exposing
-  `render(data: DashboardData) -> None`:
-  - `kpi_row` — top row: price, retail bias, dominant liquidity level, and
-    higher timeframe trend.
-  - `main_chart` — the primary chart (see `charts.main_chart`), passing the
-    concatenation of `market_structure_events` and
-    `internal_structure_events`.
-  - `liquidity_targets` — right sidebar: top-ranked `ScoredLiquidityZone`s
-    (price, type, score, distance %).
-  - `retail_trap_panel` — right sidebar: `RetailBiasEstimate` dominant
-    side, a descriptive Low/Medium/High "trap risk" label derived from
-    `confidence`, and `explanation`.
-  - `market_structure_panel` — right sidebar: trend for the dashboard's
-    loaded timeframe, the latest `market_structure_events` entry, and the
-    latest `internal_structure_events` entry. Currently single-timeframe;
-    a future phase may add a per-timeframe (D1/H4/H1/M15) view.
-  - `liquidity_zones_table`, `recent_events`, `statistics` — bottom tabs:
-    detected zones table, structure events table (major and internal,
-    sorted by timestamp with a "Scope" column), and descriptive summary
-    counts.
-
-Tested with `streamlit.testing.v1.AppTest` in
-`liquidity_hunter/tests/dashboard/test_app.py`.
-
 ### API layer (`liquidity_hunter/api`)
 
 A FastAPI app exposing `app.load_dashboard_data` output as JSON, depending
@@ -661,7 +604,7 @@ Tested with FastAPI's `TestClient` in `liquidity_hunter/tests/api/test_main.py`.
 
 A React + TypeScript + Vite project (Tailwind CSS, Lightweight Charts v4),
 separate from the Python package, that polls `GET /api/dashboard` and renders
-the same data as the Streamlit dashboard (work in progress).
+the dashboard data.
 
 The React frontend has a professional TradingView-style dark UI with a
 `Logo` component, `StatusBar` (live connection indicator, candle/event
@@ -730,14 +673,13 @@ selector.
 
 The KPI row, main chart (with volume delta and RSI sub-panes), and
 manipulation cycles sidebar panel are implemented. The liquidity targets,
-retail trap, market structure sidebar panels and bottom tabs remain
-Streamlit-only.
+retail trap, and market structure sidebar panels are not yet implemented
+in the React frontend.
 
 ## Project status
 
 Core domain, data, indicators, liquidity detectors, scoring, psychology,
-Streamlit dashboard, FastAPI API, and React frontend (main chart + sidebar)
-are all implemented. Below are the key design decisions and confirmed
+FastAPI API, and React frontend (main chart + sidebar) are all implemented. Below are the key design decisions and confirmed
 behaviors as of 2026-06-20:
 
 **Both structure detectors use the same unified architecture** (as of today):
@@ -787,8 +729,8 @@ to anchor CHoCH lines at their true origin rather than at the break candle.
 `load_dashboard_data`. Zones are anchored to the CHoCH → first-same-direction-BOS
 window, built from the extreme candle in that window, with frozen boundaries.
 The lifecycle (ACTIVE → MITIGATED via RTO, ACTIVE → INVALIDATED via persistence
-closes) is fully implemented. Both Streamlit (Plotly filled rectangles) and
-React (`POIBoxesPrimitive` canvas primitives) renderers are implemented.
+closes) is fully implemented. The React frontend renders POI zones via
+`POIBoxesPrimitive` canvas primitives.
 
 **Manipulation cycle detection**: `ManipulationCycleDetector` connects
 existing observations into three-phase Wyckoff/SMC cycles (accumulation →
@@ -811,5 +753,5 @@ crosshairs.
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.
-- React frontend liquidity targets, retail trap, market structure sidebar
-  panels and bottom tabs (remain Streamlit-only).
+- React frontend liquidity targets, retail trap, and market structure
+  sidebar panels.

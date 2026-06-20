@@ -163,19 +163,6 @@ scenario:
 poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 ```
 
-### Running the dashboard
-
-A Streamlit dashboard renders live BTCUSDT research data as a dark,
-multi-column research terminal: a top KPI row (price, retail bias,
-dominant liquidity level, trend), a main candlestick chart annotated with
-liquidity zones and BOS/CHoCH/liquidity-sweep markers, a right sidebar
-(liquidity targets, retail trap analysis, market structure), and bottom
-tabs for detected zones, recent structure events, and summary statistics:
-
-```bash
-poetry run streamlit run liquidity_hunter/dashboard/app.py
-```
-
 ### Running the API
 
 A FastAPI application (`liquidity_hunter.api`) exposes the same research
@@ -211,13 +198,12 @@ poetry run uvicorn liquidity_hunter.api.main:app --reload
 ### Running the React frontend
 
 A React + TypeScript frontend (`frontend/`), built with Vite and styled
-with Tailwind CSS, consumes `GET /api/dashboard` and renders the same dark,
-institutional theme as the Streamlit dashboard. The current scope covers
-the top KPI row (price, retail bias, dominant liquidity, trend) and the
-main candlestick chart (top-ranked liquidity zones and BOS/CHoCH/
-liquidity-sweep markers) using
+with Tailwind CSS, consumes `GET /api/dashboard` and renders a dark,
+TradingView-style research terminal. Includes KPI row, main candlestick
+chart with volume delta and RSI sub-panes, liquidity zone overlays,
+BOS/CHoCH/SWEEP markers, POI order block boxes, and a manipulation cycles
+sidebar panel, using
 [Lightweight Charts](https://tradingview.github.io/lightweight-charts/).
-Other panels (sidebar, bottom tabs) remain Streamlit-only for now.
 
 With the FastAPI app running (see above), in a separate terminal:
 
