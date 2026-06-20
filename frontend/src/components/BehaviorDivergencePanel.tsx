@@ -1,4 +1,5 @@
 import type { BehaviorDivergence } from '../types/dashboard'
+import { CollapsibleSection } from './CollapsibleSection'
 import { DIVERGENCE_STYLES } from '../theme'
 
 function formatTimestamp(ts: string): string {
@@ -118,28 +119,26 @@ export function BehaviorDivergencePanel({
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
     .slice(0, MAX_DISPLAY)
 
+  const overlayButton = (
+    <button
+      onClick={(e) => { e.stopPropagation(); onToggleChart() }}
+      title={chartVisible ? 'Hide chart overlay' : 'Show chart overlay'}
+      className="flex items-center gap-1 rounded-sm px-1.5 py-[3px] text-[9px] font-bold tracking-wider transition-all duration-200"
+      style={{
+        color: chartVisible ? '#2962ff' : '#5d6477',
+        backgroundColor: chartVisible ? '#2962ff12' : '#0f1319',
+      }}
+    >
+      <span
+        className="inline-block h-1.5 w-1.5 rounded-full transition-colors"
+        style={{ backgroundColor: chartVisible ? '#2962ff' : '#5d6477' }}
+      />
+      {chartVisible ? 'OVERLAY' : 'HIDDEN'}
+    </button>
+  )
+
   return (
-    <div className="flex flex-col">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-[10px] font-semibold uppercase tracking-[0.15em] text-[#5d6477]">
-          Behavior Divergences
-        </h2>
-        <button
-          onClick={onToggleChart}
-          title={chartVisible ? 'Hide chart overlay' : 'Show chart overlay'}
-          className="group/btn flex items-center gap-1 rounded-sm px-1.5 py-[3px] text-[9px] font-bold tracking-wider transition-all duration-200"
-          style={{
-            color: chartVisible ? '#2962ff' : '#5d6477',
-            backgroundColor: chartVisible ? '#2962ff12' : '#0f1319',
-          }}
-        >
-          <span
-            className="inline-block h-1.5 w-1.5 rounded-full transition-colors"
-            style={{ backgroundColor: chartVisible ? '#2962ff' : '#5d6477' }}
-          />
-          {chartVisible ? 'OVERLAY' : 'HIDDEN'}
-        </button>
-      </div>
+    <CollapsibleSection title="Behavior Divergences" count={sorted.length} trailing={overlayButton}>
       {sorted.length === 0 ? (
         <div className="flex flex-col items-center gap-2 py-6 text-center">
           <div className="text-lg text-[#1f2430]">◇</div>
@@ -152,6 +151,6 @@ export function BehaviorDivergencePanel({
           ))}
         </div>
       )}
-    </div>
+    </CollapsibleSection>
   )
 }

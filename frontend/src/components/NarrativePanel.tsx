@@ -1,4 +1,5 @@
 import type { MarketNarrative, NarrativeAnomaly, NarrativeEvent } from '../types/dashboard'
+import { CollapsibleSection } from './CollapsibleSection'
 
 const EVENT_TYPE_STYLES: Record<string, { label: string; color: string; icon: string }> = {
   consolidation: { label: 'CONSOL', color: '#ffb74d', icon: '▬' },
@@ -141,60 +142,52 @@ export function NarrativePanel({ narrative }: NarrativePanelProps) {
   )
 
   return (
-    <div className="flex flex-col">
-      <h2 className="mb-3 text-[10px] font-semibold uppercase tracking-[0.15em] text-[#5d6477]">
-        Narrative
-      </h2>
-
-      {/* Phase + Summary */}
-      <div className="mb-3 rounded-md border border-[#1a1f2e] bg-[#0a0d14] p-3">
-        {narrative.phase && (
-          <div className="mb-2 flex items-center gap-2">
-            <span
-              className="rounded-sm px-1.5 py-[2px] text-[9px] font-bold tracking-widest"
-              style={{
-                color: PHASE_LABELS[narrative.phase]?.color ?? '#5d6477',
-                backgroundColor: `${PHASE_LABELS[narrative.phase]?.color ?? '#5d6477'}15`,
-              }}
-            >
-              {PHASE_LABELS[narrative.phase]?.label ?? narrative.phase.toUpperCase()}
-            </span>
+    <div className="flex flex-col gap-3">
+      {/* Narrative (Phase + Summary) */}
+      <CollapsibleSection title="Narrative">
+        <div className="rounded-md border border-[#1a1f2e] bg-[#0a0d14] p-3">
+          {narrative.phase && (
+            <div className="mb-2 flex items-center gap-2">
+              <span
+                className="rounded-sm px-1.5 py-[2px] text-[9px] font-bold tracking-widest"
+                style={{
+                  color: PHASE_LABELS[narrative.phase]?.color ?? '#5d6477',
+                  backgroundColor: `${PHASE_LABELS[narrative.phase]?.color ?? '#5d6477'}15`,
+                }}
+              >
+                {PHASE_LABELS[narrative.phase]?.label ?? narrative.phase.toUpperCase()}
+              </span>
+            </div>
+          )}
+          <p className="text-[11px] leading-[1.6] text-[#d1d4dc]">
+            {narrative.summary}
+          </p>
+          <div className="mt-2 border-t border-[#1a1f2e] pt-2">
+            <ConfluenceMeter count={narrative.confluence_count} total={narrative.confluence_total} />
           </div>
-        )}
-        <p className="text-[11px] leading-[1.6] text-[#d1d4dc]">
-          {narrative.summary}
-        </p>
-        <div className="mt-2 border-t border-[#1a1f2e] pt-2">
-          <ConfluenceMeter count={narrative.confluence_count} total={narrative.confluence_total} />
         </div>
-      </div>
+      </CollapsibleSection>
 
       {/* Anomalies */}
       {narrative.anomalies.length > 0 && (
-        <div className="mb-3">
-          <h3 className="mb-2 text-[9px] font-semibold uppercase tracking-[0.15em] text-[#5d6477]">
-            Anomalies
-          </h3>
+        <CollapsibleSection title="Anomalies" count={sortedAnomalies.length}>
           <div className="flex flex-col gap-1.5">
             {sortedAnomalies.map((anomaly, i) => (
               <AnomalyCallout key={i} anomaly={anomaly} />
             ))}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {/* Timeline */}
       {timelineEvents.length > 0 && (
-        <div>
-          <h3 className="mb-2 text-[9px] font-semibold uppercase tracking-[0.15em] text-[#5d6477]">
-            Timeline
-          </h3>
+        <CollapsibleSection title="Timeline" count={timelineEvents.length}>
           <div className="flex flex-col">
             {timelineEvents.map((event, i) => (
               <TimelineEvent key={i} event={event} />
             ))}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {/* Empty state */}

@@ -209,26 +209,23 @@ function App() {
                   </span>
                 </div>
                 <div className="flex-1 overflow-y-auto p-3">
-                  {data.narrative && (
-                    <>
+                  <div className="flex flex-col gap-4 divide-y divide-[#1a1f2e] [&>*:not(:first-child)]:pt-4">
+                    {data.narrative && (
                       <NarrativePanel narrative={data.narrative} />
-                      <div className="mt-4 border-t border-[#1a1f2e] pt-4" />
-                    </>
-                  )}
-                  <ManipulationCyclesPanel
-                    cycles={data.manipulation_cycles}
-                    chartVisible={manipChartVisible}
-                    onToggleChart={() => setManipChartVisible((v) => !v)}
-                  />
-                  {data.behavior_divergences.length > 0 && (
-                    <div className="mt-4 border-t border-[#1a1f2e] pt-4">
+                    )}
+                    <ManipulationCyclesPanel
+                      cycles={data.manipulation_cycles}
+                      chartVisible={manipChartVisible}
+                      onToggleChart={() => setManipChartVisible((v) => !v)}
+                    />
+                    {data.behavior_divergences.length > 0 && (
                       <BehaviorDivergencePanel
                         divergences={data.behavior_divergences}
                         chartVisible={divChartVisible}
                         onToggleChart={() => setDivChartVisible((v) => !v)}
                       />
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
