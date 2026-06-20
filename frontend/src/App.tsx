@@ -6,6 +6,7 @@ import { KpiRow } from './components/KpiRow'
 import { Logo } from './components/Logo'
 import { MainChart } from './components/MainChart'
 import { ManipulationCyclesPanel } from './components/ManipulationCyclesPanel'
+import { NarrativePanel } from './components/NarrativePanel'
 import type { DashboardData, TimeFrame } from './types/dashboard'
 
 const SYMBOL = 'BTCUSDT'
@@ -208,6 +209,12 @@ function App() {
                   </span>
                 </div>
                 <div className="flex-1 overflow-y-auto p-3">
+                  {data.narrative && (
+                    <>
+                      <NarrativePanel narrative={data.narrative} />
+                      <div className="mt-4 border-t border-[#1a1f2e] pt-4" />
+                    </>
+                  )}
                   <ManipulationCyclesPanel
                     cycles={data.manipulation_cycles}
                     chartVisible={manipChartVisible}
