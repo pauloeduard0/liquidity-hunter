@@ -324,9 +324,10 @@ function buildManipulationBoxes(
 interface MainChartProps {
   data: DashboardData
   showManipulationBoxes?: boolean
+  showDivergenceMarkers?: boolean
 }
 
-export function MainChart({ data, showManipulationBoxes = true }: MainChartProps) {
+export function MainChart({ data, showManipulationBoxes = true, showDivergenceMarkers = true }: MainChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const mainContainerRef = useRef<HTMLDivElement>(null)
   const deltaContainerRef = useRef<HTMLDivElement>(null)
@@ -812,7 +813,9 @@ export function MainChart({ data, showManipulationBoxes = true }: MainChartProps
     manipBoxesPrimitiveRef.current?.setBoxes(manipBoxes)
 
     // Behavior divergence markers
-    const divMarkers = buildDivergenceMarkers(data.behavior_divergences ?? [])
+    const divMarkers = showDivergenceMarkers
+      ? buildDivergenceMarkers(data.behavior_divergences ?? [])
+      : []
     divergenceMarkersRef.current?.setMarkers(divMarkers)
 
     labelsPrimitiveRef.current?.setLabels(labels)
@@ -823,7 +826,7 @@ export function MainChart({ data, showManipulationBoxes = true }: MainChartProps
       rsiChart.timeScale().fitContent()
       hasFittedRef.current = true
     }
-  }, [data, showManipulationBoxes])
+  }, [data, showManipulationBoxes, showDivergenceMarkers])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

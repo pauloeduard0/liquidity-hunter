@@ -103,11 +103,17 @@ function DivergenceCard({ divergence }: { divergence: BehaviorDivergence }) {
 
 interface BehaviorDivergencePanelProps {
   divergences: BehaviorDivergence[]
+  chartVisible: boolean
+  onToggleChart: () => void
 }
 
 const MAX_DISPLAY = 5
 
-export function BehaviorDivergencePanel({ divergences }: BehaviorDivergencePanelProps) {
+export function BehaviorDivergencePanel({
+  divergences,
+  chartVisible,
+  onToggleChart,
+}: BehaviorDivergencePanelProps) {
   const sorted = [...divergences]
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
     .slice(0, MAX_DISPLAY)
@@ -118,11 +124,21 @@ export function BehaviorDivergencePanel({ divergences }: BehaviorDivergencePanel
         <h2 className="text-[10px] font-semibold uppercase tracking-[0.15em] text-[#5d6477]">
           Behavior Divergences
         </h2>
-        {sorted.length > 0 && (
-          <span className="rounded-sm bg-[#1a1f2e] px-1.5 py-[2px] font-mono text-[9px] font-medium text-[#5d6477]">
-            {sorted.length}
-          </span>
-        )}
+        <button
+          onClick={onToggleChart}
+          title={chartVisible ? 'Hide chart overlay' : 'Show chart overlay'}
+          className="group/btn flex items-center gap-1 rounded-sm px-1.5 py-[3px] text-[9px] font-bold tracking-wider transition-all duration-200"
+          style={{
+            color: chartVisible ? '#2962ff' : '#5d6477',
+            backgroundColor: chartVisible ? '#2962ff12' : '#0f1319',
+          }}
+        >
+          <span
+            className="inline-block h-1.5 w-1.5 rounded-full transition-colors"
+            style={{ backgroundColor: chartVisible ? '#2962ff' : '#5d6477' }}
+          />
+          {chartVisible ? 'OVERLAY' : 'HIDDEN'}
+        </button>
       </div>
       {sorted.length === 0 ? (
         <div className="flex flex-col items-center gap-2 py-6 text-center">

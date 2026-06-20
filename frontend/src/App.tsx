@@ -77,6 +77,7 @@ function App() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [manipChartVisible, setManipChartVisible] = useState(true)
+  const [divChartVisible, setDivChartVisible] = useState(true)
   const [, setTick] = useState(0)
 
   const switchTimeframe = (tf: TimeFrame) => {
@@ -195,7 +196,7 @@ function App() {
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col p-1">
-                  <MainChart key={timeframe} data={data} showManipulationBoxes={manipChartVisible} />
+                  <MainChart key={timeframe} data={data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} />
                 </div>
               </div>
 
@@ -214,7 +215,11 @@ function App() {
                   />
                   {data.behavior_divergences.length > 0 && (
                     <div className="mt-4 border-t border-[#1a1f2e] pt-4">
-                      <BehaviorDivergencePanel divergences={data.behavior_divergences} />
+                      <BehaviorDivergencePanel
+                        divergences={data.behavior_divergences}
+                        chartVisible={divChartVisible}
+                        onToggleChart={() => setDivChartVisible((v) => !v)}
+                      />
                     </div>
                   )}
                 </div>
