@@ -5,9 +5,11 @@ liquidity zones, structural events, retail psychology) and contain no
 trading, signal, or decisioning logic.
 """
 
+from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
 from liquidity_hunter.core.domain.candle import Candle
 from liquidity_hunter.core.domain.enums import (
     BiasSource,
+    DivergenceType,
     LiquiditySide,
     LiquidityZoneType,
     ManipulationCycleStatus,
@@ -26,8 +28,10 @@ from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
 from liquidity_hunter.core.domain.retail_bias import RetailBias
 
 __all__ = [
+    "BehaviorDivergence",
     "BiasSource",
     "Candle",
+    "DivergenceType",
     "LiquiditySide",
     "LiquidityZone",
     "LiquidityZoneType",

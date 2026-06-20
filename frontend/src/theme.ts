@@ -67,6 +67,14 @@ export const MANIPULATION_BOX_STYLES: Record<string, { border: string; fill: str
   failed: { border: '#8a8f9c', fill: '#8a8f9c12' },
 }
 
+/** Behavior divergence type colors and marker shapes. */
+export const DIVERGENCE_STYLES: Record<string, { label: string; color: string; bg: string; icon: string }> = {
+  distribution: { label: 'DIST', color: '#ef5350', bg: '#ef535015', icon: '▼' },
+  accumulation: { label: 'ACCUM', color: '#26a69a', bg: '#26a69a15', icon: '▲' },
+  exhaustion: { label: 'EXHAUST', color: '#ffb74d', bg: '#ffb74d15', icon: '◇' },
+  absorption: { label: 'ABSORB', color: '#ab63fa', bg: '#ab63fa15', icon: '◆' },
+}
+
 /** Volume delta histogram bar colors. */
 export const VOLUME_DELTA_UP_COLOR = '#26a69a'
 export const VOLUME_DELTA_DOWN_COLOR = '#ef5350'

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { fetchDashboardData } from './api/dashboard'
+import { BehaviorDivergencePanel } from './components/BehaviorDivergencePanel'
 import { KpiRow } from './components/KpiRow'
 import { Logo } from './components/Logo'
 import { MainChart } from './components/MainChart'
@@ -211,6 +212,11 @@ function App() {
                     chartVisible={manipChartVisible}
                     onToggleChart={() => setManipChartVisible((v) => !v)}
                   />
+                  {data.behavior_divergences.length > 0 && (
+                    <div className="mt-4 border-t border-[#1a1f2e] pt-4">
+                      <BehaviorDivergencePanel divergences={data.behavior_divergences} />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

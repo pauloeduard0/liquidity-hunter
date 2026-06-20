@@ -140,12 +140,21 @@ and `validate_assignment=True`. New entities should follow this pattern.
   `accumulation_avg_volume_delta`), sweep context (`sweep_timestamp`,
   `sweep_extreme`, `sweep_volume_delta`), and expansion context
   (`expansion_timestamp`, `expansion_price`, `expansion_volume_delta`).
+- **`BehaviorDivergence`** — an observed divergence between price movement
+  and volume delta, defined in `core/domain/behavior_divergence.py`. Detects
+  when institutional flow opposes visible price direction. Fields: `timestamp`,
+  `divergence_type` (`DivergenceType`: `DISTRIBUTION`/`ACCUMULATION`/
+  `EXHAUSTION`/`ABSORPTION`), `direction` (apparent price direction),
+  `price_level`, `volume_delta_avg`, `price_change_pct`, optional zone
+  context (`nearest_zone_side`, `nearest_zone_price_low/high`),
+  `confidence` (0-100), `description`.
 - **`RetailBias`** — a measurement of retail sentiment/positioning from a
   given `BiasSource`, with a bounded `sentiment_score` and `confidence`.
 
 Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `LiquidityZoneType`, `StructureEvent`, `BiasSource`, `RetailPositioning`,
-`POIZoneStatus`, `ManipulationPhase`, `ManipulationCycleStatus`) live in
+`POIZoneStatus`, `ManipulationPhase`, `ManipulationCycleStatus`,
+`DivergenceType`) live in
 `core/domain/enums.py`. Extend behavior by adding enum members rather than
 branching logic elsewhere (Open/Closed principle).
 
@@ -493,7 +502,27 @@ documented in `liquidity_hunter/docs/psychology.md`.
   (keeping the strongest), and zones already targeted by a sweep-based cycle
   are excluded from prospective results via proximity matching.
 
-All four are re-exported from `liquidity_hunter.psychology`.
+- **`psychology/analyzers/behavior_divergence.py`** —
+  `BehaviorDivergenceAnalyzer`: cross-references `volume_delta_series` with
+  `LiquidityZone` proximity and `MarketStructure` events to detect when
+  institutional flow opposes visible price direction. Produces
+  `list[BehaviorDivergence]` with four divergence types:
+  - **Distribution**: price rising + negative VD near a buy-side zone →
+    institutional selling into retail buying.
+  - **Accumulation**: price falling + positive VD near a sell-side zone →
+    institutional buying into retail panic.
+  - **Exhaustion**: VD magnitude declining after a BOS while price continues
+    trending → move losing momentum.
+  - **Absorption**: high volume + small price movement near a zone → large
+    orders being absorbed at a key level.
+  Constructor parameters: `window_size` (default `None` → resolved per
+  timeframe from `_TIMEFRAME_WINDOW`: M1=20, M5=15, M15=10, M30=7, H1=7,
+  H4=5, D1=5, W1=3), `proximity_pct` (default `0.02` = 2%),
+  `min_price_change_pct` (default `0.005` = 0.5%), `min_vd_ratio` (default
+  `0.1` = 10% of average volume). Deduplication keeps only the
+  highest-confidence event per type within a window-sized range.
+
+All five are re-exported from `liquidity_hunter.psychology`.
 
 ### Scoring layer (`liquidity_hunter/scoring`)
 
@@ -529,8 +558,8 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `higher_timeframe_direction`, `liquidity_zones`, `ranked_zones`,
   `market_structure_events`, `internal_structure_events`, `retail_bias`,
   `poi_zones` (`list[POIZone]`), `poi_sweep_events` (`list[RTOSweepEvent]`),
-  and `manipulation_cycles` (`list[ManipulationCycle]`) for one
-  symbol/timeframe.
+  `manipulation_cycles` (`list[ManipulationCycle]`), and
+  `behavior_divergences` (`list[BehaviorDivergence]`) for one symbol/timeframe.
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=..., swing_lookback=..., internal_swing_lookback=..., confluence_filter=True)`**
   — fetches candles, runs all liquidity detectors, scores the zones via
   `LiquidityScoringEngine`, runs `SwingStructureDetector(swing_lookback=...,
@@ -561,6 +590,9 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   After all detectors run, `ManipulationCycleDetector().detect(candles,
   all_structure, liquidity_zones, poi_sweep_events, volume_delta_series(candles))`
   populates `manipulation_cycles`.
+
+  `BehaviorDivergenceAnalyzer().analyze(candles, vd, liquidity_zones,
+  all_structure)` populates `behavior_divergences`.
 
 `DashboardData` and `ScoredLiquidityZone` are re-exported from
 `liquidity_hunter.app` for use by `dashboard`.
@@ -596,7 +628,8 @@ only on `app` and `core` (an alternative presentation layer to
   `LiquidityZone`, `MarketStructure`, `ScoredLiquidityZone`,
   `RetailBiasEstimate`, `POIZone`, `RTOSweepEvent`, `ManipulationCycle`) are
   already `DomainModel`s and serialize as-is. `poi_zones`,
-  `poi_sweep_events`, and `manipulation_cycles` fields are included.
+  `poi_sweep_events`, `manipulation_cycles`, and `behavior_divergences`
+  fields are included.
 
 Tested with FastAPI's `TestClient` in `liquidity_hunter/tests/api/test_main.py`.
 
@@ -666,7 +699,7 @@ selector.
 - **`frontend/src/types/dashboard.ts`** — TypeScript types mirroring the API
   schema; includes `POIZone`, `RTOSweepEvent`, `MarketStructure` (with
   `reference_timestamp`), `ManipulationCycle`, `ManipulationPhase`,
-  `ManipulationCycleStatus`.
+  `ManipulationCycleStatus`, `BehaviorDivergence`, `DivergenceType`.
 - **`frontend/src/theme.ts`** — color constants for POI zones, structure
   events, manipulation cycle boxes (`MANIPULATION_BOX_STYLES`), volume delta,
   RSI, and other chart elements.
@@ -745,6 +778,15 @@ matching. The React frontend renders cycles in a sidebar panel
 (`ManipulationCyclesPanel`, max 5 cards) and as chart overlay boxes (max 3,
 togglable via CHART ON/OFF button).
 
+**Behavior divergence detection**: `BehaviorDivergenceAnalyzer` cross-references
+volume delta with zone proximity and structure events to detect when institutional
+flow opposes visible price direction. Four types: distribution (price rising +
+negative VD near buy-side zone), accumulation (price falling + positive VD near
+sell-side zone), exhaustion (VD declining after BOS), absorption (high volume +
+small price movement near zone). Window size is timeframe-adaptive. Wired into
+`DashboardData` and the API schema; frontend TypeScript types are defined but
+no sidebar panel or chart overlay yet.
+
 **React frontend panes**: the main chart has three synced panes — candlestick
 (main), volume delta histogram, and RSI(14) with regular divergence detection
 (bullish LL+HL, bearish HH+LH). All three share synchronized time scales and
@@ -753,5 +795,6 @@ crosshairs.
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.
+- React frontend behavior divergence sidebar panel and chart overlay.
 - React frontend liquidity targets, retail trap, and market structure
   sidebar panels.

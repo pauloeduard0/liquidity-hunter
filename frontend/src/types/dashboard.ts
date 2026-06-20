@@ -41,6 +41,8 @@ export type ManipulationPhase = 'accumulation' | 'manipulation' | 'expansion'
 
 export type ManipulationCycleStatus = 'in_progress' | 'confirmed' | 'failed'
 
+export type DivergenceType = 'distribution' | 'accumulation' | 'exhaustion' | 'absorption'
+
 export interface Candle {
   symbol: string
   timeframe: TimeFrame
@@ -142,6 +144,22 @@ export interface ManipulationCycle {
   expansion_volume_delta: number | null
 }
 
+export interface BehaviorDivergence {
+  symbol: string
+  timeframe: TimeFrame
+  timestamp: string
+  divergence_type: DivergenceType
+  direction: MarketDirection
+  price_level: number
+  volume_delta_avg: number
+  price_change_pct: number
+  nearest_zone_side: LiquiditySide | null
+  nearest_zone_price_low: number | null
+  nearest_zone_price_high: number | null
+  confidence: number
+  description: string
+}
+
 export interface DashboardData {
   symbol: string
   timeframe: TimeFrame
@@ -156,4 +174,5 @@ export interface DashboardData {
   poi_zones: POIZone[]
   poi_sweep_events: RTOSweepEvent[]
   manipulation_cycles: ManipulationCycle[]
+  behavior_divergences: BehaviorDivergence[]
 }

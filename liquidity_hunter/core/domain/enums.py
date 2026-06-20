@@ -102,3 +102,12 @@ class ManipulationCycleStatus(str, Enum):
     IN_PROGRESS = "in_progress"
     CONFIRMED = "confirmed"
     FAILED = "failed"
+
+
+class DivergenceType(str, Enum):
+    """Classification of a price/volume-delta behavioral divergence."""
+
+    DISTRIBUTION = "distribution"
+    ACCUMULATION = "accumulation"
+    EXHAUSTION = "exhaustion"
+    ABSORPTION = "absorption"

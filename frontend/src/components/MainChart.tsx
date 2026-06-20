@@ -7,20 +7,25 @@ import {
   LineStyle,
   CrosshairMode,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts'
 
 import { LineLabelsPrimitive, type LineLabel } from '../charting/LineLabelsPrimitive'
 import { POIBoxesPrimitive, type POIBox } from '../charting/POIBoxesPrimitive'
-import type { DashboardData, ManipulationCycle, MarketStructure, POIZone } from '../types/dashboard'
+import type { BehaviorDivergence, DashboardData, ManipulationCycle, MarketStructure, POIZone } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
   DARK_BG,
   DEFAULT_ZONE_COLOR,
   FONT_COLOR,
+  DIVERGENCE_STYLES,
   MANIPULATION_BOX_STYLES,
   POI_BOX_STYLES,
   RSI_DIV_BEARISH_COLOR,
@@ -231,6 +236,31 @@ function poiBoxEndTime(
     : ((lastCandleTime + 9_999_999) as UTCTimestamp)
 }
 
+const DIVERGENCE_MARKER_SHAPES: Record<string, { shape: 'circle' | 'square' | 'arrowUp' | 'arrowDown'; position: 'aboveBar' | 'belowBar' }> = {
+  distribution: { shape: 'arrowDown', position: 'aboveBar' },
+  accumulation: { shape: 'arrowUp', position: 'belowBar' },
+  exhaustion: { shape: 'circle', position: 'aboveBar' },
+  absorption: { shape: 'square', position: 'belowBar' },
+}
+
+function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker<Time>[] {
+  return [...divergences]
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+    .map((div) => {
+      const style = DIVERGENCE_STYLES[div.divergence_type]
+      const markerStyle = DIVERGENCE_MARKER_SHAPES[div.divergence_type] ?? DIVERGENCE_MARKER_SHAPES.exhaustion
+      const dirIcon = div.direction === 'bullish' ? '▲' : '▼'
+      return {
+        time: toUtcTimestamp(div.timestamp) as Time,
+        position: markerStyle.position,
+        shape: markerStyle.shape,
+        color: style?.color ?? '#888888',
+        text: `${style?.label ?? div.divergence_type} ${dirIcon}`,
+        size: 1.5,
+      } as SeriesMarker<Time>
+    })
+}
+
 const MAX_MANIP_BOXES = 3
 const ZONE_PRICE_BUFFER_PCT = 0.003
 
@@ -313,6 +343,7 @@ export function MainChart({ data, showManipulationBoxes = true }: MainChartProps
   const labelsPrimitiveRef = useRef<LineLabelsPrimitive | null>(null)
   const poiBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const manipBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
+  const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const hasFittedRef = useRef(false)
   const isSyncingRef = useRef(false)
 
@@ -423,6 +454,9 @@ export function MainChart({ data, showManipulationBoxes = true }: MainChartProps
     series.attachPrimitive(manipBoxesPrimitive)
     manipBoxesPrimitiveRef.current = manipBoxesPrimitive
 
+    const divergenceMarkers = createSeriesMarkers(series)
+    divergenceMarkersRef.current = divergenceMarkers
+
     // Sync time scales across all three charts
     const charts = [chart, deltaChart, rsiChart]
     for (const src of charts) {
@@ -504,6 +538,7 @@ export function MainChart({ data, showManipulationBoxes = true }: MainChartProps
       labelsPrimitiveRef.current = null
       poiBoxesPrimitiveRef.current = null
       manipBoxesPrimitiveRef.current = null
+      divergenceMarkersRef.current = null
       hasFittedRef.current = false
     }
   }, [])
@@ -775,6 +810,10 @@ export function MainChart({ data, showManipulationBoxes = true }: MainChartProps
       ? buildManipulationBoxes(data.manipulation_cycles ?? [], lastCandleTime)
       : []
     manipBoxesPrimitiveRef.current?.setBoxes(manipBoxes)
+
+    // Behavior divergence markers
+    const divMarkers = buildDivergenceMarkers(data.behavior_divergences ?? [])
+    divergenceMarkersRef.current?.setMarkers(divMarkers)
 
     labelsPrimitiveRef.current?.setLabels(labels)
 

@@ -14,6 +14,7 @@ from liquidity_hunter.core.domain import (
     MarketStructure,
     TimeFrame,
 )
+from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
 from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
 from liquidity_hunter.data import BinanceDataProvider, OHLCVProvider
 from liquidity_hunter.indicators import volume_delta_series
@@ -28,6 +29,7 @@ from liquidity_hunter.liquidity import (
     mark_swept_zones,
 )
 from liquidity_hunter.psychology import (
+    BehaviorDivergenceAnalyzer,
     ManipulationCycleDetector,
     RetailBiasEstimate,
     RetailTrapAnalyzer,
@@ -75,6 +77,7 @@ class DashboardData:
     poi_zones: list[POIZone]
     poi_sweep_events: list[RTOSweepEvent]
     manipulation_cycles: list[ManipulationCycle]
+    behavior_divergences: list[BehaviorDivergence]
 
 
 def _latest_structure_direction(events: list[MarketStructure]) -> MarketDirection:
@@ -170,6 +173,13 @@ def load_dashboard_data(
         volume_deltas=vd,
     )
 
+    behavior_divergences = BehaviorDivergenceAnalyzer().analyze(
+        candles=candles,
+        volume_deltas=vd,
+        liquidity_zones=liquidity_zones,
+        structure_events=all_structure,
+    )
+
     return DashboardData(
         symbol=symbol,
         timeframe=timeframe,
@@ -184,4 +194,5 @@ def load_dashboard_data(
         poi_zones=poi_zones,
         poi_sweep_events=poi_sweep_events,
         manipulation_cycles=manipulation_cycles,
+        behavior_divergences=behavior_divergences,
     )
