@@ -150,11 +150,21 @@ and `validate_assignment=True`. New entities should follow this pattern.
   `confidence` (0-100), `description`.
 - **`RetailBias`** — a measurement of retail sentiment/positioning from a
   given `BiasSource`, with a bounded `sentiment_score` and `confidence`.
+- **`MarketNarrative`** — synthesized institutional narrative for a
+  symbol/timeframe snapshot, defined in `core/domain/narrative.py`. Fields:
+  `symbol`, `timeframe`, `timestamp`, `phase` (`ManipulationPhase | None`),
+  `timeline` (`list[NarrativeEvent]`), `anomalies` (`list[NarrativeAnomaly]`),
+  `summary`, `confluence_count`, `confluence_total`.
+- **`NarrativeEvent`** — a single event in the narrative timeline. Fields:
+  `timestamp`, `event_type` (`NarrativeEventType`), `direction`, `description`,
+  `source_layer`.
+- **`NarrativeAnomaly`** — a pattern contradiction. Fields: `timestamp`,
+  `expected`, `observed`, `description`, `severity` (`AnomalySeverity`).
 
 Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `LiquidityZoneType`, `StructureEvent`, `BiasSource`, `RetailPositioning`,
 `POIZoneStatus`, `ManipulationPhase`, `ManipulationCycleStatus`,
-`DivergenceType`) live in
+`DivergenceType`, `NarrativeEventType`, `AnomalySeverity`) live in
 `core/domain/enums.py`. Extend behavior by adding enum members rather than
 branching logic elsewhere (Open/Closed principle).
 
@@ -558,8 +568,9 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `higher_timeframe_direction`, `liquidity_zones`, `ranked_zones`,
   `market_structure_events`, `internal_structure_events`, `retail_bias`,
   `poi_zones` (`list[POIZone]`), `poi_sweep_events` (`list[RTOSweepEvent]`),
-  `manipulation_cycles` (`list[ManipulationCycle]`), and
-  `behavior_divergences` (`list[BehaviorDivergence]`) for one symbol/timeframe.
+  `manipulation_cycles` (`list[ManipulationCycle]`),
+  `behavior_divergences` (`list[BehaviorDivergence]`), and
+  `narrative` (`MarketNarrative | None`) for one symbol/timeframe.
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=..., swing_lookback=..., internal_swing_lookback=..., confluence_filter=True)`**
   — fetches candles, runs all liquidity detectors, scores the zones via
   `LiquidityScoringEngine`, runs `SwingStructureDetector(swing_lookback=...,
@@ -594,8 +605,36 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `BehaviorDivergenceAnalyzer().analyze(candles, vd, liquidity_zones,
   all_structure)` populates `behavior_divergences`.
 
-`DashboardData` and `ScoredLiquidityZone` are re-exported from
-`liquidity_hunter.app` for use by `dashboard`.
+  Finally, `NarrativeEngine().build(data)` synthesizes all outputs into a
+  `MarketNarrative` (timeline, anomalies, phase-dependent summary,
+  confluence count). The engine runs last via `dataclasses.replace` since
+  it depends on the fully assembled `DashboardData`.
+
+- **`app/narrative.py`** — `NarrativeEngine`: composition-level synthesizer
+  that builds a `MarketNarrative` from a completed `DashboardData`. Lives in
+  `app/` (not `psychology/`) because it depends on outputs from every layer.
+  `build(data) -> MarketNarrative` produces:
+  - **Timeline**: chronological `list[NarrativeEvent]` mapped from structure
+    events (major + internal BOS/CHoCH/SWEEP), manipulation cycle phases
+    (consolidation/sweep/expansion), behavior divergences, and POI sweep
+    events. Deduplicated by `(timestamp, event_type)`, keeping the
+    higher-priority source (`manipulation_cycle` > `poi` >
+    `behavior_divergence` > `market_structure`).
+  - **Anomalies**: `list[NarrativeAnomaly]` detecting pattern contradictions:
+    expansion + exhaustion (HIGH), accumulation + distribution (MEDIUM),
+    concentrated liquidity on one side (MEDIUM/HIGH), unconfirmed CHoCH
+    (MEDIUM), BOS without sustained VD (MEDIUM).
+  - **Phase**: the `ManipulationPhase` of the latest active cycle, or `None`.
+  - **Summary**: phase-dependent institutional tone incorporating retail bias,
+    HTF alignment, and VD context. Phases: neutral, accumulation
+    ("smart money absorbing supply"), manipulation ("stops swept, cascading
+    liquidation, retail trapped"), expansion ("impulsive move, sustained VD"),
+    failed ("expansion failed to materialize, cycle invalidated").
+  - **Confluence**: `(count, total)` — how many detection layers agree on
+    direction (structure, manipulation cycle, behavior divergence, HTF).
+
+`DashboardData`, `NarrativeEngine`, and `ScoredLiquidityZone` are re-exported
+from `liquidity_hunter.app` for use by `dashboard`.
 
 ### API layer (`liquidity_hunter/api`)
 
@@ -628,8 +667,8 @@ only on `app` and `core` (an alternative presentation layer to
   `LiquidityZone`, `MarketStructure`, `ScoredLiquidityZone`,
   `RetailBiasEstimate`, `POIZone`, `RTOSweepEvent`, `ManipulationCycle`) are
   already `DomainModel`s and serialize as-is. `poi_zones`,
-  `poi_sweep_events`, `manipulation_cycles`, and `behavior_divergences`
-  fields are included.
+  `poi_sweep_events`, `manipulation_cycles`, `behavior_divergences`, and
+  `narrative` fields are included.
 
 Tested with FastAPI's `TestClient` in `liquidity_hunter/tests/api/test_main.py`.
 
@@ -699,7 +738,9 @@ selector.
 - **`frontend/src/types/dashboard.ts`** — TypeScript types mirroring the API
   schema; includes `POIZone`, `RTOSweepEvent`, `MarketStructure` (with
   `reference_timestamp`), `ManipulationCycle`, `ManipulationPhase`,
-  `ManipulationCycleStatus`, `BehaviorDivergence`, `DivergenceType`.
+  `ManipulationCycleStatus`, `BehaviorDivergence`, `DivergenceType`,
+  `MarketNarrative`, `NarrativeEvent`, `NarrativeAnomaly`,
+  `NarrativeEventType`, `AnomalySeverity`.
 - **`frontend/src/theme.ts`** — color constants for POI zones, structure
   events, manipulation cycle boxes (`MANIPULATION_BOX_STYLES`), volume delta,
   RSI, and other chart elements.
@@ -792,9 +833,20 @@ no sidebar panel or chart overlay yet.
 (bullish LL+HL, bearish HH+LH). All three share synchronized time scales and
 crosshairs.
 
+**Narrative engine**: `NarrativeEngine` (in `app/narrative.py`) synthesizes all
+detection layer outputs into a `MarketNarrative` — a chronological timeline of
+institutional events, pattern anomalies, phase-dependent summary, and
+confluence count. Wired into `DashboardData`, API schema, and frontend
+TypeScript types. Five anomaly detectors: expansion+exhaustion, accumulation+
+distribution, concentrated liquidity, unconfirmed CHoCH, BOS without VD.
+Summary tone adapts per manipulation phase (neutral, accumulation, manipulation,
+expansion, failed) with retail bias and HTF alignment context. Frontend
+`NarrativePanel` sidebar component is not yet implemented.
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.
+- React frontend narrative sidebar panel (`NarrativePanel`).
 - React frontend behavior divergence sidebar panel and chart overlay.
 - React frontend liquidity targets, retail trap, and market structure
   sidebar panels.

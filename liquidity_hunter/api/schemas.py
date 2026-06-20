@@ -14,6 +14,7 @@ from liquidity_hunter.core.domain import (
     LiquidityZone,
     ManipulationCycle,
     MarketDirection,
+    MarketNarrative,
     MarketStructure,
     TimeFrame,
 )
@@ -42,3 +43,4 @@ class DashboardDataResponse(BaseModel):
     poi_sweep_events: list[RTOSweepEvent]
     manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
+    narrative: MarketNarrative | None = None

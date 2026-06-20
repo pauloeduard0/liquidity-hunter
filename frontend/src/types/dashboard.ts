@@ -43,6 +43,19 @@ export type ManipulationCycleStatus = 'in_progress' | 'confirmed' | 'failed'
 
 export type DivergenceType = 'distribution' | 'accumulation' | 'exhaustion' | 'absorption'
 
+export type NarrativeEventType =
+  | 'consolidation'
+  | 'distribution'
+  | 'accumulation'
+  | 'sweep'
+  | 'expansion'
+  | 'exhaustion'
+  | 'absorption'
+  | 'structure_break'
+  | 'zone_mitigation'
+
+export type AnomalySeverity = 'low' | 'medium' | 'high'
+
 export interface Candle {
   symbol: string
   timeframe: TimeFrame
@@ -160,6 +173,34 @@ export interface BehaviorDivergence {
   description: string
 }
 
+export interface NarrativeEvent {
+  timestamp: string
+  event_type: NarrativeEventType
+  direction: MarketDirection
+  description: string
+  source_layer: string
+}
+
+export interface NarrativeAnomaly {
+  timestamp: string
+  expected: string
+  observed: string
+  description: string
+  severity: AnomalySeverity
+}
+
+export interface MarketNarrative {
+  symbol: string
+  timeframe: TimeFrame
+  timestamp: string
+  phase: ManipulationPhase | null
+  timeline: NarrativeEvent[]
+  anomalies: NarrativeAnomaly[]
+  summary: string
+  confluence_count: number
+  confluence_total: number
+}
+
 export interface DashboardData {
   symbol: string
   timeframe: TimeFrame
@@ -175,4 +216,5 @@ export interface DashboardData {
   poi_sweep_events: RTOSweepEvent[]
   manipulation_cycles: ManipulationCycle[]
   behavior_divergences: BehaviorDivergence[]
+  narrative: MarketNarrative | null
 }

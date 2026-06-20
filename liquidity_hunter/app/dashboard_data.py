@@ -4,13 +4,14 @@ Wires together `data`, `liquidity`, `scoring`, and `psychology` into a
 single `DashboardData` snapshot for `dashboard` to render.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from liquidity_hunter.core.domain import (
     Candle,
     LiquidityZone,
     ManipulationCycle,
     MarketDirection,
+    MarketNarrative,
     MarketStructure,
     TimeFrame,
 )
@@ -78,6 +79,7 @@ class DashboardData:
     poi_sweep_events: list[RTOSweepEvent]
     manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
+    narrative: MarketNarrative | None = None
 
 
 def _latest_structure_direction(events: list[MarketStructure]) -> MarketDirection:
@@ -180,7 +182,7 @@ def load_dashboard_data(
         structure_events=all_structure,
     )
 
-    return DashboardData(
+    data = DashboardData(
         symbol=symbol,
         timeframe=timeframe,
         candles=candles,
@@ -196,3 +198,8 @@ def load_dashboard_data(
         manipulation_cycles=manipulation_cycles,
         behavior_divergences=behavior_divergences,
     )
+
+    from liquidity_hunter.app.narrative import NarrativeEngine
+
+    narrative = NarrativeEngine().build(data)
+    return replace(data, narrative=narrative)

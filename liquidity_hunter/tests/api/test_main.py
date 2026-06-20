@@ -60,6 +60,16 @@ def test_dashboard_returns_snapshot(client: TestClient) -> None:
     assert "market_structure_events" in body
     assert "internal_structure_events" in body
     assert body["retail_bias"]["symbol"] == "BTCUSDT"
+    assert "narrative" in body
+    narrative = body["narrative"]
+    assert narrative is not None
+    assert narrative["symbol"] == "BTCUSDT"
+    assert narrative["timeframe"] == "1h"
+    assert isinstance(narrative["summary"], str)
+    assert isinstance(narrative["timeline"], list)
+    assert isinstance(narrative["anomalies"], list)
+    assert narrative["confluence_count"] >= 0
+    assert narrative["confluence_total"] >= 0
 
 
 def test_dashboard_uses_default_query_params(client: TestClient) -> None:

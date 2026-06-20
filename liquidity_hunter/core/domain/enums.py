@@ -111,3 +111,25 @@ class DivergenceType(str, Enum):
     ACCUMULATION = "accumulation"
     EXHAUSTION = "exhaustion"
     ABSORPTION = "absorption"
+
+
+class NarrativeEventType(str, Enum):
+    """Classification of a narrative timeline event."""
+
+    CONSOLIDATION = "consolidation"
+    DISTRIBUTION = "distribution"
+    ACCUMULATION = "accumulation"
+    SWEEP = "sweep"
+    EXPANSION = "expansion"
+    EXHAUSTION = "exhaustion"
+    ABSORPTION = "absorption"
+    STRUCTURE_BREAK = "structure_break"
+    ZONE_MITIGATION = "zone_mitigation"
+
+
+class AnomalySeverity(str, Enum):
+    """Severity of a narrative anomaly (pattern contradiction)."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
