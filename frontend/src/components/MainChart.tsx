@@ -46,6 +46,7 @@ const MAX_INTERNAL_SWEEPS = 3
 const MAIN_CHART_RATIO = 0.68
 const DELTA_CHART_RATIO = 0.16
 const MIN_TOTAL_HEIGHT = 500
+const PRICE_SCALE_MIN_WIDTH = 110
 
 const RSI_PERIOD = 14
 const DIV_PIVOT_LOOKBACK = 5
@@ -364,6 +365,7 @@ export function MainChart({ data, showManipulationBoxes = true, showDivergenceMa
       layout: {
         background: { type: ColorType.Solid as const, color: DARK_BG },
         textColor: FONT_COLOR,
+        attributionLogo: false,
       },
       grid: {
         vertLines: { visible: false },
@@ -378,6 +380,7 @@ export function MainChart({ data, showManipulationBoxes = true, showDivergenceMa
       width: mainContainer.clientWidth,
       height: mainHeight,
       timeScale: { ...chartOptions.timeScale, visible: false },
+      rightPriceScale: { minimumWidth: PRICE_SCALE_MIN_WIDTH },
     })
     chartRef.current = chart
 
@@ -386,7 +389,7 @@ export function MainChart({ data, showManipulationBoxes = true, showDivergenceMa
       width: deltaContainer.clientWidth,
       height: deltaHeight,
       timeScale: { ...chartOptions.timeScale, visible: false },
-      rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 } },
+      rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, minimumWidth: PRICE_SCALE_MIN_WIDTH },
     })
     deltaChartRef.current = deltaChart
 
@@ -394,7 +397,7 @@ export function MainChart({ data, showManipulationBoxes = true, showDivergenceMa
       ...chartOptions,
       width: rsiContainer.clientWidth,
       height: rsiHeight,
-      rightPriceScale: { scaleMargins: { top: 0.05, bottom: 0.05 } },
+      rightPriceScale: { scaleMargins: { top: 0.05, bottom: 0.05 }, minimumWidth: PRICE_SCALE_MIN_WIDTH },
     })
     rsiChartRef.current = rsiChart
 
@@ -584,16 +587,15 @@ export function MainChart({ data, showManipulationBoxes = true, showDivergenceMa
       }),
     )
 
-    // RSI
+    // RSI — include whitespace entries for the bootstrap period so bar indices
+    // match the main/delta charts and the logical-range sync stays aligned.
     const closes = data.candles.map((c) => c.close)
     const rsiValues = computeRSI(closes, RSI_PERIOD)
-    const rsiData: { time: UTCTimestamp; value: number }[] = []
-    for (let i = 0; i < data.candles.length; i++) {
+    const rsiData = data.candles.map((candle, i) => {
+      const time = toUtcTimestamp(candle.timestamp)
       const v = rsiValues[i]
-      if (v !== null) {
-        rsiData.push({ time: toUtcTimestamp(data.candles[i].timestamp), value: v })
-      }
-    }
+      return v !== null ? { time, value: v } : { time }
+    })
     rsiSeries.setData(rsiData)
 
     // RSI 70/30 reference lines
@@ -826,18 +828,19 @@ export function MainChart({ data, showManipulationBoxes = true, showDivergenceMa
       rsiChart.timeScale().fitContent()
       hasFittedRef.current = true
     }
+
   }, [data, showManipulationBoxes, showDivergenceMarkers])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">
       <div ref={mainContainerRef} className="w-full" />
-      <div className="relative w-full">
+      <div className="relative w-full border-t border-[#1e222d]">
         <span className="pointer-events-none absolute left-2 top-1 z-10 text-xs text-[#8a8f9c]">
           Volume Delta
         </span>
         <div ref={deltaContainerRef} className="w-full" />
       </div>
-      <div className="relative w-full">
+      <div className="relative w-full border-t border-[#1e222d]">
         <span className="pointer-events-none absolute left-2 top-1 z-10 text-xs text-[#8a8f9c]">
           RSI ({RSI_PERIOD})
         </span>
