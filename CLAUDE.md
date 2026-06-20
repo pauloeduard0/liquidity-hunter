@@ -80,7 +80,7 @@ dashboard, api ── both depend on app, core (alternative presentation layers)
 
 | Layer        | Responsibility                                                              | May depend on                     |
 |--------------|------------------------------------------------------------------------------|------------------------------------|
-| `core`       | Framework-agnostic domain entities (`Candle`, `LiquidityZone`, `MarketStructure`, `RetailBias`) and shared enums | nothing |
+| `core`       | Framework-agnostic domain entities (`Candle`, `LiquidityZone`, `MarketStructure`, `ManipulationCycle`, `RetailBias`) and shared enums | nothing |
 | `data`       | Market data acquisition, repositories, persistence adapters                 | `core`                              |
 | `indicators` | Stateless derived series computed from `Candle` data                        | `core`, `data`                      |
 | `liquidity`  | Detection/modeling of `LiquidityZone` and `MarketStructure`                  | `core`, `data`, `indicators`        |
@@ -126,13 +126,29 @@ and `validate_assignment=True`. New entities should follow this pattern.
   invalidation boundary and a subsequent candle closes back inside. Fields:
   `timestamp`, `direction`, `zone_price_low`, `zone_price_high`, `sweep_extreme`
   (the most adverse price reached during the sweep).
+- **`ManipulationCycle`** — an observed institutional manipulation cycle
+  (accumulation → sweep → expansion), defined in
+  `core/domain/manipulation_cycle.py`. Describes the three-phase Wyckoff/SMC
+  pattern where price consolidates near a liquidity zone (accumulation),
+  sweeps the zone to capture stops (manipulation), then moves impulsively in
+  the opposite direction (expansion). `direction` is the expansion direction:
+  a bullish cycle sweeps sell-side liquidity (lows) then expands upward.
+  Fields: `direction`, `phase` (`ManipulationPhase`: `ACCUMULATION`/
+  `MANIPULATION`/`EXPANSION`), `status` (`ManipulationCycleStatus`:
+  `IN_PROGRESS`/`CONFIRMED`/`FAILED`), target zone info
+  (`target_zone_price_low/high`, `target_zone_type`, `target_zone_side`),
+  accumulation context (`accumulation_start/end`, `consolidation_candles`,
+  `accumulation_avg_volume_delta`), sweep context (`sweep_timestamp`,
+  `sweep_extreme`, `sweep_volume_delta`), and expansion context
+  (`expansion_timestamp`, `expansion_price`, `expansion_volume_delta`).
 - **`RetailBias`** — a measurement of retail sentiment/positioning from a
   given `BiasSource`, with a bounded `sentiment_score` and `confidence`.
 
 Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `LiquidityZoneType`, `StructureEvent`, `BiasSource`, `RetailPositioning`,
-`POIZoneStatus`) live in `core/domain/enums.py`. Extend behavior by adding
-enum members rather than branching logic elsewhere (Open/Closed principle).
+`POIZoneStatus`, `ManipulationPhase`, `ManipulationCycleStatus`) live in
+`core/domain/enums.py`. Extend behavior by adding enum members rather than
+branching logic elsewhere (Open/Closed principle).
 
 Full architecture rationale, including SOLID notes, is documented in
 `liquidity_hunter/docs/architecture.md`.
@@ -461,8 +477,24 @@ All detectors are re-exported from `liquidity_hunter.liquidity`.
   *inferred* one.
 
 The full estimation logic (confidence formula and worked example) is
-documented in `liquidity_hunter/docs/psychology.md`. All three are
-re-exported from `liquidity_hunter.psychology`.
+documented in `liquidity_hunter/docs/psychology.md`.
+- **`psychology/analyzers/manipulation_cycle.py`** —
+  `ManipulationCycleDetector`: connects existing observations (liquidity
+  zones, `LIQUIDITY_SWEEP` events, `RTOSweepEvent`s, BOS events, volume
+  delta) into three-phase Wyckoff/SMC manipulation cycles. Works in two
+  modes: **retrospective** (for each sweep event, looks backward for
+  accumulation near a liquidity zone and forward for an expansion BOS) and
+  **prospective** (scans active zones where price is currently consolidating,
+  reporting `IN_PROGRESS` `ACCUMULATION` cycles). Constructor parameters:
+  `proximity_pct` (default `0.015` = 1.5%), `min_accumulation_candles`
+  (default `None` → resolved per timeframe from
+  `_TIMEFRAME_MIN_ACCUMULATION`: M1=20, M5=15, M15=10, M30=7, H1=7, H4=3,
+  D1=2, W1=2), `max_expansion_candles` (default `30`). Zone deduplication:
+  nearby prospective zones are clustered per side within `proximity_pct`
+  (keeping the strongest), and zones already targeted by a sweep-based cycle
+  are excluded from prospective results via proximity matching.
+
+All four are re-exported from `liquidity_hunter.psychology`.
 
 ### Scoring layer (`liquidity_hunter/scoring`)
 
@@ -497,8 +529,9 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 - **`DashboardData`** — a frozen dataclass snapshot combining `candles`,
   `higher_timeframe_direction`, `liquidity_zones`, `ranked_zones`,
   `market_structure_events`, `internal_structure_events`, `retail_bias`,
-  `poi_zones` (`list[POIZone]`), and `poi_sweep_events` (`list[RTOSweepEvent]`)
-  for one symbol/timeframe.
+  `poi_zones` (`list[POIZone]`), `poi_sweep_events` (`list[RTOSweepEvent]`),
+  and `manipulation_cycles` (`list[ManipulationCycle]`) for one
+  symbol/timeframe.
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=..., swing_lookback=..., internal_swing_lookback=..., confluence_filter=True)`**
   — fetches candles, runs all liquidity detectors, scores the zones via
   `LiquidityScoringEngine`, runs `SwingStructureDetector(swing_lookback=...,
@@ -525,6 +558,10 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `internal_structure_events` and `poi_zones`/`poi_sweep_events` are filtered
   to the calendar range `[candles[0].timestamp, candles[-1].timestamp]` after
   detection. `candles` (main series, its `limit`) is unaffected.
+
+  After all detectors run, `ManipulationCycleDetector().detect(candles,
+  all_structure, liquidity_zones, poi_sweep_events, volume_delta_series(candles))`
+  populates `manipulation_cycles`.
 
 `DashboardData` and `ScoredLiquidityZone` are re-exported from
 `liquidity_hunter.app` for use by `dashboard`.
@@ -614,8 +651,9 @@ only on `app` and `core` (an alternative presentation layer to
   (`from_attributes=True`) mirroring the `DashboardData` dataclass fields,
   used to serialize it to JSON; nested domain types (`Candle`,
   `LiquidityZone`, `MarketStructure`, `ScoredLiquidityZone`,
-  `RetailBiasEstimate`, `POIZone`, `RTOSweepEvent`) are already `DomainModel`s
-  and serialize as-is. `poi_zones` and `poi_sweep_events` fields are included.
+  `RetailBiasEstimate`, `POIZone`, `RTOSweepEvent`, `ManipulationCycle`) are
+  already `DomainModel`s and serialize as-is. `poi_zones`,
+  `poi_sweep_events`, and `manipulation_cycles` fields are included.
 
 Tested with FastAPI's `TestClient` in `liquidity_hunter/tests/api/test_main.py`.
 
@@ -625,10 +663,30 @@ A React + TypeScript + Vite project (Tailwind CSS, Lightweight Charts v4),
 separate from the Python package, that polls `GET /api/dashboard` and renders
 the same data as the Streamlit dashboard (work in progress).
 
+The React frontend has a professional TradingView-style dark UI with a
+`Logo` component, `StatusBar` (live connection indicator, candle/event
+counts, clock), `LoadingSkeleton`, and header with symbol badge + timeframe
+selector.
+
 - **`frontend/src/components/MainChart.tsx`** — `MainChart` component:
-  renders a Lightweight Charts candlestick series, overlays top-ranked
-  liquidity zone lines, draws BOS/CHoCH/SWEEP horizontal lines and labels,
-  and renders POI order block boxes via `POIBoxesPrimitive`.
+  renders three synced Lightweight Charts panes (main candlestick, volume
+  delta histogram, RSI indicator) with synchronized time scales and
+  crosshairs. The main pane overlays top-ranked liquidity zone lines, draws
+  BOS/CHoCH/SWEEP horizontal lines and labels, renders POI order block boxes
+  via `POIBoxesPrimitive`, and renders manipulation cycle accumulation boxes
+  via a second `POIBoxesPrimitive` instance (toggled via
+  `showManipulationBoxes` prop). Accumulation boxes are color-coded by
+  status: amber (`in_progress`), green (`confirmed`), gray (`failed`).
+  Limited to `MAX_MANIP_BOXES = 3` most relevant (in-progress first).
+
+  **Volume delta pane**: histogram bars colored by candle direction
+  (`CANDLE_UP_COLOR`/`CANDLE_DOWN_COLOR`), computed as
+  `2 * taker_buy_volume - volume` per candle.
+
+  **RSI pane**: RSI(14) line with 70/30 reference lines and regular
+  divergence detection (bullish: price LL + RSI HL below 50; bearish:
+  price HH + RSI LH above 50). Divergence lines drawn as colored
+  `LineSeries` overlays.
 
   **BOS/CHoCH line rendering**: each event draws a horizontal line from its
   `timestamp` to the next event that terminates it. BOS lines end at the next
@@ -641,6 +699,15 @@ the same data as the Streamlit dashboard (work in progress).
   extreme), since the extreme can be far beyond the confirmed reference level.
   SWEEP lines are drawn at `reference_price_level` like BOS.
 
+- **`frontend/src/components/ManipulationCyclesPanel.tsx`** —
+  `ManipulationCyclesPanel` sidebar component: renders manipulation cycle
+  cards sorted by relevance (in-progress first, then confirmed, then failed),
+  limited to `MAX_DISPLAY = 5`. Each card shows direction arrow, phase badge
+  (`ACC`/`MANIP`/`EXP`), status indicator (`LIVE` with pulse animation,
+  `CONFIRMED`, `FAILED`), target zone, consolidation candle count, sweep
+  info, expansion BOS info, and volume delta. Includes a `CHART ON`/`OFF`
+  toggle button that controls the `showManipulationBoxes` prop on `MainChart`.
+
 - **`frontend/src/charting/POIBoxesPrimitive.ts`** — `POIBoxesPrimitive`
   implements `ISeriesPrimitive` and draws filled canvas rectangles for each
   POI zone. Colors: light blue (`#64b5f6` / `#2979ff`) for bullish demand
@@ -651,23 +718,27 @@ the same data as the Streamlit dashboard (work in progress).
   so `timeToCoordinate` returns `null` and the right edge is clamped to
   `mediaSize.width` (full pane width). Mitigated zones keep their directional
   color at lower opacity (border: 67%, fill: 9%) so direction remains readable.
+  Also reused for manipulation cycle accumulation boxes (second instance).
 
 - **`frontend/src/types/dashboard.ts`** — TypeScript types mirroring the API
   schema; includes `POIZone`, `RTOSweepEvent`, `MarketStructure` (with
-  `reference_timestamp`).
-- **`frontend/src/theme.ts`** — color constants for POI zones and other chart
-  elements.
+  `reference_timestamp`), `ManipulationCycle`, `ManipulationPhase`,
+  `ManipulationCycleStatus`.
+- **`frontend/src/theme.ts`** — color constants for POI zones, structure
+  events, manipulation cycle boxes (`MANIPULATION_BOX_STYLES`), volume delta,
+  RSI, and other chart elements.
 
-The KPI row and main chart (candlesticks, liquidity zones, structure event
-markers, POI order block boxes) are implemented. The sidebar panels and bottom
-tabs remain Streamlit-only.
+The KPI row, main chart (with volume delta and RSI sub-panes), and
+manipulation cycles sidebar panel are implemented. The liquidity targets,
+retail trap, market structure sidebar panels and bottom tabs remain
+Streamlit-only.
 
 ## Project status
 
 Core domain, data, indicators, liquidity detectors, scoring, psychology,
-Streamlit dashboard, FastAPI API, and React frontend (main chart) are all
-implemented. Below are the key design decisions and confirmed behaviors as of
-2026-06-16:
+Streamlit dashboard, FastAPI API, and React frontend (main chart + sidebar)
+are all implemented. Below are the key design decisions and confirmed
+behaviors as of 2026-06-20:
 
 **Both structure detectors use the same unified architecture** (as of today):
 trailing `active_high`/`active_low` references, `candidate_choch_<side>` /
@@ -719,7 +790,26 @@ The lifecycle (ACTIVE → MITIGATED via RTO, ACTIVE → INVALIDATED via persiste
 closes) is fully implemented. Both Streamlit (Plotly filled rectangles) and
 React (`POIBoxesPrimitive` canvas primitives) renderers are implemented.
 
+**Manipulation cycle detection**: `ManipulationCycleDetector` connects
+existing observations into three-phase Wyckoff/SMC cycles (accumulation →
+sweep → expansion). Works retrospectively (matching sweeps to prior
+accumulation and subsequent expansion BOS) and prospectively (identifying
+active accumulation zones where stops are building). Minimum accumulation
+candles are timeframe-adaptive (`_TIMEFRAME_MIN_ACCUMULATION`: M5=15,
+M15=10, M30=7, H1=7, H4=3). Prospective accumulations are clustered per
+side within `proximity_pct` to avoid duplicate cycles for overlapping zones,
+and zones already targeted by sweep-based cycles are excluded via proximity
+matching. The React frontend renders cycles in a sidebar panel
+(`ManipulationCyclesPanel`, max 5 cards) and as chart overlay boxes (max 3,
+togglable via CHART ON/OFF button).
+
+**React frontend panes**: the main chart has three synced panes — candlestick
+(main), volume delta histogram, and RSI(14) with regular divergence detection
+(bullish LL+HL, bearish HH+LH). All three share synchronized time scales and
+crosshairs.
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.
-- React frontend sidebar panels and bottom tabs (remain Streamlit-only).
+- React frontend liquidity targets, retail trap, market structure sidebar
+  panels and bottom tabs (remain Streamlit-only).

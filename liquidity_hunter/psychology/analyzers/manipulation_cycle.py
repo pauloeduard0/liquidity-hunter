@@ -26,9 +26,21 @@ from liquidity_hunter.core.domain import (
     MarketDirection,
     MarketStructure,
     StructureEvent,
+    TimeFrame,
 )
 from liquidity_hunter.core.domain.manipulation_cycle import ManipulationCycle
 from liquidity_hunter.core.domain.poi_zone import RTOSweepEvent
+
+_TIMEFRAME_MIN_ACCUMULATION: dict[TimeFrame, int] = {
+    TimeFrame.M1: 20,
+    TimeFrame.M5: 15,
+    TimeFrame.M15: 10,
+    TimeFrame.M30: 7,
+    TimeFrame.H1: 7,
+    TimeFrame.H4: 3,
+    TimeFrame.D1: 2,
+    TimeFrame.W1: 2,
+}
 
 
 @dataclass(frozen=True)
@@ -72,11 +84,11 @@ class ManipulationCycleDetector:
     def __init__(
         self,
         proximity_pct: float = 0.015,
-        min_accumulation_candles: int = 5,
+        min_accumulation_candles: int | None = None,
         max_expansion_candles: int = 30,
     ) -> None:
         self._proximity_pct = proximity_pct
-        self._min_accum = min_accumulation_candles
+        self._min_accum_override = min_accumulation_candles
         self._max_expansion = max_expansion_candles
 
     def detect(
@@ -90,6 +102,12 @@ class ManipulationCycleDetector:
         if len(candles) < 2 or not liquidity_zones:
             return []
 
+        if self._min_accum_override is not None:
+            self._min_accum = self._min_accum_override
+        else:
+            tf = candles[0].timeframe
+            self._min_accum = _TIMEFRAME_MIN_ACCUMULATION.get(tf, 5)
+
         ts_to_idx = {c.timestamp: i for i, c in enumerate(candles)}
 
         sweeps = self._collect_sweeps(structure_events, poi_sweep_events)
@@ -100,6 +118,7 @@ class ManipulationCycleDetector:
 
         cycles: list[ManipulationCycle] = []
         used_zones: set[tuple[float, float, datetime]] = set()
+        swept_zone_prices: list[tuple[float, LiquiditySide]] = []
 
         for sweep in sweeps:
             sweep_idx = ts_to_idx.get(sweep.timestamp)
@@ -115,9 +134,15 @@ class ManipulationCycleDetector:
                 continue
             used_zones.add(zone_key)
 
+            zone_mid = (zone.price_low + zone.price_high) / 2
+            swept_zone_prices.append((zone_mid, zone.side))
+
             accum = self._measure_accumulation(
                 candles, zone, sweep_idx, volume_deltas
             )
+
+            if accum.candle_count < self._min_accum:
+                continue
 
             expansion_dir = (
                 MarketDirection.BULLISH
@@ -168,11 +193,28 @@ class ManipulationCycleDetector:
             )
 
         prospective = self._find_prospective_accumulations(
-            candles, liquidity_zones, volume_deltas, used_zones
+            candles, liquidity_zones, volume_deltas, swept_zone_prices
         )
         cycles.extend(prospective)
 
         return sorted(cycles, key=lambda c: c.accumulation_start)
+
+    # ------------------------------------------------------------------
+    # Zone deduplication
+    # ------------------------------------------------------------------
+
+    def _is_zone_used(
+        self,
+        zone_mid: float,
+        side: LiquiditySide,
+        used: list[tuple[float, LiquiditySide]],
+    ) -> bool:
+        for used_mid, used_side in used:
+            if used_side != side:
+                continue
+            if abs(zone_mid - used_mid) / used_mid <= self._proximity_pct:
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Sweep collection
@@ -378,18 +420,16 @@ class ManipulationCycleDetector:
         candles: list[Candle],
         zones: list[LiquidityZone],
         volume_deltas: Sequence[float],
-        used_zones: set[tuple[float, float, datetime]],
+        used_zone_prices: list[tuple[float, LiquiditySide]],
     ) -> list[ManipulationCycle]:
         active_zones = [z for z in zones if not z.is_mitigated]
         clustered = self._cluster_zones(active_zones, self._proximity_pct)
         results: list[ManipulationCycle] = []
 
         for zone in clustered:
-            zone_key = (zone.price_low, zone.price_high, zone.formed_at)
-            if zone_key in used_zones:
-                continue
-
             zone_mid = (zone.price_high + zone.price_low) / 2
+            if self._is_zone_used(zone_mid, zone.side, used_zone_prices):
+                continue
             threshold = zone_mid * self._proximity_pct
 
             count = 0
