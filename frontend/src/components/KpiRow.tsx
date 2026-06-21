@@ -18,9 +18,10 @@ interface KpiCardProps {
   value: string
   accent?: string
   sub?: string
+  badge?: { text: string; color: string }
 }
 
-function KpiCard({ label, value, accent, sub }: KpiCardProps) {
+function KpiCard({ label, value, accent, sub, badge }: KpiCardProps) {
   return (
     <div className="group relative overflow-hidden rounded-lg border border-[#1a1f2e] bg-[#0f1319] p-4 transition-all duration-200 hover:border-[#252b3d]">
       <div
@@ -35,11 +36,21 @@ function KpiCard({ label, value, accent, sub }: KpiCardProps) {
         <div className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#5d6477]">
           {label}
         </div>
-        <div
-          className="font-mono text-lg font-semibold tracking-tight"
-          style={{ color: accent ?? '#d1d4dc' }}
-        >
-          {value}
+        <div className="flex items-center gap-2">
+          <span
+            className="font-mono text-lg font-semibold tracking-tight"
+            style={{ color: accent ?? '#d1d4dc' }}
+          >
+            {value}
+          </span>
+          {badge && (
+            <span
+              className="rounded-sm px-1.5 py-[1px] text-[9px] font-bold tracking-wider"
+              style={{ color: badge.color, backgroundColor: `${badge.color}15` }}
+            >
+              {badge.text}
+            </span>
+          )}
         </div>
         {sub && (
           <div className="mt-1 text-[10px] text-[#5d6477]">{sub}</div>
@@ -58,6 +69,21 @@ export function KpiRow({ data }: KpiRowProps) {
   const direction = data.higher_timeframe_direction
   const dirCfg = DIRECTION_CONFIG[direction]
   const biasCfg = BIAS_CONFIG[bias.dominant_side]
+
+  const isCounterTrend =
+    bias.dominant_side !== 'neutral' &&
+    direction !== 'neutral' &&
+    ((bias.dominant_side === 'long' && direction === 'bearish') ||
+      (bias.dominant_side === 'short' && direction === 'bullish'))
+  const isAligned =
+    bias.dominant_side !== 'neutral' &&
+    direction !== 'neutral' &&
+    !isCounterTrend
+  const retailBadge = isCounterTrend
+    ? { text: '⚠ TRAP', color: '#ef5350' }
+    : isAligned
+      ? { text: '✓ ALIGNED', color: '#26a69a' }
+      : undefined
 
   const price = data.current_price.toLocaleString(undefined, {
     minimumFractionDigits: 2,
@@ -82,6 +108,7 @@ export function KpiRow({ data }: KpiRowProps) {
         label="Retail Bias"
         value={`${bias.dominant_side.toUpperCase()} ${bias.confidence.toFixed(0)}%`}
         accent={biasCfg.color}
+        badge={retailBadge}
         sub={bias.confidence >= 70 ? 'High conviction' : bias.confidence >= 40 ? 'Moderate' : 'Low conviction'}
       />
       <KpiCard
