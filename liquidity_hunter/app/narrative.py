@@ -30,6 +30,7 @@ from liquidity_hunter.core.domain.narrative import (
 
 if TYPE_CHECKING:
     from liquidity_hunter.app.dashboard_data import DashboardData
+    from liquidity_hunter.core.domain.candle import Candle
     from liquidity_hunter.core.domain.manipulation_cycle import ManipulationCycle
     from liquidity_hunter.core.domain.market_structure import MarketStructure
     from liquidity_hunter.core.domain.poi_zone import RTOSweepEvent
@@ -277,6 +278,26 @@ class NarrativeEngine:
         ]
 
     # ------------------------------------------------------------------
+    # Recency
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _recency_cutoff(candles: list[Candle]) -> datetime:
+        n = len(candles)
+        if n < 4:
+            return candles[0].timestamp
+        return candles[int(n * 0.75)].timestamp
+
+    @staticmethod
+    def _cycle_latest_ts(mc: ManipulationCycle) -> datetime:
+        latest = mc.accumulation_end
+        if mc.sweep_timestamp and mc.sweep_timestamp > latest:
+            latest = mc.sweep_timestamp
+        if mc.expansion_timestamp and mc.expansion_timestamp > latest:
+            latest = mc.expansion_timestamp
+        return latest
+
+    # ------------------------------------------------------------------
     # Phase detection
     # ------------------------------------------------------------------
 
@@ -292,12 +313,12 @@ class NarrativeEngine:
         return latest.phase
 
     def _has_recent_failure(self, data: DashboardData) -> bool:
-        failed = [
-            mc
+        cutoff = self._recency_cutoff(data.candles)
+        return any(
+            mc.status == ManipulationCycleStatus.FAILED
+            and self._cycle_latest_ts(mc) >= cutoff
             for mc in data.manipulation_cycles
-            if mc.status == ManipulationCycleStatus.FAILED
-        ]
-        return bool(failed)
+        )
 
     # ------------------------------------------------------------------
     # Anomaly detection
@@ -728,10 +749,12 @@ class NarrativeEngine:
         return summary
 
     def _failed_summary(self, data: DashboardData) -> str:
+        cutoff = self._recency_cutoff(data.candles)
         failed = [
             mc
             for mc in data.manipulation_cycles
             if mc.status == ManipulationCycleStatus.FAILED
+            and self._cycle_latest_ts(mc) >= cutoff
         ]
         if not failed:
             return "No significant institutional activity detected."

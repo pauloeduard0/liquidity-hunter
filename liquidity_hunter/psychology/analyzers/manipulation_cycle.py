@@ -36,10 +36,21 @@ _TIMEFRAME_MIN_ACCUMULATION: dict[TimeFrame, int] = {
     TimeFrame.M5: 15,
     TimeFrame.M15: 10,
     TimeFrame.M30: 7,
-    TimeFrame.H1: 7,
+    TimeFrame.H1: 5,
     TimeFrame.H4: 3,
     TimeFrame.D1: 2,
     TimeFrame.W1: 2,
+}
+
+_TIMEFRAME_PROXIMITY: dict[TimeFrame, float] = {
+    TimeFrame.M1: 0.012,
+    TimeFrame.M5: 0.015,
+    TimeFrame.M15: 0.015,
+    TimeFrame.M30: 0.018,
+    TimeFrame.H1: 0.02,
+    TimeFrame.H4: 0.025,
+    TimeFrame.D1: 0.03,
+    TimeFrame.W1: 0.03,
 }
 
 
@@ -83,11 +94,11 @@ class ManipulationCycleDetector:
 
     def __init__(
         self,
-        proximity_pct: float = 0.015,
+        proximity_pct: float | None = None,
         min_accumulation_candles: int | None = None,
         max_expansion_candles: int = 30,
     ) -> None:
-        self._proximity_pct = proximity_pct
+        self._proximity_override = proximity_pct
         self._min_accum_override = min_accumulation_candles
         self._max_expansion = max_expansion_candles
 
@@ -102,10 +113,16 @@ class ManipulationCycleDetector:
         if len(candles) < 2 or not liquidity_zones:
             return []
 
+        tf = candles[0].timeframe
+
+        if self._proximity_override is not None:
+            self._proximity_pct = self._proximity_override
+        else:
+            self._proximity_pct = _TIMEFRAME_PROXIMITY.get(tf, 0.015)
+
         if self._min_accum_override is not None:
             self._min_accum = self._min_accum_override
         else:
-            tf = candles[0].timeframe
             self._min_accum = _TIMEFRAME_MIN_ACCUMULATION.get(tf, 5)
 
         ts_to_idx = {c.timestamp: i for i, c in enumerate(candles)}

@@ -547,6 +547,36 @@ def test_expansion_summary_with_vd_and_resolution() -> None:
 
 
 def test_failed_cycle_summary() -> None:
+    candles = [_candle(i) for i in range(40)]
+    mc = ManipulationCycle(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        direction=MarketDirection.BULLISH,
+        phase=ManipulationPhase.EXPANSION,
+        status=ManipulationCycleStatus.FAILED,
+        target_zone_price_low=99.0,
+        target_zone_price_high=100.0,
+        target_zone_type=LiquidityZoneType.EQUAL_LOWS,
+        target_zone_side=LiquiditySide.SELL_SIDE,
+        accumulation_start=T0 + H1 * 28,
+        accumulation_end=T0 + H1 * 35,
+        consolidation_candles=7,
+        sweep_timestamp=T0 + H1 * 36,
+        sweep_extreme=98.5,
+    )
+    data = _minimal_data(candles=candles, manipulation_cycles=[mc])
+    narrative = NarrativeEngine().build(data)
+
+    s = narrative.summary.lower()
+    assert "failed" in s
+    assert "invalidated" in s
+    assert "eql" in s
+
+
+def test_stale_failed_cycle_ignored_in_summary() -> None:
+    """A failed cycle from the beginning of the window should not drive
+    the summary — the narrative should fall through to neutral."""
+    candles = [_candle(i) for i in range(100)]
     mc = ManipulationCycle(
         symbol="BTCUSDT",
         timeframe=TimeFrame.H1,
@@ -563,13 +593,12 @@ def test_failed_cycle_summary() -> None:
         sweep_timestamp=T0 + H1 * 11,
         sweep_extreme=98.5,
     )
-    data = _minimal_data(manipulation_cycles=[mc])
+    data = _minimal_data(candles=candles, manipulation_cycles=[mc])
     narrative = NarrativeEngine().build(data)
 
     s = narrative.summary.lower()
-    assert "failed" in s
-    assert "invalidated" in s
-    assert "eql" in s
+    assert "failed" not in s
+    assert "invalidated" not in s
 
 
 def test_htf_aligned_mentioned_in_summary() -> None:

@@ -155,11 +155,13 @@ export function ManipulationCyclesPanel({
   onToggleChart,
 }: ManipulationCyclesPanelProps) {
   const sorted = [...cycles].sort((a, b) => {
-    const statusOrder: Record<string, number> = { in_progress: 0, confirmed: 1, failed: 2 }
-    const sa = statusOrder[a.status] ?? 1
-    const sb = statusOrder[b.status] ?? 1
-    if (sa !== sb) return sa - sb
-    return new Date(b.accumulation_start).getTime() - new Date(a.accumulation_start).getTime()
+    const latestTs = (c: ManipulationCycle) => {
+      const ts = [c.accumulation_end, c.sweep_timestamp, c.expansion_timestamp]
+        .filter(Boolean)
+        .map((t) => new Date(t!).getTime())
+      return Math.max(...ts)
+    }
+    return latestTs(b) - latestTs(a)
   }).slice(0, MAX_DISPLAY)
 
   const overlayButton = (
