@@ -48,6 +48,9 @@ _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
     TimeFrame.M5: TimeFrame.H1,
     TimeFrame.M15: TimeFrame.H1,
     TimeFrame.M30: TimeFrame.H1,
+    TimeFrame.H1: TimeFrame.H4,
+    TimeFrame.H4: TimeFrame.D1,
+    TimeFrame.D1: TimeFrame.W1,
 }
 
 _HIGHER_TIMEFRAME_CANDLE_LIMIT = 100

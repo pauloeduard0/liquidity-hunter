@@ -180,8 +180,8 @@ def test_load_dashboard_data_fetches_buffered_series_for_internal_structure() ->
 
     # InternalStructureDetector runs on the same timeframe as `candles`, with
     # an extra bootstrap buffer of 300 candles.
-    assert provider.requested_timeframes == [TimeFrame.H1, TimeFrame.H1]
-    assert provider.requested_limits == [500, 800]
+    assert provider.requested_timeframes == [TimeFrame.H1, TimeFrame.H1, TimeFrame.H4]
+    assert provider.requested_limits == [500, 800, 100]
 
 
 def test_load_dashboard_data_internal_structure_fetch_limit_capped_at_klines_max() -> None:
@@ -191,7 +191,7 @@ def test_load_dashboard_data_internal_structure_fetch_limit_capped_at_klines_max
 
     load_dashboard_data(provider=provider, symbol="BTCUSDT", timeframe=TimeFrame.H1, limit=900)
 
-    assert provider.requested_limits == [900, 1000]
+    assert provider.requested_limits == [900, 1000, 100]
 
 
 def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> None:
@@ -201,7 +201,11 @@ def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> N
     highs, lows = _trending_zigzag(340)
     full_candles = make_series(highs, lows, symbol="BTCUSDT", timeframe=TimeFrame.H1)
 
-    provider = _PerTimeframeFakeProvider({TimeFrame.H1: full_candles})
+    htf_candles = make_series(highs[:100], lows[:100], symbol="BTCUSDT", timeframe=TimeFrame.H4)
+    provider = _PerTimeframeFakeProvider({
+        TimeFrame.H1: full_candles,
+        TimeFrame.H4: htf_candles,
+    })
 
     data = load_dashboard_data(
         provider=provider,
@@ -211,8 +215,8 @@ def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> N
         internal_swing_lookback=10,
     )
 
-    # limit=40 + 300 buffer = 340.
-    assert provider.requested_limits == [40, 340]
+    # limit=40 + 300 buffer = 340, plus HTF fetch (100).
+    assert provider.requested_limits == [40, 340, 100]
 
     visible_start = data.candles[0].timestamp
     visible_end = data.candles[-1].timestamp

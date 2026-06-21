@@ -53,6 +53,17 @@ _TIMEFRAME_PROXIMITY: dict[TimeFrame, float] = {
     TimeFrame.W1: 0.03,
 }
 
+_TIMEFRAME_MAX_EXPANSION: dict[TimeFrame, int] = {
+    TimeFrame.M1: 30,
+    TimeFrame.M5: 30,
+    TimeFrame.M15: 30,
+    TimeFrame.M30: 35,
+    TimeFrame.H1: 40,
+    TimeFrame.H4: 50,
+    TimeFrame.D1: 25,
+    TimeFrame.W1: 12,
+}
+
 
 @dataclass(frozen=True)
 class _SweepTrigger:
@@ -96,11 +107,11 @@ class ManipulationCycleDetector:
         self,
         proximity_pct: float | None = None,
         min_accumulation_candles: int | None = None,
-        max_expansion_candles: int = 30,
+        max_expansion_candles: int | None = None,
     ) -> None:
         self._proximity_override = proximity_pct
         self._min_accum_override = min_accumulation_candles
-        self._max_expansion = max_expansion_candles
+        self._max_expansion_override = max_expansion_candles
 
     def detect(
         self,
@@ -124,6 +135,11 @@ class ManipulationCycleDetector:
             self._min_accum = self._min_accum_override
         else:
             self._min_accum = _TIMEFRAME_MIN_ACCUMULATION.get(tf, 5)
+
+        if self._max_expansion_override is not None:
+            self._max_expansion = self._max_expansion_override
+        else:
+            self._max_expansion = _TIMEFRAME_MAX_EXPANSION.get(tf, 30)
 
         ts_to_idx = {c.timestamp: i for i, c in enumerate(candles)}
 

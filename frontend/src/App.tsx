@@ -17,6 +17,7 @@ const TIMEFRAME_OPTIONS: { value: TimeFrame; label: string }[] = [
   { value: '15m', label: '15M' },
   { value: '1h', label: '1H' },
   { value: '4h', label: '4H' },
+  { value: '1d', label: '1D' },
 ]
 
 function LoadingSkeleton() {
