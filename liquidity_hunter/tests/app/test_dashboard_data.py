@@ -1,15 +1,21 @@
 """Tests for `liquidity_hunter.app.dashboard_data`."""
 
+from datetime import UTC, datetime
+
 from liquidity_hunter.app.dashboard_data import load_dashboard_data
 from liquidity_hunter.core.domain import (
     Candle,
+    FundingRate,
+    LongShortRatio,
     MarketDirection,
+    OpenInterestPoint,
     RetailPositioning,
     StructureEvent,
     StructureScope,
     TimeFrame,
 )
-from liquidity_hunter.data.providers.base import OHLCVProvider
+from liquidity_hunter.data.exceptions import DataProviderConnectionError
+from liquidity_hunter.data.providers.base import FuturesDataProvider, OHLCVProvider
 from liquidity_hunter.liquidity import InternalStructureDetector
 from liquidity_hunter.tests.liquidity.detectors._factories import make_candle, make_series
 
@@ -18,6 +24,8 @@ HIGHS = [
     100.0, 101.0, 102.0, 110.0, 103.0, 102.0, 101.0, 100.0,
 ]
 LOWS = [h - 5 for h in HIGHS]
+
+_FUTURES_TS = datetime(2026, 6, 22, tzinfo=UTC)
 
 # A short series whose only swing high (200) and lows (140, then 130) trigger
 # one BOS event with `swing_lookback=2` (see test_market_structure.py for the
@@ -83,10 +91,75 @@ def _trending_zigzag(num_candles: int) -> tuple[list[float], list[float]]:
     return highs, lows
 
 
+class _FakeFuturesProvider(FuturesDataProvider):
+    """Returns canned futures state with no network access.
+
+    Defaults model a crowded-long book (positive funding, ratio > 1, rising
+    open interest) so the estimator produces a non-empty liquidation map.
+    """
+
+    def __init__(
+        self,
+        funding_rate: float = 0.0006,
+        ratio: float = 1.85,
+        oi: tuple[float, float] = (1000.0, 1200.0),
+    ) -> None:
+        self._funding_rate = funding_rate
+        self._ratio = ratio
+        self._oi = oi
+
+    def get_open_interest_history(
+        self, symbol: str, timeframe: TimeFrame, limit: int = 500
+    ) -> list[OpenInterestPoint]:
+        return [
+            OpenInterestPoint(symbol=symbol, timestamp=_FUTURES_TS, open_interest=value)
+            for value in self._oi
+        ]
+
+    def get_funding_rate_history(self, symbol: str, limit: int = 500) -> list[FundingRate]:
+        return [FundingRate(symbol=symbol, timestamp=_FUTURES_TS, funding_rate=self._funding_rate)]
+
+    def get_long_short_ratio(
+        self, symbol: str, timeframe: TimeFrame, limit: int = 500
+    ) -> list[LongShortRatio]:
+        long_pct = self._ratio / (1 + self._ratio)
+        return [
+            LongShortRatio(
+                symbol=symbol,
+                timestamp=_FUTURES_TS,
+                long_account_pct=long_pct,
+                short_account_pct=1 - long_pct,
+                ratio=self._ratio,
+            )
+        ]
+
+
+class _RaisingFuturesProvider(FuturesDataProvider):
+    """Simulates an unreachable futures venue (e.g. a spot-only symbol)."""
+
+    def get_open_interest_history(
+        self, symbol: str, timeframe: TimeFrame, limit: int = 500
+    ) -> list[OpenInterestPoint]:
+        raise DataProviderConnectionError("no perpetual contract")
+
+    def get_funding_rate_history(self, symbol: str, limit: int = 500) -> list[FundingRate]:
+        raise DataProviderConnectionError("no perpetual contract")
+
+    def get_long_short_ratio(
+        self, symbol: str, timeframe: TimeFrame, limit: int = 500
+    ) -> list[LongShortRatio]:
+        raise DataProviderConnectionError("no perpetual contract")
+
+
+_FAKE_FUTURES = _FakeFuturesProvider()
+
+
 def test_load_dashboard_data_assembles_research_snapshot() -> None:
     candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
 
-    data = load_dashboard_data(provider=_FakeProvider(candles), symbol="BTCUSDT")
+    data = load_dashboard_data(
+        provider=_FakeProvider(candles), symbol="BTCUSDT", futures_provider=_FAKE_FUTURES
+    )
 
     assert data.symbol == "BTCUSDT"
     assert data.candles == candles
@@ -121,6 +194,7 @@ def test_load_dashboard_data_derives_trend_from_market_structure() -> None:
         symbol="BTCUSDT",
         swing_lookback=2,
         confluence_filter=False,
+        futures_provider=_FAKE_FUTURES,
     )
 
     assert len(data.market_structure_events) == 1
@@ -153,6 +227,7 @@ def test_load_dashboard_data_internal_structure_events_use_internal_scope() -> N
         symbol="BTCUSDT",
         internal_swing_lookback=2,
         confluence_filter=False,
+        futures_provider=_FAKE_FUTURES,
     )
 
     assert data.internal_structure_events
@@ -166,7 +241,9 @@ def test_load_dashboard_data_internal_structure_events_use_internal_scope() -> N
 def test_load_dashboard_data_neutral_trend_with_no_structure_events() -> None:
     candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
 
-    data = load_dashboard_data(provider=_FakeProvider(candles), symbol="BTCUSDT")
+    data = load_dashboard_data(
+        provider=_FakeProvider(candles), symbol="BTCUSDT", futures_provider=_FAKE_FUTURES
+    )
 
     assert data.market_structure_events == []
     assert data.higher_timeframe_direction is MarketDirection.NEUTRAL
@@ -176,7 +253,13 @@ def test_load_dashboard_data_fetches_buffered_series_for_internal_structure() ->
     candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
     provider = _FakeProvider(candles)
 
-    load_dashboard_data(provider=provider, symbol="BTCUSDT", timeframe=TimeFrame.H1, limit=500)
+    load_dashboard_data(
+        provider=provider,
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        limit=500,
+        futures_provider=_FAKE_FUTURES,
+    )
 
     # InternalStructureDetector runs on the same timeframe as `candles`, with
     # an extra bootstrap buffer of 300 candles.
@@ -189,7 +272,13 @@ def test_load_dashboard_data_internal_structure_fetch_limit_capped_at_klines_max
     candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
     provider = _FakeProvider(candles)
 
-    load_dashboard_data(provider=provider, symbol="BTCUSDT", timeframe=TimeFrame.H1, limit=900)
+    load_dashboard_data(
+        provider=provider,
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        limit=900,
+        futures_provider=_FAKE_FUTURES,
+    )
 
     assert provider.requested_limits == [900, 1000, 100]
 
@@ -213,6 +302,7 @@ def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> N
         timeframe=TimeFrame.H1,
         limit=40,
         internal_swing_lookback=10,
+        futures_provider=_FAKE_FUTURES,
     )
 
     # limit=40 + 300 buffer = 340, plus HTF fetch (100).
@@ -231,3 +321,31 @@ def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> N
     # events rather than the window happening to cover everything.
     unfiltered_events = InternalStructureDetector(swing_lookback=10).detect(full_candles)
     assert len(unfiltered_events) > len(data.internal_structure_events)
+
+
+def test_load_dashboard_data_populates_liquidation_map() -> None:
+    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+
+    data = load_dashboard_data(
+        provider=_FakeProvider(candles), symbol="BTCUSDT", futures_provider=_FAKE_FUTURES
+    )
+
+    assert data.liquidation_map is not None
+    # Crowded-long futures state -> long is the over-leveraged side.
+    assert data.liquidation_map.dominant_leveraged_side is RetailPositioning.LONG
+    assert data.liquidation_map.bands
+
+
+def test_load_dashboard_data_degrades_when_futures_unavailable() -> None:
+    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+
+    data = load_dashboard_data(
+        provider=_FakeProvider(candles),
+        symbol="BTCUSDT",
+        futures_provider=_RaisingFuturesProvider(),
+    )
+
+    # Spot-only symbol: liquidation map is absent but the rest is intact.
+    assert data.liquidation_map is None
+    assert data.candles == candles
+    assert data.narrative is not None

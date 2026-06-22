@@ -150,6 +150,21 @@ and `validate_assignment=True`. New entities should follow this pattern.
   `confidence` (0-100), `description`.
 - **`RetailBias`** — a measurement of retail sentiment/positioning from a
   given `BiasSource`, with a bounded `sentiment_score` and `confidence`.
+- **`OpenInterestPoint`** / **`FundingRate`** / **`LongShortRatio`** —
+  perpetual-futures market-state samples, defined in `core/domain/futures.py`.
+  The raw inputs the `LeverageLiquidationEstimator` uses to infer the
+  over-leveraged side (open interest, funding rate, crowd long/short account
+  ratio).
+- **`LiquidationBand`** / **`LeverageLiquidationMap`** — a "gravitational map"
+  of where leveraged retail positions would be force-liquidated, defined in
+  `core/domain/liquidation.py`. `LeverageLiquidationMap` fields: `symbol`,
+  `timeframe`, `current_price`, `dominant_leveraged_side` (`RetailPositioning`),
+  `positioning_intensity` (0-1), `funding_rate`, `open_interest_change_pct`,
+  `long_short_ratio`, `bands`. Each `LiquidationBand` has `price_low`,
+  `price_high`, `leverage`, `side` (`LiquiditySide`), `source_entry_price`,
+  `intensity` (0-100), and a time span: `start_time` (when the entry cluster
+  formed) and `end_time` (when price first reached the liquidation level — the
+  pool was consumed — or `None` if still live).
 - **`MarketNarrative`** — synthesized institutional narrative for a
   symbol/timeframe snapshot, defined in `core/domain/narrative.py`. Fields:
   `symbol`, `timeframe`, `timestamp`, `phase` (`ManipulationPhase | None`),
@@ -188,8 +203,21 @@ Full architecture rationale, including SOLID notes, is documented in
   exhausted) and `DataProviderRequestError` (non-retryable, e.g. invalid
   symbol), both subclasses of `DataProviderError`.
 
-`BinanceDataProvider` and `OHLCVProvider` are re-exported from
-`liquidity_hunter.data` for convenience.
+- **`data/providers/base.py`** — also defines `FuturesDataProvider`, the
+  abstract port for perpetual-futures market state
+  (`get_open_interest_history`, `get_funding_rate_history`,
+  `get_long_short_ratio`), a sibling to `OHLCVProvider`.
+- **`data/providers/binance_futures.py`** — `BinanceFuturesDataProvider`, a
+  ccxt `binanceusdm`-backed implementation. Open interest and funding use
+  ccxt's unified `fetch_open_interest_history`/`fetch_funding_rate_history`
+  (against the swap symbol, e.g. `"BTC/USDT:USDT"`); the crowd long/short
+  account ratio uses the implicit `fapiDataGetGlobalLongShortAccountRatio`
+  (raw `BTCUSDT` symbol). `TimeFrame` maps to Binance's fixed futures-data
+  periods (`_FUTURES_PERIOD`). Same `retry_with_backoff` + error translation
+  as `BinanceDataProvider`.
+
+`BinanceDataProvider`, `OHLCVProvider`, `BinanceFuturesDataProvider`, and
+`FuturesDataProvider` are re-exported from `liquidity_hunter.data`.
 
 ### Indicators layer (`liquidity_hunter/indicators`)
 
@@ -532,7 +560,30 @@ documented in `liquidity_hunter/docs/psychology.md`.
   `0.1` = 10% of average volume). Deduplication keeps only the
   highest-confidence event per type within a window-sized range.
 
-All five are re-exported from `liquidity_hunter.psychology`.
+- **`psychology/analyzers/leverage_liquidation.py`** —
+  `LeverageLiquidationEstimator`: builds a `LeverageLiquidationMap` from
+  perpetual-futures market state. `estimate(symbol, timeframe, current_price,
+  liquidity_zones, open_interest, funding, long_short) -> LeverageLiquidationMap`.
+  Infers the over-leveraged side from a signed positioning score (funding sign
+  + long/short account ratio, each normalized to [-1, 1] and averaged; OI
+  growth amplifies `positioning_intensity`): score > `_NEUTRAL_THRESHOLD`
+  (0.1) → LONG (crowded), < -threshold → SHORT, else NEUTRAL. Then projects
+  `LiquidationBand`s around unmitigated liquidity-zone entries (midpoint =
+  entry) at leverage tiers `_LEVERAGE_DISTANCE_PCT` (10x=9.5%, 25x=3.6%,
+  50x=1.6%, 100x=0.6%, from Binance tier-1 maintenance margin). **Both sides**
+  are emitted (long-liquidation pool below entries, `SELL_SIDE`; short-liquidation
+  pool above, `BUY_SIDE`); the non-dominant side's intensity is dampened by
+  `_NON_DOMINANT_FACTOR` (0.45) so the over-leveraged side stays prominent. Band
+  intensity (0-100, peak-normalized across both sides) = `side_scale ×
+  zone.strength × _LEVERAGE_POPULATION_PRIOR[lev]` (10x most common → hottest),
+  capped at `_MAX_BANDS_PER_SIDE` (20) strongest *per side*. NEUTRAL positioning
+  or empty inputs → no bands.
+  Each kept band is time-bounded via `candles`: `start_time = zone.formed_at`,
+  `end_time = _liquidation_hit_time(...)` (first candle at/after start whose
+  wick reaches the liquidation level, `None` if never — still live). The
+  hit-scan runs only for the top-`_MAX_BANDS` bands.
+
+All six are re-exported from `liquidity_hunter.psychology`.
 
 ### Scoring layer (`liquidity_hunter/scoring`)
 
@@ -569,7 +620,9 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `market_structure_events`, `internal_structure_events`, `retail_bias`,
   `poi_zones` (`list[POIZone]`), `poi_sweep_events` (`list[RTOSweepEvent]`),
   `manipulation_cycles` (`list[ManipulationCycle]`),
-  `behavior_divergences` (`list[BehaviorDivergence]`), and
+  `behavior_divergences` (`list[BehaviorDivergence]`),
+  `liquidity_heatmap` (`LiquidityHeatmap | None`),
+  `liquidation_map` (`LeverageLiquidationMap | None`), and
   `narrative` (`MarketNarrative | None`) for one symbol/timeframe.
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=..., swing_lookback=..., internal_swing_lookback=..., confluence_filter=True)`**
   — fetches candles, runs all liquidity detectors, scores the zones via
@@ -604,6 +657,16 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 
   `BehaviorDivergenceAnalyzer().analyze(candles, vd, liquidity_zones,
   all_structure)` populates `behavior_divergences`.
+
+  `LiquidityHeatmapEngine().build(...)` populates `liquidity_heatmap`. A
+  separate `futures_provider` arg (`FuturesDataProvider | None`, defaults to
+  `BinanceFuturesDataProvider()`) fetches open interest / funding /
+  long-short ratio, fed to `LeverageLiquidationEstimator().estimate(...)` to
+  populate `liquidation_map`. The futures fetch is wrapped in try/except
+  `DataProviderError` (`_build_liquidation_map`): a symbol with no perpetual
+  contract, or an unreachable venue, degrades to `liquidation_map=None`
+  rather than failing the whole snapshot. Tests must inject a fake
+  `futures_provider` to avoid network.
 
   Finally, `NarrativeEngine().build(data)` synthesizes all outputs into a
   `MarketNarrative` (timeline, anomalies, phase-dependent summary,
@@ -667,8 +730,8 @@ only on `app` and `core` (an alternative presentation layer to
   `LiquidityZone`, `MarketStructure`, `ScoredLiquidityZone`,
   `RetailBiasEstimate`, `POIZone`, `RTOSweepEvent`, `ManipulationCycle`) are
   already `DomainModel`s and serialize as-is. `poi_zones`,
-  `poi_sweep_events`, `manipulation_cycles`, `behavior_divergences`, and
-  `narrative` fields are included.
+  `poi_sweep_events`, `manipulation_cycles`, `behavior_divergences`,
+  `liquidity_heatmap`, `liquidation_map`, and `narrative` fields are included.
 
 Tested with FastAPI's `TestClient` in `liquidity_hunter/tests/api/test_main.py`.
 
@@ -735,15 +798,31 @@ selector.
   color at lower opacity (border: 67%, fill: 9%) so direction remains readable.
   Also reused for manipulation cycle accumulation boxes (second instance).
 
+- **`frontend/src/charting/LiquidationBandsPrimitive.ts`** —
+  `LiquidationBandsPrimitive` implements `ISeriesPrimitive` and draws
+  leverage-liquidation bands as **time-bounded** horizontal boxes on the main
+  pane (modeled on `POIBoxesPrimitive`): each spans `x0` (entry-cluster
+  formation) to `x1` (liquidation-hit time, or a far-future sentinel →
+  clamped to the right edge if still live). Color encodes the **leverage tier**
+  (`LIQUIDATION_LEVERAGE_COLORS`, warmer = higher leverage: 10x amber → 100x
+  crimson — the estimator emits only one side per snapshot, so color is free
+  to encode leverage rather than side), opacity scales with `intensity`
+  between `LIQUIDATION_MIN_ALPHA` and `LIQUIDATION_MAX_ALPHA`, with a center
+  line and a leverage tag (`10x`/`25x`/…) at the left edge. Toggled by the
+  `showLiquidationBands` prop (the `⊟ Liq` toolbar button in `App.tsx`).
+
 - **`frontend/src/types/dashboard.ts`** — TypeScript types mirroring the API
   schema; includes `POIZone`, `RTOSweepEvent`, `MarketStructure` (with
   `reference_timestamp`), `ManipulationCycle`, `ManipulationPhase`,
   `ManipulationCycleStatus`, `BehaviorDivergence`, `DivergenceType`,
-  `MarketNarrative`, `NarrativeEvent`, `NarrativeAnomaly`,
+  `LiquidityHeatmap`, `HeatmapBucket`, `LeverageLiquidationMap`,
+  `LiquidationBand`, `MarketNarrative`, `NarrativeEvent`, `NarrativeAnomaly`,
   `NarrativeEventType`, `AnomalySeverity`.
 - **`frontend/src/theme.ts`** — color constants for POI zones, structure
   events, manipulation cycle boxes (`MANIPULATION_BOX_STYLES`), volume delta,
-  RSI, and other chart elements.
+  RSI, the liquidity heatmap gradient, leverage-liquidation bands
+  (`LIQUIDATION_LEVERAGE_COLORS`, warm gradient by tier), and other chart
+  elements.
 
 The KPI row, main chart (with volume delta and RSI sub-panes), and
 manipulation cycles sidebar panel are implemented. The liquidity targets,
@@ -842,6 +921,19 @@ distribution, concentrated liquidity, unconfirmed CHoCH, BOS without VD.
 Summary tone adapts per manipulation phase (neutral, accumulation, manipulation,
 expansion, failed) with retail bias and HTF alignment context. Frontend
 `NarrativePanel` sidebar component is not yet implemented.
+
+**Leverage liquidation estimator** (psychology-evolution roadmap idea 3,
+completed): the data layer gained a second provider port,
+`FuturesDataProvider` (`BinanceFuturesDataProvider` via ccxt `binanceusdm`),
+sourcing open interest / funding / long-short ratio.
+`LeverageLiquidationEstimator` infers the over-leveraged side and projects
+`LeverageLiquidationMap` liquidation bands at tiers 10x/25x/50x/100x around
+liquidity-zone entries, each time-bounded from entry formation to the
+liquidation-hit candle (or still live). Wired into
+`DashboardData.liquidation_map` (degrades to `None` for spot-only symbols) +
+API schema. Frontend renders the bands via `LiquidationBandsPrimitive`
+(time-bounded boxes, warm color per leverage tier: 10x amber → 100x crimson)
+behind a `⊟ Liq` toolbar toggle.
 
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /

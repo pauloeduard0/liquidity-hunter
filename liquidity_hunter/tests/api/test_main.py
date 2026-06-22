@@ -9,8 +9,14 @@ from liquidity_hunter.api.cache import TTLCache
 from liquidity_hunter.api.main import app
 from liquidity_hunter.api.routes import dashboard
 from liquidity_hunter.app.dashboard_data import DashboardData, load_dashboard_data
-from liquidity_hunter.core.domain import Candle, TimeFrame
-from liquidity_hunter.data.providers.base import OHLCVProvider
+from liquidity_hunter.core.domain import (
+    Candle,
+    FundingRate,
+    LongShortRatio,
+    OpenInterestPoint,
+    TimeFrame,
+)
+from liquidity_hunter.data.providers.base import FuturesDataProvider, OHLCVProvider
 from liquidity_hunter.tests.liquidity.detectors._factories import make_series
 
 HIGHS = [
@@ -28,13 +34,34 @@ class _FakeProvider(OHLCVProvider):
         return self._candles
 
 
+class _FakeFuturesProvider(FuturesDataProvider):
+    """Empty futures state, so the estimator runs without network access."""
+
+    def get_open_interest_history(
+        self, symbol: str, timeframe: TimeFrame, limit: int = 500
+    ) -> list[OpenInterestPoint]:
+        return []
+
+    def get_funding_rate_history(self, symbol: str, limit: int = 500) -> list[FundingRate]:
+        return []
+
+    def get_long_short_ratio(
+        self, symbol: str, timeframe: TimeFrame, limit: int = 500
+    ) -> list[LongShortRatio]:
+        return []
+
+
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
     monkeypatch.setattr(
         dashboard,
         "load_dashboard_data",
-        lambda **kwargs: load_dashboard_data(provider=_FakeProvider(candles), **kwargs),
+        lambda **kwargs: load_dashboard_data(
+            provider=_FakeProvider(candles),
+            futures_provider=_FakeFuturesProvider(),
+            **kwargs,
+        ),
     )
     monkeypatch.setattr(dashboard, "_cache", TTLCache[DashboardData]())
     with TestClient(app) as test_client:
@@ -60,6 +87,11 @@ def test_dashboard_returns_snapshot(client: TestClient) -> None:
     assert "market_structure_events" in body
     assert "internal_structure_events" in body
     assert body["retail_bias"]["symbol"] == "BTCUSDT"
+    assert "liquidation_map" in body
+    liquidation_map = body["liquidation_map"]
+    assert liquidation_map is not None
+    assert liquidation_map["dominant_leveraged_side"] == "neutral"
+    assert isinstance(liquidation_map["bands"], list)
     assert "narrative" in body
     narrative = body["narrative"]
     assert narrative is not None

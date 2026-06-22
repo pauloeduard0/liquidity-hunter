@@ -19,6 +19,10 @@ import {
 import { LineLabelsPrimitive, type LineLabel } from '../charting/LineLabelsPrimitive'
 import { POIBoxesPrimitive, type POIBox } from '../charting/POIBoxesPrimitive'
 import { HeatmapStripPrimitive, type HeatmapBand } from '../charting/HeatmapStripPrimitive'
+import {
+  LiquidationBandsPrimitive,
+  type LiquidationBandInput,
+} from '../charting/LiquidationBandsPrimitive'
 import type { BehaviorDivergence, DashboardData, ManipulationCycle, MarketStructure, POIZone } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
@@ -340,6 +344,7 @@ interface MainChartProps {
   showManipulationBoxes?: boolean
   showDivergenceMarkers?: boolean
   showHeatmap?: boolean
+  showLiquidationBands?: boolean
 }
 
 export function MainChart({
@@ -347,6 +352,7 @@ export function MainChart({
   showManipulationBoxes = true,
   showDivergenceMarkers = true,
   showHeatmap = true,
+  showLiquidationBands = true,
 }: MainChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const mainContainerRef = useRef<HTMLDivElement>(null)
@@ -365,6 +371,7 @@ export function MainChart({
   const poiBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const manipBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const heatmapPrimitiveRef = useRef<HeatmapStripPrimitive | null>(null)
+  const liquidationBandsPrimitiveRef = useRef<LiquidationBandsPrimitive | null>(null)
   const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const hasFittedRef = useRef(false)
   const isSyncingRef = useRef(false)
@@ -482,6 +489,10 @@ export function MainChart({
     series.attachPrimitive(heatmapPrimitive)
     heatmapPrimitiveRef.current = heatmapPrimitive
 
+    const liquidationBandsPrimitive = new LiquidationBandsPrimitive()
+    series.attachPrimitive(liquidationBandsPrimitive)
+    liquidationBandsPrimitiveRef.current = liquidationBandsPrimitive
+
     const divergenceMarkers = createSeriesMarkers(series)
     divergenceMarkersRef.current = divergenceMarkers
 
@@ -566,6 +577,8 @@ export function MainChart({
       labelsPrimitiveRef.current = null
       poiBoxesPrimitiveRef.current = null
       manipBoxesPrimitiveRef.current = null
+      heatmapPrimitiveRef.current = null
+      liquidationBandsPrimitiveRef.current = null
       divergenceMarkersRef.current = null
       hasFittedRef.current = false
     }
@@ -856,6 +869,22 @@ export function MainChart({
         : []
     heatmapPrimitiveRef.current?.setBands(heatmapBands)
 
+    // Leverage liquidation bands (time-bounded: entry formation -> liq hit)
+    const liquidationBands: LiquidationBandInput[] =
+      showLiquidationBands && data.liquidation_map
+        ? data.liquidation_map.bands.map((band) => ({
+            x0: toUtcTimestamp(band.start_time) as Time,
+            x1: (band.end_time
+              ? toUtcTimestamp(band.end_time)
+              : ((lastCandleTime + 9_999_999) as UTCTimestamp)) as Time,
+            priceLow: band.price_low,
+            priceHigh: band.price_high,
+            intensity: band.intensity,
+            leverage: band.leverage,
+          }))
+        : []
+    liquidationBandsPrimitiveRef.current?.setBands(liquidationBands)
+
     labelsPrimitiveRef.current?.setLabels(labels)
 
     if (!hasFittedRef.current) {
@@ -865,7 +894,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap])
+  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

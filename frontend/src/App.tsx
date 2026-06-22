@@ -81,6 +81,7 @@ function App() {
   const [manipChartVisible, setManipChartVisible] = useState(true)
   const [divChartVisible, setDivChartVisible] = useState(true)
   const [heatmapVisible, setHeatmapVisible] = useState(true)
+  const [liquidationVisible, setLiquidationVisible] = useState(true)
   const [, setTick] = useState(0)
 
   const switchTimeframe = (tf: TimeFrame) => {
@@ -202,6 +203,18 @@ function App() {
                     >
                       ▮ Heatmap
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setLiquidationVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        liquidationVisible
+                          ? 'bg-[#26c6da22] text-[#26c6da]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle leverage liquidation bands"
+                    >
+                      ⊟ Liq
+                    </button>
                   </div>
                   <div className="flex items-center gap-2 text-[10px] text-[#3d4455]">
                     <span>O <span className="font-mono text-[#9ca3b4]">{data.candles.at(-1)?.open.toFixed(2)}</span></span>
@@ -211,7 +224,7 @@ function App() {
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col p-1">
-                  <MainChart key={timeframe} data={data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} />
+                  <MainChart key={timeframe} data={data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} />
                 </div>
               </div>
 

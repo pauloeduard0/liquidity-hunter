@@ -100,6 +100,26 @@ export const HEATMAP_MAX_WIDTH = 104
 /** Min bar length (px) for any non-zero bucket, so faint levels stay visible. */
 export const HEATMAP_MIN_WIDTH = 6
 
+/**
+ * Leverage-liquidation band colors, warmer for higher leverage (more fragile
+ * positions). The estimator emits only one side per snapshot (crowded longs
+ * liquidate below price, shorts above), so the side is read from the band's
+ * position relative to price and color is free to encode the leverage tier.
+ */
+export const LIQUIDATION_LEVERAGE_COLORS: Record<number, [number, number, number]> = {
+  10: [255, 213, 79],  // amber — most common, lowest risk
+  25: [255, 152, 0],   // orange
+  50: [244, 81, 30],   // deep orange / red
+  100: [198, 40, 40],  // crimson — hottest, most fragile
+}
+export const LIQUIDATION_DEFAULT_COLOR: [number, number, number] = [136, 136, 136]
+
+/** Max alpha (0-1) applied to the most intense liquidation band. */
+export const LIQUIDATION_MAX_ALPHA = 0.5
+
+/** Min alpha (0-1) for any rendered liquidation band, so faint tiers stay visible. */
+export const LIQUIDATION_MIN_ALPHA = 0.12
+
 /** Volume delta histogram bar colors. */
 export const VOLUME_DELTA_UP_COLOR = '#26a69a'
 export const VOLUME_DELTA_DOWN_COLOR = '#ef5350'

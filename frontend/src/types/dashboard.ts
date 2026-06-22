@@ -191,6 +191,29 @@ export interface LiquidityHeatmap {
   buckets: HeatmapBucket[]
 }
 
+export interface LiquidationBand {
+  price_low: number
+  price_high: number
+  leverage: number
+  side: LiquiditySide
+  source_entry_price: number
+  intensity: number
+  start_time: string
+  end_time: string | null
+}
+
+export interface LeverageLiquidationMap {
+  symbol: string
+  timeframe: TimeFrame
+  current_price: number
+  dominant_leveraged_side: RetailPositioning
+  positioning_intensity: number
+  funding_rate: number
+  open_interest_change_pct: number
+  long_short_ratio: number
+  bands: LiquidationBand[]
+}
+
 export interface NarrativeEvent {
   timestamp: string
   event_type: NarrativeEventType
@@ -235,5 +258,6 @@ export interface DashboardData {
   manipulation_cycles: ManipulationCycle[]
   behavior_divergences: BehaviorDivergence[]
   liquidity_heatmap: LiquidityHeatmap | null
+  liquidation_map: LeverageLiquidationMap | null
   narrative: MarketNarrative | null
 }

@@ -4,10 +4,12 @@ Wires together `data`, `liquidity`, `scoring`, and `psychology` into a
 single `DashboardData` snapshot for `dashboard` to render.
 """
 
+import logging
 from dataclasses import dataclass, replace
 
 from liquidity_hunter.core.domain import (
     Candle,
+    LeverageLiquidationMap,
     LiquidityHeatmap,
     LiquidityZone,
     ManipulationCycle,
@@ -18,7 +20,13 @@ from liquidity_hunter.core.domain import (
 )
 from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
 from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
-from liquidity_hunter.data import BinanceDataProvider, OHLCVProvider
+from liquidity_hunter.data import (
+    BinanceDataProvider,
+    BinanceFuturesDataProvider,
+    FuturesDataProvider,
+    OHLCVProvider,
+)
+from liquidity_hunter.data.exceptions import DataProviderError
 from liquidity_hunter.indicators import volume_delta_series
 from liquidity_hunter.liquidity import (
     EqualHighDetector,
@@ -32,6 +40,7 @@ from liquidity_hunter.liquidity import (
 )
 from liquidity_hunter.psychology import (
     BehaviorDivergenceAnalyzer,
+    LeverageLiquidationEstimator,
     ManipulationCycleDetector,
     RetailBiasEstimate,
     RetailTrapAnalyzer,
@@ -41,6 +50,8 @@ from liquidity_hunter.scoring import (
     LiquidityScoringEngine,
     ScoredLiquidityZone,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SWING_LOOKBACK = 10
 DEFAULT_INTERNAL_SWING_LOOKBACK = 2
@@ -88,6 +99,7 @@ class DashboardData:
     manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
     liquidity_heatmap: LiquidityHeatmap | None = None
+    liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
 
 
@@ -110,6 +122,7 @@ def load_dashboard_data(
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
     internal_swing_lookback: int = DEFAULT_INTERNAL_SWING_LOOKBACK,
     confluence_filter: bool = False,
+    futures_provider: FuturesDataProvider | None = None,
 ) -> DashboardData:
     """Fetch candles and assemble liquidity, ranking, and retail bias data."""
     provider = provider if provider is not None else BinanceDataProvider()
@@ -202,6 +215,15 @@ def load_dashboard_data(
         retail_bias=retail_bias,
     )
 
+    liquidation_map = _build_liquidation_map(
+        futures_provider if futures_provider is not None else BinanceFuturesDataProvider(),
+        symbol=symbol,
+        timeframe=timeframe,
+        current_price=current_price,
+        candles=candles,
+        liquidity_zones=liquidity_zones,
+    )
+
     data = DashboardData(
         symbol=symbol,
         timeframe=timeframe,
@@ -218,9 +240,44 @@ def load_dashboard_data(
         manipulation_cycles=manipulation_cycles,
         behavior_divergences=behavior_divergences,
         liquidity_heatmap=liquidity_heatmap,
+        liquidation_map=liquidation_map,
     )
 
     from liquidity_hunter.app.narrative import NarrativeEngine
 
     narrative = NarrativeEngine().build(data)
     return replace(data, narrative=narrative)
+
+
+def _build_liquidation_map(
+    futures_provider: FuturesDataProvider,
+    symbol: str,
+    timeframe: TimeFrame,
+    current_price: float,
+    candles: list[Candle],
+    liquidity_zones: list[LiquidityZone],
+) -> LeverageLiquidationMap | None:
+    """Fetch futures market state and estimate the leverage-liquidation map.
+
+    Degrades to ``None`` if futures data is unavailable (e.g. the symbol has no
+    perpetual contract, or the venue is unreachable), so the dashboard still
+    renders for spot-only symbols.
+    """
+    try:
+        open_interest = futures_provider.get_open_interest_history(symbol, timeframe)
+        funding = futures_provider.get_funding_rate_history(symbol)
+        long_short = futures_provider.get_long_short_ratio(symbol, timeframe)
+    except DataProviderError:
+        logger.warning("Futures data unavailable for %s; skipping liquidation map", symbol)
+        return None
+
+    return LeverageLiquidationEstimator().estimate(
+        symbol=symbol,
+        timeframe=timeframe,
+        current_price=current_price,
+        candles=candles,
+        liquidity_zones=liquidity_zones,
+        open_interest=open_interest,
+        funding=funding,
+        long_short=long_short,
+    )
