@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 
 from liquidity_hunter.core.domain import (
     Candle,
+    LiquidityHeatmap,
     LiquidityZone,
     ManipulationCycle,
     MarketDirection,
@@ -35,7 +36,11 @@ from liquidity_hunter.psychology import (
     RetailBiasEstimate,
     RetailTrapAnalyzer,
 )
-from liquidity_hunter.scoring import LiquidityScoringEngine, ScoredLiquidityZone
+from liquidity_hunter.scoring import (
+    LiquidityHeatmapEngine,
+    LiquidityScoringEngine,
+    ScoredLiquidityZone,
+)
 
 DEFAULT_SWING_LOOKBACK = 10
 DEFAULT_INTERNAL_SWING_LOOKBACK = 2
@@ -82,6 +87,7 @@ class DashboardData:
     poi_sweep_events: list[RTOSweepEvent]
     manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
+    liquidity_heatmap: LiquidityHeatmap | None = None
     narrative: MarketNarrative | None = None
 
 
@@ -185,6 +191,17 @@ def load_dashboard_data(
         structure_events=all_structure,
     )
 
+    liquidity_heatmap = LiquidityHeatmapEngine().build(
+        symbol=symbol,
+        timeframe=timeframe,
+        candles=candles,
+        current_price=current_price,
+        liquidity_zones=liquidity_zones,
+        poi_zones=poi_zones,
+        manipulation_cycles=manipulation_cycles,
+        retail_bias=retail_bias,
+    )
+
     data = DashboardData(
         symbol=symbol,
         timeframe=timeframe,
@@ -200,6 +217,7 @@ def load_dashboard_data(
         poi_sweep_events=poi_sweep_events,
         manipulation_cycles=manipulation_cycles,
         behavior_divergences=behavior_divergences,
+        liquidity_heatmap=liquidity_heatmap,
     )
 
     from liquidity_hunter.app.narrative import NarrativeEngine

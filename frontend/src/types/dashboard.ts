@@ -173,6 +173,24 @@ export interface BehaviorDivergence {
   description: string
 }
 
+export interface HeatmapBucket {
+  price_low: number
+  price_high: number
+  heat: number
+  side: LiquiditySide
+  heat_zones: number
+  heat_poi: number
+  heat_manipulation: number
+}
+
+export interface LiquidityHeatmap {
+  symbol: string
+  timeframe: TimeFrame
+  current_price: number
+  bucket_pct: number
+  buckets: HeatmapBucket[]
+}
+
 export interface NarrativeEvent {
   timestamp: string
   event_type: NarrativeEventType
@@ -216,5 +234,6 @@ export interface DashboardData {
   poi_sweep_events: RTOSweepEvent[]
   manipulation_cycles: ManipulationCycle[]
   behavior_divergences: BehaviorDivergence[]
+  liquidity_heatmap: LiquidityHeatmap | null
   narrative: MarketNarrative | null
 }

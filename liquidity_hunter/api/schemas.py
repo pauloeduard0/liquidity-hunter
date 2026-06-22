@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from liquidity_hunter.core.domain import (
     Candle,
+    LiquidityHeatmap,
     LiquidityZone,
     ManipulationCycle,
     MarketDirection,
@@ -43,4 +44,5 @@ class DashboardDataResponse(BaseModel):
     poi_sweep_events: list[RTOSweepEvent]
     manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
+    liquidity_heatmap: LiquidityHeatmap | None = None
     narrative: MarketNarrative | None = None

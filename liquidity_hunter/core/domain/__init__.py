@@ -23,6 +23,7 @@ from liquidity_hunter.core.domain.enums import (
     StructureScope,
     TimeFrame,
 )
+from liquidity_hunter.core.domain.liquidity_heatmap import HeatmapBucket, LiquidityHeatmap
 from liquidity_hunter.core.domain.liquidity_zone import LiquidityZone
 from liquidity_hunter.core.domain.manipulation_cycle import ManipulationCycle
 from liquidity_hunter.core.domain.market_structure import MarketStructure
@@ -40,6 +41,8 @@ __all__ = [
     "BiasSource",
     "Candle",
     "DivergenceType",
+    "HeatmapBucket",
+    "LiquidityHeatmap",
     "LiquiditySide",
     "LiquidityZone",
     "LiquidityZoneType",

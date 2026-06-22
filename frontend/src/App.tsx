@@ -80,6 +80,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [manipChartVisible, setManipChartVisible] = useState(true)
   const [divChartVisible, setDivChartVisible] = useState(true)
+  const [heatmapVisible, setHeatmapVisible] = useState(true)
   const [, setTick] = useState(0)
 
   const switchTimeframe = (tf: TimeFrame) => {
@@ -189,6 +190,18 @@ function App() {
                     <span className="text-[10px] font-medium text-[#5d6477]">
                       {timeframe.toUpperCase()}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => setHeatmapVisible((v) => !v)}
+                      className={`ml-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        heatmapVisible
+                          ? 'bg-[#ef535022] text-[#ef5350]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle liquidity heatmap strip"
+                    >
+                      ▮ Heatmap
+                    </button>
                   </div>
                   <div className="flex items-center gap-2 text-[10px] text-[#3d4455]">
                     <span>O <span className="font-mono text-[#9ca3b4]">{data.candles.at(-1)?.open.toFixed(2)}</span></span>
@@ -198,7 +211,7 @@ function App() {
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col p-1">
-                  <MainChart key={timeframe} data={data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} />
+                  <MainChart key={timeframe} data={data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} />
                 </div>
               </div>
 

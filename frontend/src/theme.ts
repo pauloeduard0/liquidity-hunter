@@ -75,6 +75,31 @@ export const DIVERGENCE_STYLES: Record<string, { label: string; color: string; b
   absorption: { label: 'ABSORB', color: '#ab63fa', bg: '#ab63fa15', icon: '◆' },
 }
 
+/**
+ * Liquidity heatmap gradient stops, cold -> hot, used by the lateral strip on
+ * the main chart. Each entry maps a normalized heat threshold (0-1) to an RGB
+ * triple; the strip interpolates between adjacent stops per bucket.
+ */
+export const HEATMAP_GRADIENT: ReadonlyArray<{ stop: number; rgb: [number, number, number] }> = [
+  { stop: 0.0, rgb: [41, 98, 255] },   // cold — blue (low concentration)
+  { stop: 0.45, rgb: [171, 99, 250] }, // purple
+  { stop: 0.7, rgb: [255, 183, 77] },  // amber
+  { stop: 1.0, rgb: [239, 83, 80] },   // hot — red (stop magnet)
+]
+
+/** Max alpha (0-1) applied to the hottest heatmap band; cold bands fade out. */
+export const HEATMAP_MAX_ALPHA = 0.6
+
+/**
+ * Max horizontal projection (px) of a heatmap bar into the chart, reached by
+ * the hottest bucket. Bar length scales with normalized heat, so hot levels
+ * reach further left like a volume profile.
+ */
+export const HEATMAP_MAX_WIDTH = 104
+
+/** Min bar length (px) for any non-zero bucket, so faint levels stay visible. */
+export const HEATMAP_MIN_WIDTH = 6
+
 /** Volume delta histogram bar colors. */
 export const VOLUME_DELTA_UP_COLOR = '#26a69a'
 export const VOLUME_DELTA_DOWN_COLOR = '#ef5350'

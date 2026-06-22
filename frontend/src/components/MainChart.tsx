@@ -18,6 +18,7 @@ import {
 
 import { LineLabelsPrimitive, type LineLabel } from '../charting/LineLabelsPrimitive'
 import { POIBoxesPrimitive, type POIBox } from '../charting/POIBoxesPrimitive'
+import { HeatmapStripPrimitive, type HeatmapBand } from '../charting/HeatmapStripPrimitive'
 import type { BehaviorDivergence, DashboardData, ManipulationCycle, MarketStructure, POIZone } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
@@ -326,9 +327,15 @@ interface MainChartProps {
   data: DashboardData
   showManipulationBoxes?: boolean
   showDivergenceMarkers?: boolean
+  showHeatmap?: boolean
 }
 
-export function MainChart({ data, showManipulationBoxes = true, showDivergenceMarkers = true }: MainChartProps) {
+export function MainChart({
+  data,
+  showManipulationBoxes = true,
+  showDivergenceMarkers = true,
+  showHeatmap = true,
+}: MainChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const mainContainerRef = useRef<HTMLDivElement>(null)
   const deltaContainerRef = useRef<HTMLDivElement>(null)
@@ -345,6 +352,7 @@ export function MainChart({ data, showManipulationBoxes = true, showDivergenceMa
   const labelsPrimitiveRef = useRef<LineLabelsPrimitive | null>(null)
   const poiBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const manipBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
+  const heatmapPrimitiveRef = useRef<HeatmapStripPrimitive | null>(null)
   const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const hasFittedRef = useRef(false)
   const isSyncingRef = useRef(false)
@@ -457,6 +465,10 @@ export function MainChart({ data, showManipulationBoxes = true, showDivergenceMa
     const manipBoxesPrimitive = new POIBoxesPrimitive()
     series.attachPrimitive(manipBoxesPrimitive)
     manipBoxesPrimitiveRef.current = manipBoxesPrimitive
+
+    const heatmapPrimitive = new HeatmapStripPrimitive()
+    series.attachPrimitive(heatmapPrimitive)
+    heatmapPrimitiveRef.current = heatmapPrimitive
 
     const divergenceMarkers = createSeriesMarkers(series)
     divergenceMarkersRef.current = divergenceMarkers
@@ -820,6 +832,17 @@ export function MainChart({ data, showManipulationBoxes = true, showDivergenceMa
       : []
     divergenceMarkersRef.current?.setMarkers(divMarkers)
 
+    // Liquidity heatmap strip
+    const heatmapBands: HeatmapBand[] =
+      showHeatmap && data.liquidity_heatmap
+        ? data.liquidity_heatmap.buckets.map((bucket) => ({
+            priceLow: bucket.price_low,
+            priceHigh: bucket.price_high,
+            heat: bucket.heat,
+          }))
+        : []
+    heatmapPrimitiveRef.current?.setBands(heatmapBands)
+
     labelsPrimitiveRef.current?.setLabels(labels)
 
     if (!hasFittedRef.current) {
@@ -829,7 +852,7 @@ export function MainChart({ data, showManipulationBoxes = true, showDivergenceMa
       hasFittedRef.current = true
     }
 
-  }, [data, showManipulationBoxes, showDivergenceMarkers])
+  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

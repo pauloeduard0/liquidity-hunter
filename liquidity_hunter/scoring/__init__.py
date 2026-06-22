@@ -6,7 +6,13 @@ order signals. Depends on `core`, `liquidity`, and `psychology`.
 """
 
 from liquidity_hunter.scoring.engine import LiquidityScoringEngine
+from liquidity_hunter.scoring.heatmap import LiquidityHeatmapEngine
 from liquidity_hunter.scoring.models import ScoredLiquidityZone
 from liquidity_hunter.scoring.weights import DEFAULT_TIMEFRAME_WEIGHTS
 
-__all__ = ["DEFAULT_TIMEFRAME_WEIGHTS", "LiquidityScoringEngine", "ScoredLiquidityZone"]
+__all__ = [
+    "DEFAULT_TIMEFRAME_WEIGHTS",
+    "LiquidityHeatmapEngine",
+    "LiquidityScoringEngine",
+    "ScoredLiquidityZone",
+]
