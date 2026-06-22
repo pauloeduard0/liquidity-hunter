@@ -1,14 +1,38 @@
 """Tests for `liquidity_hunter.app.liquidation_backtest`."""
 
+from datetime import UTC, datetime
+
 from liquidity_hunter.app.liquidation_backtest import (
     LiquidationBacktester,
     _intensity_quartiles,
+    _near_any,
     _Outcome,
     _reach_index,
     _reacted,
+    _select_levels,
 )
 from liquidity_hunter.core.domain import Candle, LiquiditySide
+from liquidity_hunter.psychology import ProjectedLevel
 from liquidity_hunter.tests.liquidity.detectors._factories import make_candle, make_series
+
+_TS = datetime(2024, 1, 1, tzinfo=UTC)
+
+
+def _level(
+    price: float,
+    *,
+    side: LiquiditySide,
+    base_weight: float = 1.0,
+    leverage: int = 25,
+) -> ProjectedLevel:
+    return ProjectedLevel(
+        price=price,
+        leverage=leverage,
+        side=side,
+        source_entry_price=price,
+        start_time=_TS,
+        base_weight=base_weight,
+    )
 
 
 def _candles(*highlows: tuple[float, float]) -> list[Candle]:
@@ -88,6 +112,36 @@ def test_intensity_quartiles_empty_when_too_few() -> None:
     assert _intensity_quartiles(outcomes) == {}
 
 
+# --- _near_any / _select_levels ---------------------------------------------
+
+
+def test_near_any_within_eps() -> None:
+    assert _near_any(100.0, [99.9, 105.0], 0.0025) is True  # 0.1% away
+    assert _near_any(100.0, [101.0, 105.0], 0.0025) is False  # 1% away
+
+
+def test_select_levels_caps_and_balances_sides() -> None:
+    levels = (
+        [_level(100.0 * (1 - 0.005 * i), side=LiquiditySide.SELL_SIDE) for i in range(1, 8)]
+        + [_level(100.0 * (1 + 0.005 * i), side=LiquiditySide.BUY_SIDE) for i in range(1, 8)]
+    )
+    selected = _select_levels(levels, current_price=100.0, max_levels=6, price_window=0.08)
+
+    assert len(selected) == 6
+    above = sum(1 for lvl in selected if lvl.price >= 100.0)
+    below = sum(1 for lvl in selected if lvl.price < 100.0)
+    assert above == 3 and below == 3  # balanced
+
+
+def test_select_levels_filters_outside_window() -> None:
+    levels = [
+        _level(100.5, side=LiquiditySide.BUY_SIDE),  # 0.5% away -> in window
+        _level(120.0, side=LiquiditySide.BUY_SIDE),  # 20% away -> out
+    ]
+    selected = _select_levels(levels, current_price=100.0, max_levels=12, price_window=0.08)
+    assert [round(lvl.price, 1) for lvl in selected] == [100.5]
+
+
 # --- end-to-end run ---------------------------------------------------------
 
 
@@ -116,6 +170,9 @@ def test_run_produces_valid_populated_result() -> None:
     assert result.n_levels > 0
     assert 0.0 <= result.reach_rate <= 1.0
     assert 0.0 <= result.reaction_rate <= 1.0
+    assert result.n_forward_extremes > 0
+    assert 0.0 <= result.precision_model <= 1.0
+    assert 0.0 <= result.precision_baseline <= 1.0
     assert result.by_distance_bucket  # buckets always present
     assert result.params["forward_horizon"] == 20
 

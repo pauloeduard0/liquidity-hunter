@@ -31,13 +31,26 @@ def _fmt(value: float) -> str:
 
 def _print_report(result: LiquidationBacktestResult) -> None:
     print(f"\n=== Liquidation backtest: {result.symbol} {result.timeframe.value} ===")
-    print(f"eval points: {result.n_eval_points} | levels: {result.n_levels}")
+    print(f"eval points: {result.n_eval_points} | top-N levels: {result.n_levels}")
+
+    print("\n-- TARGET / MAGNET (headline) --")
+    print(
+        f"clustering precision (forward extremes ON a level, n={result.n_forward_extremes}):"
+        f" model {result.precision_model:.1%} vs baseline {result.precision_baseline:.1%}"
+        f"  LIFT {_fmt(result.precision_lift)}x"
+    )
+    btr_m = result.median_bars_to_reach_model
+    btr_b = result.median_bars_to_reach_baseline
+    print(
+        f"median bars to reach: model {btr_m if btr_m is not None else 'n/a'}"
+        f" vs baseline {btr_b if btr_b is not None else 'n/a'} (lower = stronger magnet)"
+    )
+
+    print("\n-- reach + reaction (sanity / legacy) --")
     print(
         f"reach rate: {result.reach_rate:.1%} | reaction|reached: {result.reaction_rate:.1%}"
-        f" | baseline: {result.baseline_reaction_rate:.1%} | LIFT: {_fmt(result.lift)}x"
+        f" vs baseline {result.baseline_reaction_rate:.1%}  lift {_fmt(result.reaction_lift)}x"
     )
-    btr = result.median_bars_to_reach
-    print(f"median bars to reach: {btr if btr is not None else 'n/a'}")
 
     print("\nby leverage (reach / reaction):")
     for lev, (reach, reaction) in result.by_leverage.items():

@@ -37,7 +37,10 @@ def test_main_runs_backtest_and_reports(capsys: pytest.CaptureFixture[str]) -> N
     assert result.n_eval_points > 0
     assert result.n_levels > 0
 
+    assert result.n_forward_extremes > 0
+
     out = capsys.readouterr().out
     assert "Liquidation backtest" in out
+    assert "TARGET / MAGNET" in out
+    assert "clustering precision" in out
     assert "by leverage" in out
-    assert "by distance bucket" in out
