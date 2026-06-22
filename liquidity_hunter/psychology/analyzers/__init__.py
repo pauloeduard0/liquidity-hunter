@@ -6,6 +6,7 @@ from liquidity_hunter.psychology.analyzers.behavior_divergence import (
 )
 from liquidity_hunter.psychology.analyzers.leverage_liquidation import (
     LeverageLiquidationEstimator,
+    ProjectedLevel,
 )
 from liquidity_hunter.psychology.analyzers.manipulation_cycle import ManipulationCycleDetector
 from liquidity_hunter.psychology.analyzers.retail_trap import RetailTrapAnalyzer
@@ -14,6 +15,7 @@ __all__ = [
     "BehaviorDivergenceAnalyzer",
     "LeverageLiquidationEstimator",
     "ManipulationCycleDetector",
+    "ProjectedLevel",
     "RetailBiasEstimator",
     "RetailTrapAnalyzer",
 ]

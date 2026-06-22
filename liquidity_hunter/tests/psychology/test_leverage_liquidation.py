@@ -261,6 +261,21 @@ def test_nearby_entries_merged_into_one_cluster() -> None:
     assert entries == {100.0}  # the stronger of the two represents the cluster
 
 
+def test_project_levels_is_futures_independent() -> None:
+    # One zone -> both sides x 4 tiers = 8 levels, placed at entry x (1 +- dist),
+    # weighted by strength x leverage prior (no positioning side scaling).
+    zone = make_zone(100.0, side=LiquiditySide.SELL_SIDE, strength=0.8)
+    levels = LeverageLiquidationEstimator().project_levels([zone])
+
+    assert len(levels) == 8
+    sell = {lv.leverage: lv for lv in levels if lv.side is LiquiditySide.SELL_SIDE}
+    assert sell[10].price == pytest.approx(100.0 * (1 - 0.095))
+    assert sell[10].base_weight == pytest.approx(0.8 * 1.0)  # strength x 10x prior
+    assert sell[100].base_weight == pytest.approx(0.8 * 0.25)
+    buy = {lv.leverage: lv for lv in levels if lv.side is LiquiditySide.BUY_SIDE}
+    assert buy[10].price == pytest.approx(100.0 * (1 + 0.095))
+
+
 def test_poi_order_blocks_anchor_liquidation_bands() -> None:
     # No liquidity zones — only an order block at midpoint 100 seeds bands.
     poi = make_poi(99.0, 101.0)

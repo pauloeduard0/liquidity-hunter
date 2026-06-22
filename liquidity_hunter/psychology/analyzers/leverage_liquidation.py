@@ -86,15 +86,23 @@ class _Entry:
 
 
 @dataclass(frozen=True)
-class _RawBand:
-    """A liquidation band before intensity normalization and time-bounding."""
+class ProjectedLevel:
+    """A candidate liquidation level, independent of futures positioning.
 
-    liq_price: float
+    Produced by `LeverageLiquidationEstimator.project_levels`: the price where a
+    position entered at `source_entry_price` with `leverage` would be liquidated
+    (`side` = `SELL_SIDE` for longs liquidating below, `BUY_SIDE` for shorts
+    above). `base_weight` (= entry weight × leverage-population prior) ranks the
+    level *before* any futures-derived side scaling, so it is the futures-neutral
+    intensity signal the backtest evaluates.
+    """
+
+    price: float
     leverage: int
     side: LiquiditySide
     source_entry_price: float
     start_time: datetime
-    weight: float
+    base_weight: float
 
 
 class LeverageLiquidationEstimator:
@@ -149,6 +157,39 @@ class LeverageLiquidationEstimator:
             bands=bands,
         )
 
+    def project_levels(
+        self,
+        liquidity_zones: list[LiquidityZone],
+        poi_zones: list[POIZone] | None = None,
+    ) -> list[ProjectedLevel]:
+        """Project candidate liquidation levels (both sides, all tiers).
+
+        Futures-independent: it places levels at `entry × (1 ± tier_distance)`
+        for every entry anchor and weights them by `entry.weight × leverage
+        prior` — *no* positioning side scaling. `estimate` layers the futures
+        side/intensity on top; the backtest evaluates these raw levels directly.
+        """
+        entries = _entry_anchors(liquidity_zones, poi_zones or [])
+        levels: list[ProjectedLevel] = []
+        for side, direction in ((LiquiditySide.SELL_SIDE, -1), (LiquiditySide.BUY_SIDE, 1)):
+            for entry in entries:
+                for leverage, dist_pct in _LEVERAGE_DISTANCE_PCT.items():
+                    price = entry.price * (1 + direction * dist_pct)
+                    base_weight = entry.weight * _LEVERAGE_POPULATION_PRIOR[leverage]
+                    if price <= 0 or base_weight <= 0:
+                        continue
+                    levels.append(
+                        ProjectedLevel(
+                            price=price,
+                            leverage=leverage,
+                            side=side,
+                            source_entry_price=entry.price,
+                            start_time=entry.start_time,
+                            base_weight=base_weight,
+                        )
+                    )
+        return levels
+
     def _project_bands(
         self,
         dominant: RetailPositioning,
@@ -157,7 +198,7 @@ class LeverageLiquidationEstimator:
         poi_zones: list[POIZone],
         intensity_scale: float,
     ) -> list[LiquidationBand]:
-        """Project liquidation bands around entry anchors for both sides.
+        """Apply futures side/intensity scaling + time-bounding to raw levels.
 
         Both the long-liquidation pool (below entries, ``SELL_SIDE``) and the
         short-liquidation pool (above, ``BUY_SIDE``) are emitted; the
@@ -167,64 +208,42 @@ class LeverageLiquidationEstimator:
         if dominant is RetailPositioning.NEUTRAL or intensity_scale <= 0:
             return []
 
-        # (side, price direction from entry, intensity scale). Crowded longs
-        # liquidate below entries (sell-side); crowded shorts above (buy-side).
+        # Crowded longs liquidate below entries (sell-side); shorts above.
         nondominant = intensity_scale * _NON_DOMINANT_FACTOR
         if dominant is RetailPositioning.LONG:
-            side_scales = [
-                (LiquiditySide.SELL_SIDE, -1, intensity_scale),
-                (LiquiditySide.BUY_SIDE, 1, nondominant),
-            ]
+            side_scale = {
+                LiquiditySide.SELL_SIDE: intensity_scale,
+                LiquiditySide.BUY_SIDE: nondominant,
+            }
         else:
-            side_scales = [
-                (LiquiditySide.BUY_SIDE, 1, intensity_scale),
-                (LiquiditySide.SELL_SIDE, -1, nondominant),
-            ]
+            side_scale = {
+                LiquiditySide.BUY_SIDE: intensity_scale,
+                LiquiditySide.SELL_SIDE: nondominant,
+            }
 
-        entries = _entry_anchors(liquidity_zones, poi_zones)
-        if not entries:
-            return []
+        weighted: list[tuple[ProjectedLevel, float]] = []
+        for level in self.project_levels(liquidity_zones, poi_zones):
+            weight = level.base_weight * side_scale[level.side]
+            if weight > 0:
+                weighted.append((level, weight))
 
-        raw: list[_RawBand] = []
-        for side, direction, scale in side_scales:
-            if scale <= 0:
-                continue
-            for entry in entries:
-                for leverage, dist_pct in _LEVERAGE_DISTANCE_PCT.items():
-                    liq_price = entry.price * (1 + direction * dist_pct)
-                    if liq_price <= 0:
-                        continue
-                    weight = scale * entry.weight * _LEVERAGE_POPULATION_PRIOR[leverage]
-                    if weight <= 0:
-                        continue
-                    raw.append(
-                        _RawBand(
-                            liq_price=liq_price,
-                            leverage=leverage,
-                            side=side,
-                            source_entry_price=entry.price,
-                            start_time=entry.start_time,
-                            weight=weight,
-                        )
-                    )
-
-        peak = max((b.weight for b in raw), default=0.0)
+        peak = max((w for _, w in weighted), default=0.0)
         if peak <= 0:
             return []
 
         bands: list[LiquidationBand] = []
-        for b in raw:
-            half = b.liq_price * _BAND_HALF_PCT
-            end_time = _liquidation_hit_time(candles, b.start_time, b.liq_price, b.side)
+        for level, weight in weighted:
+            half = level.price * _BAND_HALF_PCT
+            end_time = _liquidation_hit_time(candles, level.start_time, level.price, level.side)
             bands.append(
                 LiquidationBand(
-                    price_low=b.liq_price - half,
-                    price_high=b.liq_price + half,
-                    leverage=b.leverage,
-                    side=b.side,
-                    source_entry_price=b.source_entry_price,
-                    intensity=b.weight / peak * 100.0,
-                    start_time=b.start_time,
+                    price_low=level.price - half,
+                    price_high=level.price + half,
+                    leverage=level.leverage,
+                    side=level.side,
+                    source_entry_price=level.source_entry_price,
+                    intensity=weight / peak * 100.0,
+                    start_time=level.start_time,
                     end_time=end_time,
                 )
             )

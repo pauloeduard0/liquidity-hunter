@@ -8,6 +8,7 @@ from liquidity_hunter.psychology.analyzers import (
     BehaviorDivergenceAnalyzer,
     LeverageLiquidationEstimator,
     ManipulationCycleDetector,
+    ProjectedLevel,
     RetailBiasEstimator,
     RetailTrapAnalyzer,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "BehaviorDivergenceAnalyzer",
     "LeverageLiquidationEstimator",
     "ManipulationCycleDetector",
+    "ProjectedLevel",
     "RetailBiasEstimate",
     "RetailBiasEstimator",
     "RetailTrapAnalyzer",
