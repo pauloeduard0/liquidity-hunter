@@ -23,7 +23,7 @@ import {
   LiquidationBandsPrimitive,
   type LiquidationBandInput,
 } from '../charting/LiquidationBandsPrimitive'
-import type { BehaviorDivergence, DashboardData, ManipulationCycle, MarketStructure, POIZone } from '../types/dashboard'
+import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, POIZone } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -261,6 +261,63 @@ const DIVERGENCE_MARKER_SHAPES: Record<string, { shape: 'circle' | 'square' | 'a
   absorption: { shape: 'square', position: 'belowBar' },
 }
 
+// Chart-only declutter for liquidation bands: the API returns the full set
+// (including far/old liquidations, kept for the backtest), but the chart shows
+// only what's actionable near current price — the still-live (untriggered)
+// pools plus a few of the most recent hits for context.
+const LIQ_PRICE_WINDOW = 0.08 // ±8% of current price
+const LIQ_MAX_BANDS = 12
+const LIQ_MAX_RECENT_HITS = 4
+
+/** Interleave two intensity-sorted lists, keeping both sides represented. */
+function balancedTake(above: LiquidationBand[], below: LiquidationBand[], budget: number): LiquidationBand[] {
+  const out: LiquidationBand[] = []
+  let i = 0
+  while (out.length < budget && (i < above.length || i < below.length)) {
+    if (i < below.length) out.push(below[i])
+    if (out.length < budget && i < above.length) out.push(above[i])
+    i++
+  }
+  return out
+}
+
+function selectVisibleLiquidationBands(
+  bands: LiquidationBand[],
+  currentPrice: number,
+  liveOnly: boolean,
+): LiquidationBand[] {
+  const mid = (b: LiquidationBand) => (b.price_low + b.price_high) / 2
+  const inWindow = bands.filter(
+    (b) => Math.abs(mid(b) - currentPrice) <= currentPrice * LIQ_PRICE_WINDOW,
+  )
+  // Relevance blends proximity to current price (dominant) with intensity, so
+  // the nearest live pools always surface instead of far-but-strong ones.
+  const relevance = (b: LiquidationBand) => {
+    const distPct = Math.abs(mid(b) - currentPrice) / currentPrice
+    const proximity = Math.max(0, 1 - distPct / LIQ_PRICE_WINDOW)
+    return 0.6 * proximity + 0.4 * (b.intensity / 100)
+  }
+  const byRelevance = (a: LiquidationBand, b: LiquidationBand) => relevance(b) - relevance(a)
+  const live = inWindow.filter((b) => b.end_time === null)
+  const hits = liveOnly
+    ? []
+    : inWindow
+        .filter((b) => b.end_time !== null)
+        .sort((a, b) => Date.parse(b.end_time as string) - Date.parse(a.end_time as string))
+
+  // Reserve a few slots for recent hits (context), then fill with live pools
+  // balanced across both sides of price so above and below stay visible.
+  const recentHits = hits.slice(0, LIQ_MAX_RECENT_HITS)
+  const liveBudget = LIQ_MAX_BANDS - recentHits.length
+  const above = live.filter((b) => mid(b) >= currentPrice).sort(byRelevance)
+  const below = live.filter((b) => mid(b) < currentPrice).sort(byRelevance)
+  const selected = [...balancedTake(above, below, liveBudget), ...recentHits]
+  if (selected.length < LIQ_MAX_BANDS) {
+    selected.push(...hits.slice(recentHits.length, recentHits.length + (LIQ_MAX_BANDS - selected.length)))
+  }
+  return selected
+}
+
 function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker<Time>[] {
   return [...divergences]
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
@@ -345,6 +402,7 @@ interface MainChartProps {
   showDivergenceMarkers?: boolean
   showHeatmap?: boolean
   showLiquidationBands?: boolean
+  liquidationLiveOnly?: boolean
 }
 
 export function MainChart({
@@ -353,6 +411,7 @@ export function MainChart({
   showDivergenceMarkers = true,
   showHeatmap = true,
   showLiquidationBands = true,
+  liquidationLiveOnly = false,
 }: MainChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const mainContainerRef = useRef<HTMLDivElement>(null)
@@ -869,10 +928,16 @@ export function MainChart({
         : []
     heatmapPrimitiveRef.current?.setBands(heatmapBands)
 
-    // Leverage liquidation bands (time-bounded: entry formation -> liq hit)
+    // Leverage liquidation bands (time-bounded: entry formation -> liq hit).
+    // Declutter to the relevant subset near current price (full set stays in
+    // the API for the backtest).
     const liquidationBands: LiquidationBandInput[] =
       showLiquidationBands && data.liquidation_map
-        ? data.liquidation_map.bands.map((band) => ({
+        ? selectVisibleLiquidationBands(
+            data.liquidation_map.bands,
+            data.current_price,
+            liquidationLiveOnly,
+          ).map((band) => ({
             x0: toUtcTimestamp(band.start_time) as Time,
             x1: (band.end_time
               ? toUtcTimestamp(band.end_time)
@@ -881,6 +946,7 @@ export function MainChart({
             priceHigh: band.price_high,
             intensity: band.intensity,
             leverage: band.leverage,
+            hit: band.end_time !== null,
           }))
         : []
     liquidationBandsPrimitiveRef.current?.setBands(liquidationBands)
@@ -894,7 +960,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands])
+  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

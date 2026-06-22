@@ -82,6 +82,7 @@ function App() {
   const [divChartVisible, setDivChartVisible] = useState(true)
   const [heatmapVisible, setHeatmapVisible] = useState(true)
   const [liquidationVisible, setLiquidationVisible] = useState(true)
+  const [liquidationLiveOnly, setLiquidationLiveOnly] = useState(false)
   const [, setTick] = useState(0)
 
   const switchTimeframe = (tf: TimeFrame) => {
@@ -205,15 +206,19 @@ function App() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setLiquidationVisible((v) => !v)}
+                      onClick={(e) => {
+                        // Alt/Shift-click toggles "live pools only"; plain click toggles visibility.
+                        if (e.altKey || e.shiftKey) setLiquidationLiveOnly((v) => !v)
+                        else setLiquidationVisible((v) => !v)
+                      }}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         liquidationVisible
                           ? 'bg-[#26c6da22] text-[#26c6da]'
                           : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
                       }`}
-                      title="Toggle leverage liquidation bands"
+                      title="Click: toggle liquidation bands · Alt/Shift-click: live pools only"
                     >
-                      ⊟ Liq
+                      ⊟ Liq{liquidationLiveOnly ? ' •' : ''}
                     </button>
                   </div>
                   <div className="flex items-center gap-2 text-[10px] text-[#3d4455]">
@@ -224,7 +229,7 @@ function App() {
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col p-1">
-                  <MainChart key={timeframe} data={data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} />
+                  <MainChart key={timeframe} data={data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} />
                 </div>
               </div>
 

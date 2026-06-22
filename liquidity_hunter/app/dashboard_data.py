@@ -222,6 +222,7 @@ def load_dashboard_data(
         current_price=current_price,
         candles=candles,
         liquidity_zones=liquidity_zones,
+        poi_zones=poi_zones,
     )
 
     data = DashboardData(
@@ -256,6 +257,7 @@ def _build_liquidation_map(
     current_price: float,
     candles: list[Candle],
     liquidity_zones: list[LiquidityZone],
+    poi_zones: list[POIZone],
 ) -> LeverageLiquidationMap | None:
     """Fetch futures market state and estimate the leverage-liquidation map.
 
@@ -280,4 +282,5 @@ def _build_liquidation_map(
         open_interest=open_interest,
         funding=funding,
         long_short=long_short,
+        poi_zones=poi_zones,
     )

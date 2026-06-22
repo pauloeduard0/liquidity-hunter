@@ -26,6 +26,8 @@ export interface LiquidationBandInput {
   /** Normalized intensity, 0-100. */
   intensity: number
   leverage: number
+  /** True once price reached the level (consumed); false = still-live pool. */
+  hit: boolean
 }
 
 interface ResolvedBand {
@@ -38,7 +40,14 @@ interface ResolvedBand {
   alpha: number
   rgb: [number, number, number]
   leverage: number
+  hit: boolean
+  showTag: boolean
 }
+
+// Already-hit (consumed) bands are rendered fainter than still-live pools.
+const HIT_ALPHA_FACTOR = 0.55
+// Only label bands strong enough to be worth reading, to cut text clutter.
+const TAG_MIN_INTENSITY = 30
 
 class LiquidationBandsRenderer implements IPrimitivePaneRenderer {
   private readonly _bands: ResolvedBand[]
@@ -64,20 +73,26 @@ class LiquidationBandsRenderer implements IPrimitivePaneRenderer {
         const mid = top + height / 2
 
         // Filled time-bounded band (entry formation -> liquidation hit).
-        context.fillStyle = `rgba(${r}, ${g}, ${b}, ${band.alpha.toFixed(3)})`
+        // Consumed (hit) bands render fainter than still-live pools.
+        const fillAlpha = band.hit ? band.alpha * HIT_ALPHA_FACTOR : band.alpha
+        context.fillStyle = `rgba(${r}, ${g}, ${b}, ${fillAlpha.toFixed(3)})`
         context.fillRect(left, top, right - left, height)
 
-        // Center line so the exact liquidation level reads through the fill.
-        context.strokeStyle = `rgba(${r}, ${g}, ${b}, ${Math.min(1, band.alpha + 0.3).toFixed(3)})`
+        // Center line: solid for live pools, dashed for already-hit levels.
+        context.strokeStyle = `rgba(${r}, ${g}, ${b}, ${Math.min(1, fillAlpha + 0.3).toFixed(3)})`
         context.lineWidth = 1
+        context.setLineDash(band.hit ? [4, 3] : [])
         context.beginPath()
         context.moveTo(left, mid)
         context.lineTo(right, mid)
         context.stroke()
+        context.setLineDash([])
 
-        // Leverage tag at the band's left edge.
-        context.fillStyle = `rgba(${r}, ${g}, ${b}, ${Math.min(1, band.alpha + 0.45).toFixed(3)})`
-        context.fillText(`${band.leverage}x`, left + 3, mid)
+        // Leverage tag at the band's left edge (only for strong-enough bands).
+        if (band.showTag) {
+          context.fillStyle = `rgba(${r}, ${g}, ${b}, ${Math.min(1, fillAlpha + 0.45).toFixed(3)})`
+          context.fillText(`${band.leverage}x`, left + 3, mid)
+        }
       }
     })
   }
@@ -113,6 +128,8 @@ class LiquidationBandsPaneView implements IPrimitivePaneView {
         alpha,
         rgb,
         leverage: band.leverage,
+        hit: band.hit,
+        showTag: band.intensity >= TAG_MIN_INTENSITY,
       })
     }
 

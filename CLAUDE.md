@@ -575,9 +575,18 @@ documented in `liquidity_hunter/docs/psychology.md`.
   pool above, `BUY_SIDE`); the non-dominant side's intensity is dampened by
   `_NON_DOMINANT_FACTOR` (0.45) so the over-leveraged side stays prominent. Band
   intensity (0-100, peak-normalized across both sides) = `side_scale ×
-  zone.strength × _LEVERAGE_POPULATION_PRIOR[lev]` (10x most common → hottest),
-  capped at `_MAX_BANDS_PER_SIDE` (20) strongest *per side*. NEUTRAL positioning
-  or empty inputs → no bands.
+  entry.weight × _LEVERAGE_POPULATION_PRIOR[lev]` (10x most common → hottest).
+  Entry anchors come from `_entry_anchors`: liquidity zones with `strength > 0`
+  **including mitigated ones** (real past entry areas, downweighted by
+  `_MITIGATED_ENTRY_FACTOR`=0.7) **and order blocks** (`poi_zones`, weight
+  `_POI_ENTRY_WEIGHT`=1.0, mitigated downweighted, invalidated dropped — order
+  blocks concentrate real institutional volume), merged within
+  `_ENTRY_CLUSTER_PCT` (0.4%,
+  keep strongest), then at most `_MAX_ENTRY_CLUSTERS` (16) kept **spread evenly
+  across price** via `_bucket_select` (strongest per equal-width price bucket) —
+  so coverage isn't monopolized by the densest cluster and bands appear across
+  the whole range, not just one region. NEUTRAL positioning or empty inputs →
+  no bands.
   Each kept band is time-bounded via `candles`: `start_time = zone.formed_at`,
   `end_time = _liquidation_hit_time(...)` (first candle at/after start whose
   wick reaches the liquidation level, `None` if never — still live). The
@@ -810,6 +819,19 @@ selector.
   between `LIQUIDATION_MIN_ALPHA` and `LIQUIDATION_MAX_ALPHA`, with a center
   line and a leverage tag (`10x`/`25x`/…) at the left edge. Toggled by the
   `showLiquidationBands` prop (the `⊟ Liq` toolbar button in `App.tsx`).
+  `MainChart.selectVisibleLiquidationBands` declutters the render to a relevant
+  subset near current price — still-live (untriggered) pools plus a few most
+  recent hits — within `LIQ_PRICE_WINDOW` (±8%), capped at `LIQ_MAX_BANDS` (12),
+  **balanced across both sides of price** (`balancedTake`, so above/below stay
+  visible) and ranked by a **proximity-weighted relevance** (0.6 proximity +
+  0.4 intensity) so the nearest live pools surface instead of far-but-strong
+  ones. The **full** band
+  set stays in `liquidation_map.bands` (API) for backtesting; only the chart is
+  filtered. Live pools render with a solid center line; already-hit (consumed)
+  levels render fainter with a dashed line (`HIT_ALPHA_FACTOR`); the leverage
+  tag is drawn only above `TAG_MIN_INTENSITY`. The `⊟ Liq` toolbar button
+  toggles visibility on plain click; Alt/Shift-click toggles a "live pools only"
+  mode (`liquidationLiveOnly`, shown as `⊟ Liq •`).
 
 - **`frontend/src/types/dashboard.ts`** — TypeScript types mirroring the API
   schema; includes `POIZone`, `RTOSweepEvent`, `MarketStructure` (with
@@ -933,7 +955,8 @@ liquidation-hit candle (or still live). Wired into
 `DashboardData.liquidation_map` (degrades to `None` for spot-only symbols) +
 API schema. Frontend renders the bands via `LiquidationBandsPrimitive`
 (time-bounded boxes, warm color per leverage tier: 10x amber → 100x crimson)
-behind a `⊟ Liq` toolbar toggle.
+behind a `⊟ Liq` toolbar toggle, decluttered to a near-price subset (live pools
++ recent hits, ±8%, ≤12) while the full set stays in the API for backtesting.
 
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /

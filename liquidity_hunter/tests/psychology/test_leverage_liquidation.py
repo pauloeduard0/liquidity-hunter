@@ -8,15 +8,39 @@ from liquidity_hunter.core.domain import (
     Candle,
     FundingRate,
     LeverageLiquidationMap,
+    LiquidationBand,
     LiquiditySide,
     LiquidityZone,
     LongShortRatio,
+    MarketDirection,
     OpenInterestPoint,
+    POIZone,
+    POIZoneStatus,
     RetailPositioning,
     TimeFrame,
 )
 from liquidity_hunter.psychology import LeverageLiquidationEstimator
 from liquidity_hunter.tests.psychology._factories import FORMED_AT, make_zone
+
+
+def make_poi(
+    price_low: float,
+    price_high: float,
+    *,
+    status: POIZoneStatus = POIZoneStatus.ACTIVE,
+) -> POIZone:
+    return POIZone(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        direction=MarketDirection.BULLISH,
+        price_low=price_low,
+        price_high=price_high,
+        created_at=FORMED_AT,
+        origin_choch_timestamp=FORMED_AT,
+        origin_bos_timestamp=FORMED_AT,
+        extreme_candle_timestamp=FORMED_AT,
+        status=status,
+    )
 
 TS = datetime(2026, 6, 22, tzinfo=UTC)
 
@@ -67,6 +91,7 @@ def _estimate(
     ratio: float,
     oi: tuple[float, float] = (1000.0, 1000.0),
     candles: list[Candle] | None = None,
+    poi_zones: list[POIZone] | None = None,
 ) -> LeverageLiquidationMap:
     return LeverageLiquidationEstimator().estimate(
         symbol="BTCUSDT",
@@ -77,10 +102,11 @@ def _estimate(
         open_interest=_oi(*oi),
         funding=_funding(funding),
         long_short=_long_short(ratio),
+        poi_zones=poi_zones,
     )
 
 
-def _side(m: LeverageLiquidationMap, side: LiquiditySide) -> list:
+def _side(m: LeverageLiquidationMap, side: LiquiditySide) -> list[LiquidationBand]:
     return [b for b in m.bands if b.side is side]
 
 
@@ -193,7 +219,7 @@ def test_neutral_positioning_produces_no_bands() -> None:
     assert m.bands == []
 
 
-def test_mitigated_and_zero_strength_zones_skipped() -> None:
+def test_zero_strength_zones_skipped_mitigated_included() -> None:
     active = make_zone(100.0, side=LiquiditySide.SELL_SIDE, strength=0.8)
     mitigated = make_zone(120.0, side=LiquiditySide.SELL_SIDE, strength=0.8).model_copy(
         update={"is_mitigated": True}
@@ -201,8 +227,54 @@ def test_mitigated_and_zero_strength_zones_skipped() -> None:
     zero = make_zone(80.0, side=LiquiditySide.SELL_SIDE, strength=0.0)
     m = _estimate([active, mitigated, zero], funding=0.0006, ratio=1.85)
 
-    # Only the active, non-zero zone (entry 100.0) anchors any bands.
-    assert {b.source_entry_price for b in m.bands} == {100.0}
+    # Mitigated zones are kept as historical entry anchors; zero-strength skipped.
+    assert {b.source_entry_price for b in m.bands} == {100.0, 120.0}
+
+
+def test_mitigated_entry_is_weaker_than_equivalent_active() -> None:
+    active = make_zone(100.0, side=LiquiditySide.SELL_SIDE, strength=0.8)
+    mitigated = make_zone(200.0, side=LiquiditySide.SELL_SIDE, strength=0.8).model_copy(
+        update={"is_mitigated": True}
+    )
+    m = _estimate([active, mitigated], funding=0.0006, ratio=1.85)
+
+    def intensity_at(entry: float, side: LiquiditySide) -> float:
+        return next(
+            b.intensity
+            for b in m.bands
+            if b.source_entry_price == entry and b.leverage == 10 and b.side is side
+        )
+
+    # Same strength + tier, but the mitigated entry is downweighted.
+    assert intensity_at(100.0, LiquiditySide.SELL_SIDE) > intensity_at(
+        200.0, LiquiditySide.SELL_SIDE
+    )
+
+
+def test_nearby_entries_merged_into_one_cluster() -> None:
+    # Two zones within _ENTRY_CLUSTER_PCT (0.4%) of each other -> one anchor.
+    z1 = make_zone(100.0, side=LiquiditySide.SELL_SIDE, strength=0.8)
+    z2 = make_zone(100.2, side=LiquiditySide.SELL_SIDE, strength=0.5)
+    m = _estimate([z1, z2], funding=0.0006, ratio=1.85)
+
+    entries = {b.source_entry_price for b in m.bands}
+    assert entries == {100.0}  # the stronger of the two represents the cluster
+
+
+def test_poi_order_blocks_anchor_liquidation_bands() -> None:
+    # No liquidity zones — only an order block at midpoint 100 seeds bands.
+    poi = make_poi(99.0, 101.0)
+    m = _estimate([], funding=0.0006, ratio=1.85, poi_zones=[poi])
+
+    assert m.bands
+    assert {round(b.source_entry_price) for b in m.bands} == {100}
+
+
+def test_invalidated_poi_zones_skipped() -> None:
+    poi = make_poi(99.0, 101.0, status=POIZoneStatus.INVALIDATED)
+    m = _estimate([], funding=0.0006, ratio=1.85, poi_zones=[poi])
+
+    assert m.bands == []
 
 
 def test_empty_inputs_return_map_without_bands() -> None:

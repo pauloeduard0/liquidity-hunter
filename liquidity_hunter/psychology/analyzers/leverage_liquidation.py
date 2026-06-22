@@ -21,6 +21,8 @@ from liquidity_hunter.core.domain import (
     LiquidityZone,
     LongShortRatio,
     OpenInterestPoint,
+    POIZone,
+    POIZoneStatus,
     RetailPositioning,
     TimeFrame,
 )
@@ -53,14 +55,34 @@ _RATIO_NORM = 0.5  # a long/short account ratio of 1.5 reads as fully long.
 # Below this absolute positioning score neither side is meaningfully crowded.
 _NEUTRAL_THRESHOLD = 0.1
 
-# Cap on emitted bands *per side* (strongest first), so overlapping zones don't
-# flood the map/chart with near-duplicate liquidation levels.
-_MAX_BANDS_PER_SIDE = 20
-
 # Intensity multiplier for the non-dominant side's pools. Both sides hold
 # resting stops, but the less-crowded side is dampened so the over-leveraged
 # (dominant) side stays visually prominent.
 _NON_DOMINANT_FACTOR = 0.45
+
+# Entry-anchor selection. Liquidation bands are projected from entry clusters
+# (liquidity zones). To cover the whole price range — not just the densest
+# cluster — nearby entries are first merged (kept strongest) within
+# `_ENTRY_CLUSTER_PCT`, then at most `_MAX_ENTRY_CLUSTERS` are kept, spread
+# evenly across price via bucket selection. Mitigated (already-swept) zones are
+# still valid historical entry areas, downweighted by `_MITIGATED_ENTRY_FACTOR`.
+_ENTRY_CLUSTER_PCT = 0.004
+_MAX_ENTRY_CLUSTERS = 16
+_MITIGATED_ENTRY_FACTOR = 0.7
+
+# Base weight for an order-block (POI) entry anchor. Order blocks concentrate
+# real institutional volume, so they rank as strong as the strongest liquidity
+# zone (which tops out at strength 1.0).
+_POI_ENTRY_WEIGHT = 1.0
+
+
+@dataclass(frozen=True)
+class _Entry:
+    """A deduplicated entry-cluster anchor for projecting liquidation bands."""
+
+    price: float
+    weight: float
+    start_time: datetime
 
 
 @dataclass(frozen=True)
@@ -88,6 +110,7 @@ class LeverageLiquidationEstimator:
         open_interest: list[OpenInterestPoint],
         funding: list[FundingRate],
         long_short: list[LongShortRatio],
+        poi_zones: list[POIZone] | None = None,
     ) -> LeverageLiquidationMap:
         """Infer the over-leveraged side and project its liquidation bands."""
         if current_price <= 0:
@@ -110,7 +133,9 @@ class LeverageLiquidationEstimator:
         else:
             dominant = RetailPositioning.NEUTRAL
 
-        bands = self._project_bands(dominant, candles, liquidity_zones, intensity_scale)
+        bands = self._project_bands(
+            dominant, candles, liquidity_zones, poi_zones or [], intensity_scale
+        )
 
         return LeverageLiquidationMap(
             symbol=symbol,
@@ -129,6 +154,7 @@ class LeverageLiquidationEstimator:
         dominant: RetailPositioning,
         candles: list[Candle],
         liquidity_zones: list[LiquidityZone],
+        poi_zones: list[POIZone],
         intensity_scale: float,
     ) -> list[LiquidationBand]:
         """Project liquidation bands around entry anchors for both sides.
@@ -155,63 +181,53 @@ class LeverageLiquidationEstimator:
                 (LiquiditySide.SELL_SIDE, -1, nondominant),
             ]
 
-        raw_by_side: dict[LiquiditySide, list[_RawBand]] = {
-            LiquiditySide.SELL_SIDE: [],
-            LiquiditySide.BUY_SIDE: [],
-        }
+        entries = _entry_anchors(liquidity_zones, poi_zones)
+        if not entries:
+            return []
+
+        raw: list[_RawBand] = []
         for side, direction, scale in side_scales:
             if scale <= 0:
                 continue
-            for zone in liquidity_zones:
-                if zone.is_mitigated or zone.strength <= 0:
-                    continue
-                entry = (zone.price_low + zone.price_high) / 2
+            for entry in entries:
                 for leverage, dist_pct in _LEVERAGE_DISTANCE_PCT.items():
-                    liq_price = entry * (1 + direction * dist_pct)
+                    liq_price = entry.price * (1 + direction * dist_pct)
                     if liq_price <= 0:
                         continue
-                    weight = scale * zone.strength * _LEVERAGE_POPULATION_PRIOR[leverage]
+                    weight = scale * entry.weight * _LEVERAGE_POPULATION_PRIOR[leverage]
                     if weight <= 0:
                         continue
-                    raw_by_side[side].append(
+                    raw.append(
                         _RawBand(
                             liq_price=liq_price,
                             leverage=leverage,
                             side=side,
-                            source_entry_price=entry,
-                            start_time=zone.formed_at,
+                            source_entry_price=entry.price,
+                            start_time=entry.start_time,
                             weight=weight,
                         )
                     )
 
-        peak = max(
-            (b.weight for bands in raw_by_side.values() for b in bands), default=0.0
-        )
+        peak = max((b.weight for b in raw), default=0.0)
         if peak <= 0:
             return []
 
-        # Keep the strongest bands per side, then resolve start/end times only
-        # for those (the liquidation-hit scan is the costly part).
         bands: list[LiquidationBand] = []
-        for side_bands in raw_by_side.values():
-            strongest = sorted(side_bands, key=lambda b: b.weight, reverse=True)[
-                :_MAX_BANDS_PER_SIDE
-            ]
-            for b in strongest:
-                half = b.liq_price * _BAND_HALF_PCT
-                end_time = _liquidation_hit_time(candles, b.start_time, b.liq_price, b.side)
-                bands.append(
-                    LiquidationBand(
-                        price_low=b.liq_price - half,
-                        price_high=b.liq_price + half,
-                        leverage=b.leverage,
-                        side=b.side,
-                        source_entry_price=b.source_entry_price,
-                        intensity=b.weight / peak * 100.0,
-                        start_time=b.start_time,
-                        end_time=end_time,
-                    )
+        for b in raw:
+            half = b.liq_price * _BAND_HALF_PCT
+            end_time = _liquidation_hit_time(candles, b.start_time, b.liq_price, b.side)
+            bands.append(
+                LiquidationBand(
+                    price_low=b.liq_price - half,
+                    price_high=b.liq_price + half,
+                    leverage=b.leverage,
+                    side=b.side,
+                    source_entry_price=b.source_entry_price,
+                    intensity=b.weight / peak * 100.0,
+                    start_time=b.start_time,
+                    end_time=end_time,
                 )
+            )
         return bands
 
 
@@ -225,6 +241,81 @@ def _positioning_score(funding_rate: float, long_short_ratio: float) -> float:
     funding_signal = _clamp(funding_rate / _FUNDING_NORM, -1.0, 1.0)
     ratio_signal = _clamp((long_short_ratio - 1.0) / _RATIO_NORM, -1.0, 1.0)
     return 0.5 * funding_signal + 0.5 * ratio_signal
+
+
+def _entry_anchors(
+    liquidity_zones: list[LiquidityZone], poi_zones: list[POIZone]
+) -> list[_Entry]:
+    """Entry-cluster anchors for projecting liquidation bands.
+
+    Sources entries from liquidity zones (equal highs/lows, swings) **and**
+    order blocks (POI zones — real institutional volume areas). Mitigated zones
+    and mitigated order blocks are kept as historical entry areas, downweighted
+    by `_MITIGATED_ENTRY_FACTOR` (invalidated order blocks are dropped). Entries
+    within `_ENTRY_CLUSTER_PCT` are merged (keep strongest), then at most
+    `_MAX_ENTRY_CLUSTERS` are kept spread evenly across price so coverage isn't
+    monopolized by the densest cluster.
+    """
+    candidates = [
+        _Entry(
+            price=(z.price_low + z.price_high) / 2,
+            weight=z.strength * (_MITIGATED_ENTRY_FACTOR if z.is_mitigated else 1.0),
+            start_time=z.formed_at,
+        )
+        for z in liquidity_zones
+        if z.strength > 0
+    ]
+    for poi in poi_zones:
+        if poi.status is POIZoneStatus.INVALIDATED:
+            continue
+        weight = _POI_ENTRY_WEIGHT * (
+            _MITIGATED_ENTRY_FACTOR if poi.status is POIZoneStatus.MITIGATED else 1.0
+        )
+        candidates.append(
+            _Entry(
+                price=(poi.price_low + poi.price_high) / 2,
+                weight=weight,
+                start_time=poi.created_at,
+            )
+        )
+    if not candidates:
+        return []
+
+    # Merge nearby entries (keep the strongest per cluster).
+    candidates.sort(key=lambda e: e.price)
+    merged: list[_Entry] = []
+    cluster = [candidates[0]]
+    for entry in candidates[1:]:
+        if entry.price - cluster[0].price <= cluster[0].price * _ENTRY_CLUSTER_PCT:
+            cluster.append(entry)
+        else:
+            merged.append(max(cluster, key=lambda e: e.weight))
+            cluster = [entry]
+    merged.append(max(cluster, key=lambda e: e.weight))
+
+    if len(merged) <= _MAX_ENTRY_CLUSTERS:
+        return merged
+    return _bucket_select(merged, _MAX_ENTRY_CLUSTERS)
+
+
+def _bucket_select(entries: list[_Entry], k: int) -> list[_Entry]:
+    """Keep the strongest entry in each of `k` equal-width price buckets.
+
+    Guarantees the kept anchors are spread across the price range rather than
+    clumped in the strongest region.
+    """
+    prices = [e.price for e in entries]
+    lo, hi = min(prices), max(prices)
+    if hi <= lo:
+        return sorted(entries, key=lambda e: e.weight, reverse=True)[:k]
+    span = hi - lo
+    by_bucket: dict[int, _Entry] = {}
+    for entry in entries:
+        idx = min(k - 1, int((entry.price - lo) / span * k))
+        current = by_bucket.get(idx)
+        if current is None or entry.weight > current.weight:
+            by_bucket[idx] = entry
+    return list(by_bucket.values())
 
 
 def _liquidation_hit_time(
