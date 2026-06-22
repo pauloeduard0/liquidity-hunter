@@ -156,10 +156,22 @@ function toUtcTimestamp(isoTimestamp: string): UTCTimestamp {
   return (Date.parse(isoTimestamp) / 1000) as UTCTimestamp
 }
 
-function lineFrom(startTime: UTCTimestamp, lastCandleTime: UTCTimestamp, value: number) {
-  return startTime < lastCandleTime
+function lineFrom(
+  startTime: UTCTimestamp,
+  lastCandleTime: UTCTimestamp,
+  value: number,
+  minTime?: UTCTimestamp,
+) {
+  // Clamp the start to the first visible candle. Overlay series live only on
+  // the main chart; a point before candles[0] (e.g. a CHoCH whose
+  // reference_timestamp predates the visible window — its pivot can come from
+  // the buffered bootstrap series) would add an extra slot to the main chart's
+  // time scale that the delta/RSI panes lack, shifting their logical-range sync
+  // by one bar and desyncing the crosshair.
+  const start = minTime !== undefined && startTime < minTime ? minTime : startTime
+  return start < lastCandleTime
     ? [
-        { time: startTime, value },
+        { time: start, value },
         { time: lastCandleTime, value },
       ]
     : [{ time: lastCandleTime, value }]
@@ -654,6 +666,7 @@ export function MainChart({
     overlaySeriesRef.current = []
 
     const lastCandleTime = toUtcTimestamp(data.candles[data.candles.length - 1].timestamp)
+    const firstCandleTime = toUtcTimestamp(data.candles[0].timestamp)
 
     const labels: LineLabel[] = []
 
@@ -673,7 +686,7 @@ export function MainChart({
         priceLineVisible: false,
         crosshairMarkerVisible: false,
       })
-      zoneSeries.setData(lineFrom(startTime, lastCandleTime, price))
+      zoneSeries.setData(lineFrom(startTime, lastCandleTime, price, firstCandleTime))
       overlaySeriesRef.current.push(zoneSeries)
       labels.push({ time: startTime, price, color, text: title })
     }
@@ -714,7 +727,7 @@ export function MainChart({
           priceLineVisible: false,
           crosshairMarkerVisible: false,
         })
-        sweptSeries.setData(lineFrom(startTime, endTime, price))
+        sweptSeries.setData(lineFrom(startTime, endTime, price, firstCandleTime))
         overlaySeriesRef.current.push(sweptSeries)
         labels.push({
           time: startTime,
@@ -769,7 +782,7 @@ export function MainChart({
         priceLineVisible: false,
         crosshairMarkerVisible: false,
       })
-      structureSeries.setData(lineFrom(lineStartTime, endTime, linePrice))
+      structureSeries.setData(lineFrom(lineStartTime, endTime, linePrice, firstCandleTime))
       overlaySeriesRef.current.push(structureSeries)
 
       labels.push({
