@@ -286,6 +286,15 @@ class InternalStructureDetector(MarketStructureDetector):
         # used as the CHoCH reference until a validated one is rebuilt.
         choch_origin_high: Pivot | None = None
         choch_origin_low: Pivot | None = None
+        # Running extreme of the current leg, used to gate candidate -> validated
+        # promotion. A bearish BOS's pullback is promoted only when a later low
+        # makes a NEW LEG LOW (below bear_leg_low) -- not merely a lower-low
+        # below that BOS's own pivot -- so a pullback-BOS formed during a
+        # retrace (which never extends the leg) cannot ratchet the CHoCH
+        # reference down to a less significant level. Seeded/reset at each trend
+        # flip (CHoCH) and at the NEUTRAL bootstrap; mirror for bull_leg_high.
+        bear_leg_low: float | None = None
+        bull_leg_high: float | None = None
         pending_bos: _PendingBOS | None = None
         last_bullish_bos_price: float | None = None
         last_bullish_bos_origin: float | None = None
@@ -403,6 +412,8 @@ class InternalStructureDetector(MarketStructureDetector):
                     # but only for a *validated* trigger (one-shot, no ping-pong).
                     choch_origin_high = None
                     choch_origin_low = active_low if via_validated else None
+                    # New bullish leg begins; seed its running high extreme.
+                    bull_leg_high = price
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bullish_bos_origin = None
@@ -434,18 +445,22 @@ class InternalStructureDetector(MarketStructureDetector):
                         # BOS bullish: state advances now; the BOS is emitted
                         # once a pullback (HL) confirms it. Promote the previous
                         # bullish BOS's pullback to the validated bearish-CHoCH
-                        # reference *only* if this break is a genuine
-                        # continuation -- a new high beyond that BOS's own
-                        # breaking pivot (last_bullish_bos_price). A shallow
-                        # higher-high that does not extend the leg leaves the
-                        # candidate provisional: that BOS was never continued.
+                        # reference *only* if this break makes a NEW LEG HIGH
+                        # (above bull_leg_high, the bullish leg's running
+                        # extreme) -- a genuine continuation. A higher-high that
+                        # does not exceed the leg extreme (e.g. a pullback-BOS
+                        # within a retrace) leaves the candidate provisional:
+                        # that BOS never extended the leg, so its pullback must
+                        # not ratchet the CHoCH reference down.
                         if (
                             candidate_choch_low is not None
-                            and last_bullish_bos_price is not None
-                            and price > last_bullish_bos_price
+                            and bull_leg_high is not None
+                            and price > bull_leg_high
                         ):
                             validated_choch_low = candidate_choch_low
                             choch_origin_low = None
+                        if bull_leg_high is None or price > bull_leg_high:
+                            bull_leg_high = price
                         ref_price = active_high.price
                         pullback_ref_snapshot = active_low
                         trend = MarketDirection.BULLISH
@@ -562,6 +577,8 @@ class InternalStructureDetector(MarketStructureDetector):
                     # but only for a *validated* trigger (one-shot, no ping-pong).
                     choch_origin_low = None
                     choch_origin_high = active_high if via_validated else None
+                    # New bearish leg begins; seed its running low extreme.
+                    bear_leg_low = price
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bearish_bos_price = None
@@ -589,24 +606,24 @@ class InternalStructureDetector(MarketStructureDetector):
                         pending_high = self._extreme(pending_high, active_high, higher=True)
                     else:
                         # BOS bearish: state advances now; the BOS is emitted
-                        # once a pullback (LH) confirms it. This break is also
-                        # the *continuation* that confirms the previous bearish
-                        # BOS, so its provisional pullback (candidate_choch_high)
-                        # is promoted to the validated bullish-CHoCH reference.
-                        # Promote the previous bearish BOS's pullback to the
-                        # validated bullish-CHoCH reference *only* if this break
-                        # is a genuine continuation -- a new low beyond that
-                        # BOS's own breaking pivot (last_bearish_bos_price). A
-                        # shallow lower-low that does not extend the leg leaves
-                        # the candidate provisional: that BOS was never
-                        # continued, so its pullback must not anchor a CHoCH.
+                        # once a pullback (LH) confirms it. Promote the previous
+                        # bearish BOS's pullback to the validated bullish-CHoCH
+                        # reference *only* if this break makes a NEW LEG LOW
+                        # (below bear_leg_low, the bearish leg's running extreme)
+                        # -- a genuine continuation. A lower-low that does not
+                        # break the leg extreme (e.g. a pullback-BOS within a
+                        # retrace) leaves the candidate provisional: that BOS
+                        # never extended the leg, so its pullback must not
+                        # ratchet the CHoCH reference down.
                         if (
                             candidate_choch_high is not None
-                            and last_bearish_bos_price is not None
-                            and price < last_bearish_bos_price
+                            and bear_leg_low is not None
+                            and price < bear_leg_low
                         ):
                             validated_choch_high = candidate_choch_high
                             choch_origin_high = None
+                        if bear_leg_low is None or price < bear_leg_low:
+                            bear_leg_low = price
                         ref_price = active_low.price
                         pullback_ref_snapshot = active_high
                         trend = MarketDirection.BEARISH
