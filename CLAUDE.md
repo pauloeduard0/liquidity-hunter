@@ -348,10 +348,17 @@ Full architecture rationale, including SOLID notes, is documented in
   side as `validated_choch_high`/`validated_choch_low`, distinct from the
   trailing `active_<side>` and from `pending_<side>`. Promotion to
   `validated_choch_<side>` is a two-step process via an intermediate
-  `candidate_choch_<side>`: `candidate_choch_high` is the most recent
-  `LOWER_HIGH`-labeled pivot (or a re-bootstrap pivot that is functionally one
-  — see below), not yet promoted. SMC requires `LL1 -> LH1 -> LL2 (confirms
-  LH1) -> break LH1` for a bullish CHoCH, so an LH *alone* is not a CHoCH
+  `candidate_choch_<side>`: `candidate_choch_high` is the *highest*
+  `LOWER_HIGH`-labeled pivot since the last promotion (or a re-bootstrap pivot
+  that is functionally one — see below), not yet promoted. It is kept at the
+  window **extreme**, not overwritten with each more-recent LH: within a
+  promotion window LHs descend monotonically, so the highest is the pullback
+  top that confirmed the BOS, and a weaker later LH must not ratchet the anchor
+  down to a mid-leg level no BOS reached (the early-CHoCH bug). The matching
+  `candidate = pivot` assignment therefore lives *inside* the "is None or more
+  extreme" guard, like the SWEEP branch already did. SMC requires `LL1 -> LH1
+  -> LL2 (confirms LH1) -> break LH1` for a bullish CHoCH, so an LH *alone* is
+  not a CHoCH
   reference — `candidate_choch_high` is only a placeholder until structure
   confirms it. Alongside `candidate_choch_high`, `candidate_choch_high_baseline`
   snapshots `active_low` as it stood at the moment the candidate was set — the
@@ -427,8 +434,10 @@ Full architecture rationale, including SOLID notes, is documented in
   then promotes the actual structural extreme (the sweep pivot) rather than the
   phantom level that had already been breached.
 
-  The low side mirrors this exactly: `candidate_choch_low` is the most recent
-  `HIGHER_LOW`-labeled pivot (or re-bootstrap equivalent), with
+  The low side mirrors this exactly: `candidate_choch_low` is the *lowest*
+  `HIGHER_LOW`-labeled pivot since the last promotion (or re-bootstrap
+  equivalent) — the pullback floor that confirmed the BOS, kept rather than
+  ratcheted up toward a higher, more recent HL — with
   `candidate_choch_low_baseline` snapshotting `active_high` at the moment it
   was set; it is promoted to `validated_choch_low` when a bullish BOS occurs
   after that HL formed *and* its pivot price is above

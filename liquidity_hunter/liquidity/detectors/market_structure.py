@@ -17,14 +17,19 @@ Architecture is identical to `InternalStructureDetector` (see
   stuck-trend bug on the third event.
 
 The CHoCH reference is `validated_choch_high`/`validated_choch_low`,
-promoted from a `candidate_choch_*` (the most recent LOWER_HIGH /
-HIGHER_LOW pivot, or a functionally equivalent re-bootstrap pivot) via
-the same two-step gate: a BOS in the leg's direction must occur *after*
-the candidate was set *and* its pivot price must surpass
+promoted from a `candidate_choch_*` (the *strongest* LOWER_HIGH /
+HIGHER_LOW pivot of its window -- highest LH / lowest HL since the last
+promotion, the pullback that confirmed the BOS, NOT the most recent
+pivot -- or a functionally equivalent re-bootstrap pivot) via the same
+two-step gate: a BOS in the leg's direction must occur *after* the
+candidate was set *and* its pivot price must surpass
 `candidate_choch_*_baseline` (the opposite-side trailing reference
 snapshotted when the candidate was set), confirming a genuine structural
-continuation. Ghost-candidate fix: a SWEEP that violates an unvalidated
-candidate updates the candidate to the sweep pivot.
+continuation. Keeping the candidate at the window extreme (rather than
+overwriting it with each weaker, more recent LH/HL) stops the CHoCH from
+anchoring early on a mid-leg pivot no BOS reached. Ghost-candidate fix: a
+SWEEP that violates an unvalidated candidate updates the candidate to the
+sweep pivot.
 
 Every emitted `MarketStructure` has `scope = StructureScope.MAJOR`
 (the field's default).
@@ -67,9 +72,9 @@ class SwingStructureDetector(MarketStructureDetector):
       `HIGHER_LOW` label.
     - The reversal (`CHANGE_OF_CHARACTER`) reference is
       `validated_choch_high`/`validated_choch_low`, promoted from
-      `candidate_choch_high`/`candidate_choch_low` (the most recent LH/HL)
-      on the next BOS in that leg's direction whose pivot price also surpasses
-      `candidate_choch_*_baseline`.
+      `candidate_choch_high`/`candidate_choch_low` (the strongest LH/HL of its
+      window) on the next BOS in that leg's direction whose pivot price also
+      surpasses `candidate_choch_*_baseline`.
 
     `persistence_candles` is the number of candles immediately following a
     counter-trend pivot that must also close beyond the reference for the
@@ -204,7 +209,7 @@ class SwingStructureDetector(MarketStructureDetector):
                     if last_high_pivot is not None and price < last_high_pivot.price:
                         if candidate_choch_high is None or price > candidate_choch_high.price:
                             candidate_choch_high_baseline = active_low
-                        candidate_choch_high = pivot
+                            candidate_choch_high = pivot
                 elif price > active_high.price:
                     if trend is MarketDirection.BEARISH:
                         sweep_candle = candles[
@@ -232,14 +237,6 @@ class SwingStructureDetector(MarketStructureDetector):
                         trend = MarketDirection.BULLISH
                         active_low = pending_low
                         pending_low = None
-                        if candidate_choch_low is not None and (
-                            candidate_choch_low_baseline is None
-                            or price > candidate_choch_low_baseline.price
-                        ):
-                            validated_choch_low = candidate_choch_low
-                            choch_origin_low = None
-                            candidate_choch_low = None
-                            candidate_choch_low_baseline = None
                         close_idx = find_close_break_index(
                             candles,
                             prev_high_pivot_index + 1,
@@ -258,6 +255,18 @@ class SwingStructureDetector(MarketStructureDetector):
                                 price,
                                 ref_price,
                             )
+                            # BOS confirmed (close break) -> promote the CHoCH
+                            # reference. A wick-only state advance must not
+                            # promote it, else a CHoCH could fire with no
+                            # confirmed BOS beneath it.
+                            if candidate_choch_low is not None and (
+                                candidate_choch_low_baseline is None
+                                or price > candidate_choch_low_baseline.price
+                            ):
+                                validated_choch_low = candidate_choch_low
+                                choch_origin_low = None
+                                candidate_choch_low = None
+                                candidate_choch_low_baseline = None
                 elif price < active_high.price:
                     emit(
                         timestamp,
@@ -269,7 +278,7 @@ class SwingStructureDetector(MarketStructureDetector):
                     pending_low = self._extreme(pending_low, active_low, higher=False)
                     if candidate_choch_high is None or price > candidate_choch_high.price:
                         candidate_choch_high_baseline = active_low
-                    candidate_choch_high = pivot
+                        candidate_choch_high = pivot
                 active_high = pivot
                 last_high_pivot = pivot
                 prev_high_pivot_index = current_index
@@ -319,7 +328,7 @@ class SwingStructureDetector(MarketStructureDetector):
                     if last_low_pivot is not None and price > last_low_pivot.price:
                         if candidate_choch_low is None or price < candidate_choch_low.price:
                             candidate_choch_low_baseline = active_high
-                        candidate_choch_low = pivot
+                            candidate_choch_low = pivot
                 elif price < active_low.price:
                     if trend is MarketDirection.BULLISH:
                         sweep_candle = candles[
@@ -347,14 +356,6 @@ class SwingStructureDetector(MarketStructureDetector):
                         trend = MarketDirection.BEARISH
                         active_high = pending_high
                         pending_high = None
-                        if candidate_choch_high is not None and (
-                            candidate_choch_high_baseline is None
-                            or price < candidate_choch_high_baseline.price
-                        ):
-                            validated_choch_high = candidate_choch_high
-                            choch_origin_high = None
-                            candidate_choch_high = None
-                            candidate_choch_high_baseline = None
                         close_idx = find_close_break_index(
                             candles,
                             prev_low_pivot_index + 1,
@@ -373,6 +374,18 @@ class SwingStructureDetector(MarketStructureDetector):
                                 price,
                                 ref_price,
                             )
+                            # BOS confirmed (close break) -> promote the CHoCH
+                            # reference. A wick-only state advance must not
+                            # promote it, else a CHoCH could fire with no
+                            # confirmed BOS beneath it.
+                            if candidate_choch_high is not None and (
+                                candidate_choch_high_baseline is None
+                                or price < candidate_choch_high_baseline.price
+                            ):
+                                validated_choch_high = candidate_choch_high
+                                choch_origin_high = None
+                                candidate_choch_high = None
+                                candidate_choch_high_baseline = None
                 elif price > active_low.price:
                     emit(
                         timestamp,
@@ -384,7 +397,7 @@ class SwingStructureDetector(MarketStructureDetector):
                     pending_high = self._extreme(pending_high, active_high, higher=True)
                     if candidate_choch_low is None or price < candidate_choch_low.price:
                         candidate_choch_low_baseline = active_high
-                    candidate_choch_low = pivot
+                        candidate_choch_low = pivot
                 active_low = pivot
                 last_low_pivot = pivot
                 prev_low_pivot_index = current_index
