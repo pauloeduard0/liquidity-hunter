@@ -1,5 +1,5 @@
 """Internal (minor) market structure detector: trailing-reference BOS/HL/LH
-with a *validated* CHoCH reference.
+with a *continuation-confirmed* CHoCH reference.
 
 `SwingStructureDetector` deliberately holds an active reference until the
 *opposite* side breaks, so the reference reflects the true extreme of the
@@ -14,14 +14,19 @@ kind). These drive:
   direction of* `trend` (or the first break while `trend` is `NEUTRAL`).
   State (trend, promotions) advances immediately on the break, but the BOS
   event is only *emitted* when a pullback pivot forms in the opposite
-  direction (HL for bullish, LH for bearish). If the next opposite-direction
-  pivot is not a valid pullback, the pending BOS is silently discarded (state
-  already advanced). Wick-only breaks (no candle closing beyond the level)
-  advance state but never create a pending BOS.
+  direction (HL for bullish, LH for bearish) that is above/below the
+  pullback reference snapshot (confirming direction). If the next opposite-
+  direction pivot is not a valid pullback, the pending BOS is silently
+  discarded (state already advanced). Wick-only breaks (no candle closing
+  beyond the level) advance state but never create a pending BOS. A
+  continuation dedup gate ensures each pullback stays on the correct side
+  of the previous pullback (LH staircase for bearish, HL staircase for
+  bullish), preventing re-emission of the same structural break.
 - `LOWER_HIGH`/`HIGHER_LOW`: a pivot that does not break the trailing
   reference.
 - `LIQUIDITY_SWEEP`: a counter-trend pivot that breaks the trailing
-  reference but is not a confirmed reversal (see below).
+  reference but is not a confirmed reversal (see below). Sweeps are noise
+  and do NOT affect the CHoCH reference.
 
 `pending_high`/`pending_low` accumulate the most extreme high/low pivot for
 their side, promoted to `active_<side>` when the opposite side breaks (the
@@ -31,120 +36,61 @@ it). `_extreme` keeps the more extreme of the two.
 The CHoCH reference (`CHANGE_OF_CHARACTER`)
 ==========================================
 
-A change of character is a *reversal*, and the level it must break to count
-as one is tracked explicitly per side as `validated_choch_high` /
-`validated_choch_low` -- distinct from the trailing `active_<side>` and from
-`pending_<side>`. Promotion to `validated_choch_<side>` is a two-step process
-via an intermediate `candidate_choch_<side>` (mirrored for the low side):
+The CHoCH reference is the **pullback (origin) of the most recent
+continuation-confirmed BOS**. A BOS's pullback starts as a *provisional*
+candidate; it is promoted to the *validated* CHoCH reference only when a
+subsequent move makes a new leg extreme (a genuine continuation), confirming
+that the BOS was structural, not noise. If price reverses before that
+continuation, the BOS is never confirmed and its pullback never anchors a
+CHoCH.
 
-- `candidate_choch_high` is the *highest* `LOWER_HIGH`-labeled pivot since the
-  last promotion (or a re-bootstrap pivot that is functionally one -- see
-  below), not yet promoted. It is the **highest**, not the most recent: a
-  weaker, more recent LH must NOT ratchet the candidate down to a level no BOS
-  reached (that is the "ativou cedo demais" bug -- the CHoCH would then anchor
-  on a micro lower-high in the middle of the leg rather than on the pullback
-  that actually confirmed the BOS). Within one promotion window LOWER_HIGH
-  labels descend monotonically, so the highest is the first -- the pullback
-  top that confirmed the BOS. An LH *alone* is not a CHoCH reference: SMC
-  requires `LL1 -> LH1 -> LL2 (confirms LH1) -> break LH1` for a bullish CHoCH,
-  so `candidate_choch_high` is only a placeholder until structure confirms it.
-  Alongside it, `candidate_choch_high_baseline` snapshots `active_low` as it
-  stood at the moment `candidate_choch_high` was set -- the trailing low
-  reference in effect immediately before that LH formed. (The matching
-  `candidate = pivot` assignment lives *inside* the "is None or more extreme"
-  guard, exactly as in the SWEEP branch -- keeping candidate and baseline in
-  sync.)
-- `validated_choch_high` is the swing high that a *bullish* CHoCH must break.
-  It is **only updated when a bearish BOS occurs after `candidate_choch_high`
-  was set, and that BOS's pivot price is below `candidate_choch_high_baseline`**
-  -- i.e. the bearish leg makes a *new* low relative to the low that preceded
-  the LH (a genuine `LL2 < LL1` for *this* candidate), not merely any
-  continuation of the leg. At that moment, `candidate_choch_high` is
-  **promoted**: `validated_choch_high = candidate_choch_high`, and both
-  `candidate_choch_high` and `candidate_choch_high_baseline` are cleared to
-  `None`. If no candidate has formed since the last promotion/reset,
-  `validated_choch_high` is left unchanged.
+The reference is tracked per side as `validated_choch_high` (the level a
+bullish CHoCH must break) and `validated_choch_low` (bearish CHoCH). The
+promotion pipeline for `validated_choch_high` (bearish leg, mirrored on the
+bullish side):
 
-  This two-part gate -- "a BOS after the candidate formed" *and* "beyond that
-  candidate's own baseline" -- balances two failure modes seen in earlier
-  iterations:
-    - Gating on a new *absolute* low/high of the *entire* leg (tracked as
-      `last_ll`/`last_hh`) deadlocks: the *first* impulsive BOS right after a
-      CHoCH is often the leg's eventual extreme, after which no later pivot
-      can ever exceed it, permanently starving promotion -- `trend` can get
-      stuck for hundreds of candles through an obvious reversal.
-    - Gating on *any* BOS after the candidate, with no baseline at all,
-      over-promotes: `validated_choch_high` keeps ratcheting toward weaker,
-      more recent LH pivots even after the leg's true reversal point has
-      already been confirmed and should stay frozen.
-  The per-candidate baseline -- "beat the low that immediately preceded
-  *this* LH", not "beat the whole leg's low" -- is both achievable (fixing
-  the deadlock, since each new candidate gets its own, more recent baseline)
-  and selective (preserving the freeze once the leg's true reversal has
-  already been confirmed and a later, weaker LH cannot beat its own
-  baseline).
-- While no qualifying bearish BOS confirms it, `candidate_choch_high`,
-  `candidate_choch_high_baseline`, and `validated_choch_high` are **frozen**.
-- A *bullish CHoCH* fires when, with `trend` BEARISH, a high pivot breaks
-  (sustained, see persistence below) **above `validated_choch_high`**; its
-  `reference_price_level` is `validated_choch_high` (never the trailing
-  `active_high`, never `candidate_choch_high`, never the breaking pivot). A
-  high pivot that breaks the trailing `active_high` but not
-  `validated_choch_high` -- including while `validated_choch_high` is still
-  `None` -- or whose break does not hold, is a `LIQUIDITY_SWEEP` (trend
-  unchanged) -- an internal bounce within the still-intact bearish leg.
-- The moment a CHoCH fires, the *opposite* side's `validated_choch_<side>`,
-  `candidate_choch_<side>`, and `candidate_choch_<side>_baseline` are all
-  reset to `None`. A **one-shot origin** mechanism prevents the "blind spot"
-  after a CHoCH: if the CHoCH was triggered via a *validated* reference,
-  `choch_origin_<opposite>` is set to the just-promoted `active_<side>`
-  (the extreme of the leg that just reversed), frozen at that value. The
-  CHoCH check uses `validated_choch_<side> or choch_origin_<side>`, so the
-  origin serves as fallback when validated has not been rebuilt yet. An
-  origin-triggered CHoCH does **not** set `choch_origin` on the opposite
-  side (one-shot), breaking any ping-pong chain: validated CHoCH -> origin
-  CHoCH -> (no further origin, must rebuild validated). When a candidate is
-  normally promoted to `validated_choch_<side>`, the corresponding
-  `choch_origin_<side>` is cleared (redundant).
+1. **BOS emission**: when a bearish BOS is confirmed (pending BOS + LH
+   pullback), the confirming LH pivot becomes `candidate_choch_high` --
+   *provisional*, not yet the CHoCH reference.
 
-Re-bootstrap and `candidate_choch_<side>`: a BOS/CHoCH on one side retires the
-*opposite* side's `active_<side>` (promoted from `pending_<side>`, or to
-`None` if nothing has accumulated there yet). If `active_<side>` was retired
-to `None`, the next pivot on that side silently re-bootstraps it with no
-HH/HL/LH/LL label (the "accepted cost" described above) -- but if that pivot
-is *worse* than the just-retired `active_<side>` (lower for a high pivot,
-higher for a low pivot -- judged against `last_high_pivot`/`last_low_pivot`,
-which still hold that retired value), it is functionally an LH/HL and still
-becomes `candidate_choch_<opposite-side>` (with `candidate_choch_<opposite-
-side>_baseline` set from `active_<side>` on the *other* side, same as a
-labeled LH/HL would), even though no label is emitted. Without this, a real
-LH/HL that happens to land on a re-bootstrap pivot would never become a CHoCH
-candidate, permanently freezing `validated_choch_<opposite>` at `None`.
+2. **Continuation-gated promotion**: the next bearish state-advance (a lower-
+   low pivot) promotes `candidate_choch_high` to `validated_choch_high`
+   **only if** the new low is below `bear_leg_low` (the running extreme of
+   the current bearish leg). This ensures the leg actually extended -- a
+   pullback-BOS formed during a retrace that does not make a new leg low
+   leaves the candidate provisional and cannot ratchet the reference down
+   to a less significant level.
 
-`last_high_pivot`/`last_low_pivot` track the most recent swing high/low pivot
-*regardless* of the `active_<side>`/`pending_<side>` promotion machinery.
-They no longer drive `validated_choch_<side>` directly -- that role now
-belongs to `candidate_choch_<side>` -- but feed the re-bootstrap check above
-and remain otherwise unused.
+3. **Validated reference is frozen**: once promoted, `validated_choch_high`
+   stays at that level until it is consumed by a CHoCH firing (reset to
+   `None`) or replaced by the next genuine promotion. Weaker, more recent
+   BOS pullbacks that cannot produce a new leg low do not overwrite it.
 
-The symmetric machinery on the bullish side: `candidate_choch_low` is the
-*lowest* `HIGHER_LOW`-labeled pivot since the last promotion (or re-bootstrap
-equivalent) -- the pullback floor that confirmed the BOS, kept rather than
-ratcheted up toward a higher, more recent HL -- with
-`candidate_choch_low_baseline` snapshotting `active_high` at the moment it
-was set. `validated_choch_low` is promoted from it when a bullish BOS occurs
-after that HL formed *and* its pivot price is above
-`candidate_choch_low_baseline` (a genuine `HH2 > HH1` for this candidate); a
-bearish CHoCH fires on a sustained break below `validated_choch_low`.
+`bear_leg_low` / `bull_leg_high` track the running extreme of each leg,
+seeded at each trend flip (CHoCH) and updated on every in-trend state-
+advance.
+
+**CHoCH check**: with `trend` BEARISH, a high pivot that breaks (sustained,
+see persistence below) above `validated_choch_high or choch_origin_high` is
+a `CHANGE_OF_CHARACTER`; its `reference_price_level` is the reference it
+broke. A high pivot that breaks the trailing `active_high` but not the
+validated/origin reference -- including while both are `None` -- or whose
+break does not hold, is a `LIQUIDITY_SWEEP` (trend unchanged).
+
+**One-shot origin (blind-spot fallback)**: the moment a CHoCH fires, all
+validated/candidate state is reset. Rebuilding the *reverse* reference needs
+a fresh BOS + continuation, during which a failed reversal would otherwise
+leave the trend stuck. `choch_origin_<side>` is the extreme of the leg the
+CHoCH just reversed (set only by a *validated*-triggered CHoCH, one-shot).
+The CHoCH check uses `validated or origin`, so the origin serves as fallback
+until a validated reference is rebuilt. An origin-triggered CHoCH does NOT
+set origin on the opposite side (one-shot), breaking ping-pong chains.
 
 Confirmation is *persistence*-based (see `_common.is_sustained_break`): the
 breaking candle AND the `persistence_candles` candles immediately following
 it must all close beyond the reference. A single candle that pokes through
-`validated_choch_<side>` and reverts (a "false break") fails this and is a
-`LIQUIDITY_SWEEP`; a break that holds is a `CHANGE_OF_CHARACTER`. If there
-are not yet enough trailing candles to evaluate the window, the break is
-treated as unconfirmed. This applies only to `InternalStructureDetector`;
-`SwingStructureDetector`'s `volume_delta`-ratio confirmation is unaffected.
+the reference and reverts (a "false break") is a `LIQUIDITY_SWEEP`; a break
+that holds is a `CHANGE_OF_CHARACTER`.
 
 Every emitted `MarketStructure` has `scope = StructureScope.INTERNAL`.
 """
@@ -345,7 +291,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     if (
                         pb is not None
                         and price < pb.price
-                        and (last_bearish_bos_price is None or price < last_bearish_bos_price)
+                        and (last_bearish_bos_origin is None or price < last_bearish_bos_origin)
                     ):
                         emit(
                             pending_bos.close_break_timestamp,
@@ -511,7 +457,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     if (
                         pb is not None
                         and price > pb.price
-                        and (last_bullish_bos_price is None or price > last_bullish_bos_price)
+                        and (last_bullish_bos_origin is None or price > last_bullish_bos_origin)
                     ):
                         emit(
                             pending_bos.close_break_timestamp,

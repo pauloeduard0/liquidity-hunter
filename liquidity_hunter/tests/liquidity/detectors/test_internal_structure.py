@@ -626,40 +626,45 @@ def test_streaming_sliding_window_reclassifies_same_candle() -> None:
     )
 
 
-def test_bullish_choch_baseline_preservation_with_deep_bos() -> None:
+def test_continuation_chain_promotes_through_multiple_bos() -> None:
     """Three bearish BOS events making progressively deeper lows. Each BOS
-    genuinely beats the preserved baseline, so promotion proceeds normally
-    (baseline preservation doesn't block genuine structural continuation).
-    The CHoCH reference is the last promoted LH (165) -- the strongest LH of
-    its window, not the weaker, more recent one (160).
+    is a genuine continuation (new leg low), so the second promotes BOS 1's
+    pullback to validated, and the third promotes BOS 2's pullback.
+
+    The CHoCH reference is the last promoted pullback (165, from BOS 2) --
+    BOS 3's pullback (155) is still provisional (needs a fourth BOS to
+    promote), so validated_choch_high stays frozen at 165.
+
+    Sequence:
+      BOS 1 (L80, pullback LH=180) -> candidate=180
+      continuation L60 < bear_leg_low(80) -> promotes validated=180
+      BOS 2 (L60, pullback LH=165) -> candidate=165
+      continuation L50 < bear_leg_low(60) -> promotes validated=165
+      BOS 3 (L50, pullback LH=155) -> candidate=155 (provisional)
+      break above 165 -> CHoCH bullish ref=165
     """
     highs = [150.0] * 27
     lows = [140.0] * 27
 
-    # bootstrap
     highs[1] = 200.0
     lows[3] = 100.0
 
-    # LH1 + LL1
-    lows[5] = 80.0    # pending BOS 1
-    highs[7] = 180.0  # LH confirms BOS 1; candidate_choch_high=180
+    lows[5] = 80.0
+    highs[7] = 180.0
 
-    # LH2 + LL2 (deeper low: promotes because BOS beats baseline)
-    highs[9] = 170.0  # weaker LH (170 < 180) -> candidate unchanged
-    lows[11] = 60.0   # pending BOS 2 (beats baseline) -> promotes validated=180
-    highs[13] = 165.0 # LH -> candidate_choch_high=165
+    highs[9] = 170.0
+    lows[11] = 60.0
+    highs[13] = 165.0
 
-    # LH3 + LL3 (even deeper: still promotes)
-    highs[15] = 160.0 # weaker LH (160 < 165) -> candidate unchanged
-    lows[17] = 50.0   # pending BOS 3 (beats baseline) -> promotes validated=165
-    highs[19] = 155.0 # LH -> candidate=155 (validated frozen at 165)
+    highs[15] = 160.0
+    lows[17] = 50.0
+    highs[19] = 155.0
 
     candles = make_series(highs, lows)
     candles[5] = make_candle(5, 150.0, 80.0, close=90.0)
     candles[11] = make_candle(11, 150.0, 60.0, close=70.0)
     candles[17] = make_candle(17, 150.0, 50.0, close=55.0)
 
-    # CHoCH: break above last promoted validated_choch_high=165
     candles[22] = make_candle(22, high=170.0, low=145.0, close=168.0)
     candles[23] = make_candle(23, high=175.0, low=150.0, close=172.0)
     candles[24] = make_candle(24, high=170.0, low=152.0, close=169.0)
@@ -670,26 +675,40 @@ def test_bullish_choch_baseline_preservation_with_deep_bos() -> None:
         confluence_filter=False,
     ).detect(candles)
 
+    bos_bear = [
+        e for e in events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+    ]
+    assert len(bos_bear) == 3, "All three bearish BOS should be emitted."
+
     chochs = [e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
     assert len(chochs) == 1
     assert chochs[0].direction is MarketDirection.BULLISH
     assert chochs[0].reference_price_level == 165.0
 
 
-def test_sweep_below_candidate_choch_low_updates_candidate() -> None:
-    """A SWEEP that breaks below candidate_choch_low replaces the phantom
-    candidate. With pullback-based BOS, each BOS needs an HL pullback.
+def test_sweep_below_active_low_does_not_affect_choch_reference() -> None:
+    """A SWEEP below active_low is market noise and must NOT alter the CHoCH
+    reference. The validated reference stays at the BOS-confirming pullback
+    (HL=100), not the swept level (80).
+
+    Sequence:
+      BOS 1 (H210, pullback HL=100) -> candidate_choch_low=100
+      SWEEP to 80 -> does NOT update candidate (noise)
+      BOS 2 (H220, continuation 220 > bull_leg_high(210)) -> promotes validated=100
+      CHoCH at L75 breaks validated(100) -> ref=100
     """
     highs = [150.0] * 20
     lows = [140.0] * 20
     highs[1] = 200.0
     lows[3] = 90.0
-    highs[5] = 210.0   # pending bullish BOS (close > 200)
-    lows[7] = 100.0     # HL -> confirms BOS; candidate_choch_low=100
-    lows[9] = 80.0      # SWEEP below active_low(100); candidate updated to 80
-    highs[11] = 220.0   # pending bullish BOS (close > 210)
-    lows[13] = 105.0    # HL -> confirms BOS; promotes validated_choch_low=80
-    lows[15] = 75.0     # breaks validated_choch_low(80) -> CHoCH bearish
+    highs[5] = 210.0
+    lows[7] = 100.0
+    lows[9] = 80.0
+    highs[11] = 220.0
+    lows[13] = 105.0
+    lows[15] = 75.0
 
     candles = make_series(highs, lows)
     candles[5] = make_candle(5, 210.0, 140.0, close=205.0)
@@ -704,23 +723,30 @@ def test_sweep_below_candidate_choch_low_updates_candidate() -> None:
     chochs = [e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
     assert len(chochs) == 1
     assert chochs[0].direction is MarketDirection.BEARISH
-    assert chochs[0].reference_price_level == 80.0
+    assert chochs[0].reference_price_level == 100.0
 
 
-def test_sweep_above_candidate_choch_high_updates_candidate() -> None:
-    """Bearish mirror: SWEEP above candidate_choch_high replaces the phantom.
-    Each bearish BOS needs an LH pullback.
+def test_sweep_above_active_high_does_not_affect_choch_reference() -> None:
+    """Bearish mirror: a SWEEP above active_high is noise and must NOT alter
+    the CHoCH reference. The validated reference stays at the BOS-confirming
+    pullback (LH=175), not the swept level (185).
+
+    Sequence:
+      BOS 1 (L80, pullback LH=175) -> candidate_choch_high=175
+      SWEEP to 185 -> does NOT update candidate (noise)
+      BOS 2 (L65, continuation 65 < bear_leg_low(80)) -> promotes validated=175
+      CHoCH at H190 breaks validated(175) -> ref=175
     """
     highs = [150.0] * 20
     lows = [140.0] * 20
     lows[1] = 90.0
     highs[3] = 200.0
-    lows[5] = 80.0      # pending bearish BOS (close < 90)
-    highs[7] = 175.0    # LH -> confirms BOS; re-bootstrap; candidate_choch_high=175
-    highs[9] = 185.0    # SWEEP above active_high(175); candidate updated to 185
-    lows[11] = 65.0     # pending bearish BOS (close < 80)
-    highs[13] = 170.0   # LH -> confirms BOS; promotes validated_choch_high=185
-    highs[15] = 190.0   # breaks validated_choch_high(185) -> CHoCH bullish
+    lows[5] = 80.0
+    highs[7] = 175.0
+    highs[9] = 185.0
+    lows[11] = 65.0
+    highs[13] = 170.0
+    highs[15] = 190.0
 
     candles = make_series(highs, lows)
     candles[5] = make_candle(5, 150.0, 80.0, close=85.0)
@@ -735,7 +761,7 @@ def test_sweep_above_candidate_choch_high_updates_candidate() -> None:
     chochs = [e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
     assert len(chochs) == 1
     assert chochs[0].direction is MarketDirection.BULLISH
-    assert chochs[0].reference_price_level == 185.0
+    assert chochs[0].reference_price_level == 175.0
 
 
 def test_real_window_choch_validated_freeze_prevents_ratchet() -> None:
