@@ -253,16 +253,23 @@ Full architecture rationale, including SOLID notes, is documented in
   Volume-delta confirmation (`min_volume_delta_ratio`) has been removed entirely.
 
   **BOS**: The state machine (`active_<side>`, `pending_<side>`, `trend`)
-  advances unconditionally on any wick break of the active reference in the
-  direction of trend. A `BREAK_OF_STRUCTURE` event is only *emitted*, however,
-  when a candle within the leg also *closes* beyond the reference
-  (`find_close_break_index`), and that close candle optionally passes the
-  LuxAlgo-style confluence filter (`bos_confluence`, see `_common.py`).
-  `confluence_filter` (constructor parameter, default `True`) enables this
-  shadow-balance check: the breaking close candle must have a larger upper
-  shadow than lower shadow (bullish) or vice versa (bearish). The emitted BOS
-  `timestamp` is that closing candle's timestamp; `price_level` is the
-  triggering pivot's extreme; `reference_price_level` is `active_<side>`.
+  advances **only when a candle in the leg *closes* beyond the active
+  reference** (`find_close_break_index`) — a wick-only overshoot does not
+  advance state. On a wick-only break the reference is *frozen* (not trailed
+  to the new pivot), so a later candle that closes beyond that same level
+  activates the BOS then. A continuation BOS must also satisfy the **BOS
+  staircase**: it must extend the leg beyond the previous BOS level
+  (`last_bear_bos_low`/`last_bull_bos_high`, reset at each CHoCH) — breaking a
+  higher trailing low (or lower trailing high) formed during a retrace, which
+  does not beat the previous BOS extreme, is not a structural BOS. The
+  `BREAK_OF_STRUCTURE` event is *emitted* once confirmed, and that close
+  candle optionally passes the LuxAlgo-style confluence filter
+  (`bos_confluence`, see `_common.py`). `confluence_filter` (constructor
+  parameter, default `True`) enables this shadow-balance check: the breaking
+  close candle must have a larger upper shadow than lower shadow (bullish) or
+  vice versa (bearish). The emitted BOS `timestamp` is that closing candle's
+  timestamp; `price_level` is the triggering pivot's extreme;
+  `reference_price_level` is `active_<side>`.
 
   **CHoCH**: A counter-trend break is confirmed via **persistence** (same as
   `InternalStructureDetector`): `is_sustained_break` must hold for
@@ -325,14 +332,21 @@ Full architecture rationale, including SOLID notes, is documented in
   keep tracking recent pivots (rather than freezing on either an old extreme
   or a stale promoted value).
 
-  **BOS confirmation**: The state machine advances on any wick break, but a
-  `BREAK_OF_STRUCTURE` event is only *emitted* when a candle in the leg also
-  *closes* beyond the reference (`find_close_break_index`), and that close
-  candle optionally passes the LuxAlgo-style confluence filter
-  (`bos_confluence`): upper shadow > lower shadow for bullish, reverse for
-  bearish. `confluence_filter` (constructor parameter, default `True`) enables
-  this check; `load_dashboard_data` exposes it so tests can disable it. The
-  BOS `timestamp` is the close-break candle's timestamp.
+  **BOS confirmation**: The state machine advances **only when a candle in the
+  leg *closes* beyond the reference** (`find_close_break_index`) — a wick-only
+  overshoot does not advance state; the reference is *frozen* (not trailed to
+  the new pivot) until a close confirms. A continuation BOS must also satisfy
+  the **BOS staircase**: it must extend the leg beyond the previous BOS level
+  (`last_bear_bos_low`/`last_bull_bos_high`, reset at each CHoCH) — a break of
+  a higher trailing low (or lower trailing high) formed during a retrace,
+  which does not beat the previous BOS extreme, is not a structural BOS (it
+  just trails the active reference). The `BREAK_OF_STRUCTURE` event is
+  *emitted* once confirmed, and that close candle optionally passes the
+  LuxAlgo-style confluence filter (`bos_confluence`): upper shadow > lower
+  shadow for bullish, reverse for bearish. `confluence_filter` (constructor
+  parameter, default `True`) enables this check; `load_dashboard_data` exposes
+  it so tests can disable it. The BOS `timestamp` is the close-break candle's
+  timestamp.
 
   **CHoCH confirmation** is **persistence**-based: a single candle that pokes
   through a level and immediately reverts is a "false break"; a break that
@@ -816,11 +830,19 @@ detector uses `volume_delta` or `min_volume_delta_ratio` for any confirmation.
 `SwingStructureDetector` defaults: `swing_lookback=10`, `persistence_candles=10`.
 `InternalStructureDetector` defaults: `swing_lookback=2`, `persistence_candles=5`.
 
-**BOS confirmation** (both detectors): the state machine advances on any wick
-break; a `BREAK_OF_STRUCTURE` event is only *emitted* when a candle in the
-leg also *closes* beyond the reference (`find_close_break_index`), and
-optionally passes the `bos_confluence` shadow-balance filter. SWEEP and CHoCH
-detection is unaffected by the close requirement.
+**BOS confirmation** (both detectors): the state machine advances **only when
+a candle in the leg *closes* beyond the active reference**
+(`find_close_break_index`) — a wick-only overshoot does not advance state and
+*freezes* the reference (it is not trailed to the new pivot) until a close
+confirms. A continuation BOS must also satisfy the **BOS staircase**: it must
+extend the leg beyond the previous BOS level (`last_bear_bos_low` /
+`last_bull_bos_high`, reset at each CHoCH), so bearish BOS lows keep making
+lower lows (bullish BOS highs higher highs) while the trend is unchanged; a
+break of a higher trailing low (lower trailing high) during a retrace, which
+does not beat the previous BOS extreme, is not a BOS. The
+`BREAK_OF_STRUCTURE` event is *emitted* once confirmed and optionally passes
+the `bos_confluence` shadow-balance filter. SWEEP and CHoCH detection are
+unaffected by the close/staircase requirements (sweeps are wick events).
 
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A

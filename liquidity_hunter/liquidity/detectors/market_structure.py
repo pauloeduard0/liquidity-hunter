@@ -140,6 +140,13 @@ class SwingStructureDetector(MarketStructureDetector):
         candidate_choch_low_baseline: Pivot | None = None
         choch_origin_high: Pivot | None = None
         choch_origin_low: Pivot | None = None
+        # The price level of the previous confirmed BOS in the current trend.
+        # A continuation BOS must *extend* the staircase beyond this level, so a
+        # break of a higher trailing low (lower trailing high) formed during a
+        # retrace is not a structural BOS. Reset to None at each trend flip
+        # (CHoCH); the first BOS of a leg (None) is unconstrained.
+        last_bear_bos_low: float | None = None
+        last_bull_bos_high: float | None = None
         trend = MarketDirection.NEUTRAL
         prev_high_pivot_index = -1
         prev_low_pivot_index = -1
@@ -170,6 +177,12 @@ class SwingStructureDetector(MarketStructureDetector):
             current_index = index_by_timestamp[timestamp]
 
             if kind == "high":
+                # A wick-only in-trend break (no candle closed beyond the
+                # active reference) stays *pending*: the state must not advance
+                # and the broken reference stays frozen at its level (not trailed
+                # up to this pivot) so a later candle that *closes* beyond it
+                # activates the BOS then.
+                wick_only_break = False
                 choch_high_ref = validated_choch_high or choch_origin_high or active_high
                 if (
                     trend is MarketDirection.BEARISH
@@ -208,6 +221,9 @@ class SwingStructureDetector(MarketStructureDetector):
                     choch_origin_low = active_low
                     candidate_choch_low = None
                     candidate_choch_low_baseline = None
+                    # New regime: the BOS staircase restarts on both sides.
+                    last_bear_bos_low = None
+                    last_bull_bos_high = None
                 elif active_high is None:
                     if active_low is not None:
                         pending_high = pivot
@@ -237,11 +253,20 @@ class SwingStructureDetector(MarketStructureDetector):
                         if candidate_choch_high is not None and price > candidate_choch_high.price:
                             candidate_choch_high = pivot
                             candidate_choch_high_baseline = active_low
+                    elif last_bull_bos_high is not None and price <= last_bull_bos_high:
+                        # BOS bullish staircase: a continuation BOS must *extend*
+                        # the leg beyond the previous BOS high. A break of a lower
+                        # trailing high formed during a retrace (price not above
+                        # the last BOS high) is not a structural BOS -- it just
+                        # trails active_high. The first BOS of the leg
+                        # (last_bull_bos_high is None) is unconstrained.
+                        pass
                     else:
+                        # BOS bullish: the state advances ONLY when a candle in
+                        # the leg *closes* beyond the reference. A wick-only
+                        # overshoot stays pending (the reference is frozen below)
+                        # so the BOS activates later, once a close confirms it.
                         ref_price = active_high.price
-                        trend = MarketDirection.BULLISH
-                        active_low = pending_low
-                        pending_low = None
                         close_idx = find_close_break_index(
                             candles,
                             prev_high_pivot_index + 1,
@@ -249,29 +274,35 @@ class SwingStructureDetector(MarketStructureDetector):
                             ref_price,
                             bullish=True,
                         )
-                        if close_idx is not None and (
-                            not self._confluence_filter
-                            or bos_confluence(candles[close_idx], bullish=True)
-                        ):
-                            emit(
-                                candles[close_idx].timestamp,
-                                StructureEvent.BREAK_OF_STRUCTURE,
-                                MarketDirection.BULLISH,
-                                price,
-                                ref_price,
-                            )
-                            # BOS confirmed (close break) -> promote the CHoCH
-                            # reference. A wick-only state advance must not
-                            # promote it, else a CHoCH could fire with no
-                            # confirmed BOS beneath it.
-                            if candidate_choch_low is not None and (
-                                candidate_choch_low_baseline is None
-                                or price > candidate_choch_low_baseline.price
+                        if close_idx is None:
+                            wick_only_break = True
+                        else:
+                            trend = MarketDirection.BULLISH
+                            active_low = pending_low
+                            pending_low = None
+                            # Extend the BOS staircase: the next bullish
+                            # continuation must break above this new high.
+                            last_bull_bos_high = price
+                            if not self._confluence_filter or bos_confluence(
+                                candles[close_idx], bullish=True
                             ):
-                                validated_choch_low = candidate_choch_low
-                                choch_origin_low = None
-                                candidate_choch_low = None
-                                candidate_choch_low_baseline = None
+                                emit(
+                                    candles[close_idx].timestamp,
+                                    StructureEvent.BREAK_OF_STRUCTURE,
+                                    MarketDirection.BULLISH,
+                                    price,
+                                    ref_price,
+                                )
+                                # BOS confirmed (close break) -> promote the
+                                # CHoCH reference.
+                                if candidate_choch_low is not None and (
+                                    candidate_choch_low_baseline is None
+                                    or price > candidate_choch_low_baseline.price
+                                ):
+                                    validated_choch_low = candidate_choch_low
+                                    choch_origin_low = None
+                                    candidate_choch_low = None
+                                    candidate_choch_low_baseline = None
                 elif price < active_high.price:
                     emit(
                         timestamp,
@@ -284,11 +315,16 @@ class SwingStructureDetector(MarketStructureDetector):
                     if candidate_choch_high is None or price > candidate_choch_high.price:
                         candidate_choch_high_baseline = active_low
                         candidate_choch_high = pivot
-                active_high = pivot
-                last_high_pivot = pivot
-                prev_high_pivot_index = current_index
+                # Freeze the reference on a wick-only break (see above): the
+                # pivot must not become the new trailing active_high, so the
+                # broken level persists until a candle closes beyond it.
+                if not wick_only_break:
+                    active_high = pivot
+                    last_high_pivot = pivot
+                    prev_high_pivot_index = current_index
 
             else:
+                wick_only_break = False
                 choch_low_ref = validated_choch_low or choch_origin_low or active_low
                 if (
                     trend is MarketDirection.BULLISH
@@ -327,6 +363,9 @@ class SwingStructureDetector(MarketStructureDetector):
                     choch_origin_high = active_high
                     candidate_choch_high = None
                     candidate_choch_high_baseline = None
+                    # New regime: the BOS staircase restarts on both sides.
+                    last_bear_bos_low = None
+                    last_bull_bos_high = None
                 elif active_low is None:
                     if active_high is not None:
                         pending_low = pivot
@@ -356,11 +395,20 @@ class SwingStructureDetector(MarketStructureDetector):
                         if candidate_choch_low is not None and price < candidate_choch_low.price:
                             candidate_choch_low = pivot
                             candidate_choch_low_baseline = active_high
+                    elif last_bear_bos_low is not None and price >= last_bear_bos_low:
+                        # BOS bearish staircase: a continuation BOS must *extend*
+                        # the leg beyond the previous BOS low. A break of a higher
+                        # trailing low formed during a retrace (price not below
+                        # the last BOS low) is not a structural BOS -- it just
+                        # trails active_low. The first BOS of the leg
+                        # (last_bear_bos_low is None) is unconstrained.
+                        pass
                     else:
+                        # BOS bearish: the state advances ONLY when a candle in
+                        # the leg *closes* beyond the reference. A wick-only
+                        # overshoot stays pending (the reference is frozen above)
+                        # so the BOS activates later, once a close confirms it.
                         ref_price = active_low.price
-                        trend = MarketDirection.BEARISH
-                        active_high = pending_high
-                        pending_high = None
                         close_idx = find_close_break_index(
                             candles,
                             prev_low_pivot_index + 1,
@@ -368,29 +416,35 @@ class SwingStructureDetector(MarketStructureDetector):
                             ref_price,
                             bullish=False,
                         )
-                        if close_idx is not None and (
-                            not self._confluence_filter
-                            or bos_confluence(candles[close_idx], bullish=False)
-                        ):
-                            emit(
-                                candles[close_idx].timestamp,
-                                StructureEvent.BREAK_OF_STRUCTURE,
-                                MarketDirection.BEARISH,
-                                price,
-                                ref_price,
-                            )
-                            # BOS confirmed (close break) -> promote the CHoCH
-                            # reference. A wick-only state advance must not
-                            # promote it, else a CHoCH could fire with no
-                            # confirmed BOS beneath it.
-                            if candidate_choch_high is not None and (
-                                candidate_choch_high_baseline is None
-                                or price < candidate_choch_high_baseline.price
+                        if close_idx is None:
+                            wick_only_break = True
+                        else:
+                            trend = MarketDirection.BEARISH
+                            # Extend the BOS staircase: the next bearish
+                            # continuation must break below this new low.
+                            last_bear_bos_low = price
+                            active_high = pending_high
+                            pending_high = None
+                            if not self._confluence_filter or bos_confluence(
+                                candles[close_idx], bullish=False
                             ):
-                                validated_choch_high = candidate_choch_high
-                                choch_origin_high = None
-                                candidate_choch_high = None
-                                candidate_choch_high_baseline = None
+                                emit(
+                                    candles[close_idx].timestamp,
+                                    StructureEvent.BREAK_OF_STRUCTURE,
+                                    MarketDirection.BEARISH,
+                                    price,
+                                    ref_price,
+                                )
+                                # BOS confirmed (close break) -> promote the
+                                # CHoCH reference.
+                                if candidate_choch_high is not None and (
+                                    candidate_choch_high_baseline is None
+                                    or price < candidate_choch_high_baseline.price
+                                ):
+                                    validated_choch_high = candidate_choch_high
+                                    choch_origin_high = None
+                                    candidate_choch_high = None
+                                    candidate_choch_high_baseline = None
                 elif price > active_low.price:
                     emit(
                         timestamp,
@@ -403,9 +457,13 @@ class SwingStructureDetector(MarketStructureDetector):
                     if candidate_choch_low is None or price < candidate_choch_low.price:
                         candidate_choch_low_baseline = active_high
                         candidate_choch_low = pivot
-                active_low = pivot
-                last_low_pivot = pivot
-                prev_low_pivot_index = current_index
+                # Freeze the reference on a wick-only break (see above): the
+                # pivot must not become the new trailing active_low, so the
+                # broken level persists until a candle closes beyond it.
+                if not wick_only_break:
+                    active_low = pivot
+                    last_low_pivot = pivot
+                    prev_low_pivot_index = current_index
 
         return events
 

@@ -229,37 +229,76 @@ def test_bos_confirmed_sweep_then_choch() -> None:
     ]
 
 
-def test_bos_state_updates_silently_when_close_does_not_confirm() -> None:
-    """BOS state (trend, active refs) advances on any wick break of the
-    active reference, even if no close beyond the level exists. In that case
-    no BOS event is emitted, but the trend is updated -- which means the
-    *next* counter-trend break is evaluated as a reversal (CHoCH candidate)
-    against the new state, not as a continuation.
+def test_wick_only_break_freezes_reference_until_close_confirms() -> None:
+    """A wick-only in-trend break (the pivot pokes beyond the active reference
+    but no candle closes beyond it) does NOT advance the state: the trend does
+    not flip and the reference stays frozen at its level. A later pivot whose
+    leg contains a candle that *closes* beyond that same frozen level then
+    activates the BOS, emitted at the original reference.
 
     Sequence (lookback=1): high(200) bootstrap, low(140) bootstrap,
-    high(210) breaks active_high silently (close=177.5 < 200 -> no emit,
-    but trend=BULLISH), low(130) CHoCH candidate (trend now BULLISH) ->
-    persistence fails -> SWEEP. An extra trailing candle is needed so
-    that index 4 falls within SwingLowDetector's valid pivot range.
+    high(210) breaks 200 by wick only (close=177.5 < 200 -> pending, no state
+    change, active_high frozen at 200), high(215) whose candle closes at 205
+    (> 200) -> BOS bullish confirmed at reference 200.
     """
-    highs = [150.0, 200.0, 150.0, 210.0, 150.0, 150.0]
-    lows = [145.0, 145.0, 140.0, 145.0, 130.0, 145.0]
-    # Default close for index 3 = (210+145)/2 = 177.5, which is < 200;
-    # BOS state still advances to BULLISH but no event fires.
-    # Default close for index 4 = (150+130)/2 = 140, which is not < 140
-    # (strictly) -> persistence check also fails -> SWEEP.
+    highs = [150.0, 200.0, 150.0, 150.0, 150.0, 210.0, 150.0, 215.0, 150.0]
+    lows = [145.0, 145.0, 145.0, 140.0, 145.0, 145.0, 145.0, 145.0, 145.0]
     candles = make_series(highs, lows)
+    # index 5 close = (210+145)/2 = 177.5 < 200 -> wick only.
+    assert candles[5].close < 200.0
+    # index 7 closes above the frozen 200 reference -> activates the BOS.
+    candles[7] = make_candle(7, 215.0, 145.0, close=205.0)
 
     events = SwingStructureDetector(
         swing_lookback=1, persistence_candles=1, confluence_filter=False
     ).detect(candles)
 
-    # The BOS at index 3 fires no event (close doesn't confirm), but trend
-    # becomes BULLISH, so the low at index 4 is treated as a CHoCH candidate.
-    # With default close=140 (not strictly < 140), persistence fails -> SWEEP.
+    # The wick-only break at index 5 leaked no trend, so it produced no spurious
+    # CHoCH/SWEEP; the only event is the BOS that fires once a close confirms,
+    # against the still-frozen reference 200 (not the 210 wick pivot).
     assert [(e.event, e.direction, e.price_level, e.reference_price_level) for e in events] == [
-        (StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BEARISH, 130.0, 140.0),
+        (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 215.0, 200.0),
     ]
+    assert events[0].timestamp == candles[7].timestamp
+
+
+def test_bos_staircase_blocks_higher_continuation_break() -> None:
+    """A new continuation BOS must *extend* the leg beyond the previous BOS
+    level. After a bearish BOS establishes a low, a retrace forms a higher low;
+    breaking that higher low (still above the last BOS low) is NOT a structural
+    BOS -- only a break below the previous BOS low is. This is the descending
+    staircase: bearish BOS lows must keep making lower lows while the trend is
+    unchanged.
+
+    Sequence (lookback=1): high(200)/low(100) bootstrap, low(80) first bearish
+    BOS (last BOS low = 80), high(170) lower high, low(120) higher low (active
+    ratchets up), low(100) breaks 120 but stays above 80 -> blocked (no BOS),
+    low(60) breaks below 80 -> genuine continuation BOS.
+    """
+    highs = [160.0] * 15
+    lows = [140.0] * 15
+    highs[1] = 200.0
+    lows[3] = 100.0
+    lows[5] = 80.0  # first bearish BOS low; last_bear_bos_low = 80
+    highs[7] = 170.0  # lower high (retrace up)
+    lows[9] = 120.0  # higher low; active_low ratchets up to 120
+    lows[11] = 100.0  # breaks 120 but stays above 80 -> staircase blocks
+    lows[13] = 60.0  # breaks below 80 -> genuine continuation BOS
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 160.0, 80.0, close=85.0)  # close < 100 ref
+    candles[11] = make_candle(11, 160.0, 100.0, close=110.0)  # blocked before close
+    candles[13] = make_candle(13, 160.0, 60.0, close=80.0)  # close < 100 ref
+
+    events = SwingStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
+
+    bos = [e for e in events if e.event is StructureEvent.BREAK_OF_STRUCTURE]
+    assert all(e.direction is MarketDirection.BEARISH for e in bos)
+    # Only the first BOS (index 5) and the genuine continuation (index 13). The
+    # higher-low break at index 11 (above the last BOS low 80) is NOT a BOS.
+    assert [e.timestamp for e in bos] == [candles[5].timestamp, candles[13].timestamp]
 
 
 def test_liquidity_sweep_when_persistence_fails() -> None:

@@ -898,6 +898,33 @@ def test_wick_only_in_trend_break_ignored() -> None:
     assert len(bos) == 0
 
 
+def test_wick_only_break_freezes_reference_until_close_confirms() -> None:
+    """A wick-only break does not advance the state (no trend leak) and freezes
+    the reference at its level; a later leg whose candle *closes* beyond that
+    same frozen level activates the BOS, emitted against the original reference
+    (200), not the wick pivot (220)."""
+    highs = [150.0] * 11
+    lows = [140.0] * 11
+    highs[1] = 200.0
+    lows[3] = 90.0
+    highs[5] = 220.0  # wick breaks 200 (close=180), no close beyond -> pending
+    highs[7] = 230.0  # candle closes at 205 (> 200) -> activates the BOS
+    lows[9] = 100.0  # HL pullback (> 90) confirms the pending BOS
+
+    candles = make_series(highs, lows)
+    assert candles[5].close < 200.0  # wick-only
+    candles[7] = make_candle(7, 230.0, 140.0, close=205.0)
+
+    events = InternalStructureDetector(swing_lookback=1, confluence_filter=False).detect(candles)
+
+    bos = [e for e in events if e.event is StructureEvent.BREAK_OF_STRUCTURE]
+    assert len(bos) == 1
+    assert bos[0].direction is MarketDirection.BULLISH
+    assert bos[0].price_level == 230.0
+    assert bos[0].reference_price_level == 200.0  # frozen reference, not 220
+    assert bos[0].timestamp == candles[7].timestamp
+
+
 def test_bos_fields_on_confirmed_event() -> None:
     """Verify all fields on a confirmed BOS event: timestamp, price_level,
     reference_price_level, reference_timestamp, origin_price_level."""

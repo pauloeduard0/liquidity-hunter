@@ -12,16 +12,28 @@ kind). These drive:
 
 - `BREAK_OF_STRUCTURE`: a pivot beyond the trailing reference *in the
   direction of* `trend` (or the first break while `trend` is `NEUTRAL`).
-  State (trend, promotions) advances immediately on the break, but the BOS
-  event is only *emitted* when a pullback pivot forms in the opposite
-  direction (HL for bullish, LH for bearish) that is above/below the
-  pullback reference snapshot (confirming direction). If the next opposite-
-  direction pivot is not a valid pullback, the pending BOS is silently
-  discarded (state already advanced). Wick-only breaks (no candle closing
-  beyond the level) advance state but never create a pending BOS. A
+  State (trend, promotions) advances **only when a candle in the leg
+  *closes* beyond the reference** -- a wick-only overshoot does not count.
+  On a wick-only break the state does not advance and the broken reference
+  is *frozen* (not trailed to this pivot), so a later candle that closes
+  beyond that same level activates the BOS then. Once the close confirms the
+  break, the BOS event is still only *emitted* when a pullback pivot forms
+  in the opposite direction (HL for bullish, LH for bearish) that is above/
+  below the pullback reference snapshot (confirming direction). If the next
+  opposite-direction pivot is not a valid pullback, the pending BOS is
+  silently discarded (state already advanced). A
   continuation dedup gate ensures each pullback stays on the correct side
   of the previous pullback (LH staircase for bearish, HL staircase for
   bullish), preventing re-emission of the same structural break.
+
+  **BOS staircase**: a continuation BOS must also *extend* the leg beyond
+  the previous BOS level (`last_bear_bos_low`/`last_bull_bos_high`, reset
+  at each CHoCH). While the trend is unchanged, a break of a higher trailing
+  low (or lower trailing high) formed during a retrace -- which does not
+  beat the previous BOS extreme -- is not a structural BOS; it merely trails
+  the active reference. So bearish BOS lows keep making lower lows (and
+  bullish BOS highs higher highs) until a CHoCH flips the trend. The first
+  BOS of a leg (no previous BOS level yet) is unconstrained.
 - `LOWER_HIGH`/`HIGHER_LOW`: a pivot that does not break the trailing
   reference.
 - `LIQUIDITY_SWEEP`: a counter-trend pivot that breaks the trailing
@@ -243,6 +255,15 @@ class InternalStructureDetector(MarketStructureDetector):
         # flip (CHoCH) and at the NEUTRAL bootstrap; mirror for bull_leg_high.
         bear_leg_low: float | None = None
         bull_leg_high: float | None = None
+        # The price level of the previous confirmed BOS in the current trend
+        # (the low established by the last bearish BOS / high by the last
+        # bullish BOS). A new continuation BOS must *extend* the staircase --
+        # break beyond this level -- so a break of a higher trailing low (lower
+        # trailing high) formed during a retrace, which never beats the previous
+        # BOS, is not a structural BOS. Reset to None at each trend flip (CHoCH);
+        # the first BOS of a leg (None) is unconstrained.
+        last_bear_bos_low: float | None = None
+        last_bull_bos_high: float | None = None
         pending_bos: _PendingBOS | None = None
         last_bullish_bos_price: float | None = None
         last_bullish_bos_origin: float | None = None
@@ -287,6 +308,12 @@ class InternalStructureDetector(MarketStructureDetector):
             current_index = index_by_timestamp[timestamp]
 
             if kind == "high":
+                # A wick-only in-trend break (no candle closed beyond the
+                # active reference) stays *pending*: the state must not advance
+                # and the broken reference must stay frozen at its level (not
+                # trail up to this pivot) so a later candle that *closes* beyond
+                # it activates the BOS then.
+                wick_only_break = False
                 # --- Pending BEARISH BOS confirmation ---
                 if pending_bos is not None and pending_bos.direction is MarketDirection.BEARISH:
                     pb = pending_bos.pullback_ref
@@ -362,6 +389,9 @@ class InternalStructureDetector(MarketStructureDetector):
                     choch_origin_low = active_low if via_validated else None
                     # New bullish leg begins; seed its running high extreme.
                     bull_leg_high = price
+                    # New regime: the BOS staircase restarts on both sides.
+                    last_bear_bos_low = None
+                    last_bull_bos_high = None
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bullish_bos_origin = None
@@ -389,31 +419,20 @@ class InternalStructureDetector(MarketStructureDetector):
                             active_high.price,
                         )
                         pending_low = self._extreme(pending_low, active_low, higher=False)
+                    elif last_bull_bos_high is not None and price <= last_bull_bos_high:
+                        # BOS bullish staircase: a continuation BOS must *extend*
+                        # the leg beyond the previous BOS high. A break of a lower
+                        # trailing high formed during a retrace (price not above
+                        # the last BOS high) is not a structural BOS -- it just
+                        # trails active_high. The first BOS of the leg
+                        # (last_bull_bos_high is None) is unconstrained.
+                        pass
                     else:
-                        # BOS bullish: state advances now; the BOS is emitted
-                        # once a pullback (HL) confirms it. Promote the previous
-                        # bullish BOS's pullback to the validated bearish-CHoCH
-                        # reference *only* if this break makes a NEW LEG HIGH
-                        # (above bull_leg_high, the bullish leg's running
-                        # extreme) -- a genuine continuation. A higher-high that
-                        # does not exceed the leg extreme (e.g. a pullback-BOS
-                        # within a retrace) leaves the candidate provisional:
-                        # that BOS never extended the leg, so its pullback must
-                        # not ratchet the CHoCH reference down.
-                        if (
-                            candidate_choch_low is not None
-                            and bull_leg_high is not None
-                            and price > bull_leg_high
-                        ):
-                            validated_choch_low = candidate_choch_low
-                            choch_origin_low = None
-                        if bull_leg_high is None or price > bull_leg_high:
-                            bull_leg_high = price
+                        # BOS bullish: the state advances ONLY when a candle in
+                        # the leg *closes* beyond the reference. A wick-only
+                        # overshoot stays pending (the reference is frozen below)
+                        # so the BOS activates later, once a close confirms it.
                         ref_price = active_high.price
-                        pullback_ref_snapshot = active_low
-                        trend = MarketDirection.BULLISH
-                        active_low = pending_low
-                        pending_low = None
                         close_idx = find_close_break_index(
                             candles,
                             prev_high_pivot_index + 1,
@@ -421,26 +440,53 @@ class InternalStructureDetector(MarketStructureDetector):
                             ref_price,
                             bullish=True,
                         )
-                        if (
-                            last_bullish_bos_origin is not None
-                            and last_bullish_bos_price is not None
-                            and pullback_ref_snapshot is not None
-                            and pullback_ref_snapshot.price < last_bullish_bos_origin
-                            and price < last_bullish_bos_price
-                        ):
-                            last_bullish_bos_price = None
-                            last_bullish_bos_origin = None
-                        if close_idx is not None and (
-                            not self._confluence_filter
-                            or bos_confluence(candles[close_idx], bullish=True)
-                        ):
-                            pending_bos = _PendingBOS(
-                                direction=MarketDirection.BULLISH,
-                                breaking_pivot=pivot,
-                                ref_price=ref_price,
-                                close_break_timestamp=candles[close_idx].timestamp,
-                                pullback_ref=pullback_ref_snapshot,
-                            )
+                        if close_idx is None:
+                            wick_only_break = True
+                        else:
+                            # Promote the previous bullish BOS's pullback to the
+                            # validated bearish-CHoCH reference *only* if this
+                            # break makes a NEW LEG HIGH (above bull_leg_high,
+                            # the bullish leg's running extreme) -- a genuine
+                            # continuation. A higher-high that does not exceed
+                            # the leg extreme (e.g. a pullback-BOS within a
+                            # retrace) leaves the candidate provisional: that BOS
+                            # never extended the leg, so its pullback must not
+                            # ratchet the CHoCH reference down.
+                            if (
+                                candidate_choch_low is not None
+                                and bull_leg_high is not None
+                                and price > bull_leg_high
+                            ):
+                                validated_choch_low = candidate_choch_low
+                                choch_origin_low = None
+                            if bull_leg_high is None or price > bull_leg_high:
+                                bull_leg_high = price
+                            # Extend the BOS staircase: the next bullish
+                            # continuation must break above this new high.
+                            last_bull_bos_high = price
+                            pullback_ref_snapshot = active_low
+                            trend = MarketDirection.BULLISH
+                            active_low = pending_low
+                            pending_low = None
+                            if (
+                                last_bullish_bos_origin is not None
+                                and last_bullish_bos_price is not None
+                                and pullback_ref_snapshot is not None
+                                and pullback_ref_snapshot.price < last_bullish_bos_origin
+                                and price < last_bullish_bos_price
+                            ):
+                                last_bullish_bos_price = None
+                                last_bullish_bos_origin = None
+                            if not self._confluence_filter or bos_confluence(
+                                candles[close_idx], bullish=True
+                            ):
+                                pending_bos = _PendingBOS(
+                                    direction=MarketDirection.BULLISH,
+                                    breaking_pivot=pivot,
+                                    ref_price=ref_price,
+                                    close_break_timestamp=candles[close_idx].timestamp,
+                                    pullback_ref=pullback_ref_snapshot,
+                                )
                 elif price < active_high.price:
                     emit(
                         timestamp,
@@ -450,9 +496,14 @@ class InternalStructureDetector(MarketStructureDetector):
                         active_high.price,
                     )
                     pending_low = self._extreme(pending_low, active_low, higher=False)
-                active_high = pivot
-                prev_high_pivot_index = current_index
+                # Freeze the reference on a wick-only break (see above): the
+                # pivot must not become the new trailing active_high, so the
+                # broken level persists until a candle closes beyond it.
+                if not wick_only_break:
+                    active_high = pivot
+                    prev_high_pivot_index = current_index
             else:
+                wick_only_break = False
                 # --- Pending BULLISH BOS confirmation ---
                 if pending_bos is not None and pending_bos.direction is MarketDirection.BULLISH:
                     pb = pending_bos.pullback_ref
@@ -527,6 +578,9 @@ class InternalStructureDetector(MarketStructureDetector):
                     choch_origin_high = active_high if via_validated else None
                     # New bearish leg begins; seed its running low extreme.
                     bear_leg_low = price
+                    # New regime: the BOS staircase restarts on both sides.
+                    last_bear_bos_low = None
+                    last_bull_bos_high = None
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bearish_bos_price = None
@@ -552,31 +606,20 @@ class InternalStructureDetector(MarketStructureDetector):
                             active_low.price,
                         )
                         pending_high = self._extreme(pending_high, active_high, higher=True)
+                    elif last_bear_bos_low is not None and price >= last_bear_bos_low:
+                        # BOS bearish staircase: a continuation BOS must *extend*
+                        # the leg beyond the previous BOS low. A break of a higher
+                        # trailing low formed during a retrace (price not below
+                        # the last BOS low) is not a structural BOS -- it just
+                        # trails active_low. The first BOS of the leg
+                        # (last_bear_bos_low is None) is unconstrained.
+                        pass
                     else:
-                        # BOS bearish: state advances now; the BOS is emitted
-                        # once a pullback (LH) confirms it. Promote the previous
-                        # bearish BOS's pullback to the validated bullish-CHoCH
-                        # reference *only* if this break makes a NEW LEG LOW
-                        # (below bear_leg_low, the bearish leg's running extreme)
-                        # -- a genuine continuation. A lower-low that does not
-                        # break the leg extreme (e.g. a pullback-BOS within a
-                        # retrace) leaves the candidate provisional: that BOS
-                        # never extended the leg, so its pullback must not
-                        # ratchet the CHoCH reference down.
-                        if (
-                            candidate_choch_high is not None
-                            and bear_leg_low is not None
-                            and price < bear_leg_low
-                        ):
-                            validated_choch_high = candidate_choch_high
-                            choch_origin_high = None
-                        if bear_leg_low is None or price < bear_leg_low:
-                            bear_leg_low = price
+                        # BOS bearish: the state advances ONLY when a candle in
+                        # the leg *closes* beyond the reference. A wick-only
+                        # overshoot stays pending (the reference is frozen above)
+                        # so the BOS activates later, once a close confirms it.
                         ref_price = active_low.price
-                        pullback_ref_snapshot = active_high
-                        trend = MarketDirection.BEARISH
-                        active_high = pending_high
-                        pending_high = None
                         close_idx = find_close_break_index(
                             candles,
                             prev_low_pivot_index + 1,
@@ -584,26 +627,53 @@ class InternalStructureDetector(MarketStructureDetector):
                             ref_price,
                             bullish=False,
                         )
-                        if (
-                            last_bearish_bos_origin is not None
-                            and last_bearish_bos_price is not None
-                            and pullback_ref_snapshot is not None
-                            and pullback_ref_snapshot.price > last_bearish_bos_origin
-                            and price > last_bearish_bos_price
-                        ):
-                            last_bearish_bos_price = None
-                            last_bearish_bos_origin = None
-                        if close_idx is not None and (
-                            not self._confluence_filter
-                            or bos_confluence(candles[close_idx], bullish=False)
-                        ):
-                            pending_bos = _PendingBOS(
-                                direction=MarketDirection.BEARISH,
-                                breaking_pivot=pivot,
-                                ref_price=ref_price,
-                                close_break_timestamp=candles[close_idx].timestamp,
-                                pullback_ref=pullback_ref_snapshot,
-                            )
+                        if close_idx is None:
+                            wick_only_break = True
+                        else:
+                            # Promote the previous bearish BOS's pullback to the
+                            # validated bullish-CHoCH reference *only* if this
+                            # break makes a NEW LEG LOW (below bear_leg_low, the
+                            # bearish leg's running extreme) -- a genuine
+                            # continuation. A lower-low that does not break the
+                            # leg extreme (e.g. a pullback-BOS within a retrace)
+                            # leaves the candidate provisional: that BOS never
+                            # extended the leg, so its pullback must not ratchet
+                            # the CHoCH reference down.
+                            if (
+                                candidate_choch_high is not None
+                                and bear_leg_low is not None
+                                and price < bear_leg_low
+                            ):
+                                validated_choch_high = candidate_choch_high
+                                choch_origin_high = None
+                            if bear_leg_low is None or price < bear_leg_low:
+                                bear_leg_low = price
+                            # Extend the BOS staircase: the next bearish
+                            # continuation must break below this new low.
+                            last_bear_bos_low = price
+                            pullback_ref_snapshot = active_high
+                            trend = MarketDirection.BEARISH
+                            active_high = pending_high
+                            pending_high = None
+                            if (
+                                last_bearish_bos_origin is not None
+                                and last_bearish_bos_price is not None
+                                and pullback_ref_snapshot is not None
+                                and pullback_ref_snapshot.price > last_bearish_bos_origin
+                                and price > last_bearish_bos_price
+                            ):
+                                last_bearish_bos_price = None
+                                last_bearish_bos_origin = None
+                            if not self._confluence_filter or bos_confluence(
+                                candles[close_idx], bullish=False
+                            ):
+                                pending_bos = _PendingBOS(
+                                    direction=MarketDirection.BEARISH,
+                                    breaking_pivot=pivot,
+                                    ref_price=ref_price,
+                                    close_break_timestamp=candles[close_idx].timestamp,
+                                    pullback_ref=pullback_ref_snapshot,
+                                )
                 elif price > active_low.price:
                     emit(
                         timestamp,
@@ -613,8 +683,12 @@ class InternalStructureDetector(MarketStructureDetector):
                         active_low.price,
                     )
                     pending_high = self._extreme(pending_high, active_high, higher=True)
-                active_low = pivot
-                prev_low_pivot_index = current_index
+                # Freeze the reference on a wick-only break (see above): the
+                # pivot must not become the new trailing active_low, so the
+                # broken level persists until a candle closes beyond it.
+                if not wick_only_break:
+                    active_low = pivot
+                    prev_low_pivot_index = current_index
 
         return events
 
