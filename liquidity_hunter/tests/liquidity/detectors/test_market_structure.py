@@ -301,6 +301,52 @@ def test_bos_staircase_blocks_higher_continuation_break() -> None:
     assert [e.timestamp for e in bos] == [candles[5].timestamp, candles[13].timestamp]
 
 
+def test_bos_staircase_floored_at_choch_level() -> None:
+    """After a CHoCH, a continuation BOS must break *beyond the CHoCH level*,
+    not re-break a reference that trailed onto the wrong side of it. Here a
+    bearish CHoCH fires at reference 133; price then retraces up (active_low
+    ratchets to 138, above the CHoCH level), and a break of that higher low at
+    135 -- still ABOVE the CHoCH level 133 -- is NOT a bearish BOS. Only the
+    break below 133 (at 125) is. Without the CHoCH floor, the 135 break would
+    be the (unconstrained) first BOS of the leg.
+
+    The leading sequence reproduces ``test_bos_confirmed_sweep_then_choch`` up
+    to the bearish CHoCH at index 15; indices 17-23 add the retrace + the two
+    candidate continuation breaks.
+    """
+    highs = [150.0, 200.0, 150.0, 150.0, 150.0, 210.0, 150.0, 150.0, 150.0,
+             215.0, 150.0, 150.0, 150.0, 220.0, 150.0, 150.0, 150.0,
+             160.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0]
+    lows = [145.0, 145.0, 145.0, 140.0, 145.0, 145.0, 145.0, 130.0, 145.0,
+            145.0, 145.0, 133.0, 145.0, 145.0, 145.0, 120.0, 145.0,
+            145.0, 145.0, 138.0, 145.0, 135.0, 145.0, 125.0, 145.0, 145.0]
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, highs[5], lows[5], close=205.0)
+    candles[9] = make_candle(9, highs[9], lows[9], close=212.0)
+    candles[13] = make_candle(13, highs[13], lows[13], close=217.0)
+    candles[15] = make_candle(15, highs[15], lows[15], close=125.0)
+    candles[16] = make_candle(16, 145.0, 125.0, close=126.0)
+    candles[21] = make_candle(21, 150.0, 135.0, close=136.0)  # above floor 133
+    candles[23] = make_candle(23, 150.0, 125.0, close=128.0)  # below floor 133
+
+    events = SwingStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
+
+    # The break at index 21 (135, above the CHoCH level 133) is blocked; the
+    # only post-CHoCH BOS is at index 23 (125, below the CHoCH level).
+    bos_after_choch = [
+        e
+        for e in events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.timestamp >= candles[16].timestamp
+    ]
+    assert [(e.direction, e.timestamp) for e in bos_after_choch] == [
+        (MarketDirection.BEARISH, candles[23].timestamp),
+    ]
+    assert candles[21].timestamp not in [e.timestamp for e in events]
+
+
 def test_liquidity_sweep_when_persistence_fails() -> None:
     """A counter-trend break where the close crosses the reference but the
     persistence window does not hold is reported as a `LIQUIDITY_SWEEP`, not

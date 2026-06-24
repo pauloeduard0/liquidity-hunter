@@ -259,9 +259,12 @@ Full architecture rationale, including SOLID notes, is documented in
   to the new pivot), so a later candle that closes beyond that same level
   activates the BOS then. A continuation BOS must also satisfy the **BOS
   staircase**: it must extend the leg beyond the previous BOS level
-  (`last_bear_bos_low`/`last_bull_bos_high`, reset at each CHoCH) — breaking a
-  higher trailing low (or lower trailing high) formed during a retrace, which
-  does not beat the previous BOS extreme, is not a structural BOS. The
+  (`last_bear_bos_low`/`last_bull_bos_high`) — breaking a higher trailing low
+  (or lower trailing high) formed during a retrace, which does not beat the
+  previous BOS extreme, is not a structural BOS. The staircase is **seeded at
+  each CHoCH with the CHoCH level** (the broken reference), so the first BOS of
+  the new leg must break beyond the CHoCH level — a BOS cannot form on the
+  wrong side of the CHoCH. The
   `BREAK_OF_STRUCTURE` event is *emitted* once confirmed, and that close
   candle optionally passes the LuxAlgo-style confluence filter
   (`bos_confluence`, see `_common.py`). `confluence_filter` (constructor
@@ -337,10 +340,13 @@ Full architecture rationale, including SOLID notes, is documented in
   overshoot does not advance state; the reference is *frozen* (not trailed to
   the new pivot) until a close confirms. A continuation BOS must also satisfy
   the **BOS staircase**: it must extend the leg beyond the previous BOS level
-  (`last_bear_bos_low`/`last_bull_bos_high`, reset at each CHoCH) — a break of
-  a higher trailing low (or lower trailing high) formed during a retrace,
-  which does not beat the previous BOS extreme, is not a structural BOS (it
-  just trails the active reference). The `BREAK_OF_STRUCTURE` event is
+  (`last_bear_bos_low`/`last_bull_bos_high`) — a break of a higher trailing low
+  (or lower trailing high) formed during a retrace, which does not beat the
+  previous BOS extreme, is not a structural BOS (it just trails the active
+  reference). The staircase is **seeded at each CHoCH with the CHoCH level**
+  (the broken reference), so the first BOS of the new leg must break beyond the
+  CHoCH level — a BOS cannot form on the wrong side of the CHoCH. The
+  `BREAK_OF_STRUCTURE` event is
   *emitted* once confirmed, and that close candle optionally passes the
   LuxAlgo-style confluence filter (`bos_confluence`): upper shadow > lower
   shadow for bullish, reverse for bearish. `confluence_filter` (constructor
@@ -836,13 +842,18 @@ a candle in the leg *closes* beyond the active reference**
 *freezes* the reference (it is not trailed to the new pivot) until a close
 confirms. A continuation BOS must also satisfy the **BOS staircase**: it must
 extend the leg beyond the previous BOS level (`last_bear_bos_low` /
-`last_bull_bos_high`, reset at each CHoCH), so bearish BOS lows keep making
-lower lows (bullish BOS highs higher highs) while the trend is unchanged; a
-break of a higher trailing low (lower trailing high) during a retrace, which
-does not beat the previous BOS extreme, is not a BOS. The
-`BREAK_OF_STRUCTURE` event is *emitted* once confirmed and optionally passes
-the `bos_confluence` shadow-balance filter. SWEEP and CHoCH detection are
-unaffected by the close/staircase requirements (sweeps are wick events).
+`last_bull_bos_high`), so bearish BOS lows keep making lower lows (bullish BOS
+highs higher highs) while the trend is unchanged; a break of a higher trailing
+low (lower trailing high) during a retrace, which does not beat the previous
+BOS extreme, is not a BOS. The staircase is **seeded at each CHoCH with the
+CHoCH level itself** (the broken reference), so the first BOS of the new leg
+must break *beyond the CHoCH level* — a BOS cannot form on the wrong side of
+the CHoCH (e.g. a bullish BOS below a bullish CHoCH after price fell back
+through it). Only the first BOS out of the `NEUTRAL` bootstrap is
+unconstrained. The `BREAK_OF_STRUCTURE` event is *emitted* once confirmed and
+optionally passes the `bos_confluence` shadow-balance filter. SWEEP and CHoCH
+detection are unaffected by the close/staircase requirements (sweeps are wick
+events).
 
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A

@@ -221,9 +221,14 @@ class SwingStructureDetector(MarketStructureDetector):
                     choch_origin_low = active_low
                     candidate_choch_low = None
                     candidate_choch_low_baseline = None
-                    # New regime: the BOS staircase restarts on both sides.
+                    # New regime: the bullish BOS staircase is *floored at the
+                    # CHoCH level* -- a continuation BOS must break ABOVE the
+                    # level the CHoCH broke, never re-break a lower high formed
+                    # after price fell back below the CHoCH (the active reference
+                    # trails down during that decline). The bearish staircase is
+                    # irrelevant in the new bullish leg.
+                    last_bull_bos_high = choch_high_ref.price
                     last_bear_bos_low = None
-                    last_bull_bos_high = None
                 elif active_high is None:
                     if active_low is not None:
                         pending_high = pivot
@@ -363,8 +368,13 @@ class SwingStructureDetector(MarketStructureDetector):
                     choch_origin_high = active_high
                     candidate_choch_high = None
                     candidate_choch_high_baseline = None
-                    # New regime: the BOS staircase restarts on both sides.
-                    last_bear_bos_low = None
+                    # New regime: the bearish BOS staircase is *floored at the
+                    # CHoCH level* -- a continuation BOS must break BELOW the
+                    # level the CHoCH broke, never re-break a higher low formed
+                    # after price rose back above the CHoCH (the active reference
+                    # trails up during that rise). The bullish staircase is
+                    # irrelevant in the new bearish leg.
+                    last_bear_bos_low = choch_low_ref.price
                     last_bull_bos_high = None
                 elif active_low is None:
                     if active_high is not None:

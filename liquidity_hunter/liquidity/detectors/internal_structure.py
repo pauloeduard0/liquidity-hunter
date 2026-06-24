@@ -27,13 +27,17 @@ kind). These drive:
   bullish), preventing re-emission of the same structural break.
 
   **BOS staircase**: a continuation BOS must also *extend* the leg beyond
-  the previous BOS level (`last_bear_bos_low`/`last_bull_bos_high`, reset
-  at each CHoCH). While the trend is unchanged, a break of a higher trailing
-  low (or lower trailing high) formed during a retrace -- which does not
-  beat the previous BOS extreme -- is not a structural BOS; it merely trails
-  the active reference. So bearish BOS lows keep making lower lows (and
-  bullish BOS highs higher highs) until a CHoCH flips the trend. The first
-  BOS of a leg (no previous BOS level yet) is unconstrained.
+  the previous BOS level (`last_bear_bos_low`/`last_bull_bos_high`). While
+  the trend is unchanged, a break of a higher trailing low (or lower trailing
+  high) formed during a retrace -- which does not beat the previous BOS
+  extreme -- is not a structural BOS; it merely trails the active reference.
+  So bearish BOS lows keep making lower lows (and bullish BOS highs higher
+  highs) until a CHoCH flips the trend. The staircase is *seeded at each
+  CHoCH with the CHoCH level itself* (the reference the CHoCH broke): the
+  first BOS of the new leg must already break beyond that level, so a BOS
+  cannot form on the wrong side of the CHoCH (e.g. a bullish BOS below a
+  bullish CHoCH after price fell back through it). Only the very first BOS
+  out of the `NEUTRAL` bootstrap (no CHoCH yet) is unconstrained.
 - `LOWER_HIGH`/`HIGHER_LOW`: a pivot that does not break the trailing
   reference.
 - `LIQUIDITY_SWEEP`: a counter-trend pivot that breaks the trailing
@@ -389,9 +393,14 @@ class InternalStructureDetector(MarketStructureDetector):
                     choch_origin_low = active_low if via_validated else None
                     # New bullish leg begins; seed its running high extreme.
                     bull_leg_high = price
-                    # New regime: the BOS staircase restarts on both sides.
+                    # New regime: the bullish BOS staircase is *floored at the
+                    # CHoCH level* -- a continuation BOS must break ABOVE the
+                    # level the CHoCH broke, never re-break a lower high formed
+                    # after price fell back below the CHoCH (the active reference
+                    # trails down during that decline). The bearish staircase is
+                    # irrelevant in the new bullish leg.
+                    last_bull_bos_high = choch_high_ref.price
                     last_bear_bos_low = None
-                    last_bull_bos_high = None
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bullish_bos_origin = None
@@ -578,8 +587,13 @@ class InternalStructureDetector(MarketStructureDetector):
                     choch_origin_high = active_high if via_validated else None
                     # New bearish leg begins; seed its running low extreme.
                     bear_leg_low = price
-                    # New regime: the BOS staircase restarts on both sides.
-                    last_bear_bos_low = None
+                    # New regime: the bearish BOS staircase is *floored at the
+                    # CHoCH level* -- a continuation BOS must break BELOW the
+                    # level the CHoCH broke, never re-break a higher low formed
+                    # after price rose back above the CHoCH (the active reference
+                    # trails up during that rise). The bullish staircase is
+                    # irrelevant in the new bearish leg.
+                    last_bear_bos_low = choch_low_ref.price
                     last_bull_bos_high = None
                     pending_bos = None
                     last_bullish_bos_price = None
