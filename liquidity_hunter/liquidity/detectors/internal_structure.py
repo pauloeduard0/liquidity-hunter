@@ -170,8 +170,8 @@ class InternalStructureDetector(MarketStructureDetector):
 
     def __init__(
         self,
-        swing_lookback: int = 2,
-        persistence_candles: int = 5,
+        swing_lookback: int = 5,
+        persistence_candles: int = 12,
         confluence_filter: bool = False,
     ) -> None:
         if persistence_candles < 1:

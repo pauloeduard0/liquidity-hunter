@@ -15,6 +15,7 @@ const REFRESH_INTERVAL_MS = 5_000
 const TIMEFRAME_OPTIONS: { value: TimeFrame; label: string }[] = [
   { value: '5m', label: '5M' },
   { value: '15m', label: '15M' },
+  { value: '30m', label: '30M' },
   { value: '1h', label: '1H' },
   { value: '4h', label: '4H' },
   { value: '1d', label: '1D' },
@@ -76,21 +77,35 @@ function StatusBar({ data }: { data: DashboardData | null }) {
 
 function App() {
   const [timeframe, setTimeframe] = useState<TimeFrame>('1h')
+  const [chartTimeframe, setChartTimeframe] = useState<TimeFrame>('1h')
   const [data, setData] = useState<DashboardData | null>(null)
+  const [chartData, setChartData] = useState<DashboardData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [manipChartVisible, setManipChartVisible] = useState(true)
   const [divChartVisible, setDivChartVisible] = useState(true)
   const [heatmapVisible, setHeatmapVisible] = useState(true)
-  const [liquidationVisible, setLiquidationVisible] = useState(true)
+  const [liquidationVisible, setLiquidationVisible] = useState(false)
   const [liquidationLiveOnly, setLiquidationLiveOnly] = useState(false)
+  const [sweptZonesVisible, setSweptZonesVisible] = useState(false)
   const [, setTick] = useState(0)
+
+  const chartDiverged = chartTimeframe !== timeframe
 
   const switchTimeframe = (tf: TimeFrame) => {
     setData(null)
+    setChartData(null)
     setError(null)
     setTimeframe(tf)
+    setChartTimeframe(tf)
   }
 
+  const switchChartTimeframe = (tf: TimeFrame) => {
+    if (tf === chartTimeframe) return
+    setChartData(null)
+    setChartTimeframe(tf)
+  }
+
+  // Fetch global data (sidebar panels + chart when synced)
   useEffect(() => {
     let cancelled = false
 
@@ -112,6 +127,31 @@ function App() {
       clearInterval(interval)
     }
   }, [timeframe])
+
+  // Fetch chart-only data when chart timeframe diverges from global
+  useEffect(() => {
+    if (chartTimeframe === timeframe) return
+
+    let cancelled = false
+
+    const load = () => {
+      fetchDashboardData({ symbol: SYMBOL, timeframe: chartTimeframe })
+        .then((result) => {
+          if (!cancelled) setChartData(result)
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+        })
+    }
+
+    load()
+    const interval = setInterval(load, REFRESH_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [chartTimeframe, timeframe])
 
   // Tick the clock in the status bar
   useEffect(() => {
@@ -189,9 +229,33 @@ function App() {
                       {SYMBOL}
                     </span>
                     <span className="text-[10px] text-[#3d4455]">•</span>
-                    <span className="text-[10px] font-medium text-[#5d6477]">
-                      {timeframe.toUpperCase()}
-                    </span>
+                    <div className="flex items-center rounded border border-[#1a1f2e] bg-[#0a0d14] p-px">
+                      {TIMEFRAME_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.value}
+                          onClick={() => switchChartTimeframe(opt.value)}
+                          className="rounded-[3px] px-1.5 py-0.5 text-[9px] font-bold tracking-wide transition-all duration-150"
+                          style={{
+                            color: chartTimeframe === opt.value ? '#e1e4ec' : '#5d6477',
+                            backgroundColor: chartTimeframe === opt.value
+                              ? (chartDiverged ? '#2962ff30' : '#1a1f2e')
+                              : 'transparent',
+                            boxShadow: chartTimeframe === opt.value ? '0 1px 2px rgba(0,0,0,0.2)' : 'none',
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    {chartDiverged && (
+                      <button
+                        onClick={() => switchChartTimeframe(timeframe)}
+                        className="rounded px-1 py-0.5 text-[9px] font-medium text-[#2962ff] hover:bg-[#2962ff15] transition-colors"
+                        title="Sync chart back to global timeframe"
+                      >
+                        SYNC
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setHeatmapVisible((v) => !v)}
@@ -220,16 +284,36 @@ function App() {
                     >
                       ⊟ Liq{liquidationLiveOnly ? ' •' : ''}
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setSweptZonesVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        sweptZonesVisible
+                          ? 'bg-[#ff980022] text-[#ff9800]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle swept EQH/EQL zones"
+                    >
+                      ⊟ Swept
+                    </button>
                   </div>
                   <div className="flex items-center gap-2 text-[10px] text-[#3d4455]">
-                    <span>O <span className="font-mono text-[#9ca3b4]">{data.candles.at(-1)?.open.toFixed(2)}</span></span>
-                    <span>H <span className="font-mono text-[#26a69a]">{data.candles.at(-1)?.high.toFixed(2)}</span></span>
-                    <span>L <span className="font-mono text-[#ef5350]">{data.candles.at(-1)?.low.toFixed(2)}</span></span>
-                    <span>C <span className="font-mono text-[#9ca3b4]">{data.candles.at(-1)?.close.toFixed(2)}</span></span>
+                    {(() => {
+                      const d = chartData ?? data
+                      const last = d.candles.at(-1)
+                      return last ? (
+                        <>
+                          <span>O <span className="font-mono text-[#9ca3b4]">{last.open.toFixed(2)}</span></span>
+                          <span>H <span className="font-mono text-[#26a69a]">{last.high.toFixed(2)}</span></span>
+                          <span>L <span className="font-mono text-[#ef5350]">{last.low.toFixed(2)}</span></span>
+                          <span>C <span className="font-mono text-[#9ca3b4]">{last.close.toFixed(2)}</span></span>
+                        </>
+                      ) : null
+                    })()}
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col p-1">
-                  <MainChart key={timeframe} data={data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} />
+                  <MainChart key={chartTimeframe} data={chartData ?? data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} />
                 </div>
               </div>
 

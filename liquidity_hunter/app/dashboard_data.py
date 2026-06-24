@@ -54,7 +54,17 @@ from liquidity_hunter.scoring import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_SWING_LOOKBACK = 10
-DEFAULT_INTERNAL_SWING_LOOKBACK = 2
+
+_INTERNAL_STRUCTURE_PARAMS: dict[TimeFrame, tuple[int, int]] = {
+    TimeFrame.M5: (2, 5),
+    TimeFrame.M15: (3, 8),
+    TimeFrame.M30: (5, 12),
+    TimeFrame.H1: (5, 12),
+    TimeFrame.H4: (5, 12),
+    TimeFrame.D1: (5, 12),
+    TimeFrame.W1: (5, 12),
+}
+_DEFAULT_INTERNAL_PARAMS = (5, 12)
 
 # Binance's `/api/v3/klines` endpoint accepts `limit` values up to 1000.
 _MAX_FETCH_LIMIT = 1000
@@ -120,7 +130,6 @@ def load_dashboard_data(
     timeframe: TimeFrame = TimeFrame.H1,
     limit: int = 700,
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
-    internal_swing_lookback: int = DEFAULT_INTERNAL_SWING_LOOKBACK,
     confluence_filter: bool = False,
     futures_provider: FuturesDataProvider | None = None,
 ) -> DashboardData:
@@ -156,8 +165,12 @@ def load_dashboard_data(
         e for e in all_major_events if visible_start <= e.timestamp <= visible_end
     ]
 
+    internal_lookback, internal_persistence = _INTERNAL_STRUCTURE_PARAMS.get(
+        timeframe, _DEFAULT_INTERNAL_PARAMS
+    )
     all_internal_events = InternalStructureDetector(
-        swing_lookback=internal_swing_lookback,
+        swing_lookback=internal_lookback,
+        persistence_candles=internal_persistence,
         confluence_filter=confluence_filter,
     ).detect(internal_candles)
     internal_structure_events = [

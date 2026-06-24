@@ -5,7 +5,6 @@ export interface DashboardQuery {
   timeframe?: TimeFrame
   limit?: number
   swingLookback?: number
-  internalSwingLookback?: number
 }
 
 /** Fetch a `DashboardData` snapshot from `GET /api/dashboard`. */
@@ -15,9 +14,6 @@ export async function fetchDashboardData(query: DashboardQuery = {}): Promise<Da
   if (query.timeframe) params.set('timeframe', query.timeframe)
   if (query.limit) params.set('limit', String(query.limit))
   if (query.swingLookback) params.set('swing_lookback', String(query.swingLookback))
-  if (query.internalSwingLookback) {
-    params.set('internal_swing_lookback', String(query.internalSwingLookback))
-  }
 
   const response = await fetch(`/api/dashboard?${params.toString()}`)
   if (!response.ok) {

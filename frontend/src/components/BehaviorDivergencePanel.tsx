@@ -138,7 +138,7 @@ export function BehaviorDivergencePanel({
   )
 
   return (
-    <CollapsibleSection title="Behavior Divergences" count={sorted.length} trailing={overlayButton}>
+    <CollapsibleSection title="Behavior Divergences" count={sorted.length} defaultOpen={false} trailing={overlayButton}>
       {sorted.length === 0 ? (
         <div className="flex flex-col items-center gap-2 py-6 text-center">
           <div className="text-lg text-[#1f2430]">◇</div>

@@ -403,6 +403,7 @@ interface MainChartProps {
   showHeatmap?: boolean
   showLiquidationBands?: boolean
   liquidationLiveOnly?: boolean
+  showSweptZones?: boolean
 }
 
 export function MainChart({
@@ -412,6 +413,7 @@ export function MainChart({
   showHeatmap = true,
   showLiquidationBands = true,
   liquidationLiveOnly = false,
+  showSweptZones = true,
 }: MainChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const mainContainerRef = useRef<HTMLDivElement>(null)
@@ -766,8 +768,8 @@ export function MainChart({
     // Structure scope: 4H shows major events, lower timeframes show internal
     const isMajorView = data.timeframe === '4h'
 
-    // Swept (mitigated) zones — hidden on M5 to reduce clutter
-    if (data.timeframe !== '5m') {
+    // Swept (mitigated) zones
+    if (showSweptZones && data.timeframe !== '5m') {
       const SWEPT_TTL_CANDLES = 200
       const MAX_SWEPT_ZONES = 20
       const ttlCutoff =
@@ -960,7 +962,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly])
+  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

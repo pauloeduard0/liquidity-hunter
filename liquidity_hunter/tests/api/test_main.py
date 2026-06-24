@@ -131,7 +131,7 @@ def test_dashboard_rejects_non_positive_swing_lookback(client: TestClient) -> No
     assert response.status_code == 422
 
 
-def test_dashboard_rejects_non_positive_internal_swing_lookback(client: TestClient) -> None:
+def test_dashboard_ignores_unknown_internal_swing_lookback(client: TestClient) -> None:
     response = client.get("/api/dashboard", params={"internal_swing_lookback": 0})
 
-    assert response.status_code == 422
+    assert response.status_code == 200

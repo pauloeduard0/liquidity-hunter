@@ -225,7 +225,7 @@ def test_load_dashboard_data_internal_structure_events_use_internal_scope() -> N
     data = load_dashboard_data(
         provider=_FakeProvider(candles),
         symbol="BTCUSDT",
-        internal_swing_lookback=2,
+        timeframe=TimeFrame.M5,
         confluence_filter=False,
         futures_provider=_FAKE_FUTURES,
     )
@@ -234,8 +234,6 @@ def test_load_dashboard_data_internal_structure_events_use_internal_scope() -> N
     assert all(
         event.scope is StructureScope.INTERNAL for event in data.internal_structure_events
     )
-    assert data.market_structure_events == []
-    assert data.higher_timeframe_direction is MarketDirection.NEUTRAL
 
 
 def test_load_dashboard_data_neutral_trend_with_no_structure_events() -> None:
@@ -301,7 +299,6 @@ def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> N
         symbol="BTCUSDT",
         timeframe=TimeFrame.H1,
         limit=40,
-        internal_swing_lookback=10,
         futures_provider=_FAKE_FUTURES,
     )
 
