@@ -156,6 +156,16 @@ class SwingStructureDetector(MarketStructureDetector):
         # *normal* CHoCH, never by a failed-CHoCH flip (one-shot, no ping-pong).
         bull_choch_origin: Pivot | None = None
         bear_choch_origin: Pivot | None = None
+        # The pre-CHoCH staircase floor of the trend that resumes if the current
+        # provisional CHoCH *fails*. A CHoCH nulls the reversing trend's staircase
+        # to seed the new leg, but a failed CHoCH means that trend never ended --
+        # it must resume from its genuine last BOS extreme, not the (often
+        # higher-low / lower-high) CHoCH origin, or a non-extending BOS could
+        # print past the previous same-direction BOS. Stashed when the CHoCH
+        # fires, restored on failure, discarded once a confirming BOS makes the
+        # reversal real. Lifecycle tied 1:1 to the matching `*_choch_origin`.
+        pre_choch_bear_bos_low: float | None = None
+        pre_choch_bull_bos_high: float | None = None
         trend = MarketDirection.NEUTRAL
         prev_high_pivot_index = -1
         prev_low_pivot_index = -1
@@ -234,9 +244,18 @@ class SwingStructureDetector(MarketStructureDetector):
                     candidate_choch_low_baseline = None
                     candidate_choch_high = None
                     candidate_choch_high_baseline = None
-                    # New bullish leg; floor the staircase at the broken origin.
-                    last_bull_bos_high = bear_choch_origin.price
+                    # Bullish trend resumes: cap the staircase at its genuine
+                    # last BOS high (preserved across the provisional CHoCH), not
+                    # the lower CHoCH origin -- a non-extending BOS must not print
+                    # below the previous bullish BOS.
+                    last_bull_bos_high = (
+                        bear_choch_origin.price
+                        if pre_choch_bull_bos_high is None
+                        else max(pre_choch_bull_bos_high, bear_choch_origin.price)
+                    )
                     last_bear_bos_low = None
+                    pre_choch_bear_bos_low = None
+                    pre_choch_bull_bos_high = None
                     # One-shot: a failed-CHoCH flip arms no opposite origin /
                     # blind-spot fallback, so failures cannot ping-pong.
                     choch_origin_high = None
@@ -290,6 +309,10 @@ class SwingStructureDetector(MarketStructureDetector):
                     # after price fell back below the CHoCH (the active reference
                     # trails down during that decline). The bearish staircase is
                     # irrelevant in the new bullish leg.
+                    # Stash the bearish floor in case this CHoCH later fails and
+                    # the bearish trend resumes from its genuine last BOS.
+                    pre_choch_bear_bos_low = last_bear_bos_low
+                    pre_choch_bull_bos_high = None
                     last_bull_bos_high = choch_high_ref.price
                     last_bear_bos_low = None
                 elif active_high is None:
@@ -352,8 +375,9 @@ class SwingStructureDetector(MarketStructureDetector):
                             # continuation must break above this new high.
                             last_bull_bos_high = price
                             # This BOS confirms the bullish CHoCH: it can no
-                            # longer fail (origin retired).
+                            # longer fail (origin retired, stashed floor dropped).
                             bull_choch_origin = None
+                            pre_choch_bear_bos_low = None
                             if not self._confluence_filter or bos_confluence(
                                 candles[close_idx], bullish=True
                             ):
@@ -438,9 +462,18 @@ class SwingStructureDetector(MarketStructureDetector):
                     candidate_choch_high_baseline = None
                     candidate_choch_low = None
                     candidate_choch_low_baseline = None
-                    # New bearish leg; floor the staircase at the broken origin.
-                    last_bear_bos_low = bull_choch_origin.price
+                    # Bearish trend resumes: floor the staircase at its genuine
+                    # last BOS low (preserved across the provisional CHoCH), not
+                    # the higher CHoCH origin -- a non-extending BOS must not
+                    # print above the previous bearish BOS.
+                    last_bear_bos_low = (
+                        bull_choch_origin.price
+                        if pre_choch_bear_bos_low is None
+                        else min(pre_choch_bear_bos_low, bull_choch_origin.price)
+                    )
                     last_bull_bos_high = None
+                    pre_choch_bear_bos_low = None
+                    pre_choch_bull_bos_high = None
                     # One-shot: a failed-CHoCH flip arms no opposite origin /
                     # blind-spot fallback, so failures cannot ping-pong.
                     choch_origin_low = None
@@ -494,6 +527,10 @@ class SwingStructureDetector(MarketStructureDetector):
                     # after price rose back above the CHoCH (the active reference
                     # trails up during that rise). The bullish staircase is
                     # irrelevant in the new bearish leg.
+                    # Stash the bullish ceiling in case this CHoCH later fails and
+                    # the bullish trend resumes from its genuine last BOS.
+                    pre_choch_bull_bos_high = last_bull_bos_high
+                    pre_choch_bear_bos_low = None
                     last_bear_bos_low = choch_low_ref.price
                     last_bull_bos_high = None
                 elif active_low is None:
@@ -554,8 +591,9 @@ class SwingStructureDetector(MarketStructureDetector):
                             # continuation must break below this new low.
                             last_bear_bos_low = price
                             # This BOS confirms the bearish CHoCH: it can no
-                            # longer fail (origin retired).
+                            # longer fail (origin retired, stashed ceiling dropped).
                             bear_choch_origin = None
+                            pre_choch_bull_bos_high = None
                             active_high = pending_high
                             pending_high = None
                             if not self._confluence_filter or bos_confluence(

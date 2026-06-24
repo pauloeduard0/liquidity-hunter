@@ -125,6 +125,17 @@ extreme). The origin is retired once the confirming BOS fires (the CHoCH can
 no longer fail) or when the trend flips again. A failed-CHoCH flip does NOT
 arm the opposite origin (one-shot), so failures cannot ping-pong.
 
+When a CHoCH fires it nulls the reversing trend's BOS staircase
+(`last_bear_bos_low`/`last_bull_bos_high`) to seed the new leg, but a failed
+CHoCH means that trend never actually ended -- it must resume from its
+*genuine* last BOS extreme, not from the (often higher-low / lower-high) CHoCH
+origin, or a non-extending BOS could print past the previous same-direction
+BOS. So the reversing trend's staircase floor is *stashed*
+(`pre_choch_bear_bos_low`/`pre_choch_bull_bos_high`) when the CHoCH fires and
+*restored* on failure (taking the more extreme of it and the origin); a
+confirming BOS discards the stash. Lifecycle is tied 1:1 to the matching
+`*_choch_origin`.
+
 Every emitted `MarketStructure` has `scope = StructureScope.INTERNAL`.
 """
 
@@ -294,6 +305,17 @@ class InternalStructureDetector(MarketStructureDetector):
         # ping-pong.
         bull_choch_origin: Pivot | None = None
         bear_choch_origin: Pivot | None = None
+        # The pre-CHoCH staircase floor of the trend that resumes if the current
+        # provisional CHoCH *fails*. A CHoCH nulls the reversing trend's BOS
+        # staircase (`last_bear_bos_low`/`last_bull_bos_high`) to seed the new
+        # leg, but a failed CHoCH means that trend never actually ended -- it
+        # must resume from its genuine last BOS extreme, not from the (often
+        # higher-low / lower-high) CHoCH origin, or a non-extending BOS could
+        # print above the previous same-direction BOS. Stashed when the CHoCH
+        # fires, restored on failure, discarded once a confirming BOS makes the
+        # reversal real. Lifecycle tied 1:1 to the matching `*_choch_origin`.
+        pre_choch_bear_bos_low: float | None = None
+        pre_choch_bull_bos_high: float | None = None
         pending_bos: _PendingBOS | None = None
         last_bullish_bos_price: float | None = None
         last_bullish_bos_origin: float | None = None
@@ -412,10 +434,19 @@ class InternalStructureDetector(MarketStructureDetector):
                     validated_choch_low = None
                     candidate_choch_high = None
                     candidate_choch_low = None
-                    # New bullish leg; floor the staircase at the broken origin.
+                    # Bullish trend resumes: cap the staircase at its genuine
+                    # last BOS high (preserved across the provisional CHoCH), not
+                    # the lower CHoCH origin -- a non-extending BOS must not
+                    # print below the previous bullish BOS.
                     bull_leg_high = price
-                    last_bull_bos_high = bear_choch_origin.price
+                    last_bull_bos_high = (
+                        bear_choch_origin.price
+                        if pre_choch_bull_bos_high is None
+                        else max(pre_choch_bull_bos_high, bear_choch_origin.price)
+                    )
                     last_bear_bos_low = None
+                    pre_choch_bear_bos_low = None
+                    pre_choch_bull_bos_high = None
                     # One-shot: a failed-CHoCH flip does NOT arm the opposite
                     # origin / blind-spot fallback, so failures cannot ping-pong.
                     choch_origin_high = None
@@ -484,6 +515,10 @@ class InternalStructureDetector(MarketStructureDetector):
                     # after price fell back below the CHoCH (the active reference
                     # trails down during that decline). The bearish staircase is
                     # irrelevant in the new bullish leg.
+                    # Stash the bearish floor in case this CHoCH later fails and
+                    # the bearish trend has to resume from its genuine last BOS.
+                    pre_choch_bear_bos_low = last_bear_bos_low
+                    pre_choch_bull_bos_high = None
                     last_bull_bos_high = choch_high_ref.price
                     last_bear_bos_low = None
                     pending_bos = None
@@ -559,8 +594,9 @@ class InternalStructureDetector(MarketStructureDetector):
                             # continuation must break above this new high.
                             last_bull_bos_high = price
                             # This BOS confirms the bullish CHoCH: it can no
-                            # longer fail (origin retired).
+                            # longer fail (origin retired, stashed floor dropped).
                             bull_choch_origin = None
+                            pre_choch_bear_bos_low = None
                             pullback_ref_snapshot = active_low
                             trend = MarketDirection.BULLISH
                             active_low = pending_low
@@ -668,10 +704,19 @@ class InternalStructureDetector(MarketStructureDetector):
                     validated_choch_high = None
                     candidate_choch_high = None
                     candidate_choch_low = None
-                    # New bearish leg; floor the staircase at the broken origin.
+                    # Bearish trend resumes: floor the staircase at its genuine
+                    # last BOS low (preserved across the provisional CHoCH), not
+                    # the higher CHoCH origin -- a non-extending BOS must not
+                    # print above the previous bearish BOS.
                     bear_leg_low = price
-                    last_bear_bos_low = bull_choch_origin.price
+                    last_bear_bos_low = (
+                        bull_choch_origin.price
+                        if pre_choch_bear_bos_low is None
+                        else min(pre_choch_bear_bos_low, bull_choch_origin.price)
+                    )
                     last_bull_bos_high = None
+                    pre_choch_bear_bos_low = None
+                    pre_choch_bull_bos_high = None
                     # One-shot: a failed-CHoCH flip does NOT arm the opposite
                     # origin / blind-spot fallback, so failures cannot ping-pong.
                     choch_origin_low = None
@@ -739,6 +784,10 @@ class InternalStructureDetector(MarketStructureDetector):
                     # after price rose back above the CHoCH (the active reference
                     # trails up during that rise). The bullish staircase is
                     # irrelevant in the new bearish leg.
+                    # Stash the bullish ceiling in case this CHoCH later fails
+                    # and the bullish trend resumes from its genuine last BOS.
+                    pre_choch_bull_bos_high = last_bull_bos_high
+                    pre_choch_bear_bos_low = None
                     last_bear_bos_low = choch_low_ref.price
                     last_bull_bos_high = None
                     pending_bos = None
@@ -812,8 +861,9 @@ class InternalStructureDetector(MarketStructureDetector):
                             # continuation must break below this new low.
                             last_bear_bos_low = price
                             # This BOS confirms the bearish CHoCH: it can no
-                            # longer fail (origin retired).
+                            # longer fail (origin retired, stashed ceiling dropped).
                             bear_choch_origin = None
+                            pre_choch_bull_bos_high = None
                             pullback_ref_snapshot = active_high
                             trend = MarketDirection.BEARISH
                             active_high = pending_high

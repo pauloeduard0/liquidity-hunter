@@ -903,6 +903,21 @@ sustained break back through that origin before a confirming BOS emits a
 supersedes the `choch_origin` recovery for the unconfirmed window at a tighter
 level. The origin is retired on the confirming BOS or at the next trend flip,
 and a failed-CHoCH flip arms no opposite origin (one-shot, no ping-pong).
+Because a failed CHoCH means the original trend never ended, the resumed
+trend's BOS staircase continues from its *genuine* last BOS extreme, not the
+(often higher-low / lower-high) CHoCH origin — otherwise a non-extending BOS
+could print past the previous same-direction BOS. The reversing trend's
+staircase floor is stashed (`pre_choch_bear_bos_low`/`pre_choch_bull_bos_high`)
+when the CHoCH fires and restored on failure (more extreme of it and the
+origin); a confirming BOS discards the stash.
+
+**CHoCH lines across a failed CHoCH (frontend)**: in
+`MainChart.structureLineEndTime`, a provisional CHoCH that is later invalidated
+(a same-direction `choch_failed` fires before another same-direction CHoCH
+intervenes — paired via `isFailedChoch`) is transparent to line termination:
+the prior BOS/CHoCH line it appeared to cut keeps running through it until a
+*genuine* opposite-direction CHoCH (or the chart edge), matching the resumed
+structure.
 
 **CHoCH confirmation** (`SwingStructureDetector`): uses the older
 candidate/baseline model. A candidate LH/HL is promoted to validated when a

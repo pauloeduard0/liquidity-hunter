@@ -181,6 +181,46 @@ function lineFrom(
     : [{ time: lastCandleTime, value }]
 }
 
+// If a provisional CHoCH is later invalidated, returns the timestamp of the
+// `choch_failed` event that paired with it (a same-direction failure firing
+// before any other same-direction CHoCH intervenes); otherwise `null`. A failed
+// CHoCH never actually reversed structure — the prior trend resumed — so it must
+// stay transparent to *other* lines' termination (it doesn't cut them), while
+// its *own* line stops at this failure point.
+function failedChochTime(
+  choch: MarketStructure,
+  allEvents: MarketStructure[],
+): UTCTimestamp | null {
+  if (choch.event !== 'change_of_character') return null
+  const chochTime = toUtcTimestamp(choch.timestamp)
+  const failedTimes = allEvents
+    .filter(
+      (e) =>
+        e.scope === choch.scope &&
+        e.event === 'choch_failed' &&
+        e.direction === choch.direction &&
+        toUtcTimestamp(e.timestamp) > chochTime,
+    )
+    .map((e) => toUtcTimestamp(e.timestamp))
+  if (failedTimes.length === 0) return null
+  const firstFailed = Math.min(...failedTimes) as UTCTimestamp
+  // Pair the failure with its CHoCH: ignore it if a later same-direction CHoCH
+  // sits between them (that one owns the failure instead).
+  const interveningChoch = allEvents.some(
+    (e) =>
+      e.scope === choch.scope &&
+      e.event === 'change_of_character' &&
+      e.direction === choch.direction &&
+      toUtcTimestamp(e.timestamp) > chochTime &&
+      toUtcTimestamp(e.timestamp) < firstFailed,
+  )
+  return interveningChoch ? null : firstFailed
+}
+
+function isFailedChoch(choch: MarketStructure, allEvents: MarketStructure[]): boolean {
+  return failedChochTime(choch, allEvents) !== null
+}
+
 function structureLineEndTime(
   event: MarketStructure,
   allEvents: MarketStructure[],
@@ -190,16 +230,20 @@ function structureLineEndTime(
 
   if (event.event === 'change_of_character') {
     const oppositeDirection = event.direction === 'bullish' ? 'bearish' : 'bullish'
-    const supersededAt = allEvents
+    const candidates = allEvents
       .filter(
         (other) =>
           other.scope === event.scope &&
           other.direction === oppositeDirection &&
           other.event === 'change_of_character' &&
+          !isFailedChoch(other, allEvents) &&
           toUtcTimestamp(other.timestamp) > eventTime,
       )
       .map((other) => toUtcTimestamp(other.timestamp))
-    return supersededAt.length > 0 ? (Math.min(...supersededAt) as UTCTimestamp) : lastCandleTime
+    // If this CHoCH itself failed, its line stops at the failure point.
+    const ownFailure = failedChochTime(event, allEvents)
+    if (ownFailure !== null) candidates.push(ownFailure)
+    return candidates.length > 0 ? (Math.min(...candidates) as UTCTimestamp) : lastCandleTime
   }
 
   const oppositeDirection = event.direction === 'bullish' ? 'bearish' : 'bullish'
@@ -209,8 +253,11 @@ function structureLineEndTime(
         other.scope === event.scope &&
         toUtcTimestamp(other.timestamp) > eventTime &&
         ((other.direction === event.direction &&
-          (other.event === 'break_of_structure' || other.event === 'change_of_character')) ||
-          (other.direction === oppositeDirection && other.event === 'change_of_character')),
+          (other.event === 'break_of_structure' ||
+            (other.event === 'change_of_character' && !isFailedChoch(other, allEvents)))) ||
+          (other.direction === oppositeDirection &&
+            other.event === 'change_of_character' &&
+            !isFailedChoch(other, allEvents))),
     )
     .map((other) => toUtcTimestamp(other.timestamp))
 

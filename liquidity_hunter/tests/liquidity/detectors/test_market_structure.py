@@ -384,6 +384,58 @@ def test_unconfirmed_bullish_choch_fails_when_origin_broken() -> None:
     assert failed[0].timestamp == candles[13].timestamp
 
 
+def test_failed_choch_resumes_staircase_from_genuine_prior_bos() -> None:
+    """After a failed CHoCH, the resumed trend's BOS staircase continues from
+    its *genuine* last BOS extreme, not the (higher-low) CHoCH origin -- so no
+    bearish BOS can print above the previous bearish BOS.
+
+    Sequence (lookback=1, persistence=1): a bearish BOS at index 5 makes a deep
+    low of 100; the rally launches from a *higher* low of 120 (index 9) ->
+    bullish CHoCH at index 11 (origin = 120). Price drops back below 120 but
+    stays above 100 (index 13) -> CHOCH_FAILED, bearish resumes. A later break
+    to 105 (index 15) clears the origin (120) but NOT the genuine prior BOS
+    (100): it must NOT be a BOS. Only the break to 95 (index 19), below 100, is.
+    """
+    n = 26
+    highs = [150.0] * n
+    lows = [140.0] * n
+    highs[1], highs[7], highs[11], highs[17] = 200.0, 160.0, 200.0, 160.0
+    lows[3], lows[5], lows[9], lows[13], lows[15], lows[19] = (
+        130.0, 100.0, 120.0, 110.0, 105.0, 95.0,
+    )
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 150.0, 100.0, close=110.0)  # genuine bearish BOS, low 100
+    candles[9] = make_candle(9, 150.0, 120.0, close=125.0)  # rally launch / CHoCH origin 120
+    candles[11] = make_candle(11, 200.0, 140.0, close=190.0)  # bullish CHoCH
+    candles[12] = make_candle(12, 195.0, 140.0, close=188.0)  # CHoCH persistence
+    candles[13] = make_candle(13, 150.0, 110.0, close=115.0)  # breaks origin 120 -> failed
+    candles[14] = make_candle(14, 145.0, 112.0, close=115.0)  # failure persistence
+    candles[15] = make_candle(15, 150.0, 105.0, close=108.0)  # clears 120, not 100 -> NOT a BOS
+    candles[16] = make_candle(16, 150.0, 130.0, close=145.0)
+    candles[19] = make_candle(19, 150.0, 95.0, close=98.0)  # genuine continuation, below 100
+
+    events = SwingStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
+
+    assert any(e.event is StructureEvent.CHOCH_FAILED for e in events)
+    failed_time = next(
+        e.timestamp for e in events if e.event is StructureEvent.CHOCH_FAILED
+    )
+
+    bearish_bos_after = [
+        e
+        for e in events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp > failed_time
+    ]
+    # The non-extending break to 105 (above the prior BOS at 100) must not print;
+    # only the genuine continuation to 95 (below 100) survives the staircase.
+    assert [e.price_level for e in bearish_bos_after] == [95.0]
+
+
 def test_liquidity_sweep_when_persistence_fails() -> None:
     """A counter-trend break where the close crosses the reference but the
     persistence window does not hold is reported as a `LIQUIDITY_SWEEP`, not
