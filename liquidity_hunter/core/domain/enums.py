@@ -52,6 +52,11 @@ class StructureEvent(str, Enum):
     LOWER_LOW = "lower_low"
     BREAK_OF_STRUCTURE = "break_of_structure"
     CHANGE_OF_CHARACTER = "change_of_character"
+    # A CHANGE_OF_CHARACTER that was invalidated before a confirming BOS: price
+    # broke back through the CHoCH origin (the swing the CHoCH move launched
+    # from), so the reversal failed and structure resumes in the prior
+    # direction. `direction` is the direction of the CHoCH that failed.
+    CHOCH_FAILED = "choch_failed"
     LIQUIDITY_SWEEP = "liquidity_sweep"
 
 

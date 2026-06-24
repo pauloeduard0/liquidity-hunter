@@ -839,7 +839,8 @@ export function MainChart({
       const endTime = structureLineEndTime(event, scopeEvents, lastCandleTime)
 
       const linePrice =
-        event.event === 'change_of_character' && event.reference_price_level != null
+        (event.event === 'change_of_character' || event.event === 'choch_failed') &&
+        event.reference_price_level != null
           ? event.reference_price_level
           : event.price_level
 

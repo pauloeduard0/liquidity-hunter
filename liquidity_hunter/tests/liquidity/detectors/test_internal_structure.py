@@ -925,6 +925,43 @@ def test_wick_only_break_freezes_reference_until_close_confirms() -> None:
     assert bos[0].timestamp == candles[7].timestamp
 
 
+def test_unconfirmed_bullish_choch_fails_when_origin_broken() -> None:
+    """A bullish CHoCH that is not confirmed by a BOS and whose origin (the low
+    the CHoCH rally launched from) is broken back through is invalidated: a
+    CHOCH_FAILED event fires and the trend flips back to bearish.
+
+    Sequence (lookback=1, persistence_candles=1): bearish BOS at index 5
+    establishes a bearish leg; the rally from the low 100 (index 9) breaks the
+    trailing high -> bullish CHoCH at index 11 (origin = 100). Price then drops
+    back below 100 (index 13, sustained) before any bullish BOS -> CHOCH_FAILED.
+    """
+    highs = [150.0] * 20
+    lows = [140.0] * 20
+    highs[1], highs[7], highs[11] = 200.0, 160.0, 200.0
+    lows[3], lows[5], lows[9], lows[13] = 130.0, 110.0, 100.0, 90.0
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 150.0, 110.0, close=120.0)
+    candles[9] = make_candle(9, 150.0, 100.0, close=105.0)
+    candles[11] = make_candle(11, 200.0, 140.0, close=190.0)
+    candles[12] = make_candle(12, 195.0, 140.0, close=188.0)  # CHoCH persistence
+    candles[13] = make_candle(13, 150.0, 90.0, close=95.0)  # breaks origin 100
+    candles[14] = make_candle(14, 145.0, 92.0, close=95.0)  # failure persistence
+
+    events = InternalStructureDetector(swing_lookback=1, persistence_candles=1).detect(candles)
+
+    choch = next(e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER)
+    assert choch.direction is MarketDirection.BULLISH
+
+    failed = [e for e in events if e.event is StructureEvent.CHOCH_FAILED]
+    assert len(failed) == 1
+    # direction is the failed CHoCH's direction (bullish); it broke back below
+    # the origin (100), not the CHoCH reference (160).
+    assert failed[0].direction is MarketDirection.BULLISH
+    assert failed[0].reference_price_level == 100.0
+    assert failed[0].timestamp == candles[13].timestamp
+
+
 def test_bos_fields_on_confirmed_event() -> None:
     """Verify all fields on a confirmed BOS event: timestamp, price_level,
     reference_price_level, reference_timestamp, origin_price_level."""

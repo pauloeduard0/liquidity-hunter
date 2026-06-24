@@ -147,6 +147,15 @@ class SwingStructureDetector(MarketStructureDetector):
         # (CHoCH); the first BOS of a leg (None) is unconstrained.
         last_bear_bos_low: float | None = None
         last_bull_bos_high: float | None = None
+        # The *origin* of an unconfirmed CHoCH: the swing the CHoCH move launched
+        # from (active low at a bullish CHoCH / active high at a bearish CHoCH).
+        # While set, the CHoCH is provisional -- a sustained break back through
+        # this level before a confirming BOS is a *failed* CHoCH (CHOCH_FAILED),
+        # flipping structure back. Cleared once the first same-direction BOS
+        # confirms the CHoCH, or when the trend flips again. Set only by a
+        # *normal* CHoCH, never by a failed-CHoCH flip (one-shot, no ping-pong).
+        bull_choch_origin: Pivot | None = None
+        bear_choch_origin: Pivot | None = None
         trend = MarketDirection.NEUTRAL
         prev_high_pivot_index = -1
         prev_low_pivot_index = -1
@@ -186,6 +195,56 @@ class SwingStructureDetector(MarketStructureDetector):
                 choch_high_ref = validated_choch_high or choch_origin_high or active_high
                 if (
                     trend is MarketDirection.BEARISH
+                    and bear_choch_origin is not None
+                    and price > bear_choch_origin.price
+                    and confirms_break(
+                        prev_high_pivot_index + 1,
+                        current_index,
+                        bear_choch_origin.price,
+                        bullish=True,
+                    )
+                ):
+                    # Failed bearish CHoCH: price broke back above the origin the
+                    # CHoCH drop launched from, before any confirming BOS. The
+                    # reversal is invalidated; structure flips back to bullish.
+                    break_candle = candles[
+                        find_sustained_break_index(
+                            candles,
+                            prev_high_pivot_index + 1,
+                            current_index,
+                            bear_choch_origin.price,
+                            bullish=True,
+                            persistence_candles=self._persistence_candles,
+                        )
+                    ]
+                    emit(
+                        break_candle.timestamp,
+                        StructureEvent.CHOCH_FAILED,
+                        MarketDirection.BEARISH,
+                        price,
+                        bear_choch_origin.price,
+                        reference_timestamp=bear_choch_origin.timestamp,
+                    )
+                    trend = MarketDirection.BULLISH
+                    active_low = pending_low
+                    pending_low = None
+                    validated_choch_low = None
+                    validated_choch_high = None
+                    candidate_choch_low = None
+                    candidate_choch_low_baseline = None
+                    candidate_choch_high = None
+                    candidate_choch_high_baseline = None
+                    # New bullish leg; floor the staircase at the broken origin.
+                    last_bull_bos_high = bear_choch_origin.price
+                    last_bear_bos_low = None
+                    # One-shot: a failed-CHoCH flip arms no opposite origin /
+                    # blind-spot fallback, so failures cannot ping-pong.
+                    choch_origin_high = None
+                    choch_origin_low = None
+                    bear_choch_origin = None
+                    bull_choch_origin = None
+                elif (
+                    trend is MarketDirection.BEARISH
                     and choch_high_ref is not None
                     and price > choch_high_ref.price
                     and confirms_break(
@@ -214,6 +273,10 @@ class SwingStructureDetector(MarketStructureDetector):
                         reference_timestamp=choch_high_ref.timestamp,
                     )
                     trend = MarketDirection.BULLISH
+                    # The active low this rally launched from is the bullish
+                    # CHoCH's origin (CHOCH_FAILED if broken before a BOS).
+                    bull_choch_origin = active_low
+                    bear_choch_origin = None
                     active_low = pending_low
                     pending_low = None
                     validated_choch_low = None
@@ -288,6 +351,9 @@ class SwingStructureDetector(MarketStructureDetector):
                             # Extend the BOS staircase: the next bullish
                             # continuation must break above this new high.
                             last_bull_bos_high = price
+                            # This BOS confirms the bullish CHoCH: it can no
+                            # longer fail (origin retired).
+                            bull_choch_origin = None
                             if not self._confluence_filter or bos_confluence(
                                 candles[close_idx], bullish=True
                             ):
@@ -333,6 +399,56 @@ class SwingStructureDetector(MarketStructureDetector):
                 choch_low_ref = validated_choch_low or choch_origin_low or active_low
                 if (
                     trend is MarketDirection.BULLISH
+                    and bull_choch_origin is not None
+                    and price < bull_choch_origin.price
+                    and confirms_break(
+                        prev_low_pivot_index + 1,
+                        current_index,
+                        bull_choch_origin.price,
+                        bullish=False,
+                    )
+                ):
+                    # Failed bullish CHoCH: price broke back below the origin the
+                    # CHoCH rally launched from, before any confirming BOS. The
+                    # reversal is invalidated; structure flips back to bearish.
+                    break_candle = candles[
+                        find_sustained_break_index(
+                            candles,
+                            prev_low_pivot_index + 1,
+                            current_index,
+                            bull_choch_origin.price,
+                            bullish=False,
+                            persistence_candles=self._persistence_candles,
+                        )
+                    ]
+                    emit(
+                        break_candle.timestamp,
+                        StructureEvent.CHOCH_FAILED,
+                        MarketDirection.BULLISH,
+                        price,
+                        bull_choch_origin.price,
+                        reference_timestamp=bull_choch_origin.timestamp,
+                    )
+                    trend = MarketDirection.BEARISH
+                    active_high = pending_high
+                    pending_high = None
+                    validated_choch_high = None
+                    validated_choch_low = None
+                    candidate_choch_high = None
+                    candidate_choch_high_baseline = None
+                    candidate_choch_low = None
+                    candidate_choch_low_baseline = None
+                    # New bearish leg; floor the staircase at the broken origin.
+                    last_bear_bos_low = bull_choch_origin.price
+                    last_bull_bos_high = None
+                    # One-shot: a failed-CHoCH flip arms no opposite origin /
+                    # blind-spot fallback, so failures cannot ping-pong.
+                    choch_origin_low = None
+                    choch_origin_high = None
+                    bull_choch_origin = None
+                    bear_choch_origin = None
+                elif (
+                    trend is MarketDirection.BULLISH
                     and choch_low_ref is not None
                     and price < choch_low_ref.price
                     and confirms_break(
@@ -361,6 +477,10 @@ class SwingStructureDetector(MarketStructureDetector):
                         reference_timestamp=choch_low_ref.timestamp,
                     )
                     trend = MarketDirection.BEARISH
+                    # The active high this drop launched from is the bearish
+                    # CHoCH's origin (CHOCH_FAILED if broken before a BOS).
+                    bear_choch_origin = active_high
+                    bull_choch_origin = None
                     active_high = pending_high
                     pending_high = None
                     validated_choch_high = None
@@ -433,6 +553,9 @@ class SwingStructureDetector(MarketStructureDetector):
                             # Extend the BOS staircase: the next bearish
                             # continuation must break below this new low.
                             last_bear_bos_low = price
+                            # This BOS confirms the bearish CHoCH: it can no
+                            # longer fail (origin retired).
+                            bear_choch_origin = None
                             active_high = pending_high
                             pending_high = None
                             if not self._confluence_filter or bos_confluence(

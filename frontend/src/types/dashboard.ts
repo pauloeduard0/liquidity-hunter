@@ -29,6 +29,7 @@ export type StructureEvent =
   | 'lower_low'
   | 'break_of_structure'
   | 'change_of_character'
+  | 'choch_failed'
   | 'liquidity_sweep'
 
 export type StructureScope = 'major' | 'internal'

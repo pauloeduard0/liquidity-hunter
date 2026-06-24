@@ -38,6 +38,7 @@ export const ZONE_TYPE_LABELS: Record<string, string> = {
 export const STRUCTURE_EVENT_STYLES: Record<string, { label: string; color: string }> = {
   break_of_structure: { label: 'BOS', color: '#26a69a' },
   change_of_character: { label: 'CHoCH', color: '#ffb74d' },
+  choch_failed: { label: 'CHoCH ✕', color: '#9e9e9e' },
   liquidity_sweep: { label: 'Sweep', color: '#ef5350' },
 }
 

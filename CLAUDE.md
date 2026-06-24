@@ -104,13 +104,17 @@ and `validate_assignment=True`. New entities should follow this pattern.
   highs/lows, order blocks, fair value gaps, etc.); validates
   `price_high >= price_low`.
 - **`MarketStructure`** — a discrete structural observation (BOS/CHoCH/
-  `LIQUIDITY_SWEEP`/HH/HL/LH/LL) with a `MarketDirection` and `StructureScope`.
+  `CHOCH_FAILED`/`LIQUIDITY_SWEEP`/HH/HL/LH/LL) with a `MarketDirection` and
+  `StructureScope`.
   Fields: `timestamp` (actual breaking candle, not the triggering pivot),
   `price_level` (triggering pivot's extreme), `reference_price_level` (the
   level that was broken — `active_<side>` for BOS/SWEEP, `validated_choch_<side>`
-  for CHoCH), and `reference_timestamp` (for CHoCH events: the timestamp of the
+  for CHoCH, the broken CHoCH *origin* for `CHOCH_FAILED`), and
+  `reference_timestamp` (for CHoCH events: the timestamp of the
   LH/HL pivot that was promoted to `validated_choch_<side>`, used to anchor
-  the CHoCH line's start in the frontend).
+  the CHoCH line's start in the frontend). A `CHOCH_FAILED` event marks a CHoCH
+  that was invalidated before a confirming BOS (its `direction` is the failed
+  CHoCH's direction); see the `InternalStructureDetector` notes.
 - **`POIZone`** — an institutional order block zone, defined in
   `core/domain/poi_zone.py`. Anchored to the leg between a validated CHoCH and
   the first BOS in the same direction. Fields: `direction`, `price_low`,
@@ -404,6 +408,19 @@ Full architecture rationale, including SOLID notes, is documented in
   preventing the trend from getting stuck if the initial direction was wrong.
   A high pivot whose break does not hold is a `LIQUIDITY_SWEEP` (trend
   unchanged). Sweeps are noise and do NOT affect the CHoCH reference.
+
+  **Failed CHoCH (`CHOCH_FAILED`)**: a CHoCH is *provisional* until a
+  same-direction BOS confirms it (that first BOS is beyond the CHoCH level by
+  the staircase floor). While unconfirmed it carries an *origin*
+  (`bull_choch_origin`/`bear_choch_origin` — the active low at a bullish CHoCH
+  / active high at a bearish CHoCH, the swing the CHoCH move launched from). A
+  sustained break back through that origin *before* a confirming BOS emits a
+  `CHOCH_FAILED` (direction = the failed CHoCH's direction,
+  `reference_price_level` = the broken origin) and flips the trend back. This
+  supersedes the older `choch_origin` blind-spot recovery for the unconfirmed
+  window at a tighter level. The origin is retired on the confirming BOS (the
+  CHoCH can no longer fail) or at the next trend flip; a failed-CHoCH flip does
+  not arm the opposite origin (one-shot, no ping-pong).
 
   **One-shot origin (blind-spot fallback)**: the moment a CHoCH fires, all
   validated/candidate state is reset. `choch_origin_<opposite>` is the
@@ -729,7 +746,8 @@ selector.
   renders three synced Lightweight Charts panes (main candlestick, volume
   delta histogram, RSI indicator) with synchronized time scales and
   crosshairs. The main pane overlays top-ranked liquidity zone lines, draws
-  BOS/CHoCH/SWEEP horizontal lines and labels, renders POI order block boxes
+  BOS/CHoCH/SWEEP horizontal lines and labels (plus a grey `CHoCH ✕` line at
+  the broken origin for `choch_failed` events), renders POI order block boxes
   via `POIBoxesPrimitive`, and renders manipulation cycle accumulation boxes
   via a second `POIBoxesPrimitive` instance (toggled via
   `showManipulationBoxes` prop). Accumulation boxes are color-coded by
@@ -874,6 +892,17 @@ built), preventing the trend from getting stuck if the initial direction was
 wrong. The `choch_origin` one-shot blind-spot fallback prevents the trend
 from getting stuck after a CHoCH whose reversal fails before a fresh
 validated reference can be rebuilt.
+
+**Failed CHoCH (`CHOCH_FAILED`, both detectors)**: a CHoCH is provisional
+until a same-direction BOS confirms it. While unconfirmed it carries an origin
+(`bull_choch_origin`/`bear_choch_origin` — the active low at a bullish CHoCH /
+active high at a bearish CHoCH, the swing the CHoCH move launched from). A
+sustained break back through that origin before a confirming BOS emits a
+`CHOCH_FAILED` event (direction = the failed CHoCH's direction,
+`reference_price_level` = the broken origin) and flips the trend back; it
+supersedes the `choch_origin` recovery for the unconfirmed window at a tighter
+level. The origin is retired on the confirming BOS or at the next trend flip,
+and a failed-CHoCH flip arms no opposite origin (one-shot, no ping-pong).
 
 **CHoCH confirmation** (`SwingStructureDetector`): uses the older
 candidate/baseline model. A candidate LH/HL is promoted to validated when a
