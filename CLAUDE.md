@@ -267,10 +267,14 @@ Full architecture rationale, including SOLID notes, is documented in
   **CHoCH**: A counter-trend break is confirmed via **persistence** (same as
   `InternalStructureDetector`): `is_sustained_break` must hold for
   `persistence_candles` consecutive candles beyond the break. The CHoCH
-  reference is `validated_choch_<side>`, promoted from `candidate_choch_<side>`
-  via the same two-step baseline gate described under `InternalStructureDetector`
-  below. `reference_price_level` is `validated_choch_<side>.price`;
-  `reference_timestamp` is `validated_choch_<side>.timestamp`.
+  reference is `validated_choch_<side> or choch_origin_<side> or
+  active_<side>`, promoted from `candidate_choch_<side>` via the same
+  two-step baseline gate described under `InternalStructureDetector` below.
+  The `active_<side>` cold-start fallback ensures the detector can flip
+  trend during the bootstrap phase (before any validated/origin reference has
+  been built). `reference_price_level` is the reference that was broken;
+  `reference_timestamp` is `validated_choch_<side>.timestamp` (when the
+  validated reference was used).
 
   **SWEEP**: A counter-trend wick break that does not hold (`is_sustained_break`
   fails) is a `LIQUIDITY_SWEEP`; timestamp via `find_wick_break_index`.
@@ -373,11 +377,13 @@ Full architecture rationale, including SOLID notes, is documented in
 
   A bullish CHoCH fires when, with `trend` BEARISH, a high pivot breaks
   (sustained, per the persistence rule above) above
-  `validated_choch_high or choch_origin_high`; its `reference_price_level` is
-  the reference it broke. A high pivot that breaks only the trailing
-  `active_high` but not the validated/origin reference, or whose break does
-  not hold, is a `LIQUIDITY_SWEEP` (trend unchanged). Sweeps are noise and
-  do NOT affect the CHoCH reference.
+  `validated_choch_high or choch_origin_high or active_high`; its
+  `reference_price_level` is the reference it broke. The `active_high`
+  cold-start fallback ensures the detector can flip trend during the
+  bootstrap phase (before any validated/origin reference has been built),
+  preventing the trend from getting stuck if the initial direction was wrong.
+  A high pivot whose break does not hold is a `LIQUIDITY_SWEEP` (trend
+  unchanged). Sweeps are noise and do NOT affect the CHoCH reference.
 
   **One-shot origin (blind-spot fallback)**: the moment a CHoCH fires, all
   validated/candidate state is reset. `choch_origin_<opposite>` is the
@@ -583,28 +589,24 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `narrative` (`MarketNarrative | None`) for one symbol/timeframe.
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=..., swing_lookback=..., internal_swing_lookback=..., confluence_filter=True)`**
   — fetches candles, runs all liquidity detectors, scores the zones via
-  `LiquidityScoringEngine`, runs `SwingStructureDetector(swing_lookback=...,
-  confluence_filter=...)` on `candles` to populate `market_structure_events`,
-  fetches a buffered candle series (`internal_candles`), runs
-  `InternalStructureDetector(swing_lookback=internal_swing_lookback,
-  confluence_filter=...)` (default `internal_swing_lookback =
-  DEFAULT_INTERNAL_SWING_LOOKBACK = 2`) **on `internal_candles`**, and reuses
-  the result (`all_internal_events`) for both `internal_structure_events`
-  (filtered to the visible window) and `POIDetector().detect(internal_candles,
-  all_internal_events)` — so CHoCH anchors from the buffer can produce POI
-  zones visible in the display window. `confluence_filter` is exposed for tests
-  that exercise state-machine logic without needing emission-quality filters.
-  `higher_timeframe_direction` is the `direction` of the most recent
-  `MarketStructure` event in `market_structure_events`
-  (`_latest_structure_direction`), or `NEUTRAL` if none detected yet.
+  `LiquidityScoringEngine`, fetches a buffered candle series
+  (`internal_candles`), then runs **both** `SwingStructureDetector` and
+  `InternalStructureDetector` on `internal_candles` (the buffered series) to
+  populate `market_structure_events` and `internal_structure_events`
+  respectively, both filtered to the visible window. Running both detectors
+  on the buffered series lets their `trend`/`active_<side>`/
+  `validated_choch_<side>` bootstrap stabilize before the visible window.
+  `confluence_filter` is exposed for tests that exercise state-machine logic
+  without needing emission-quality filters. `higher_timeframe_direction` is
+  the `direction` of the most recent `MarketStructure` event in
+  `market_structure_events` (`_latest_structure_direction`), or `NEUTRAL` if
+  none detected yet.
 
   `internal_candles` is fetched with an extra
   `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER = 300` candles of history prepended
   beyond `limit` (`buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER,
-  _MAX_FETCH_LIMIT)`). Running detectors on this larger buffered series lets
-  the `trend`/`active_<side>`/`validated_choch_<side>` bootstrap stabilize
-  before the visible window, avoiding per-refresh flip-flopping. Both
-  `internal_structure_events` and `poi_zones`/`poi_sweep_events` are filtered
+  _MAX_FETCH_LIMIT)`). Both `market_structure_events`,
+  `internal_structure_events`, and `poi_zones`/`poi_sweep_events` are filtered
   to the calendar range `[candles[0].timestamp, candles[-1].timestamp]` after
   detection. `candles` (main series, its `limit`) is unaffected.
 
@@ -831,10 +833,14 @@ that does not extend the leg cannot ratchet the reference down. Each
 continuation pullback must also stay on the correct side of the previous
 pullback (LH staircase / HL staircase) via a dedup gate. Sweeps do NOT
 affect the CHoCH reference. A bullish CHoCH fires on a sustained break above
-`validated_choch_high or choch_origin_high`; any break that doesn't clear the
-reference, or doesn't hold, is a `LIQUIDITY_SWEEP`. The `choch_origin`
-one-shot blind-spot fallback prevents the trend from getting stuck after a
-CHoCH whose reversal fails before a fresh validated reference can be rebuilt.
+`validated_choch_high or choch_origin_high or active_high`; any break that
+doesn't clear the reference, or doesn't hold, is a `LIQUIDITY_SWEEP`. The
+`active_<side>` cold-start fallback ensures the detector can flip trend
+during the bootstrap phase (before any validated/origin reference has been
+built), preventing the trend from getting stuck if the initial direction was
+wrong. The `choch_origin` one-shot blind-spot fallback prevents the trend
+from getting stuck after a CHoCH whose reversal fails before a fresh
+validated reference can be rebuilt.
 
 **CHoCH confirmation** (`SwingStructureDetector`): uses the older
 candidate/baseline model. A candidate LH/HL is promoted to validated when a

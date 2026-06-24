@@ -142,19 +142,20 @@ def load_dashboard_data(
     active_zones = [z for z in liquidity_zones if not z.is_mitigated]
     ranked_zones = LiquidityScoringEngine().score(active_zones, current_price)
 
-    market_structure_events = SwingStructureDetector(
-        swing_lookback=swing_lookback, confluence_filter=confluence_filter
-    ).detect(candles)
-
     buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER, _MAX_FETCH_LIMIT)
     internal_candles = provider.get_ohlcv(symbol, timeframe, buffered_limit)
     visible_start = candles[0].timestamp
     visible_end = candles[-1].timestamp
 
-    # Run InternalStructureDetector once on the full buffered series; reuse
-    # the result for both the display window filter and POI detection (which
-    # needs the unfiltered set so CHoCH anchors from the buffer can produce
-    # zones visible in the display window).
+    # Run both structure detectors on the buffered series so
+    # trend/validated_choch references stabilize before the visible window.
+    all_major_events = SwingStructureDetector(
+        swing_lookback=swing_lookback, confluence_filter=confluence_filter
+    ).detect(internal_candles)
+    market_structure_events = [
+        e for e in all_major_events if visible_start <= e.timestamp <= visible_end
+    ]
+
     all_internal_events = InternalStructureDetector(
         swing_lookback=internal_swing_lookback,
         confluence_filter=confluence_filter,

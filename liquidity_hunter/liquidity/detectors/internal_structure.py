@@ -71,11 +71,13 @@ seeded at each trend flip (CHoCH) and updated on every in-trend state-
 advance.
 
 **CHoCH check**: with `trend` BEARISH, a high pivot that breaks (sustained,
-see persistence below) above `validated_choch_high or choch_origin_high` is
-a `CHANGE_OF_CHARACTER`; its `reference_price_level` is the reference it
-broke. A high pivot that breaks the trailing `active_high` but not the
-validated/origin reference -- including while both are `None` -- or whose
-break does not hold, is a `LIQUIDITY_SWEEP` (trend unchanged).
+see persistence below) above `validated_choch_high or choch_origin_high or
+active_high` is a `CHANGE_OF_CHARACTER`; its `reference_price_level` is the
+reference it broke. The `active_high` fallback ensures the detector can flip
+trend during the cold-start phase (before any validated/origin reference has
+been built), preventing the trend from getting stuck if the bootstrap picks
+the wrong initial direction. A high pivot whose break does not hold for
+`persistence_candles` is a `LIQUIDITY_SWEEP` (trend unchanged).
 
 **One-shot origin (blind-spot fallback)**: the moment a CHoCH fires, all
 validated/candidate state is reset. Rebuilding the *reverse* reference needs
@@ -313,7 +315,7 @@ class InternalStructureDetector(MarketStructureDetector):
                 # Validated reference takes priority; choch_origin_high is the
                 # blind-spot fallback after a prior CHoCH (see declarations).
                 via_validated = validated_choch_high is not None
-                choch_high_ref = validated_choch_high or choch_origin_high
+                choch_high_ref = validated_choch_high or choch_origin_high or active_high
                 if (
                     trend is MarketDirection.BEARISH
                     and choch_high_ref is not None
@@ -478,7 +480,7 @@ class InternalStructureDetector(MarketStructureDetector):
                 # Validated reference takes priority; choch_origin_low is the
                 # blind-spot fallback after a prior CHoCH (see declarations).
                 via_validated = validated_choch_low is not None
-                choch_low_ref = validated_choch_low or choch_origin_low
+                choch_low_ref = validated_choch_low or choch_origin_low or active_low
                 if (
                     trend is MarketDirection.BULLISH
                     and choch_low_ref is not None

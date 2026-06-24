@@ -15,6 +15,11 @@ Architecture is identical to `InternalStructureDetector` (see
   origin-driven ping-pong is negligible, while the higher lookback makes
   the blind-spot window long enough that a one-shot would re-introduce the
   stuck-trend bug on the third event.
+- **Cold-start fallback**: when neither `validated_choch_<side>` nor
+  `choch_origin_<side>` exists (bootstrap phase), `active_<side>` is used
+  as the CHoCH reference. This ensures the trend can flip even when the
+  detector starts in the wrong direction. With `persistence_candles=10`
+  the fallback's ping-pong risk is negligible.
 
 The CHoCH reference is `validated_choch_high`/`validated_choch_low`,
 promoted from a `candidate_choch_*` (the *strongest* LOWER_HIGH /
@@ -165,7 +170,7 @@ class SwingStructureDetector(MarketStructureDetector):
             current_index = index_by_timestamp[timestamp]
 
             if kind == "high":
-                choch_high_ref = validated_choch_high or choch_origin_high
+                choch_high_ref = validated_choch_high or choch_origin_high or active_high
                 if (
                     trend is MarketDirection.BEARISH
                     and choch_high_ref is not None
@@ -284,7 +289,7 @@ class SwingStructureDetector(MarketStructureDetector):
                 prev_high_pivot_index = current_index
 
             else:
-                choch_low_ref = validated_choch_low or choch_origin_low
+                choch_low_ref = validated_choch_low or choch_origin_low or active_low
                 if (
                     trend is MarketDirection.BULLISH
                     and choch_low_ref is not None
