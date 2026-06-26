@@ -26,6 +26,17 @@ kind). These drive:
   of the previous pullback (LH staircase for bearish, HL staircase for
   bullish), preventing re-emission of the same structural break.
 
+  The pullback reference snapshot is the `active_<opposite>` captured at the
+  state-advance. An impulsive leg of *consecutive same-side lows (highs) with
+  no intervening opposite pivot* is the exception: the first advance promotes
+  `pending_<opposite>` (empty in a clean impulse) into `active_<opposite>`,
+  nulling it, so the next advance would snapshot a `None` pullback ref and the
+  BOS could never confirm -- a whole impulsive move would emit zero BOS. Since
+  the leg keeps extending from the *same* opposite pivot, a `None` snapshot
+  instead inherits the prior pending BOS's pullback ref (the high the bearish
+  leg is dropping from / the low the bullish leg is rising from), so the
+  continuation BOS still confirms at the next opposite pivot.
+
   **BOS staircase**: a continuation BOS must also *extend* the leg beyond
   the previous BOS level (`last_bear_bos_low`/`last_bull_bos_high`). While
   the trend is unchanged, a break of a higher trailing low (or lower trailing
@@ -600,6 +611,16 @@ class InternalStructureDetector(MarketStructureDetector):
                             # continuation must break above this new high.
                             last_bull_bos_high = price
                             pullback_ref_snapshot = active_low
+                            # Mirror of the bearish case: consecutive highs with
+                            # no intervening low pivot reset active_low to None,
+                            # so inherit the prior pending BOS's pullback ref --
+                            # the leg keeps rising from the same low.
+                            if (
+                                pullback_ref_snapshot is None
+                                and pending_bos is not None
+                                and pending_bos.direction is MarketDirection.BULLISH
+                            ):
+                                pullback_ref_snapshot = pending_bos.pullback_ref
                             trend = MarketDirection.BULLISH
                             active_low = pending_low
                             pending_low = None
@@ -869,6 +890,18 @@ class InternalStructureDetector(MarketStructureDetector):
                             # continuation must break below this new low.
                             last_bear_bos_low = price
                             pullback_ref_snapshot = active_high
+                            # Consecutive lows with no intervening high pivot
+                            # (an impulsive leg) reset active_high to None on the
+                            # first advance, so a later advance would carry a
+                            # null pullback ref and the BOS could never confirm.
+                            # The leg keeps dropping from the *same* high, so
+                            # inherit the prior pending BOS's pullback ref.
+                            if (
+                                pullback_ref_snapshot is None
+                                and pending_bos is not None
+                                and pending_bos.direction is MarketDirection.BEARISH
+                            ):
+                                pullback_ref_snapshot = pending_bos.pullback_ref
                             trend = MarketDirection.BEARISH
                             active_high = pending_high
                             pending_high = None

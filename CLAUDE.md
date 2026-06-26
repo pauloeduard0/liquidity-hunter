@@ -356,7 +356,16 @@ Full architecture rationale, including SOLID notes, is documented in
   shadow for bullish, reverse for bearish. `confluence_filter` (constructor
   parameter, default `True`) enables this check; `load_dashboard_data` exposes
   it so tests can disable it. The BOS `timestamp` is the close-break candle's
-  timestamp.
+  timestamp. A BOS is only *emitted* once a confirming opposite-direction
+  pullback pivot forms beyond the pullback reference snapshot
+  (`active_<opposite>` at the state-advance). In an **impulsive leg** of
+  consecutive same-side pivots with no intervening opposite pivot, the first
+  advance nulls `active_<opposite>` (promoting an empty `pending_<opposite>`),
+  so a later advance would snapshot a `None` pullback ref and the BOS could
+  never confirm — leaving a whole impulsive move with zero BOS. The leg keeps
+  extending from the *same* opposite pivot, so a `None` snapshot inherits the
+  prior pending BOS's pullback ref, and the continuation BOS still confirms at
+  the next opposite pivot.
 
   **CHoCH confirmation** is **persistence**-based: a single candle that pokes
   through a level and immediately reverts is a "false break"; a break that
