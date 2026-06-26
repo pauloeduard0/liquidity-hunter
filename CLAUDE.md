@@ -627,22 +627,33 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=..., swing_lookback=..., internal_swing_lookback=..., confluence_filter=True)`**
   — fetches candles, runs all liquidity detectors, scores the zones via
   `LiquidityScoringEngine`, fetches a buffered candle series
-  (`internal_candles`), then runs **both** `SwingStructureDetector` and
-  `InternalStructureDetector` on `internal_candles` (the buffered series) to
+  (`buffered_candles`), then runs `SwingStructureDetector` on it and
+  `InternalStructureDetector` on a **structurally anchored** slice of it to
   populate `market_structure_events` and `internal_structure_events`
-  respectively, both filtered to the visible window. Running both detectors
-  on the buffered series lets their `trend`/`active_<side>`/
-  `validated_choch_<side>` bootstrap stabilize before the visible window.
+  respectively, both filtered to the visible window.
   `confluence_filter` is exposed for tests that exercise state-machine logic
   without needing emission-quality filters. `higher_timeframe_direction` is
   the `direction` of the most recent `MarketStructure` event in
   `market_structure_events` (`_latest_structure_direction`), or `NEUTRAL` if
   none detected yet.
 
-  `internal_candles` is fetched with an extra
+  `buffered_candles` is fetched with an extra
   `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER = 300` candles of history prepended
   beyond `limit` (`buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER,
-  _MAX_FETCH_LIMIT)`). Both `market_structure_events`,
+  _MAX_FETCH_LIMIT)`). The **major** detector runs on the full
+  `buffered_candles`; the **internal** detector (and `POIDetector`, which
+  consumes its events) instead start at a **structural anchor** —
+  `_structural_anchor_index(buffered_candles, visible_start)`, the index of the
+  most recent *major extreme* (lowest low / highest high, whichever is more
+  recent) within `_STRUCTURAL_ANCHOR_REGION = 300` candles before the visible
+  window. A fixed candle offset would land the `NEUTRAL`→first-break bootstrap on
+  whatever pivot sits there, inheriting a stale far-back regime (e.g. a
+  months-old downtrend carried into a window that has since clearly reversed) and
+  producing a late, wrong-direction first CHoCH; anchoring at the move's
+  structural origin seeds the trend from the price action actually entering the
+  window, while staying stable across refreshes (a major extreme is a fixed price
+  point, not a sliding offset). The anchor falls back to `0` when the provider
+  returns no pre-visible buffer. Both `market_structure_events`,
   `internal_structure_events`, and `poi_zones`/`poi_sweep_events` are filtered
   to the calendar range `[candles[0].timestamp, candles[-1].timestamp]` after
   detection. `candles` (main series, its `limit`) is unaffected.

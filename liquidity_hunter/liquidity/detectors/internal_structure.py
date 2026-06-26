@@ -389,6 +389,12 @@ class InternalStructureDetector(MarketStructureDetector):
                         # validated_choch_high only once a continuation (the
                         # next bearish BOS) confirms this BOS.
                         candidate_choch_high = pivot
+                        # The bearish CHoCH is now confirmed by an *emitted* BOS
+                        # (a state-advance alone leaves a still-pending BOS that
+                        # may never emit, so the CHoCH could still fail): retire
+                        # its origin and drop the stashed bullish ceiling here.
+                        bear_choch_origin = None
+                        pre_choch_bull_bos_high = None
                     pending_bos = None
 
                 # Validated reference takes priority; choch_origin_high is the
@@ -593,10 +599,6 @@ class InternalStructureDetector(MarketStructureDetector):
                             # Extend the BOS staircase: the next bullish
                             # continuation must break above this new high.
                             last_bull_bos_high = price
-                            # This BOS confirms the bullish CHoCH: it can no
-                            # longer fail (origin retired, stashed floor dropped).
-                            bull_choch_origin = None
-                            pre_choch_bear_bos_low = None
                             pullback_ref_snapshot = active_low
                             trend = MarketDirection.BULLISH
                             active_low = pending_low
@@ -659,6 +661,12 @@ class InternalStructureDetector(MarketStructureDetector):
                         # promoted only once a continuation (the next bullish
                         # BOS) confirms this BOS.
                         candidate_choch_low = pivot
+                        # The bullish CHoCH is now confirmed by an *emitted* BOS
+                        # (a state-advance alone leaves a still-pending BOS that
+                        # may never emit, so the CHoCH could still fail): retire
+                        # its origin and drop the stashed bearish floor here.
+                        bull_choch_origin = None
+                        pre_choch_bear_bos_low = None
                     pending_bos = None
 
                 # Validated reference takes priority; choch_origin_low is the
@@ -860,10 +868,6 @@ class InternalStructureDetector(MarketStructureDetector):
                             # Extend the BOS staircase: the next bearish
                             # continuation must break below this new low.
                             last_bear_bos_low = price
-                            # This BOS confirms the bearish CHoCH: it can no
-                            # longer fail (origin retired, stashed ceiling dropped).
-                            bear_choch_origin = None
-                            pre_choch_bull_bos_high = None
                             pullback_ref_snapshot = active_high
                             trend = MarketDirection.BEARISH
                             active_high = pending_high

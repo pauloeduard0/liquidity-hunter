@@ -6,6 +6,7 @@ single `DashboardData` snapshot for `dashboard` to render.
 
 import logging
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 from liquidity_hunter.core.domain import (
     Candle,
@@ -60,8 +61,8 @@ _INTERNAL_STRUCTURE_PARAMS: dict[TimeFrame, tuple[int, int]] = {
     TimeFrame.M15: (3, 8),
     TimeFrame.M30: (5, 12),
     TimeFrame.H1: (5, 12),
-    TimeFrame.H4: (5, 12),
-    TimeFrame.D1: (5, 12),
+    TimeFrame.H4: (5, 10),
+    TimeFrame.D1: (5, 8),
     TimeFrame.W1: (5, 12),
 }
 _DEFAULT_INTERNAL_PARAMS = (5, 12)
@@ -81,14 +82,23 @@ _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
 
 _HIGHER_TIMEFRAME_CANDLE_LIMIT = 100
 
-# Extra candles fetched before the visible window so
-# InternalStructureDetector's trend/validated_choch_<side> bootstrap (which
-# depends on the *first* pivots in whatever series it's given) has stabilized
-# before reaching the candles actually shown on the dashboard. Without this,
-# a fixed-size sliding window re-fetched on every refresh shifts that
-# bootstrap by one candle each time, causing the same pivot to flip between
-# BREAK_OF_STRUCTURE/CHANGE_OF_CHARACTER/LIQUIDITY_SWEEP across refreshes.
+# Extra candles fetched before the visible window so the internal-structure
+# detector has history to bootstrap from before reaching the candles actually
+# shown on the dashboard. This bounds the region the structural anchor (below)
+# scans; it is *not* itself the detection start point.
 _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER = 300
+
+# The internal detector starts detection at the most recent *major extreme*
+# (lowest low / highest high) within this many candles before the visible
+# window, rather than at a fixed candle offset. A fixed offset lands the
+# NEUTRAL->first-break bootstrap on whatever pivot happens to sit there, which
+# can inherit a stale, far-back regime (e.g. a months-old downtrend carried into
+# a window that has since clearly reversed), making the first CHoCH late and
+# wrong-direction. Anchoring at the move's structural origin instead seeds the
+# trend from the price action actually entering the window, while staying stable
+# across refreshes (a major extreme is a fixed price point, not a sliding
+# offset). See `_structural_anchor_index`.
+_STRUCTURAL_ANCHOR_REGION = 300
 
 @dataclass(frozen=True)
 class DashboardData:
@@ -111,6 +121,32 @@ class DashboardData:
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
+
+
+def _structural_anchor_index(candles: list[Candle], visible_start: datetime) -> int:
+    """Index in ``candles`` where internal-structure detection should start.
+
+    Returns the most recent *major extreme* -- the candle with the lowest low or
+    the highest high, whichever is more recent -- within the
+    ``_STRUCTURAL_ANCHOR_REGION`` candles preceding the visible window (the
+    candles before ``visible_start``). Anchoring detection at this deterministic
+    structural point seeds the detector's trend from the move actually heading
+    into the visible window, while staying stable across refreshes (the extreme
+    is a fixed price point, not an offset that slides with the window's right
+    edge). Falls back to ``0`` when there is no pre-visible buffer (e.g. the
+    provider returned only the visible window).
+    """
+    visible_start_index = next(
+        (i for i, candle in enumerate(candles) if candle.timestamp >= visible_start),
+        0,
+    )
+    region = candles[max(0, visible_start_index - _STRUCTURAL_ANCHOR_REGION) : visible_start_index]
+    if not region:
+        return 0
+    lowest = min(region, key=lambda candle: candle.low)
+    highest = max(region, key=lambda candle: candle.high)
+    anchor = lowest if lowest.timestamp > highest.timestamp else highest
+    return next(i for i, candle in enumerate(candles) if candle.timestamp == anchor.timestamp)
 
 
 def _latest_structure_direction(events: list[MarketStructure]) -> MarketDirection:
@@ -152,18 +188,23 @@ def load_dashboard_data(
     ranked_zones = LiquidityScoringEngine().score(active_zones, current_price)
 
     buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER, _MAX_FETCH_LIMIT)
-    internal_candles = provider.get_ohlcv(symbol, timeframe, buffered_limit)
+    buffered_candles = provider.get_ohlcv(symbol, timeframe, buffered_limit)
     visible_start = candles[0].timestamp
     visible_end = candles[-1].timestamp
 
-    # Run both structure detectors on the buffered series so
-    # trend/validated_choch references stabilize before the visible window.
+    # The major (swing) detector runs on the full buffered series.
     all_major_events = SwingStructureDetector(
         swing_lookback=swing_lookback, confluence_filter=confluence_filter
-    ).detect(internal_candles)
+    ).detect(buffered_candles)
     market_structure_events = [
         e for e in all_major_events if visible_start <= e.timestamp <= visible_end
     ]
+
+    # The internal detector starts at a structural anchor (the most recent major
+    # extreme before the visible window) rather than a fixed candle offset, so
+    # the trend it bootstraps reflects the move actually entering the window
+    # instead of a stale, far-back regime. See `_structural_anchor_index`.
+    internal_candles = buffered_candles[_structural_anchor_index(buffered_candles, visible_start) :]
 
     internal_lookback, internal_persistence = _INTERNAL_STRUCTURE_PARAMS.get(
         timeframe, _DEFAULT_INTERNAL_PARAMS

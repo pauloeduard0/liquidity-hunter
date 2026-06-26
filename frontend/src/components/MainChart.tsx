@@ -812,9 +812,6 @@ export function MainChart({
       labels.push({ time: startTime, price, color, text: title })
     }
 
-    // Structure scope: 4H shows major events, lower timeframes show internal
-    const isMajorView = data.timeframe === '4h'
-
     // Swept (mitigated) zones
     if (showSweptZones && data.timeframe !== '5m') {
       const SWEPT_TTL_CANDLES = 200
@@ -859,24 +856,22 @@ export function MainChart({
       }
     }
 
-    // Structure events
-    const scopeEvents = isMajorView
-      ? data.market_structure_events
-      : data.internal_structure_events
+    // Structure events: all timeframes render the internal-structure detector,
+    // with liquidity sweeps capped to the most recent few so the chart stays
+    // readable.
+    const scopeEvents = data.internal_structure_events
 
-    const recentSweeps = !isMajorView
-      ? new Set(
-          scopeEvents
-            .filter((e) => e.event === 'liquidity_sweep')
-            .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
-            .slice(0, MAX_INTERNAL_SWEEPS),
-        )
-      : null
+    const recentSweeps = new Set(
+      scopeEvents
+        .filter((e) => e.event === 'liquidity_sweep')
+        .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
+        .slice(0, MAX_INTERNAL_SWEEPS),
+    )
 
     const structureEvents = scopeEvents.filter(
       (event) =>
         event.event in STRUCTURE_EVENT_STYLES &&
-        (isMajorView || event.event !== 'liquidity_sweep' || recentSweeps!.has(event)),
+        (event.event !== 'liquidity_sweep' || recentSweeps.has(event)),
     )
 
     for (const event of structureEvents) {
@@ -916,7 +911,7 @@ export function MainChart({
     }
 
     // POI order block zones and RTO sweeps
-    if (!isMajorView) {
+    {
       const poiBoxes: POIBox[] = []
       for (const zone of data.poi_zones ?? []) {
         if (zone.status === 'invalidated') continue
@@ -951,8 +946,6 @@ export function MainChart({
           text: `RTO ${rto.direction === 'bullish' ? '▲' : '▼'}`,
         })
       }
-    } else {
-      poiBoxesPrimitiveRef.current?.setBoxes([])
     }
 
     // Manipulation cycle accumulation boxes

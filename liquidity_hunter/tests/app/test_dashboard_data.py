@@ -2,7 +2,11 @@
 
 from datetime import UTC, datetime
 
-from liquidity_hunter.app.dashboard_data import load_dashboard_data
+from liquidity_hunter.app.dashboard_data import (
+    _STRUCTURAL_ANCHOR_REGION,
+    _structural_anchor_index,
+    load_dashboard_data,
+)
 from liquidity_hunter.core.domain import (
     Candle,
     FundingRate,
@@ -346,3 +350,40 @@ def test_load_dashboard_data_degrades_when_futures_unavailable() -> None:
     assert data.liquidation_map is None
     assert data.candles == candles
     assert data.narrative is not None
+
+
+def test_structural_anchor_index_picks_most_recent_low() -> None:
+    highs = [100.0] * 20
+    lows = [90.0] * 20
+    highs[5] = 110.0  # high spike (older)
+    lows[10] = 80.0  # deep low (more recent) -> the anchor
+    candles = make_series(highs, lows)
+
+    assert _structural_anchor_index(candles, candles[15].timestamp) == 10
+
+
+def test_structural_anchor_index_picks_most_recent_high() -> None:
+    highs = [100.0] * 20
+    lows = [90.0] * 20
+    lows[4] = 80.0  # deep low (older)
+    highs[12] = 110.0  # high spike (more recent) -> the anchor
+    candles = make_series(highs, lows)
+
+    assert _structural_anchor_index(candles, candles[15].timestamp) == 12
+
+
+def test_structural_anchor_index_no_buffer_returns_zero() -> None:
+    candles = make_series([100.0] * 10, [90.0] * 10)
+    # The visible window is the entire series: no pre-visible candles to anchor in.
+    assert _structural_anchor_index(candles, candles[0].timestamp) == 0
+
+
+def test_structural_anchor_index_ignores_extreme_outside_region() -> None:
+    n = _STRUCTURAL_ANCHOR_REGION + 20
+    highs = [100.0] * n
+    lows = [90.0] * n
+    lows[5] = 70.0  # deepest low, but OUTSIDE the anchor region
+    lows[n - 60] = 80.0  # milder low, inside the region -> the anchor
+    candles = make_series(highs, lows)
+
+    assert _structural_anchor_index(candles, candles[n - 5].timestamp) == n - 60
