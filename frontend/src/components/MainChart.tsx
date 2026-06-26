@@ -881,13 +881,16 @@ export function MainChart({
       const endTime = structureLineEndTime(event, scopeEvents, lastCandleTime)
 
       const linePrice =
-        (event.event === 'change_of_character' || event.event === 'choch_failed') &&
+        (event.event === 'change_of_character' ||
+          event.event === 'choch_failed' ||
+          event.event === 'break_of_structure') &&
         event.reference_price_level != null
           ? event.reference_price_level
           : event.price_level
 
       const lineStartTime =
-        event.event === 'change_of_character' && event.reference_timestamp != null
+        (event.event === 'change_of_character' || event.event === 'break_of_structure') &&
+        event.reference_timestamp != null
           ? toUtcTimestamp(event.reference_timestamp)
           : startTime
 

@@ -17,6 +17,7 @@ from liquidity_hunter.core.domain import (
     MarketDirection,
     MarketNarrative,
     MarketStructure,
+    StructureEvent,
     TimeFrame,
 )
 from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
@@ -61,7 +62,7 @@ _INTERNAL_STRUCTURE_PARAMS: dict[TimeFrame, tuple[int, int]] = {
     TimeFrame.M15: (3, 8),
     TimeFrame.M30: (5, 12),
     TimeFrame.H1: (5, 12),
-    TimeFrame.H4: (5, 10),
+    TimeFrame.H4: (5, 8),
     TimeFrame.D1: (5, 8),
     TimeFrame.W1: (5, 12),
 }
@@ -149,6 +150,97 @@ def _structural_anchor_index(candles: list[Candle], visible_start: datetime) -> 
     return next(i for i, candle in enumerate(candles) if candle.timestamp == anchor.timestamp)
 
 
+def _reanchor_bos_close_break(
+    events: list[MarketStructure], candles: list[Candle]
+) -> list[MarketStructure]:
+    """Re-anchor each continuation BOS to the first *close* beyond the level it broke.
+
+    A BOS's ``reference_price_level`` is the prior swing extreme it broke (the
+    staircase floor). The detector advances state on a close beyond the
+    *trailing* reference, which sits above (bearish) / below (bullish) that
+    floor, so a BOS can be stamped while price has only *wicked* past the formed
+    level. This conservative pass re-times each BOS to the first candle that
+    actually *closes* beyond the formed level, searching the window the BOS
+    stays active (up to the next same-direction BOS or opposite-direction
+    CHoCH, matching the chart's line termination), and *drops* any BOS whose leg
+    never closed beyond it -- a wick-only break is not a confirmed continuation.
+    The trailing references and CHoCH promotion inside the detector are
+    untouched; only the emitted BOS events are re-timed here.
+    """
+    if not events or not candles:
+        return events
+
+    index_by_ts = {candle.timestamp: i for i, candle in enumerate(candles)}
+    ordered = sorted(events, key=lambda event: event.timestamp)
+    last_index = len(candles) - 1
+    result: list[MarketStructure] = []
+
+    for event in ordered:
+        if event.event is not StructureEvent.BREAK_OF_STRUCTURE:
+            result.append(event)
+            continue
+        start_index = index_by_ts.get(event.timestamp)
+        if start_index is None:
+            result.append(event)
+            continue
+
+        # The BOS stays active until the next same-direction BOS or the next
+        # opposite-direction CHoCH; the formed level must close within that span.
+        end_index = last_index
+        for other in ordered:
+            if other.timestamp <= event.timestamp:
+                continue
+            terminates = (
+                other.event is StructureEvent.BREAK_OF_STRUCTURE
+                and other.direction is event.direction
+            ) or (
+                other.event is StructureEvent.CHANGE_OF_CHARACTER
+                and other.direction is not event.direction
+            )
+            if terminates:
+                other_index = index_by_ts.get(other.timestamp)
+                if other_index is not None:
+                    end_index = other_index
+                break
+
+        floor = event.reference_price_level
+        if floor is None:
+            result.append(event)
+            continue
+        bearish = event.direction is MarketDirection.BEARISH
+        new_timestamp = None
+        for i in range(start_index, end_index + 1):
+            close = candles[i].close
+            if (bearish and close < floor) or (not bearish and close > floor):
+                new_timestamp = candles[i].timestamp
+                break
+
+        if new_timestamp is None:
+            continue  # leg only wicked the formed level: not a confirmed BOS
+
+        # Anchor the line's *start* at the formed level's origin -- the candle
+        # that made the prior swing extreme (low for bearish, high for bullish)
+        # at this price -- so it runs from where the level formed to where it
+        # broke, rather than starting at the break. Falls back to the break when
+        # no exact match is found.
+        reference_timestamp = event.reference_timestamp
+        for i in range(start_index, -1, -1):
+            extreme = candles[i].low if bearish else candles[i].high
+            if extreme == floor:
+                reference_timestamp = candles[i].timestamp
+                break
+
+        updates: dict[str, datetime] = {}
+        if new_timestamp != event.timestamp:
+            updates["timestamp"] = new_timestamp
+        if reference_timestamp != event.reference_timestamp and reference_timestamp is not None:
+            updates["reference_timestamp"] = reference_timestamp
+        result.append(event.model_copy(update=updates) if updates else event)
+
+    result.sort(key=lambda event: event.timestamp)
+    return result
+
+
 def _latest_structure_direction(events: list[MarketStructure]) -> MarketDirection:
     """The `direction` of the most recent `MarketStructure` event, or NEUTRAL.
 
@@ -214,6 +306,9 @@ def load_dashboard_data(
         persistence_candles=internal_persistence,
         confluence_filter=confluence_filter,
     ).detect(internal_candles)
+    # Re-time each BOS to the first close beyond the formed level it broke
+    # (dropping wick-only continuations), before the visible filter and POI.
+    all_internal_events = _reanchor_bos_close_break(all_internal_events, internal_candles)
     internal_structure_events = [
         e for e in all_internal_events if visible_start <= e.timestamp <= visible_end
     ]

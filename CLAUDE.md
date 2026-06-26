@@ -108,11 +108,15 @@ and `validate_assignment=True`. New entities should follow this pattern.
   `StructureScope`.
   Fields: `timestamp` (actual breaking candle, not the triggering pivot),
   `price_level` (triggering pivot's extreme), `reference_price_level` (the
-  level that was broken — `active_<side>` for BOS/SWEEP, `validated_choch_<side>`
-  for CHoCH, the broken CHoCH *origin* for `CHOCH_FAILED`), and
-  `reference_timestamp` (for CHoCH events: the timestamp of the
-  LH/HL pivot that was promoted to `validated_choch_<side>`, used to anchor
-  the CHoCH line's start in the frontend). A `CHOCH_FAILED` event marks a CHoCH
+  level that was broken — for `SWEEP` and the *major* detector's BOS,
+  `active_<side>`; for the *internal* detector's BOS, the **formed low/high it
+  broke** (the staircase floor), so it plots at the prior swing extreme;
+  `validated_choch_<side>` for CHoCH, the broken CHoCH *origin* for
+  `CHOCH_FAILED`), and `reference_timestamp` (for CHoCH: the timestamp of the
+  LH/HL pivot promoted to `validated_choch_<side>`; for the internal detector's
+  BOS: the candle that *formed* the broken level, so the line starts at the
+  level's origin — both used to anchor the line's start in the frontend). A
+  `CHOCH_FAILED` event marks a CHoCH
   that was invalidated before a confirming BOS (its `direction` is the failed
   CHoCH's direction); see the `InternalStructureDetector` notes.
 - **`POIZone`** — an institutional order block zone, defined in
@@ -439,8 +443,17 @@ Full architecture rationale, including SOLID notes, is documented in
   origin-triggered CHoCH does NOT set origin on the opposite side (one-shot),
   breaking ping-pong chains.
 
-  A `BREAK_OF_STRUCTURE`'s `reference_price_level` is always the trailing
-  `active_<side>` it broke.
+  A `BREAK_OF_STRUCTURE`'s `reference_price_level` is the **formed low/high it
+  broke** — the staircase floor (`last_bear_bos_low`/`last_bull_bos_high`) in
+  effect at the state-advance, captured into `_PendingBOS.floor` before it
+  ratchets to the breaking pivot — rather than the trailing `active_<side>` the
+  state machine advanced on. So a continuation BOS reports (and plots at) the
+  prior swing extreme it actually broke, forming a clean descending/ascending
+  staircase of levels. The unconstrained first BOS of a leg (`floor is None`)
+  falls back to the trailing reference. The state machine, trailing references,
+  and CHoCH promotion are unaffected — only the reported reference changes. A
+  composition-level pass then re-times each BOS to the first *close* beyond that
+  level and drops wick-only continuations (see `load_dashboard_data` below).
 
   The pivot loop above decides *which* event fires and *against which*
   reference level, but does not itself supply that event's `timestamp` for
@@ -639,7 +652,18 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   (`buffered_candles`), then runs `SwingStructureDetector` on it and
   `InternalStructureDetector` on a **structurally anchored** slice of it to
   populate `market_structure_events` and `internal_structure_events`
-  respectively, both filtered to the visible window.
+  respectively, both filtered to the visible window. The internal detector's
+  output is passed through **`_reanchor_bos_close_break`** before the visible
+  filter (and before `POIDetector` consumes it): each `BREAK_OF_STRUCTURE` is
+  re-timed to the first candle that *closes* beyond the formed level it broke
+  (`reference_price_level`), within the window the BOS stays active (up to the
+  next same-direction BOS or opposite-direction CHoCH); any BOS whose leg only
+  *wicked* past that level (never closed) is **dropped** — a conservative
+  close-break confirmation matching the macro SMC cycle. The pass also sets each
+  BOS's `reference_timestamp` to the candle that *formed* the broken level (the
+  prior swing extreme, found by scanning back for a matching low/high), so the
+  frontend can start the line at the level's origin. Only the *internal*
+  detector is re-anchored; the major detector's events are untouched.
   `confluence_filter` is exposed for tests that exercise state-machine logic
   without needing emission-quality filters. `higher_timeframe_direction` is
   the `direction` of the most recent `MarketStructure` event in
@@ -783,16 +807,19 @@ selector.
   price HH + RSI LH above 50). Divergence lines drawn as colored
   `LineSeries` overlays.
 
-  **BOS/CHoCH line rendering**: each event draws a horizontal line from its
-  `timestamp` to the next event that terminates it. BOS lines end at the next
-  opposite-direction CHoCH (so a reversal clears stale BOS references rather
-  than letting them run to the chart edge). CHoCH lines start at
-  `reference_timestamp` (the timestamp of the `validated_choch_<side>` pivot —
-  the origin LH/HL that was promoted) and extend until the next
-  opposite-direction CHoCH. CHoCH lines are drawn at `reference_price_level`
-  (the validated swing level), not `price_level` (the breaking pivot's
-  extreme), since the extreme can be far beyond the confirmed reference level.
-  SWEEP lines are drawn at `reference_price_level` like BOS.
+  **BOS/CHoCH line rendering**: each event draws a horizontal line to the next
+  event that terminates it (`structureLineEndTime`): BOS lines end at the next
+  same-direction BOS or opposite-direction (non-failed) CHoCH; CHoCH lines at
+  the next opposite-direction CHoCH (so a reversal clears stale references
+  rather than letting them run to the chart edge). **Both BOS and CHoCH lines
+  are drawn at `reference_price_level`** (the level that was broken — the formed
+  swing extreme for BOS, the validated swing for CHoCH), not `price_level`,
+  since the breaking pivot's extreme can be far beyond the confirmed level. Both
+  also **start at `reference_timestamp`** (the candle that *formed* the broken
+  level — the prior swing extreme for BOS, the promoted LH/HL for CHoCH), so the
+  line runs from the level's origin to where it was broken rather than starting
+  at the break. SWEEP lines are drawn at `price_level` (the sweep wick's
+  extreme), starting at the event `timestamp`.
 
 - **`frontend/src/components/ManipulationCyclesPanel.tsx`** —
   `ManipulationCyclesPanel` sidebar component: renders manipulation cycle
@@ -873,6 +900,10 @@ and the LuxAlgo-style `bos_confluence` filter for BOS emission. Neither
 detector uses `volume_delta` or `min_volume_delta_ratio` for any confirmation.
 `SwingStructureDetector` defaults: `swing_lookback=10`, `persistence_candles=10`.
 `InternalStructureDetector` defaults: `swing_lookback=2`, `persistence_candles=5`.
+(The state machines remain unified; they diverge only in what an emitted BOS
+*reports* as its reference — see "Internal BOS reference + close-break
+re-anchor" below — and in the composition-level re-anchor applied to the
+internal detector alone.)
 
 **BOS confirmation** (both detectors): the state machine advances **only when
 a candle in the leg *closes* beyond the active reference**
@@ -892,6 +923,21 @@ unconstrained. The `BREAK_OF_STRUCTURE` event is *emitted* once confirmed and
 optionally passes the `bos_confluence` shadow-balance filter. SWEEP and CHoCH
 detection are unaffected by the close/staircase requirements (sweeps are wick
 events).
+
+**Internal BOS reference + close-break re-anchor** (`InternalStructureDetector`
+only, as of 2026-06-26): an internal BOS reports `reference_price_level` = the
+**formed low/high it broke** (the staircase floor `_PendingBOS.floor`, captured
+at the state-advance) rather than the trailing pivot, so it plots at the prior
+swing extreme and the BOS levels form a clean staircase. A composition-level
+pass, `_reanchor_bos_close_break` in `load_dashboard_data`, then re-times each
+BOS to the first candle that *closes* beyond that formed level (within the
+window the BOS stays active) and **drops** any BOS whose leg only *wicked* past
+it — a conservative close-confirmation that can leave long event-free stretches
+on the macro (intended). It also sets `reference_timestamp` to the candle that
+*formed* the level, so the frontend starts the BOS line at the level's origin
+and runs it to the break. The detector's state machine, trailing references, and
+CHoCH promotion are untouched; the major `SwingStructureDetector` keeps the
+trailing `active_<side>` reference and is not re-anchored.
 
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A

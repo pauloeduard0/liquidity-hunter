@@ -49,6 +49,18 @@ kind). These drive:
   cannot form on the wrong side of the CHoCH (e.g. a bullish BOS below a
   bullish CHoCH after price fell back through it). Only the very first BOS
   out of the `NEUTRAL` bootstrap (no CHoCH yet) is unconstrained.
+
+  **Emitted reference**: a continuation BOS's `reference_price_level` is the
+  **formed low/high it broke** -- the staircase floor in effect at the
+  state-advance (`_PendingBOS.floor`, captured before it ratchets to this
+  pivot) -- rather than the trailing pivot the state machine advanced on. So a
+  BOS reports the prior swing extreme it actually broke (and the chart plots it
+  there). The unconstrained first BOS of a leg (`floor is None`) falls back to
+  the trailing reference. The state machine, CHoCH promotion, and trailing
+  references are unaffected -- only the reported reference changes. A separate
+  composition-level pass (`app.dashboard_data._reanchor_bos_close_break`)
+  re-times each BOS to the first *close* beyond that formed level and drops
+  wick-only continuations; see its docstring.
 - `LOWER_HIGH`/`HIGHER_LOW`: a pivot that does not break the trailing
   reference.
 - `LIQUIDITY_SWEEP`: a counter-trend pivot that breaks the trailing
@@ -183,6 +195,12 @@ class _PendingBOS:
     ref_price: float
     close_break_timestamp: datetime
     pullback_ref: Pivot | None
+    # The formed low/high the continuation BOS breaks (the staircase floor at
+    # the state-advance), or `None` for the first BOS of a leg. The emitted
+    # `reference_price_level` is this floor (the prior swing extreme actually
+    # broken) rather than the trailing pivot, so the BOS plots at the level it
+    # structurally broke; `None` falls back to `ref_price`.
+    floor: float | None
 
 
 class InternalStructureDetector(MarketStructureDetector):
@@ -390,7 +408,9 @@ class InternalStructureDetector(MarketStructureDetector):
                             StructureEvent.BREAK_OF_STRUCTURE,
                             MarketDirection.BEARISH,
                             pending_bos.breaking_pivot.price,
-                            pending_bos.ref_price,
+                            pending_bos.floor
+                            if pending_bos.floor is not None
+                            else pending_bos.ref_price,
                             origin_price_level=price,
                         )
                         last_bearish_bos_price = pending_bos.breaking_pivot.price
@@ -579,6 +599,9 @@ class InternalStructureDetector(MarketStructureDetector):
                         # overshoot stays pending (the reference is frozen below)
                         # so the BOS activates later, once a close confirms it.
                         ref_price = active_high.price
+                        # The formed high this continuation breaks (staircase
+                        # floor), captured before it ratchets to this pivot.
+                        floor_at_advance = last_bull_bos_high
                         close_idx = find_close_break_index(
                             candles,
                             prev_high_pivot_index + 1,
@@ -642,6 +665,7 @@ class InternalStructureDetector(MarketStructureDetector):
                                     ref_price=ref_price,
                                     close_break_timestamp=candles[close_idx].timestamp,
                                     pullback_ref=pullback_ref_snapshot,
+                                    floor=floor_at_advance,
                                 )
                 elif price < active_high.price:
                     emit(
@@ -673,7 +697,9 @@ class InternalStructureDetector(MarketStructureDetector):
                             StructureEvent.BREAK_OF_STRUCTURE,
                             MarketDirection.BULLISH,
                             pending_bos.breaking_pivot.price,
-                            pending_bos.ref_price,
+                            pending_bos.floor
+                            if pending_bos.floor is not None
+                            else pending_bos.ref_price,
                             origin_price_level=price,
                         )
                         last_bullish_bos_price = pending_bos.breaking_pivot.price
@@ -858,6 +884,9 @@ class InternalStructureDetector(MarketStructureDetector):
                         # overshoot stays pending (the reference is frozen above)
                         # so the BOS activates later, once a close confirms it.
                         ref_price = active_low.price
+                        # The formed low this continuation breaks (staircase
+                        # floor), captured before it ratchets to this pivot.
+                        floor_at_advance = last_bear_bos_low
                         close_idx = find_close_break_index(
                             candles,
                             prev_low_pivot_index + 1,
@@ -923,6 +952,7 @@ class InternalStructureDetector(MarketStructureDetector):
                                     ref_price=ref_price,
                                     close_break_timestamp=candles[close_idx].timestamp,
                                     pullback_ref=pullback_ref_snapshot,
+                                    floor=floor_at_advance,
                                 )
                 elif price > active_low.price:
                     emit(
