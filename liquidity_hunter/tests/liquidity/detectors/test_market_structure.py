@@ -105,6 +105,10 @@ def test_swing_structure_detector_full_sequence() -> None:
         (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, 80.0, 95.0),
         (StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, 185.0, 180.0),
         (StructureEvent.HIGHER_LOW, MarketDirection.BULLISH, 95.0, 90.0),
+        # First BOS of the new bullish leg: it reports the trailing reference it
+        # broke (active_high=185), NOT the CHoCH-seeded staircase floor (180),
+        # so it does not plot on the CHoCH's own line. Continuation BOS (with a
+        # prior BOS in the leg) report the formed level instead.
         (StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 195.0, 185.0),
     ]
     assert [e.timestamp for e in events] == [

@@ -284,10 +284,13 @@ def load_dashboard_data(
     visible_start = candles[0].timestamp
     visible_end = candles[-1].timestamp
 
-    # The major (swing) detector runs on the full buffered series.
+    # The major (swing) detector runs on the full buffered series. Its BOS are
+    # re-anchored to the formed level's close-break (same as the internal
+    # detector) to keep the two consistent.
     all_major_events = SwingStructureDetector(
         swing_lookback=swing_lookback, confluence_filter=confluence_filter
     ).detect(buffered_candles)
+    all_major_events = _reanchor_bos_close_break(all_major_events, buffered_candles)
     market_structure_events = [
         e for e in all_major_events if visible_start <= e.timestamp <= visible_end
     ]

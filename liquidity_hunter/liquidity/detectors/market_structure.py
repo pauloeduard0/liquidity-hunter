@@ -74,7 +74,14 @@ class SwingStructureDetector(MarketStructureDetector):
       side's extreme for promotion when the opposite side breaks.
     - A pivot beyond the trailing reference in the direction of `trend` is a
       `BREAK_OF_STRUCTURE`; one that does not break it is a `LOWER_HIGH`/
-      `HIGHER_LOW` label.
+      `HIGHER_LOW` label. A BOS's emitted `reference_price_level` is the
+      **formed low/high it broke** -- the staircase floor (`last_bear_bos_low`/
+      `last_bull_bos_high`, `floor_at_advance`) captured before it ratchets to
+      this pivot -- not the trailing `active_<side>` the close-break tested,
+      mirroring `InternalStructureDetector`. The first BOS of a leg
+      (`floor is None`) falls back to the trailing reference. A composition-level
+      pass (`app.dashboard_data._reanchor_bos_close_break`) re-times each BOS to
+      the first *close* beyond that formed level and drops wick-only ones.
     - The reversal (`CHANGE_OF_CHARACTER`) reference is
       `validated_choch_high`/`validated_choch_low`, promoted from
       `candidate_choch_high`/`candidate_choch_low` (the strongest LH/HL of its
@@ -147,6 +154,13 @@ class SwingStructureDetector(MarketStructureDetector):
         # (CHoCH); the first BOS of a leg (None) is unconstrained.
         last_bear_bos_low: float | None = None
         last_bull_bos_high: float | None = None
+        # The extreme of the *previous* BOS in the current leg, used as the
+        # emitted `reference_price_level`. Unlike the staircase floor it is not
+        # seeded at a CHoCH (`None` for the first BOS of a leg), so that first BOS
+        # reports the trailing reference it broke instead of plotting on the
+        # CHoCH's own line.
+        prev_bear_bos_extreme: float | None = None
+        prev_bull_bos_extreme: float | None = None
         # The *origin* of an unconfirmed CHoCH: the swing the CHoCH move launched
         # from (active low at a bullish CHoCH / active high at a bearish CHoCH).
         # While set, the CHoCH is provisional -- a sustained break back through
@@ -254,6 +268,10 @@ class SwingStructureDetector(MarketStructureDetector):
                         else max(pre_choch_bull_bos_high, bear_choch_origin.price)
                     )
                     last_bear_bos_low = None
+                    # Bullish trend resumed -> previous BOS extreme is the
+                    # restored staircase floor (a genuine level, not a seed).
+                    prev_bull_bos_extreme = last_bull_bos_high
+                    prev_bear_bos_extreme = None
                     pre_choch_bear_bos_low = None
                     pre_choch_bull_bos_high = None
                     # One-shot: a failed-CHoCH flip arms no opposite origin /
@@ -315,6 +333,10 @@ class SwingStructureDetector(MarketStructureDetector):
                     pre_choch_bull_bos_high = None
                     last_bull_bos_high = choch_high_ref.price
                     last_bear_bos_low = None
+                    # New leg: no previous BOS yet -> the first BOS reports the
+                    # trailing reference, not the seeded CHoCH level.
+                    prev_bull_bos_extreme = None
+                    prev_bear_bos_extreme = None
                 elif active_high is None:
                     if active_low is not None:
                         pending_high = pivot
@@ -358,6 +380,10 @@ class SwingStructureDetector(MarketStructureDetector):
                         # overshoot stays pending (the reference is frozen below)
                         # so the BOS activates later, once a close confirms it.
                         ref_price = active_high.price
+                        # The formed high the *previous* BOS made (the level this
+                        # continuation broke); `None` for the first BOS of the leg
+                        # -> the emit falls back to the trailing `ref_price`.
+                        floor_at_advance = prev_bull_bos_extreme
                         close_idx = find_close_break_index(
                             candles,
                             prev_high_pivot_index + 1,
@@ -374,6 +400,9 @@ class SwingStructureDetector(MarketStructureDetector):
                             # Extend the BOS staircase: the next bullish
                             # continuation must break above this new high.
                             last_bull_bos_high = price
+                            # This BOS's extreme is the formed level the next
+                            # bullish continuation will report as its reference.
+                            prev_bull_bos_extreme = price
                             # This BOS confirms the bullish CHoCH: it can no
                             # longer fail (origin retired, stashed floor dropped).
                             bull_choch_origin = None
@@ -386,7 +415,9 @@ class SwingStructureDetector(MarketStructureDetector):
                                     StructureEvent.BREAK_OF_STRUCTURE,
                                     MarketDirection.BULLISH,
                                     price,
-                                    ref_price,
+                                    floor_at_advance
+                                    if floor_at_advance is not None
+                                    else ref_price,
                                 )
                                 # BOS confirmed (close break) -> promote the
                                 # CHoCH reference.
@@ -472,6 +503,10 @@ class SwingStructureDetector(MarketStructureDetector):
                         else min(pre_choch_bear_bos_low, bull_choch_origin.price)
                     )
                     last_bull_bos_high = None
+                    # Bearish trend resumed -> previous BOS extreme is the
+                    # restored staircase floor (a genuine level, not a seed).
+                    prev_bear_bos_extreme = last_bear_bos_low
+                    prev_bull_bos_extreme = None
                     pre_choch_bear_bos_low = None
                     pre_choch_bull_bos_high = None
                     # One-shot: a failed-CHoCH flip arms no opposite origin /
@@ -533,6 +568,10 @@ class SwingStructureDetector(MarketStructureDetector):
                     pre_choch_bear_bos_low = None
                     last_bear_bos_low = choch_low_ref.price
                     last_bull_bos_high = None
+                    # New leg: no previous BOS yet -> the first BOS reports the
+                    # trailing reference, not the seeded CHoCH level.
+                    prev_bear_bos_extreme = None
+                    prev_bull_bos_extreme = None
                 elif active_low is None:
                     if active_high is not None:
                         pending_low = pivot
@@ -576,6 +615,10 @@ class SwingStructureDetector(MarketStructureDetector):
                         # overshoot stays pending (the reference is frozen above)
                         # so the BOS activates later, once a close confirms it.
                         ref_price = active_low.price
+                        # The formed low the *previous* BOS made (the level this
+                        # continuation broke); `None` for the first BOS of the leg
+                        # -> the emit falls back to the trailing `ref_price`.
+                        floor_at_advance = prev_bear_bos_extreme
                         close_idx = find_close_break_index(
                             candles,
                             prev_low_pivot_index + 1,
@@ -590,6 +633,9 @@ class SwingStructureDetector(MarketStructureDetector):
                             # Extend the BOS staircase: the next bearish
                             # continuation must break below this new low.
                             last_bear_bos_low = price
+                            # This BOS's extreme is the formed level the next
+                            # bearish continuation will report as its reference.
+                            prev_bear_bos_extreme = price
                             # This BOS confirms the bearish CHoCH: it can no
                             # longer fail (origin retired, stashed ceiling dropped).
                             bear_choch_origin = None
@@ -604,7 +650,9 @@ class SwingStructureDetector(MarketStructureDetector):
                                     StructureEvent.BREAK_OF_STRUCTURE,
                                     MarketDirection.BEARISH,
                                     price,
-                                    ref_price,
+                                    floor_at_advance
+                                    if floor_at_advance is not None
+                                    else ref_price,
                                 )
                                 # BOS confirmed (close break) -> promote the
                                 # CHoCH reference.

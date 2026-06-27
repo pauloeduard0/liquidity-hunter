@@ -323,6 +323,14 @@ class InternalStructureDetector(MarketStructureDetector):
         # the first BOS of a leg (None) is unconstrained.
         last_bear_bos_low: float | None = None
         last_bull_bos_high: float | None = None
+        # The extreme of the *previous* BOS in the current leg, used as the
+        # emitted `reference_price_level` (the formed level the continuation
+        # broke). Unlike the staircase floor it is *not* seeded at a CHoCH --
+        # `None` for the first BOS of a leg -- so that first BOS reports the
+        # trailing reference it actually broke instead of plotting on the CHoCH's
+        # own line.
+        prev_bear_bos_extreme: float | None = None
+        prev_bull_bos_extreme: float | None = None
         # The *origin* of an unconfirmed CHoCH: the swing the CHoCH move launched
         # from (the active low at a bullish CHoCH / active high at a bearish
         # CHoCH). While set, the CHoCH is provisional -- a break back through
@@ -482,6 +490,10 @@ class InternalStructureDetector(MarketStructureDetector):
                         else max(pre_choch_bull_bos_high, bear_choch_origin.price)
                     )
                     last_bear_bos_low = None
+                    # The bullish trend resumed -> its previous BOS extreme is the
+                    # restored staircase floor (a genuine level, not a CHoCH seed).
+                    prev_bull_bos_extreme = last_bull_bos_high
+                    prev_bear_bos_extreme = None
                     pre_choch_bear_bos_low = None
                     pre_choch_bull_bos_high = None
                     # One-shot: a failed-CHoCH flip does NOT arm the opposite
@@ -558,6 +570,10 @@ class InternalStructureDetector(MarketStructureDetector):
                     pre_choch_bull_bos_high = None
                     last_bull_bos_high = choch_high_ref.price
                     last_bear_bos_low = None
+                    # New leg: no previous BOS yet -> the first BOS reports the
+                    # trailing reference, not the seeded CHoCH level.
+                    prev_bull_bos_extreme = None
+                    prev_bear_bos_extreme = None
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bullish_bos_origin = None
@@ -599,9 +615,10 @@ class InternalStructureDetector(MarketStructureDetector):
                         # overshoot stays pending (the reference is frozen below)
                         # so the BOS activates later, once a close confirms it.
                         ref_price = active_high.price
-                        # The formed high this continuation breaks (staircase
-                        # floor), captured before it ratchets to this pivot.
-                        floor_at_advance = last_bull_bos_high
+                        # The formed high the *previous* BOS made (the level this
+                        # continuation broke). `None` for the first BOS of the leg
+                        # -> the emit falls back to the trailing `ref_price`.
+                        floor_at_advance = prev_bull_bos_extreme
                         close_idx = find_close_break_index(
                             candles,
                             prev_high_pivot_index + 1,
@@ -633,6 +650,9 @@ class InternalStructureDetector(MarketStructureDetector):
                             # Extend the BOS staircase: the next bullish
                             # continuation must break above this new high.
                             last_bull_bos_high = price
+                            # This BOS's extreme becomes the formed level the next
+                            # bullish continuation will report as its reference.
+                            prev_bull_bos_extreme = price
                             pullback_ref_snapshot = active_low
                             # Mirror of the bearish case: consecutive highs with
                             # no intervening low pivot reset active_low to None,
@@ -770,6 +790,10 @@ class InternalStructureDetector(MarketStructureDetector):
                         else min(pre_choch_bear_bos_low, bull_choch_origin.price)
                     )
                     last_bull_bos_high = None
+                    # The bearish trend resumed -> its previous BOS extreme is the
+                    # restored staircase floor (a genuine level, not a CHoCH seed).
+                    prev_bear_bos_extreme = last_bear_bos_low
+                    prev_bull_bos_extreme = None
                     pre_choch_bear_bos_low = None
                     pre_choch_bull_bos_high = None
                     # One-shot: a failed-CHoCH flip does NOT arm the opposite
@@ -845,6 +869,10 @@ class InternalStructureDetector(MarketStructureDetector):
                     pre_choch_bear_bos_low = None
                     last_bear_bos_low = choch_low_ref.price
                     last_bull_bos_high = None
+                    # New leg: no previous BOS yet -> the first BOS reports the
+                    # trailing reference, not the seeded CHoCH level.
+                    prev_bear_bos_extreme = None
+                    prev_bull_bos_extreme = None
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bearish_bos_price = None
@@ -884,9 +912,10 @@ class InternalStructureDetector(MarketStructureDetector):
                         # overshoot stays pending (the reference is frozen above)
                         # so the BOS activates later, once a close confirms it.
                         ref_price = active_low.price
-                        # The formed low this continuation breaks (staircase
-                        # floor), captured before it ratchets to this pivot.
-                        floor_at_advance = last_bear_bos_low
+                        # The formed low the *previous* BOS made (the level this
+                        # continuation broke). `None` for the first BOS of the leg
+                        # -> the emit falls back to the trailing `ref_price`.
+                        floor_at_advance = prev_bear_bos_extreme
                         close_idx = find_close_break_index(
                             candles,
                             prev_low_pivot_index + 1,
@@ -918,6 +947,9 @@ class InternalStructureDetector(MarketStructureDetector):
                             # Extend the BOS staircase: the next bearish
                             # continuation must break below this new low.
                             last_bear_bos_low = price
+                            # This BOS's extreme becomes the formed level the next
+                            # bearish continuation will report as its reference.
+                            prev_bear_bos_extreme = price
                             pullback_ref_snapshot = active_high
                             # Consecutive lows with no intervening high pivot
                             # (an impulsive leg) reset active_high to None on the
