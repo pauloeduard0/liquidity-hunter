@@ -146,6 +146,41 @@ def bos_confluence(candle: Candle, *, bullish: bool) -> bool:
     return upper_shadow < lower_shadow
 
 
+def find_fvg(
+    candles: Sequence[Candle],
+    start_index: int,
+    end_index: int,
+    *,
+    bullish: bool,
+) -> tuple[int, float] | None:
+    """The first 3-candle fair-value gap (FVG / displacement) in
+    `candles[start_index:end_index + 1]`, scanned chronologically.
+
+    An FVG is an imbalance left by an impulsive move: a 3-candle window
+    `(c0, c1, c2)` where price gapped past `c1` without overlap.
+
+    - Bearish gap (`bullish=False`): `c0.low > c2.high` -- a displacement down.
+      The *reclaim level* a later reversal must reclaim is `c0.low` (the top of
+      the gap, the last price before the imbalance).
+    - Bullish gap (`bullish=True`): `c0.high < c2.low` -- a displacement up. The
+      reclaim level is `c0.high` (the bottom of the gap).
+
+    Returns `(c0_index, reclaim_level)` for the first qualifying window, or
+    `None` if the range holds no gap. The returned index is `c0` -- the candle
+    that *formed* the reclaim level -- so callers can anchor a re-anchor line at
+    the level's origin. The window requires `c0_index >= start_index` and
+    `c0_index + 2 <= end_index`.
+    """
+    for c0_index in range(start_index, end_index - 1):
+        c0 = candles[c0_index]
+        c2 = candles[c0_index + 2]
+        if bullish and c0.high < c2.low:
+            return c0_index, c0.high
+        if not bullish and c0.low > c2.high:
+            return c0_index, c0.low
+    return None
+
+
 def find_sustained_break_index(
     candles: Sequence[Candle],
     start_index: int,

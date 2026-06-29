@@ -1027,3 +1027,106 @@ def test_bos_fields_on_confirmed_event() -> None:
     assert bos.reference_price_level == 200.0
     assert bos.origin_price_level == 100.0
     assert bos.scope is StructureScope.INTERNAL
+
+
+# --- Online re-anchor (flavor B) -------------------------------------------
+
+
+def test_invalid_reanchor_mode_raises() -> None:
+    with pytest.raises(ValueError, match="reanchor_mode"):
+        InternalStructureDetector(reanchor_mode="nope")
+    with pytest.raises(ValueError, match="reanchor_chain_threshold"):
+        InternalStructureDetector(reanchor_mode="chain", reanchor_chain_threshold=0)
+
+
+def test_reanchor_off_matches_default() -> None:
+    """`reanchor_mode="off"` is byte-for-byte identical to the default: the new
+    machinery is inert unless a trigger mode is selected (regression-safe)."""
+    candles = _load_window_candles()
+    default = InternalStructureDetector(
+        swing_lookback=2, persistence_candles=3, confluence_filter=False
+    ).detect(candles)
+    off = InternalStructureDetector(
+        swing_lookback=2, persistence_candles=3, confluence_filter=False, reanchor_mode="off"
+    ).detect(candles)
+    assert default == off
+
+
+def test_displacement_surfaces_local_choch_where_off_finds_none() -> None:
+    """On the real 1h window the bearish impulse leaves the high-side references
+    parked at the leg origin, so `off` never fires a reversal CHoCH. The
+    displacement trigger re-anchors them to a local FVG edge, so the eventual
+    reclaim lands as a *local* bullish CHoCH instead of being missed."""
+    candles = _load_window_candles()
+
+    off = InternalStructureDetector(
+        swing_lookback=2, persistence_candles=3, confluence_filter=False, reanchor_mode="off"
+    ).detect(candles)
+    displacement = InternalStructureDetector(
+        swing_lookback=2,
+        persistence_candles=3,
+        confluence_filter=False,
+        reanchor_mode="displacement",
+    ).detect(candles)
+
+    off_chochs = [e for e in off if e.event is StructureEvent.CHANGE_OF_CHARACTER]
+    disp_chochs = [e for e in displacement if e.event is StructureEvent.CHANGE_OF_CHARACTER]
+    assert off_chochs == []
+    bullish = [e for e in disp_chochs if e.direction is MarketDirection.BULLISH]
+    assert len(bullish) >= 1
+    # The local CHoCH breaks a re-anchored level well below the leg origin
+    # (64,766), not the stale top.
+    ref = bullish[0].reference_price_level
+    assert ref is not None and ref < 64766.0
+
+
+def test_chain_reanchors_stale_reference_to_local_level() -> None:
+    """A clean bearish impulse of consecutive lower-low pivots with no
+    intervening high pivot chains state-advances; at the threshold the stale
+    `active_high`/`validated_choch_high` (parked at the 200 origin) re-anchor
+    down to the local 150 high, so a modest reclaim to 160 fires a bullish CHoCH
+    there. Under `off` the same reclaim never reaches the stale 200 reference, so
+    no CHoCH fires."""
+    highs = [150.0] * 14
+    lows = [140.0] * 14
+    highs[1] = 200.0   # bootstraps active_high at the leg origin
+    lows[3] = 130.0    # bootstraps active_low
+    lows[5] = 110.0    # bearish advance 1
+    lows[7] = 90.0     # bearish advance 2
+    lows[9] = 70.0     # bearish advance 3 -> chain threshold -> re-anchor to 150
+    highs[11] = 160.0  # reclaim above the re-anchored 150 -> bullish CHoCH
+    highs[12] = 155.0  # persistence candle (still above 150, not a new pivot)
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 150.0, 110.0, close=120.0)
+    candles[7] = make_candle(7, 150.0, 90.0, close=100.0)
+    candles[9] = make_candle(9, 150.0, 70.0, close=80.0)
+    candles[11] = make_candle(11, 160.0, 140.0, close=158.0)
+    candles[12] = make_candle(12, 155.0, 140.0, close=152.0)
+
+    off = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False, reanchor_mode="off"
+    ).detect(candles)
+    chain = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=1,
+        confluence_filter=False,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=3,
+    ).detect(candles)
+
+    off_bull_choch = [
+        e
+        for e in off
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+    ]
+    chain_bull_choch = [
+        e
+        for e in chain
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+    ]
+    assert off_bull_choch == []
+    assert len(chain_bull_choch) == 1
+    assert chain_bull_choch[0].reference_price_level == 150.0

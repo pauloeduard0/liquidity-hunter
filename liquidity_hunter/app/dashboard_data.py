@@ -308,6 +308,18 @@ def load_dashboard_data(
         swing_lookback=internal_lookback,
         persistence_candles=internal_persistence,
         confluence_filter=confluence_filter,
+        # Online re-anchor (flavor B), "chain" trigger: on an extended impulsive
+        # leg the high/low references go blind, so the reversal CHoCH would fire
+        # late at a stale level. The chain trigger re-anchors them to a local
+        # level after `reanchor_chain_threshold` BOS advances in the leg, so the
+        # CHoCH lands locally. Threshold 2 (not the constructor default 3): at
+        # the production internal lookback legs run ~2 advances, so 3 almost
+        # never fires; 2 catches the big impulses (e.g. surfaces the local
+        # reversal after a sharp drop) while staying conservative and purely
+        # additive. Conservative variant (vs "displacement"); major detector
+        # unchanged for now. See InternalStructureDetector.reanchor_mode.
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
     ).detect(internal_candles)
     # Re-time each BOS to the first close beyond the formed level it broke
     # (dropping wick-only continuations), before the visible filter and POI.

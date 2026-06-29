@@ -195,6 +195,7 @@ from liquidity_hunter.liquidity.detectors._common import (
     bos_confluence,
     collect_pivots,
     find_close_break_index,
+    find_fvg,
     find_sustained_break_index,
     find_wick_break_index,
     is_sustained_break,
@@ -202,6 +203,10 @@ from liquidity_hunter.liquidity.detectors._common import (
 )
 from liquidity_hunter.liquidity.detectors.base import MarketStructureDetector
 from liquidity_hunter.liquidity.detectors.swing_points import SwingHighDetector, SwingLowDetector
+
+# Allowed values for `InternalStructureDetector.reanchor_mode`. See the
+# constructor and the "online re-anchor" section of the class docstring.
+_REANCHOR_MODES = frozenset({"off", "displacement", "chain"})
 
 
 @dataclass
@@ -255,6 +260,27 @@ class InternalStructureDetector(MarketStructureDetector):
     than lower shadow for a bullish BOS (or larger lower shadow for a bearish
     BOS), confirming directional price expansion beyond the level. When
     `False`, the filter is skipped and only the close requirement is checked.
+
+    `reanchor_mode` (default `"off"`) enables the **online re-anchor** (flavor
+    B). On a strong impulsive leg with few/no opposite pullbacks, the opposite-
+    side references (`active_high`/`validated_choch_high` in a bearish impulse,
+    mirror for bullish) stay parked at the leg's origin, so the eventual reversal
+    CHoCH fires late and at a stale level. When enabled, a *trigger* pulls those
+    references to a *local* level mid-move WITHOUT flipping `trend` (so the
+    reversal lands locally), via `reanchor_opposite`. Triggers:
+
+    - `"displacement"`: a 3-candle fair-value gap (`_common.find_fvg`) in the
+      trend direction re-anchors to the gap's reclaim edge.
+    - `"chain"`: `reanchor_chain_threshold` (default `3`) BOS state-advances
+      within the current leg (minor LH/HL pullbacks do not interrupt the count;
+      only a trend change does) re-anchor to the most recent in-leg counter-
+      extreme.
+
+    `"off"` preserves the original behavior exactly. The re-anchor only ever
+    *tightens* the reversal reference (never loosens it or lands on the wrong
+    side of price), and leaves the staircase floor and continuation-BOS logic
+    untouched. (Staging the skipped intermediate BOS of an impulse is a deferred
+    follow-up; this re-anchors only the reversal references.)
     """
 
     def __init__(
@@ -262,13 +288,21 @@ class InternalStructureDetector(MarketStructureDetector):
         swing_lookback: int = 5,
         persistence_candles: int = 12,
         confluence_filter: bool = False,
+        reanchor_mode: str = "off",
+        reanchor_chain_threshold: int = 3,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
+        if reanchor_mode not in _REANCHOR_MODES:
+            raise ValueError(f"reanchor_mode must be one of {sorted(_REANCHOR_MODES)}")
+        if reanchor_chain_threshold < 1:
+            raise ValueError("reanchor_chain_threshold must be at least 1")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
         self._low_detector = SwingLowDetector(lookback=swing_lookback)
         self._persistence_candles = persistence_candles
         self._confluence_filter = confluence_filter
+        self._reanchor_mode = reanchor_mode
+        self._reanchor_chain_threshold = reanchor_chain_threshold
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -385,6 +419,82 @@ class InternalStructureDetector(MarketStructureDetector):
         # first pivot of that kind, i.e. once these are no longer -1.
         prev_high_pivot_index = -1
         prev_low_pivot_index = -1
+        # --- Online re-anchor state (flavor B; only used when reanchor_mode is
+        # not "off"). On a strong impulsive leg with few/no opposite pullbacks,
+        # the *opposite-side* references (`active_high`/`validated_choch_high`
+        # for a bearish impulse, mirror for bullish) stay parked at the top/
+        # bottom of the leg, so the eventual reversal CHoCH fires late and at a
+        # stale level. A trigger (displacement FVG, or a pending-BOS chain) pulls
+        # those references to a *local* level mid-move WITHOUT flipping `trend`,
+        # so the reversal lands locally and structure resumes. The staircase
+        # floor and continuation BOS logic are untouched.
+        prev_any_pivot_index = -1
+        # Count of BOS state-advances *within the current leg* (trigger
+        # "chain"). `chain_dir` is the leg's advance direction. Minor pullback
+        # pivots (LH/HL labels) within an impulse do NOT reset it -- only a
+        # genuine trend change does, implicitly: the opposite leg's first advance
+        # finds `chain_dir` mismatched and restarts the count at 1 (within a
+        # single-direction leg only same-side advances occur, since a counter-
+        # trend break is a sweep/CHoCH, never an opposite advance). At the
+        # threshold the re-anchor level is the most recent in-leg counter-extreme
+        # (the local high of a bearish advance / low of a bullish advance), and
+        # the count resets so a long leg can re-anchor again as it extends.
+        bos_chain = 0
+        chain_dir = MarketDirection.NEUTRAL
+
+        def reanchor_opposite(level: float, ts: datetime, *, current_price: float) -> bool:
+            """Pull the stale *opposite-side* references to a local `level`
+            (flavor B), without touching `trend` or the staircase.
+
+            In a bearish trend the high-side references (`active_high`,
+            `validated_choch_high`, `choch_origin_high`) are collapsed *down* to
+            `level`; in a bullish trend the low-side references are collapsed
+            *up*. It either *tightens* an existing reversal reference or
+            *establishes* one when the impulse has nulled them all (the
+            blind-spot the re-anchor exists to fix): it re-anchors when `level`
+            is on the correct side of `current_price` (above it for bearish,
+            below for bullish) and -- if any reference still exists -- does not
+            loosen it (lower than the most stale high / higher than the most
+            stale low). `candidate_choch_<side>` is cleared too, so a stale
+            candidate cannot later promote back to the old extreme. Returns
+            whether it moved anything.
+            """
+            nonlocal active_high, active_low
+            nonlocal validated_choch_high, validated_choch_low
+            nonlocal choch_origin_high, choch_origin_low
+            nonlocal candidate_choch_high, candidate_choch_low
+            new = Pivot(price=level, timestamp=ts)
+            if trend is MarketDirection.BEARISH:
+                if level <= current_price:
+                    return False
+                refs = [
+                    r.price
+                    for r in (active_high, validated_choch_high, choch_origin_high)
+                    if r is not None
+                ]
+                if refs and level >= max(refs):
+                    return False
+                active_high = new
+                validated_choch_high = new
+                choch_origin_high = None
+                candidate_choch_high = None
+                return True
+            if trend is MarketDirection.BULLISH:
+                if level >= current_price:
+                    return False
+                refs = [
+                    r.price
+                    for r in (active_low, validated_choch_low, choch_origin_low)
+                    if r is not None
+                ]
+                if refs and level <= min(refs):
+                    return False
+                active_low = new
+                validated_choch_low = new
+                choch_origin_low = None
+                candidate_choch_low = None
+                return True
+            return False
 
         def emit(
             timestamp: datetime,
@@ -413,6 +523,28 @@ class InternalStructureDetector(MarketStructureDetector):
         for timestamp, kind, price in pivots:
             pivot = Pivot(price=price, timestamp=timestamp)
             current_index = index_by_timestamp[timestamp]
+
+            # --- Trigger "displacement": a fair-value gap in the trend
+            # direction, formed in the leg since the previous pivot, re-anchors
+            # the stale opposite-side references to the gap's reclaim edge (the
+            # last price before the imbalance). Runs before this pivot is
+            # processed, so a reversal pivot here is already evaluated against
+            # the local level. (BOS staging at the FVG is a deferred follow-up;
+            # this only re-anchors the reversal references -- payoff "A".)
+            if self._reanchor_mode == "displacement" and trend is not MarketDirection.NEUTRAL:
+                fvg = find_fvg(
+                    candles,
+                    max(0, prev_any_pivot_index),
+                    current_index,
+                    bullish=trend is MarketDirection.BULLISH,
+                )
+                if fvg is not None:
+                    fvg_c0_index, fvg_level = fvg
+                    reanchor_opposite(
+                        fvg_level,
+                        candles[fvg_c0_index].timestamp,
+                        current_price=candles[current_index].close,
+                    )
 
             if kind == "high":
                 # A wick-only in-trend break (no candle closed beyond the
@@ -697,6 +829,32 @@ class InternalStructureDetector(MarketStructureDetector):
                             trend = MarketDirection.BULLISH
                             active_low = pending_low
                             pending_low = None
+                            # Trigger "chain": count bullish BOS advances in this
+                            # leg; at the threshold re-anchor the stale low-side
+                            # references up to the most recent in-leg low.
+                            if chain_dir is MarketDirection.BULLISH:
+                                bos_chain += 1
+                            else:
+                                chain_dir = MarketDirection.BULLISH
+                                bos_chain = 1
+                            if (
+                                self._reanchor_mode == "chain"
+                                and bos_chain >= self._reanchor_chain_threshold
+                            ):
+                                seg_start = max(0, prev_any_pivot_index + 1)
+                                # Re-anchor to the candle that actually formed the
+                                # recent in-leg low (its timestamp anchors the CHoCH
+                                # line's origin), not the advance pivot's timestamp.
+                                low_candle = min(
+                                    candles[seg_start : current_index + 1], key=lambda c: c.low
+                                )
+                                reanchor_opposite(
+                                    low_candle.low,
+                                    low_candle.timestamp,
+                                    current_price=candles[current_index].close,
+                                )
+                                bos_chain = 0
+                                chain_dir = MarketDirection.NEUTRAL
                             if (
                                 last_bullish_bos_origin is not None
                                 and last_bullish_bos_price is not None
@@ -1008,6 +1166,32 @@ class InternalStructureDetector(MarketStructureDetector):
                             trend = MarketDirection.BEARISH
                             active_high = pending_high
                             pending_high = None
+                            # Trigger "chain": count bearish BOS advances in this
+                            # leg; at the threshold re-anchor the stale high-side
+                            # references down to the most recent in-leg high.
+                            if chain_dir is MarketDirection.BEARISH:
+                                bos_chain += 1
+                            else:
+                                chain_dir = MarketDirection.BEARISH
+                                bos_chain = 1
+                            if (
+                                self._reanchor_mode == "chain"
+                                and bos_chain >= self._reanchor_chain_threshold
+                            ):
+                                seg_start = max(0, prev_any_pivot_index + 1)
+                                # Re-anchor to the candle that actually formed the
+                                # recent in-leg high (its timestamp anchors the CHoCH
+                                # line's origin), not the advance pivot's timestamp.
+                                high_candle = max(
+                                    candles[seg_start : current_index + 1], key=lambda c: c.high
+                                )
+                                reanchor_opposite(
+                                    high_candle.high,
+                                    high_candle.timestamp,
+                                    current_price=candles[current_index].close,
+                                )
+                                bos_chain = 0
+                                chain_dir = MarketDirection.NEUTRAL
                             if (
                                 last_bearish_bos_origin is not None
                                 and last_bearish_bos_price is not None
@@ -1043,6 +1227,12 @@ class InternalStructureDetector(MarketStructureDetector):
                 if not wick_only_break:
                     active_low = pivot
                     prev_low_pivot_index = current_index
+
+            # Track the most recent pivot (of any kind) so the next iteration's
+            # displacement scan and chain segment-extreme bound the leg to the
+            # candles since this pivot. Updated even on a wick-only break (the
+            # pivot still happened chronologically).
+            prev_any_pivot_index = current_index
 
         return events
 
