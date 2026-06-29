@@ -25,6 +25,8 @@ from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
 from liquidity_hunter.data import (
     BinanceDataProvider,
     BinanceFuturesDataProvider,
+    BinanceFuturesOHLCVProvider,
+    FallbackOHLCVProvider,
     FuturesDataProvider,
     OHLCVProvider,
 )
@@ -67,9 +69,6 @@ _INTERNAL_STRUCTURE_PARAMS: dict[TimeFrame, tuple[int, int]] = {
     TimeFrame.W1: (5, 12),
 }
 _DEFAULT_INTERNAL_PARAMS = (5, 12)
-
-# Binance's `/api/v3/klines` endpoint accepts `limit` values up to 1000.
-_MAX_FETCH_LIMIT = 1000
 
 _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
     TimeFrame.M1: TimeFrame.H1,
@@ -256,14 +255,27 @@ def load_dashboard_data(
     provider: OHLCVProvider | None = None,
     symbol: str = "BTCUSDT",
     timeframe: TimeFrame = TimeFrame.H1,
-    limit: int = 700,
+    limit: int = 1200,
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
     confluence_filter: bool = False,
     futures_provider: FuturesDataProvider | None = None,
 ) -> DashboardData:
     """Fetch candles and assemble liquidity, ranking, and retail bias data."""
-    provider = provider if provider is not None else BinanceDataProvider()
-    candles = provider.get_ohlcv(symbol, timeframe, limit)
+    # Default to perpetual-futures candles (aligned with the futures-derived
+    # liquidation/OI/funding analysis, and a 1500-candle per-request window vs
+    # spot's 1000), falling back to spot for symbols without a perpetual.
+    if provider is None:
+        provider = FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(), BinanceDataProvider())
+
+    # Fetch the buffered series once and derive the visible window from its
+    # tail. `buffered_candles` prepends `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER`
+    # candles of history before the visible window (for the internal detector's
+    # warm-up and the structural anchor); the visible `candles` are just its
+    # last `limit`, so a separate fetch would be redundant -- and a second call
+    # could even race a freshly-printed candle, desyncing the two series.
+    buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER, provider.max_fetch_limit)
+    buffered_candles = provider.get_ohlcv(symbol, timeframe, buffered_limit)
+    candles = buffered_candles[-limit:]
 
     liquidity_zones = mark_swept_zones(
         [
@@ -279,8 +291,6 @@ def load_dashboard_data(
     active_zones = [z for z in liquidity_zones if not z.is_mitigated]
     ranked_zones = LiquidityScoringEngine().score(active_zones, current_price)
 
-    buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER, _MAX_FETCH_LIMIT)
-    buffered_candles = provider.get_ohlcv(symbol, timeframe, buffered_limit)
     visible_start = candles[0].timestamp
     visible_end = candles[-1].timestamp
 

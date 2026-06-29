@@ -125,6 +125,15 @@ def test_dashboard_rejects_non_positive_limit(client: TestClient) -> None:
     assert response.status_code == 422
 
 
+def test_dashboard_accepts_limit_up_to_1200(client: TestClient) -> None:
+    assert client.get("/api/dashboard", params={"limit": 1200}).status_code == 200
+
+
+def test_dashboard_rejects_limit_above_1200(client: TestClient) -> None:
+    # 1200 + the 300-candle buffer is the futures klines per-request max (1500).
+    assert client.get("/api/dashboard", params={"limit": 1201}).status_code == 422
+
+
 def test_dashboard_rejects_non_positive_swing_lookback(client: TestClient) -> None:
     response = client.get("/api/dashboard", params={"swing_lookback": 0})
 

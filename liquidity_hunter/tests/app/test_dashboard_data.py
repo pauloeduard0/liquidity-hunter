@@ -263,10 +263,10 @@ def test_load_dashboard_data_fetches_buffered_series_for_internal_structure() ->
         futures_provider=_FAKE_FUTURES,
     )
 
-    # InternalStructureDetector runs on the same timeframe as `candles`, with
-    # an extra bootstrap buffer of 300 candles.
-    assert provider.requested_timeframes == [TimeFrame.H1, TimeFrame.H1, TimeFrame.H4]
-    assert provider.requested_limits == [500, 800, 100]
+    # The buffered series (limit + 300 bootstrap buffer) is fetched once; the
+    # visible window is its tail. Then the HTF series (100) is fetched.
+    assert provider.requested_timeframes == [TimeFrame.H1, TimeFrame.H4]
+    assert provider.requested_limits == [800, 100]
 
 
 def test_load_dashboard_data_internal_structure_fetch_limit_capped_at_klines_max() -> None:
@@ -282,7 +282,7 @@ def test_load_dashboard_data_internal_structure_fetch_limit_capped_at_klines_max
         futures_provider=_FAKE_FUTURES,
     )
 
-    assert provider.requested_limits == [900, 1000, 100]
+    assert provider.requested_limits == [1000, 100]
 
 
 def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> None:
@@ -306,8 +306,8 @@ def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> N
         futures_provider=_FAKE_FUTURES,
     )
 
-    # limit=40 + 300 buffer = 340, plus HTF fetch (100).
-    assert provider.requested_limits == [40, 340, 100]
+    # limit=40 + 300 buffer = 340 (fetched once), plus HTF fetch (100).
+    assert provider.requested_limits == [340, 100]
 
     visible_start = data.candles[0].timestamp
     visible_end = data.candles[-1].timestamp

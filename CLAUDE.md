@@ -223,8 +223,32 @@ Full architecture rationale, including SOLID notes, is documented in
   periods (`_FUTURES_PERIOD`). Same `retry_with_backoff` + error translation
   as `BinanceDataProvider`.
 
-`BinanceDataProvider`, `OHLCVProvider`, `BinanceFuturesDataProvider`, and
-`FuturesDataProvider` are re-exported from `liquidity_hunter.data`.
+- **`data/providers/binance_futures_ohlcv.py`** — `BinanceFuturesOHLCVProvider`,
+  an `OHLCVProvider` (sibling to `BinanceDataProvider`) that fetches **candles**
+  from Binance USDT-M perpetual futures via ccxt `binanceusdm`'s implicit
+  `fapiPublicGetKlines` (raw `/fapi/v1/klines`, same 12-column layout as spot,
+  so `Candle.taker_buy_volume` at column 9 is still populated). Preferred over
+  spot because the candles align with the futures-derived analysis already
+  overlaid on the chart (OI/funding/long-short/liquidation map) and reflect
+  leveraged flow. Its `max_fetch_limit` is **1500** (vs spot's 1000), so one
+  request covers a larger window. Symbols with no perpetual contract raise
+  `DataProviderRequestError`.
+- **`data/providers/fallback.py`** — `FallbackOHLCVProvider(primary, secondary)`:
+  an `OHLCVProvider` that tries `primary` and falls back to `secondary` on
+  `DataProviderRequestError` (e.g. a symbol with no perpetual), clamping the
+  fallback request to the secondary's `max_fetch_limit`; connection errors
+  propagate. `max_fetch_limit` follows the primary. `load_dashboard_data`'s
+  default provider is `FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(),
+  BinanceDataProvider())` (futures candles, spot fallback for spot-only pairs).
+
+The `OHLCVProvider` port carries a `max_fetch_limit` class attribute (default
+1000, the per-request candle cap) that callers read instead of assuming a fixed
+limit; `klines_row_to_candle` (in `binance.py`) is the shared 12-column row →
+`Candle` parser used by both the spot and futures providers.
+
+`BinanceDataProvider`, `BinanceFuturesOHLCVProvider`, `FallbackOHLCVProvider`,
+`OHLCVProvider`, `BinanceFuturesDataProvider`, and `FuturesDataProvider` are
+re-exported from `liquidity_hunter.data`.
 
 ### Indicators layer (`liquidity_hunter/indicators`)
 
@@ -663,10 +687,13 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `liquidity_heatmap` (`LiquidityHeatmap | None`),
   `liquidation_map` (`LeverageLiquidationMap | None`), and
   `narrative` (`MarketNarrative | None`) for one symbol/timeframe.
-- **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=..., swing_lookback=..., internal_swing_lookback=..., confluence_filter=True)`**
-  — fetches candles, runs all liquidity detectors, scores the zones via
-  `LiquidityScoringEngine`, fetches a buffered candle series
-  (`buffered_candles`), then runs `SwingStructureDetector` on it and
+- **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=1200, swing_lookback=..., internal_swing_lookback=..., confluence_filter=True)`**
+  — fetches a single buffered candle series (`buffered_candles`) and derives the
+  visible `candles` from its tail (`buffered_candles[-limit:]`; no separate fetch
+  for the visible window — its second fetch would be redundant and could race a
+  freshly-printed candle). It then runs all liquidity detectors and scores the
+  zones via `LiquidityScoringEngine`, runs `SwingStructureDetector` on the
+  buffered series and
   `InternalStructureDetector` on a **structurally anchored** slice of it to
   populate `market_structure_events` and `internal_structure_events`
   respectively, both filtered to the visible window. The internal detector's
@@ -690,7 +717,8 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `buffered_candles` is fetched with an extra
   `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER = 300` candles of history prepended
   beyond `limit` (`buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER,
-  _MAX_FETCH_LIMIT)`). The **major** detector runs on the full
+  provider.max_fetch_limit)` — the cap comes from the provider: 1000 for spot,
+  1500 for the futures default). The **major** detector runs on the full
   `buffered_candles`; the **internal** detector (and `POIDetector`, which
   consumes its events) instead start at a **structural anchor** —
   `_structural_anchor_index(buffered_candles, visible_start)`, the index of the
@@ -706,7 +734,8 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   returns no pre-visible buffer. Both `market_structure_events`,
   `internal_structure_events`, and `poi_zones`/`poi_sweep_events` are filtered
   to the calendar range `[candles[0].timestamp, candles[-1].timestamp]` after
-  detection. `candles` (main series, its `limit`) is unaffected.
+  detection. `candles` (the visible window, the trailing `limit` of
+  `buffered_candles`) is unaffected.
 
   After all detectors run, `ManipulationCycleDetector().detect(candles,
   all_structure, liquidity_zones, poi_sweep_events, volume_delta_series(candles))`

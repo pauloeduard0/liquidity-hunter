@@ -24,7 +24,10 @@ _cache: TTLCache[DashboardData] = TTLCache(ttl_seconds=10.0)
 def get_dashboard(
     symbol: str = "BTCUSDT",
     timeframe: TimeFrame = TimeFrame.H1,
-    limit: Annotated[int, Query(gt=0, le=1000)] = 700,
+    # Cap at 1200: with the 300-candle internal-structure buffer, 1200 + 300
+    # hits the futures klines per-request max of 1500, while keeping the buffer
+    # fully fed (it covers `_STRUCTURAL_ANCHOR_REGION`).
+    limit: Annotated[int, Query(gt=0, le=1200)] = 1200,
     swing_lookback: Annotated[int, Query(gt=0)] = DEFAULT_SWING_LOOKBACK,
 ) -> DashboardDataResponse:
     """Return a `DashboardData` snapshot for `symbol`/`timeframe` as JSON.

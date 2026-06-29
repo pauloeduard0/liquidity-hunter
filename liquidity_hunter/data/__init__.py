@@ -7,6 +7,8 @@ entities (e.g. `Candle`). Depends only on `core`.
 from liquidity_hunter.data.providers import (
     BinanceDataProvider,
     BinanceFuturesDataProvider,
+    BinanceFuturesOHLCVProvider,
+    FallbackOHLCVProvider,
     FuturesDataProvider,
     OHLCVProvider,
 )
@@ -14,6 +16,8 @@ from liquidity_hunter.data.providers import (
 __all__ = [
     "BinanceDataProvider",
     "BinanceFuturesDataProvider",
+    "BinanceFuturesOHLCVProvider",
+    "FallbackOHLCVProvider",
     "FuturesDataProvider",
     "OHLCVProvider",
 ]

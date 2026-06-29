@@ -18,6 +18,13 @@ class OHLCVProvider(ABC):
     exchange/API and mapping its response onto `Candle` entities.
     """
 
+    #: Maximum candles a single `get_ohlcv` request can return. Callers that
+    #: size a fetch (e.g. the dashboard's buffered window) read this instead of
+    #: assuming a fixed cap, since it varies by source (Binance spot klines
+    #: allow 1000 per request, USDT-M futures klines allow 1500). The default
+    #: matches Binance spot.
+    max_fetch_limit: int = 1000
+
     @abstractmethod
     def get_ohlcv(self, symbol: str, timeframe: TimeFrame, limit: int = 500) -> list[Candle]:
         """Return up to `limit` most recent candles for `symbol`/`timeframe`.

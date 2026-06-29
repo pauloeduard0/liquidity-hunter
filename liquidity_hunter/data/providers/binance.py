@@ -30,8 +30,33 @@ def to_ccxt_symbol(symbol: str) -> str:
     raise ValueError(f"Unable to determine base/quote split for symbol '{symbol}'")
 
 
+def klines_row_to_candle(symbol: str, timeframe: TimeFrame, row: list[Any]) -> Candle:
+    """Map one raw Binance kline row (12 columns) onto a `Candle`.
+
+    Shared by the spot and USDT-M futures providers, whose `/api/v3/klines`
+    and `/fapi/v1/klines` responses share the same column layout -- notably
+    taker buy base asset volume at column index 9, the basis for `volume_delta`.
+    """
+    timestamp_ms, open_, high, low, close, volume = row[:6]
+    taker_buy_volume = row[9]
+    return Candle(
+        symbol=symbol,
+        timeframe=timeframe,
+        timestamp=datetime.fromtimestamp(int(timestamp_ms) / 1000, tz=UTC),
+        open=float(open_),
+        high=float(high),
+        low=float(low),
+        close=float(close),
+        volume=float(volume),
+        taker_buy_volume=float(taker_buy_volume),
+    )
+
+
 class BinanceDataProvider(OHLCVProvider):
-    """Fetches OHLCV candles from Binance via CCXT."""
+    """Fetches OHLCV candles from Binance spot via CCXT."""
+
+    # Binance spot's `/api/v3/klines` endpoint accepts `limit` up to 1000.
+    max_fetch_limit = 1000
 
     def __init__(
         self,
@@ -56,7 +81,7 @@ class BinanceDataProvider(OHLCVProvider):
         """
         ccxt_symbol = to_ccxt_symbol(symbol)
         raw_rows = self._fetch_klines(ccxt_symbol, timeframe, limit)
-        return [self._to_candle(symbol, timeframe, row) for row in raw_rows]
+        return [klines_row_to_candle(symbol, timeframe, row) for row in raw_rows]
 
     def _fetch_klines(self, ccxt_symbol: str, timeframe: TimeFrame, limit: int) -> list[list[Any]]:
         # ccxt's unified `fetch_ohlcv` only returns 6 columns (no taker buy
@@ -100,19 +125,3 @@ class BinanceDataProvider(OHLCVProvider):
             timeframe.value,
         )
         return rows
-
-    @staticmethod
-    def _to_candle(symbol: str, timeframe: TimeFrame, row: list[Any]) -> Candle:
-        timestamp_ms, open_, high, low, close, volume = row[:6]
-        taker_buy_volume = row[9]
-        return Candle(
-            symbol=symbol,
-            timeframe=timeframe,
-            timestamp=datetime.fromtimestamp(int(timestamp_ms) / 1000, tz=UTC),
-            open=float(open_),
-            high=float(high),
-            low=float(low),
-            close=float(close),
-            volume=float(volume),
-            taker_buy_volume=float(taker_buy_volume),
-        )
