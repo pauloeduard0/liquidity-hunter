@@ -986,6 +986,29 @@ runs on both `all_internal_events` and `all_major_events`. Both detectors' state
 machines, trailing references, and CHoCH promotion are untouched — only the
 reported BOS reference/timestamp change.
 
+**Staleness re-anchor** (**both detectors**, as of 2026-06-29):
+`stale_reanchor_candles` (constructor default `None` = off; wired in
+`load_dashboard_data` for **both** detectors per timeframe via the shared
+`_STALE_REANCHOR_CANDLES`, e.g. H4=60, D1=40) retires a stale cycle. On a coarse
+timeframe a trend can lock for a long time: a bearish leg pins the bullish
+reversal reference at the leg origin, so the eventual CHoCH only fires once price
+climbs all the way back there (the "long-stuck-BOS" pathology). When the trend
+runs `stale_reanchor_candles` candles past its last BOS / trend flip (tracked by
+`last_advance_index`, set in `emit` for BOS/CHoCH/`CHOCH_FAILED`) without a fresh
+one, the reversal reference is pulled to the most recent local swing extreme via
+the existing `reanchor_opposite` helper — so a CHoCH can confirm **locally** and
+a new cycle begins, **without flipping `trend`** (the CHoCH itself still has to
+confirm). It only ever tightens (and only to a level on the correct side of
+price), so it tracks the recent extreme as the range unfolds; a confirming
+CHoCH/BOS resets the counter. Independent of `reanchor_mode`. The two detectors
+differ only in how they pick the local extreme: the major uses `last_high_pivot`
+/ `last_low_pivot`; the internal (no such held pivot — references trail) uses the
+extreme high/low over a trailing window of `stale_reanchor_candles` candles.
+**The internal detector is what the chart renders for all timeframes**
+(`MainChart.tsx`: `scopeEvents = data.internal_structure_events`), so the
+internal staleness re-anchor is what fixes the visible lock; the major one feeds
+`market_structure_events` (in the API, not currently drawn).
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a

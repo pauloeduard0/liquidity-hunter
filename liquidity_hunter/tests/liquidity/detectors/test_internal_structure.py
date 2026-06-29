@@ -1130,3 +1130,45 @@ def test_chain_reanchors_stale_reference_to_local_level() -> None:
     assert off_bull_choch == []
     assert len(chain_bull_choch) == 1
     assert chain_bull_choch[0].reference_price_level == 150.0
+
+
+def test_invalid_stale_reanchor_candles_raises() -> None:
+    with pytest.raises(ValueError, match="stale_reanchor_candles"):
+        InternalStructureDetector(stale_reanchor_candles=0)
+
+
+def test_stale_reanchor_surfaces_local_choch_where_off_finds_none() -> None:
+    """On the real 1h window the bearish leg leaves the high-side reversal
+    reference parked at the leg origin (64,766), so `off` never fires a reversal
+    CHoCH as price grinds back up. After `stale_reanchor_candles` candles with no
+    fresh BOS/CHoCH the staleness re-anchor pulls that reference down to the
+    recent local high, so the reclaim lands as a *local* bullish CHoCH well below
+    the origin instead of being missed."""
+    candles = _load_window_candles()
+
+    off = InternalStructureDetector(
+        swing_lookback=2, persistence_candles=3, confluence_filter=False
+    ).detect(candles)
+    stale = InternalStructureDetector(
+        swing_lookback=2,
+        persistence_candles=3,
+        confluence_filter=False,
+        stale_reanchor_candles=30,
+    ).detect(candles)
+
+    off_bull_choch = [
+        e
+        for e in off
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+    ]
+    stale_bull_choch = [
+        e
+        for e in stale
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+    ]
+    assert off_bull_choch == []
+    assert len(stale_bull_choch) >= 1
+    ref = stale_bull_choch[0].reference_price_level
+    assert ref is not None and ref < 64766.0

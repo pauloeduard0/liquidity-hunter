@@ -70,6 +70,27 @@ _INTERNAL_STRUCTURE_PARAMS: dict[TimeFrame, tuple[int, int]] = {
 }
 _DEFAULT_INTERNAL_PARAMS = (5, 12)
 
+# Staleness threshold for both structure detectors' reversal re-anchor
+# (`*StructureDetector.stale_reanchor_candles`): how many candles a trend may run
+# without a confirming BOS / trend flip before its reversal reference is pulled
+# to the most recent local swing extreme so a CHoCH can fire locally and a new
+# cycle can begin. Per timeframe (clock time differs), sized well above a normal
+# leg so routine consolidations don't trip it -- it targets a cycle that has
+# visibly stopped making sense (e.g. a bearish leg still pinning the bullish
+# reversal at the leg origin months after price ranged/recovered). Applied to the
+# *internal* detector (what the chart renders for all timeframes) as well as the
+# major one.
+_STALE_REANCHOR_CANDLES: dict[TimeFrame, int] = {
+    TimeFrame.M5: 120,
+    TimeFrame.M15: 90,
+    TimeFrame.M30: 80,
+    TimeFrame.H1: 80,
+    TimeFrame.H4: 60,
+    TimeFrame.D1: 40,
+    TimeFrame.W1: 26,
+}
+_DEFAULT_STALE_REANCHOR_CANDLES = 60
+
 _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
     TimeFrame.M1: TimeFrame.H1,
     TimeFrame.M5: TimeFrame.H1,
@@ -304,6 +325,13 @@ def load_dashboard_data(
         # detector call below for the threshold=2 rationale.
         reanchor_mode="chain",
         reanchor_chain_threshold=2,
+        # Retire a stale cycle: after this many candles with no fresh BOS/CHoCH
+        # the reversal reference is pulled to the recent local swing extreme so a
+        # CHoCH fires locally rather than waiting for price to climb back to the
+        # leg origin (the long-stuck-BOS pathology on coarse timeframes).
+        stale_reanchor_candles=_STALE_REANCHOR_CANDLES.get(
+            timeframe, _DEFAULT_STALE_REANCHOR_CANDLES
+        ),
     ).detect(buffered_candles)
     all_major_events = _reanchor_bos_close_break(all_major_events, buffered_candles)
     market_structure_events = [
@@ -331,10 +359,20 @@ def load_dashboard_data(
         # the production internal lookback legs run ~2 advances, so 3 almost
         # never fires; 2 catches the big impulses (e.g. surfaces the local
         # reversal after a sharp drop) while staying conservative and purely
-        # additive. Conservative variant (vs "displacement"); major detector
-        # unchanged for now. See InternalStructureDetector.reanchor_mode.
+        # additive. Conservative variant (vs "displacement").
+        # See InternalStructureDetector.reanchor_mode.
         reanchor_mode="chain",
         reanchor_chain_threshold=2,
+        # Retire a stale cycle (same as the major detector above): the internal
+        # detector is what the chart renders for all timeframes, and on coarse
+        # ones its bearish/bullish leg can stay pinned to the origin reversal
+        # reference while price ranges/recovers, so the CHoCH only fires far
+        # overhead. After this many candles with no fresh BOS/CHoCH the reversal
+        # reference is pulled to the recent local swing extreme so a CHoCH lands
+        # locally and a new cycle begins.
+        stale_reanchor_candles=_STALE_REANCHOR_CANDLES.get(
+            timeframe, _DEFAULT_STALE_REANCHOR_CANDLES
+        ),
     ).detect(internal_candles)
     # Re-time each BOS to the first close beyond the formed level it broke
     # (dropping wick-only continuations), before the visible filter and POI.

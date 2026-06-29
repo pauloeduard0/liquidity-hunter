@@ -821,6 +821,59 @@ def test_reanchor_invalid_mode_raises() -> None:
         SwingStructureDetector(reanchor_mode="nope")
     with pytest.raises(ValueError, match="reanchor_chain_threshold"):
         SwingStructureDetector(reanchor_mode="chain", reanchor_chain_threshold=0)
+    with pytest.raises(ValueError, match="stale_reanchor_candles"):
+        SwingStructureDetector(stale_reanchor_candles=0)
+
+
+def test_stale_reanchor_pulls_reversal_reference_to_local_extreme() -> None:
+    """A bearish leg promotes a pinned bullish reversal reference at 180 (a
+    continuation BOS), then goes quiet: no fresh BOS/CHoCH for
+    `stale_reanchor_candles` candles. The staleness re-anchor pulls the pinned
+    reference down to the most recent local swing high (150), so a modest
+    reclaim to 160 fires a bullish CHoCH there. Without the staleness toggle the
+    reclaim stays below the pinned 180 reference, so no CHoCH fires (only a
+    sweep) -- the staleness toggle is what tightens the reversal level."""
+    highs = [140.0] * 19
+    lows = [130.0] * 19
+    highs[1] = 200.0   # bootstraps active_high
+    lows[3] = 100.0    # bootstraps active_low
+    highs[5] = 180.0   # lower-high -> candidate_choch_high = 180
+    lows[7] = 80.0     # bearish BOS #1 (NEUTRAL -> BEARISH)
+    lows[9] = 60.0     # bearish BOS #2 (continuation) -> promotes validated 180
+    highs[11] = 150.0  # most recent local swing high (LH); last advance @9
+    lows[13] = 120.0   # quiet HL pivot (price < 150): staleness fires -> 180->150
+    highs[16] = 160.0  # reclaim: above re-anchored 150 but below pinned 180
+    highs[17] = 155.0  # persistence candle (still above 150, not a new pivot)
+
+    candles = make_series(highs, lows)
+    candles[7] = make_candle(7, 140.0, 80.0, close=90.0)
+    candles[9] = make_candle(9, 140.0, 60.0, close=70.0)
+    candles[13] = make_candle(13, 140.0, 120.0, close=125.0)
+    candles[16] = make_candle(16, 160.0, 130.0, close=158.0)
+    candles[17] = make_candle(17, 155.0, 130.0, close=152.0)
+
+    off = SwingStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
+    stale = SwingStructureDetector(
+        swing_lookback=1,
+        persistence_candles=1,
+        confluence_filter=False,
+        stale_reanchor_candles=4,
+    ).detect(candles)
+
+    def bull_choch(events: list) -> list:
+        return [
+            e
+            for e in events
+            if e.event is StructureEvent.CHANGE_OF_CHARACTER
+            and e.direction is MarketDirection.BULLISH
+        ]
+
+    assert bull_choch(off) == []
+    stale_bull_choch = bull_choch(stale)
+    assert len(stale_bull_choch) == 1
+    assert stale_bull_choch[0].reference_price_level == 150.0
 
 
 def test_chain_reanchors_stale_reference_to_local_level() -> None:

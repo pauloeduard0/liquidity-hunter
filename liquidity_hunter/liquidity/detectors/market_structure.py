@@ -107,6 +107,18 @@ class SwingStructureDetector(MarketStructureDetector):
     in-trend fair-value gap; `"chain"` triggers after `reanchor_chain_threshold`
     (default `3`) BOS advances within the leg. `"off"` is byte-for-byte the
     original behavior.
+
+    `stale_reanchor_candles` (default `None` = off) enables a *staleness*
+    re-anchor, independent of `reanchor_mode`: when the trend has run this many
+    candles without a confirming BOS or a trend flip (CHoCH/`CHOCH_FAILED`), the
+    cycle has stopped making structural sense -- price has ranged or reversed
+    while the reversal reference is still pinned at the leg's far origin (so the
+    eventual CHoCH only fires once price climbs all the way back there). The
+    reversal reference is then pulled down (bearish) / up (bullish) to the most
+    recent local swing extreme so a CHoCH can confirm locally and a new cycle
+    can begin -- WITHOUT flipping `trend` (the CHoCH itself still has to
+    confirm). It only ever tightens, so it tracks the recent extreme as the
+    range unfolds; a confirming CHoCH/BOS resets the staleness counter.
     """
 
     def __init__(
@@ -116,6 +128,7 @@ class SwingStructureDetector(MarketStructureDetector):
         confluence_filter: bool = True,
         reanchor_mode: str = "off",
         reanchor_chain_threshold: int = 3,
+        stale_reanchor_candles: int | None = None,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -123,12 +136,15 @@ class SwingStructureDetector(MarketStructureDetector):
             raise ValueError(f"reanchor_mode must be one of {sorted(_REANCHOR_MODES)}")
         if reanchor_chain_threshold < 1:
             raise ValueError("reanchor_chain_threshold must be at least 1")
+        if stale_reanchor_candles is not None and stale_reanchor_candles < 1:
+            raise ValueError("stale_reanchor_candles must be at least 1")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
         self._low_detector = SwingLowDetector(lookback=swing_lookback)
         self._persistence_candles = persistence_candles
         self._confluence_filter = confluence_filter
         self._reanchor_mode = reanchor_mode
         self._reanchor_chain_threshold = reanchor_chain_threshold
+        self._stale_reanchor_candles = stale_reanchor_candles
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -219,6 +235,11 @@ class SwingStructureDetector(MarketStructureDetector):
         # never an opposite advance).
         bos_chain = 0
         chain_dir = MarketDirection.NEUTRAL
+        # Index of the candle that last *advanced* the cycle (a BOS) or *flipped*
+        # it (a CHoCH / CHOCH_FAILED), set in `emit`. Drives the staleness
+        # re-anchor (`stale_reanchor_candles`): a cycle that runs too long past
+        # this index without a fresh advance/flip is stale.
+        last_advance_index = -1
 
         def reanchor_opposite(level: float, ts: datetime, *, current_price: float) -> bool:
             """Pull the stale *opposite-side* references to a local `level`
@@ -277,6 +298,13 @@ class SwingStructureDetector(MarketStructureDetector):
             reference_price_level: float,
             reference_timestamp: datetime | None = None,
         ) -> None:
+            nonlocal last_advance_index
+            if event in (
+                StructureEvent.BREAK_OF_STRUCTURE,
+                StructureEvent.CHANGE_OF_CHARACTER,
+                StructureEvent.CHOCH_FAILED,
+            ):
+                last_advance_index = index_by_timestamp[timestamp]
             events.append(
                 MarketStructure(
                     symbol=symbol,
@@ -309,6 +337,27 @@ class SwingStructureDetector(MarketStructureDetector):
                     reanchor_opposite(
                         fvg_level,
                         candles[fvg_c0_index].timestamp,
+                        current_price=candles[current_index].close,
+                    )
+
+            # --- Staleness re-anchor: the cycle has run `stale_reanchor_candles`
+            # candles past its last BOS/CHoCH without a fresh one. Pull the stale
+            # reversal reference to the most recent local swing extreme (the high
+            # a bearish leg must reclaim / the low a bullish leg must lose) so a
+            # CHoCH can confirm locally instead of waiting for price to climb all
+            # the way back to the leg's origin. `reanchor_opposite` only tightens,
+            # so this tracks the recent extreme as the range unfolds.
+            if (
+                self._stale_reanchor_candles is not None
+                and trend is not MarketDirection.NEUTRAL
+                and last_advance_index >= 0
+                and current_index - last_advance_index >= self._stale_reanchor_candles
+            ):
+                local = last_high_pivot if trend is MarketDirection.BEARISH else last_low_pivot
+                if local is not None:
+                    reanchor_opposite(
+                        local.price,
+                        local.timestamp,
                         current_price=candles[current_index].close,
                     )
 
