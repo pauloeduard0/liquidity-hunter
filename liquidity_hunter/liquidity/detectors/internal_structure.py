@@ -64,8 +64,14 @@ kind). These drive:
 - `LOWER_HIGH`/`HIGHER_LOW`: a pivot that does not break the trailing
   reference.
 - `LIQUIDITY_SWEEP`: a counter-trend pivot that breaks the trailing
-  reference but is not a confirmed reversal (see below). Sweeps are noise
-  and do NOT affect the CHoCH reference.
+  reference but is not a confirmed reversal (see below). A sweep never
+  promotes or overwrites the *validated* CHoCH reference directly, but a
+  sweep that takes out the current pullback *candidate* re-anchors that
+  candidate to the swept level (see the CHoCH-reference section): the swept
+  low/high is the structural origin a subsequent same-trend expansion rises/
+  falls from. The re-anchored candidate only becomes validated if a
+  continuation confirms it, so a lone sweep with no follow-through expansion
+  remains noise.
 
 `pending_high`/`pending_low` accumulate the most extreme high/low pivot for
 their side, promoted to `active_<side>` when the opposite side breaks (the
@@ -91,6 +97,18 @@ bullish side):
 1. **BOS emission**: when a bearish BOS is confirmed (pending BOS + LH
    pullback), the confirming LH pivot becomes `candidate_choch_high` --
    *provisional*, not yet the CHoCH reference.
+
+1b. **Sweep re-anchor**: while the bearish leg is unfolding, a counter-trend
+   sweep (a high pivot wicking above the trailing reference but not holding)
+   that pokes *above* the current `candidate_choch_high` re-anchors the
+   candidate UP to that swept high. Rationale: once price grabs liquidity above
+   the prior LH and then resumes lower, the swept high -- not the pre-sweep LH
+   -- is the level a subsequent bullish reversal launched from, so the eventual
+   CHoCH should break it. The candidate only moves to a *more extreme* (higher)
+   sweep, so progressively higher grabs keep the highest origin. This re-anchor
+   feeds step 2's promotion; a sweep with no continuation never promotes, so it
+   does not affect the validated reference. Mirrored on the bullish side
+   (`candidate_choch_low` re-anchors DOWN to a swept low).
 
 2. **Continuation-gated promotion**: the next bearish state-advance (a lower-
    low pivot) promotes `candidate_choch_high` to `validated_choch_high`
@@ -601,6 +619,18 @@ class InternalStructureDetector(MarketStructureDetector):
                             active_high.price,
                         )
                         pending_low = self._extreme(pending_low, active_low, higher=False)
+                        # Mirror of the bearish case: a sweep that takes out the
+                        # current bullish-CHoCH pullback candidate redefines the
+                        # leg's pullback origin -- the swept high (not the
+                        # pre-sweep LH) is the high a later new-low expansion
+                        # falls from. Re-anchor the candidate up to it (more
+                        # extreme only, so progressively higher sweeps keep the
+                        # highest origin).
+                        if (
+                            candidate_choch_high is not None
+                            and price > candidate_choch_high.price
+                        ):
+                            candidate_choch_high = pivot
                     elif last_bull_bos_high is not None and price <= last_bull_bos_high:
                         # BOS bullish staircase: a continuation BOS must *extend*
                         # the leg beyond the previous BOS high. A break of a lower
@@ -898,6 +928,18 @@ class InternalStructureDetector(MarketStructureDetector):
                             active_low.price,
                         )
                         pending_high = self._extreme(pending_high, active_high, higher=True)
+                        # A sweep that takes out the current bearish-CHoCH
+                        # pullback candidate redefines the leg's pullback origin:
+                        # the swept low (not the pre-sweep HL) is the low a later
+                        # new-high expansion rises from, so a continuation must
+                        # promote the swept low as the bearish-CHoCH reference.
+                        # Re-anchor the candidate down to it (more extreme only,
+                        # so progressively deeper sweeps keep the lowest origin).
+                        if (
+                            candidate_choch_low is not None
+                            and price < candidate_choch_low.price
+                        ):
+                            candidate_choch_low = pivot
                     elif last_bear_bos_low is not None and price >= last_bear_bos_low:
                         # BOS bearish staircase: a continuation BOS must *extend*
                         # the leg beyond the previous BOS low. A break of a higher

@@ -409,10 +409,23 @@ Full architecture rationale, including SOLID notes, is documented in
      seeded at each trend flip (CHoCH) and updated on every in-trend
      state-advance.
 
+  2b. **Sweep re-anchor of the candidate**: while the leg unfolds, a
+     counter-trend sweep that pokes beyond the current `candidate_choch_<side>`
+     re-anchors that candidate to the swept extreme (the high a bearish leg's
+     sweep grabbed / the low a bullish leg's sweep grabbed), but only to a
+     *more extreme* level (higher for `candidate_choch_high`, lower for
+     `candidate_choch_low`). Once price sweeps the prior pullback and then
+     resumes the trend to a new leg extreme, the swept level — not the
+     pre-sweep pullback — is where the eventual reversal launched from, so the
+     CHoCH should break it (the SMC "sweep then expand" pattern). This only
+     feeds step 2's continuation-gated promotion; a sweep with no follow-through
+     never promotes, so the *validated* reference is untouched.
+
   3. **Validated reference is frozen**: once promoted, `validated_choch_high`
      stays until consumed by a CHoCH (reset to `None`) or replaced by the
-     next genuine continuation promotion. Sweeps and non-extending BOS do
-     not overwrite it.
+     next genuine continuation promotion. Non-extending BOS do not overwrite
+     it, and a sweep can only move the *candidate* (step 2b), never the
+     validated level directly.
 
   A bullish CHoCH fires when, with `trend` BEARISH, a high pivot breaks
   (sustained, per the persistence rule above) above
@@ -422,7 +435,9 @@ Full architecture rationale, including SOLID notes, is documented in
   bootstrap phase (before any validated/origin reference has been built),
   preventing the trend from getting stuck if the initial direction was wrong.
   A high pivot whose break does not hold is a `LIQUIDITY_SWEEP` (trend
-  unchanged). Sweeps are noise and do NOT affect the CHoCH reference.
+  unchanged). A sweep never overwrites the *validated* CHoCH reference, but it
+  re-anchors the pullback *candidate* to the swept extreme (step 2b above) so a
+  later continuation can promote it.
 
   **Failed CHoCH (`CHOCH_FAILED`)**: a CHoCH is *provisional* until a
   same-direction BOS confirms it (that first BOS is beyond the CHoCH level by
@@ -951,8 +966,11 @@ extreme** (below `bear_leg_low` for bearish, above `bull_leg_high` for
 bullish) — a genuine continuation. A pullback-BOS formed during a retrace
 that does not extend the leg cannot ratchet the reference down. Each
 continuation pullback must also stay on the correct side of the previous
-pullback (LH staircase / HL staircase) via a dedup gate. Sweeps do NOT
-affect the CHoCH reference. A bullish CHoCH fires on a sustained break above
+pullback (LH staircase / HL staircase) via a dedup gate. A sweep that pokes
+beyond the current `candidate_choch_<side>` re-anchors that candidate to the
+swept extreme (more-extreme only — the "sweep then expand" origin), but a
+sweep never moves the *validated* reference directly; a sweep with no
+continuation never promotes. A bullish CHoCH fires on a sustained break above
 `validated_choch_high or choch_origin_high or active_high`; any break that
 doesn't clear the reference, or doesn't hold, is a `LIQUIDITY_SWEEP`. The
 `active_<side>` cold-start fallback ensures the detector can flip trend

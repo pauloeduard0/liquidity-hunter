@@ -688,16 +688,19 @@ def test_continuation_chain_promotes_through_multiple_bos() -> None:
     assert chochs[0].reference_price_level == 165.0
 
 
-def test_sweep_below_active_low_does_not_affect_choch_reference() -> None:
-    """A SWEEP below active_low is market noise and must NOT alter the CHoCH
-    reference. The validated reference stays at the BOS-confirming pullback
-    (HL=100), not the swept level (80).
+def test_sweep_then_expansion_reanchors_choch_reference() -> None:
+    """A SWEEP below the current CHoCH pullback candidate, *followed by an
+    expansion to a new leg high*, re-anchors the bearish-CHoCH reference DOWN to
+    the swept low (the origin the expansion rose from) -- not the pre-sweep HL.
+    This is the SMC "sweep then expand" pattern: once price takes out the old
+    higher-low and makes a new high, the swept low is the structure-defining
+    level a reversal must break.
 
     Sequence:
       BOS 1 (H210, pullback HL=100) -> candidate_choch_low=100
-      SWEEP to 80 -> does NOT update candidate (noise)
-      BOS 2 (H220, continuation 220 > bull_leg_high(210)) -> promotes validated=100
-      CHoCH at L75 breaks validated(100) -> ref=100
+      SWEEP to 80 (below candidate 100) -> re-anchors candidate down to 80
+      BOS 2 (H220, continuation 220 > bull_leg_high(210)) -> promotes validated=80
+      CHoCH at L75 breaks validated(80) -> ref=80
     """
     highs = [150.0] * 20
     lows = [140.0] * 20
@@ -723,19 +726,20 @@ def test_sweep_below_active_low_does_not_affect_choch_reference() -> None:
     chochs = [e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
     assert len(chochs) == 1
     assert chochs[0].direction is MarketDirection.BEARISH
-    assert chochs[0].reference_price_level == 100.0
+    assert chochs[0].reference_price_level == 80.0
 
 
-def test_sweep_above_active_high_does_not_affect_choch_reference() -> None:
-    """Bearish mirror: a SWEEP above active_high is noise and must NOT alter
-    the CHoCH reference. The validated reference stays at the BOS-confirming
-    pullback (LH=175), not the swept level (185).
+def test_sweep_then_expansion_reanchors_choch_reference_bearish() -> None:
+    """Bearish mirror: a SWEEP above the current CHoCH pullback candidate,
+    *followed by an expansion to a new leg low*, re-anchors the bullish-CHoCH
+    reference UP to the swept high (the origin the expansion fell from) -- not
+    the pre-sweep LH.
 
     Sequence:
       BOS 1 (L80, pullback LH=175) -> candidate_choch_high=175
-      SWEEP to 185 -> does NOT update candidate (noise)
-      BOS 2 (L65, continuation 65 < bear_leg_low(80)) -> promotes validated=175
-      CHoCH at H190 breaks validated(175) -> ref=175
+      SWEEP to 185 (above candidate 175) -> re-anchors candidate up to 185
+      BOS 2 (L65, continuation 65 < bear_leg_low(80)) -> promotes validated=185
+      CHoCH at H190 breaks validated(185) -> ref=185
     """
     highs = [150.0] * 20
     lows = [140.0] * 20
@@ -761,7 +765,47 @@ def test_sweep_above_active_high_does_not_affect_choch_reference() -> None:
     chochs = [e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
     assert len(chochs) == 1
     assert chochs[0].direction is MarketDirection.BULLISH
-    assert chochs[0].reference_price_level == 175.0
+    assert chochs[0].reference_price_level == 185.0
+
+
+def test_sweep_without_continuation_does_not_reanchor_choch_reference() -> None:
+    """The re-anchor is gated on a continuation: a SWEEP that is NOT followed by
+    a new leg high leaves the candidate provisional, so the validated reference
+    stays at the prior continuation-confirmed pullback. The swept low is only
+    promoted once an expansion confirms it -- a lone sweep remains noise.
+
+    Sequence:
+      BOS 1 (H210, pullback HL=100), continuation BOS (H215) -> validated=100
+      SWEEP to 80 (re-anchors candidate to 80, but never promoted: no new high)
+      CHoCH at L95 breaks validated(100) -> ref=100 (NOT 80)
+    """
+    highs = [150.0] * 22
+    lows = [140.0] * 22
+    highs[1] = 200.0
+    lows[3] = 90.0
+    highs[5] = 210.0   # BOS 1
+    lows[7] = 100.0     # HL pullback -> candidate=100
+    highs[9] = 215.0   # continuation BOS (new leg high) -> validated=100
+    lows[11] = 105.0    # HL pullback (candidate=105)
+    lows[13] = 80.0     # SWEEP below candidate (re-anchors candidate, not validated)
+    lows[15] = 95.0     # break of validated(100), sustained -> CHoCH ref=100
+    lows[17] = 95.0
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 210.0, 140.0, close=205.0)
+    candles[9] = make_candle(9, 215.0, 140.0, close=212.0)
+    candles[15] = make_candle(15, 150.0, 95.0, close=98.0)
+    candles[16] = make_candle(16, 150.0, 96.0, close=99.0)
+    candles[17] = make_candle(17, 150.0, 95.0, close=98.0)
+
+    events = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False
+    ).detect(candles)
+
+    chochs = [e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
+    assert len(chochs) == 1
+    assert chochs[0].direction is MarketDirection.BEARISH
+    assert chochs[0].reference_price_level == 100.0
 
 
 def test_real_window_choch_validated_freeze_prevents_ratchet() -> None:
