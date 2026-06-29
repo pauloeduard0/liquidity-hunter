@@ -811,3 +811,64 @@ def test_swing_structure_detector_rejects_empty_candles() -> None:
 def test_swing_structure_detector_rejects_invalid_persistence_candles() -> None:
     with pytest.raises(ValueError, match="persistence_candles must be at least 1"):
         SwingStructureDetector(persistence_candles=0)
+
+
+# --- Online re-anchor (flavor B), mirrored from InternalStructureDetector -----
+
+
+def test_reanchor_invalid_mode_raises() -> None:
+    with pytest.raises(ValueError, match="reanchor_mode"):
+        SwingStructureDetector(reanchor_mode="nope")
+    with pytest.raises(ValueError, match="reanchor_chain_threshold"):
+        SwingStructureDetector(reanchor_mode="chain", reanchor_chain_threshold=0)
+
+
+def test_chain_reanchors_stale_reference_to_local_level() -> None:
+    """A clean bearish impulse of consecutive lower-low pivots with no
+    intervening high pivot chains BOS advances; at the threshold the stale
+    high-side reference (parked at the 200 origin, then nulled) re-anchors down
+    to the local 150 high, so a modest reclaim to 160 fires a bullish CHoCH
+    there. Under `off` the same reclaim never reaches the stale reference."""
+    highs = [150.0] * 14
+    lows = [140.0] * 14
+    highs[1] = 200.0   # bootstraps active_high at the leg origin
+    lows[3] = 130.0    # bootstraps active_low
+    lows[5] = 110.0    # bearish advance 1
+    lows[7] = 90.0     # bearish advance 2
+    lows[9] = 70.0     # bearish advance 3 -> chain threshold -> re-anchor to 150
+    highs[11] = 160.0  # reclaim above the re-anchored 150 -> bullish CHoCH
+    highs[12] = 155.0  # persistence candle (still above 150, not a new pivot)
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 150.0, 110.0, close=120.0)
+    candles[7] = make_candle(7, 150.0, 90.0, close=100.0)
+    candles[9] = make_candle(9, 150.0, 70.0, close=80.0)
+    candles[11] = make_candle(11, 160.0, 140.0, close=158.0)
+    candles[12] = make_candle(12, 155.0, 140.0, close=152.0)
+
+    off = SwingStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False, reanchor_mode="off"
+    ).detect(candles)
+    chain = SwingStructureDetector(
+        swing_lookback=1,
+        persistence_candles=1,
+        confluence_filter=False,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=3,
+    ).detect(candles)
+
+    off_bull_choch = [
+        e
+        for e in off
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+    ]
+    chain_bull_choch = [
+        e
+        for e in chain
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+    ]
+    assert off_bull_choch == []
+    assert len(chain_bull_choch) == 1
+    assert chain_bull_choch[0].reference_price_level == 150.0

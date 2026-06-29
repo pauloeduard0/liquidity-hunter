@@ -288,7 +288,12 @@ def load_dashboard_data(
     # re-anchored to the formed level's close-break (same as the internal
     # detector) to keep the two consistent.
     all_major_events = SwingStructureDetector(
-        swing_lookback=swing_lookback, confluence_filter=confluence_filter
+        swing_lookback=swing_lookback,
+        confluence_filter=confluence_filter,
+        # Mirror the internal detector's online re-anchor: see the internal
+        # detector call below for the threshold=2 rationale.
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
     ).detect(buffered_candles)
     all_major_events = _reanchor_bos_close_break(all_major_events, buffered_candles)
     market_structure_events = [
