@@ -138,6 +138,11 @@ def test_internal_structure_detector_rejects_invalid_persistence_candles() -> No
         InternalStructureDetector(persistence_candles=0)
 
 
+def test_internal_structure_detector_rejects_invalid_impulse_displacement() -> None:
+    with pytest.raises(ValueError, match="impulse_bos_displacement_pct must be positive"):
+        InternalStructureDetector(impulse_bos_displacement_pct=0.0)
+
+
 # --- The validated CHoCH reference -----------------------------------------
 #
 # To test CHoCH with pullback-based BOS, every bearish BOS needs an LH pullback.
@@ -898,6 +903,67 @@ def test_bos_not_emitted_without_pullback() -> None:
 
     bos = [e for e in events if e.event is StructureEvent.BREAK_OF_STRUCTURE]
     assert len(bos) == 0
+
+
+def test_impulse_bos_staging_marks_steps_in_an_impulsive_leg() -> None:
+    """A clean impulsive bearish leg (consecutive lower lows, no intervening
+    high pivot) advances the state machine at each step but emits no BOS -- the
+    deferred pending BOS never confirms without a pullback. With
+    `impulse_bos_displacement_pct` set, each advance whose displacement beyond
+    the prior BOS level clears the threshold is staged as a BOS, so the descent
+    shows a staircase. Purely additive: the off events are unchanged."""
+    highs = [150.0] * 13
+    lows = [140.0] * 13
+    highs[1] = 200.0   # bootstraps active_high
+    lows[3] = 90.0     # bootstraps active_low
+    lows[5] = 80.0     # first advance (floor None -> not staged)
+    lows[7] = 60.0     # impulsive advance, no high pivot -> staged (vs floor 80)
+    lows[9] = 40.0     # impulsive advance, no high pivot -> staged (vs floor 60)
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 150.0, 80.0, close=85.0)
+    candles[7] = make_candle(7, 150.0, 60.0, close=65.0)
+    candles[9] = make_candle(9, 150.0, 40.0, close=45.0)
+
+    off = InternalStructureDetector(swing_lookback=1, confluence_filter=False).detect(candles)
+    on = InternalStructureDetector(
+        swing_lookback=1, confluence_filter=False, impulse_bos_displacement_pct=0.015
+    ).detect(candles)
+
+    # No BOS without staging (no pullback ever confirms the pending BOS).
+    assert [e for e in off if e.event is StructureEvent.BREAK_OF_STRUCTURE] == []
+    # Existing events are untouched -- staging only adds.
+    off_keys = {(e.timestamp, e.event, e.direction) for e in off}
+    assert off_keys <= {(e.timestamp, e.event, e.direction) for e in on}
+
+    staged = [e for e in on if e.event is StructureEvent.BREAK_OF_STRUCTURE]
+    assert len(staged) == 2
+    assert all(e.direction is MarketDirection.BEARISH for e in staged)
+    assert [e.price_level for e in staged] == [60.0, 40.0]
+    assert [e.reference_price_level for e in staged] == [80.0, 60.0]
+    assert [e.timestamp for e in staged] == [candles[7].timestamp, candles[9].timestamp]
+    assert all(e.scope is StructureScope.INTERNAL for e in staged)
+
+
+def test_impulse_bos_staging_off_by_default_is_identical() -> None:
+    """With the flag unset the detector is byte-for-byte unchanged."""
+    highs = [150.0] * 13
+    lows = [140.0] * 13
+    highs[1] = 200.0
+    lows[3] = 90.0
+    lows[5] = 80.0
+    lows[7] = 60.0
+    lows[9] = 40.0
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 150.0, 80.0, close=85.0)
+    candles[7] = make_candle(7, 150.0, 60.0, close=65.0)
+    candles[9] = make_candle(9, 150.0, 40.0, close=45.0)
+
+    default = InternalStructureDetector(swing_lookback=1, confluence_filter=False).detect(candles)
+    explicit_off = InternalStructureDetector(
+        swing_lookback=1, confluence_filter=False, impulse_bos_displacement_pct=None
+    ).detect(candles)
+    assert [e.model_dump() for e in default] == [e.model_dump() for e in explicit_off]
 
 
 def test_pending_bos_updated_on_higher_break() -> None:

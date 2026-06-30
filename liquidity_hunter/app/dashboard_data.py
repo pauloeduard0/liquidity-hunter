@@ -91,6 +91,17 @@ _STALE_REANCHOR_CANDLES: dict[TimeFrame, int] = {
 }
 _DEFAULT_STALE_REANCHOR_CANDLES = 60
 
+# Impulse-BOS staging threshold for the internal detector
+# (`InternalStructureDetector.impulse_bos_displacement_pct`). A clean impulsive
+# leg advances the state machine at each lower low / higher high but, with no
+# intervening pullback pivot to confirm them, emits no intermediate BOS -- a
+# sharp displacement prints a single long event-free stretch instead of a
+# staircase. This stages a BOS at each advance whose displacement beyond the
+# prior BOS level clears the threshold (deduped against the real BOS, so it only
+# fills the impulsive gaps). 1.5% is conservative: it surfaces the big multi-leg
+# drops/rallies across timeframes without staging routine continuation steps.
+_IMPULSE_BOS_DISPLACEMENT_PCT = 0.015
+
 _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
     TimeFrame.M1: TimeFrame.H1,
     TimeFrame.M5: TimeFrame.H1,
@@ -373,6 +384,12 @@ def load_dashboard_data(
         stale_reanchor_candles=_STALE_REANCHOR_CANDLES.get(
             timeframe, _DEFAULT_STALE_REANCHOR_CANDLES
         ),
+        # Stage a continuation BOS at each impulsive advance that displaces the
+        # prior BOS level by this fraction, so a sharp multi-leg move shows a
+        # staircase instead of one long event-free stretch (the impulsive leg
+        # confirms no pullback, so the state machine alone emits no intermediate
+        # BOS). Deduped against the real BOS -- only fills the gaps.
+        impulse_bos_displacement_pct=_IMPULSE_BOS_DISPLACEMENT_PCT,
     ).detect(internal_candles)
     # Re-time each BOS to the first close beyond the formed level it broke
     # (dropping wick-only continuations), before the visible filter and POI.

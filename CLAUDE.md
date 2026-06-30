@@ -1009,6 +1009,31 @@ extreme high/low over a trailing window of `stale_reanchor_candles` candles.
 internal staleness re-anchor is what fixes the visible lock; the major one feeds
 `market_structure_events` (in the API, not currently drawn).
 
+**Impulse BOS staging** (`InternalStructureDetector` only, as of 2026-06-29):
+`impulse_bos_displacement_pct` (constructor default `None` = off; wired in
+`load_dashboard_data` via `_IMPULSE_BOS_DISPLACEMENT_PCT = 0.015`). A clean
+impulsive leg (consecutive lower lows / higher highs with **no intervening
+opposite pivot**) advances the state machine at each step but, with no pullback
+pivot to confirm them, emits at most one *deferred* pending BOS — so a sharp
+multi-leg move (e.g. a −20% drop over ~60 H4 candles) prints one long event-free
+stretch instead of a staircase. When set, each state-advance whose displacement
+beyond the prior BOS level (`prev_bear_bos_extreme`/`prev_bull_bos_extreme`, the
+`floor_at_advance`) clears the threshold is recorded as a staged BOS in a
+**separate list**; at the end of `detect` the staged BOS are **deduped against
+the real emitted BOS** (same direction, `price_level` within
+`_STAGED_BOS_DEDUP_PCT = 0.2%` — both report the advance pivot's extreme) and
+merged. So it only ever *adds* marks in the impulsive gaps the state machine left
+empty; the state machine, references, and CHoCH promotion are **untouched** (with
+the flag off the output is byte-for-byte identical). Staged BOS leave
+`reference_timestamp` unset so `_reanchor_bos_close_break` anchors their line
+origin like any other BOS. The reported `reference_price_level` is the prior
+BOS's extreme, so staged steps continue the same descending/ascending staircase.
+This was chosen over a composition-level post-pass: re-deriving "current trend +
+live staircase floor" outside the detector leaks across segments (a stale floor
+from a prior leg bleeds in), whereas in-detector `trend`/`prev_*_bos_extreme` are
+already correct. Not mirrored into `SwingStructureDetector` (coarse lookback has
+far fewer impulsive gaps and is not drawn).
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a

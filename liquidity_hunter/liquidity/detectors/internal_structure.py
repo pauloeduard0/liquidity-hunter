@@ -208,6 +208,11 @@ from liquidity_hunter.liquidity.detectors.swing_points import SwingHighDetector,
 # constructor and the "online re-anchor" section of the class docstring.
 _REANCHOR_MODES = frozenset({"off", "displacement", "chain"})
 
+# Relative price tolerance for matching a staged impulse BOS to a real emitted
+# BOS (both report the advance pivot's extreme, so a genuine duplicate matches
+# almost exactly). See the staged-BOS merge in `detect`.
+_STAGED_BOS_DEDUP_PCT = 0.002
+
 
 @dataclass
 class _PendingBOS:
@@ -302,6 +307,7 @@ class InternalStructureDetector(MarketStructureDetector):
         reanchor_mode: str = "off",
         reanchor_chain_threshold: int = 3,
         stale_reanchor_candles: int | None = None,
+        impulse_bos_displacement_pct: float | None = None,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -311,6 +317,8 @@ class InternalStructureDetector(MarketStructureDetector):
             raise ValueError("reanchor_chain_threshold must be at least 1")
         if stale_reanchor_candles is not None and stale_reanchor_candles < 1:
             raise ValueError("stale_reanchor_candles must be at least 1")
+        if impulse_bos_displacement_pct is not None and impulse_bos_displacement_pct <= 0:
+            raise ValueError("impulse_bos_displacement_pct must be positive")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
         self._low_detector = SwingLowDetector(lookback=swing_lookback)
         self._persistence_candles = persistence_candles
@@ -318,6 +326,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._reanchor_mode = reanchor_mode
         self._reanchor_chain_threshold = reanchor_chain_threshold
         self._stale_reanchor_candles = stale_reanchor_candles
+        self._impulse_bos_displacement_pct = impulse_bos_displacement_pct
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -343,6 +352,17 @@ class InternalStructureDetector(MarketStructureDetector):
             )
 
         events: list[MarketStructure] = []
+        # Staged impulse BOS (only when `impulse_bos_displacement_pct` is set).
+        # On a clean impulsive leg the state machine advances at each lower low /
+        # higher high but emits at most ONE deferred BOS (the surviving pending
+        # BOS, confirmed at the next opposite pullback), so a sharp multi-step
+        # move prints no intermediate staircase. These staged BOS mark each
+        # advance whose displacement beyond the prior BOS level clears the
+        # threshold; they are merged at the end and DEDUPED against the real
+        # emitted BOS, so they only ever *add* marks where the state machine
+        # produced none (the impulsive gaps). The state machine itself is
+        # untouched -- with the flag off this list stays empty.
+        staged_bos: list[MarketStructure] = []
         # Trailing references (most recent pivot of each kind); drive BOS
         # detection and HL/LH labels.
         active_high: Pivot | None = None
@@ -873,6 +893,27 @@ class InternalStructureDetector(MarketStructureDetector):
                             # This BOS's extreme becomes the formed level the next
                             # bullish continuation will report as its reference.
                             prev_bull_bos_extreme = price
+                            # Stage an impulse BOS at this advance (mirror of the
+                            # bearish case): displaces the prior BOS level upward by
+                            # the threshold. Deduped against the real BOS later.
+                            staged_pct = self._impulse_bos_displacement_pct
+                            if (
+                                staged_pct is not None
+                                and floor_at_advance is not None
+                                and price > floor_at_advance * (1 + staged_pct)
+                            ):
+                                staged_bos.append(
+                                    MarketStructure(
+                                        symbol=symbol,
+                                        timeframe=timeframe,
+                                        timestamp=candles[close_idx].timestamp,
+                                        event=StructureEvent.BREAK_OF_STRUCTURE,
+                                        direction=MarketDirection.BULLISH,
+                                        price_level=price,
+                                        reference_price_level=floor_at_advance,
+                                        scope=StructureScope.INTERNAL,
+                                    )
+                                )
                             pullback_ref_snapshot = active_low
                             # Mirror of the bearish case: consecutive highs with
                             # no intervening low pivot reset active_low to None,
@@ -1208,6 +1249,29 @@ class InternalStructureDetector(MarketStructureDetector):
                             # This BOS's extreme becomes the formed level the next
                             # bearish continuation will report as its reference.
                             prev_bear_bos_extreme = price
+                            # Stage an impulse BOS at this advance if it displaces
+                            # the prior BOS level by the threshold. Recorded
+                            # separately and deduped against the real BOS later, so
+                            # it only surfaces in impulsive gaps the deferred
+                            # pending BOS never fills.
+                            staged_pct = self._impulse_bos_displacement_pct
+                            if (
+                                staged_pct is not None
+                                and floor_at_advance is not None
+                                and price < floor_at_advance * (1 - staged_pct)
+                            ):
+                                staged_bos.append(
+                                    MarketStructure(
+                                        symbol=symbol,
+                                        timeframe=timeframe,
+                                        timestamp=candles[close_idx].timestamp,
+                                        event=StructureEvent.BREAK_OF_STRUCTURE,
+                                        direction=MarketDirection.BEARISH,
+                                        price_level=price,
+                                        reference_price_level=floor_at_advance,
+                                        scope=StructureScope.INTERNAL,
+                                    )
+                                )
                             pullback_ref_snapshot = active_high
                             # Consecutive lows with no intervening high pivot
                             # (an impulsive leg) reset active_high to None on the
@@ -1292,7 +1356,25 @@ class InternalStructureDetector(MarketStructureDetector):
             # pivot still happened chronologically).
             prev_any_pivot_index = current_index
 
-        return events
+        if not staged_bos:
+            return events
+        # Merge staged impulse BOS, dropping any that duplicate a real emitted BOS
+        # of the same direction (same advance pivot, hence the same price level
+        # within a small tolerance). What remains marks the impulsive gaps where
+        # the deferred pending BOS never emitted.
+        real_bos = [e for e in events if e.event is StructureEvent.BREAK_OF_STRUCTURE]
+
+        def duplicates_real(staged: MarketStructure) -> bool:
+            return any(
+                real.direction is staged.direction
+                and abs(real.price_level - staged.price_level)
+                <= abs(staged.price_level) * _STAGED_BOS_DEDUP_PCT
+                for real in real_bos
+            )
+
+        merged = [*events, *(s for s in staged_bos if not duplicates_real(s))]
+        merged.sort(key=lambda e: e.timestamp)
+        return merged
 
     @staticmethod
     def _extreme(current: Pivot | None, candidate: Pivot | None, *, higher: bool) -> Pivot | None:
