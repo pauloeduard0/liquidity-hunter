@@ -287,6 +287,14 @@ class InternalStructureDetector(MarketStructureDetector):
     untouched. (Staging the skipped intermediate BOS of an impulse is a deferred
     follow-up; this re-anchors only the reversal references.)
 
+    `reanchor_min_price_gap_pct` (default `None` = off) guards the *output* of
+    every re-anchor trigger (chain, stale, displacement): `reanchor_opposite`
+    refuses to set the reversal reference to a local extreme closer than this
+    fraction to current price. A reference sitting almost on top of price is
+    hair-trigger -- a trivial bounce confirms a CHoCH mid-range that then
+    immediately fails -- so requiring a minimum gap makes breaking the
+    re-anchored level a real reversal rather than noise.
+
     `stale_reanchor_candles` (default `None` = off) is a separate *staleness*
     re-anchor, independent of `reanchor_mode`: when the trend runs this many
     candles past its last BOS / trend flip (`last_advance_index`, set in `emit`)
@@ -306,6 +314,7 @@ class InternalStructureDetector(MarketStructureDetector):
         confluence_filter: bool = False,
         reanchor_mode: str = "off",
         reanchor_chain_threshold: int = 3,
+        reanchor_min_price_gap_pct: float | None = None,
         stale_reanchor_candles: int | None = None,
         impulse_bos_displacement_pct: float | None = None,
     ) -> None:
@@ -315,6 +324,8 @@ class InternalStructureDetector(MarketStructureDetector):
             raise ValueError(f"reanchor_mode must be one of {sorted(_REANCHOR_MODES)}")
         if reanchor_chain_threshold < 1:
             raise ValueError("reanchor_chain_threshold must be at least 1")
+        if reanchor_min_price_gap_pct is not None and reanchor_min_price_gap_pct <= 0:
+            raise ValueError("reanchor_min_price_gap_pct must be positive")
         if stale_reanchor_candles is not None and stale_reanchor_candles < 1:
             raise ValueError("stale_reanchor_candles must be at least 1")
         if impulse_bos_displacement_pct is not None and impulse_bos_displacement_pct <= 0:
@@ -325,6 +336,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._confluence_filter = confluence_filter
         self._reanchor_mode = reanchor_mode
         self._reanchor_chain_threshold = reanchor_chain_threshold
+        self._reanchor_min_price_gap_pct = reanchor_min_price_gap_pct
         self._stale_reanchor_candles = stale_reanchor_candles
         self._impulse_bos_displacement_pct = impulse_bos_displacement_pct
 
@@ -506,8 +518,17 @@ class InternalStructureDetector(MarketStructureDetector):
             nonlocal choch_origin_high, choch_origin_low
             nonlocal candidate_choch_high, candidate_choch_low
             new = Pivot(price=level, timestamp=ts)
+            # Minimum-gap guard (applies to every trigger -- chain, stale,
+            # displacement): a local extreme sitting almost on top of price makes
+            # the reversal reference hair-trigger, so a trivial bounce confirms a
+            # CHoCH mid-range that then immediately fails. Require the re-anchor
+            # level to be at least `reanchor_min_price_gap_pct` away from current
+            # price, so breaking it constitutes a real reversal.
+            min_gap = self._reanchor_min_price_gap_pct
             if trend is MarketDirection.BEARISH:
                 if level <= current_price:
+                    return False
+                if min_gap is not None and (level - current_price) / current_price < min_gap:
                     return False
                 refs = [
                     r.price
@@ -523,6 +544,8 @@ class InternalStructureDetector(MarketStructureDetector):
                 return True
             if trend is MarketDirection.BULLISH:
                 if level >= current_price:
+                    return False
+                if min_gap is not None and (current_price - level) / current_price < min_gap:
                     return False
                 refs = [
                     r.price

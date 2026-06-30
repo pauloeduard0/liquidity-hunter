@@ -102,6 +102,16 @@ _DEFAULT_STALE_REANCHOR_CANDLES = 60
 # drops/rallies across timeframes without staging routine continuation steps.
 _IMPULSE_BOS_DISPLACEMENT_PCT = 0.015
 
+# Minimum gap (fraction of current price) between a re-anchored reversal
+# reference and current price (`InternalStructureDetector.reanchor_min_price_gap_pct`).
+# The chain/stale re-anchors can land the reversal reference on a local extreme
+# sitting almost on top of price; that reference is hair-trigger, so a trivial
+# bounce confirms a mid-range CHoCH that immediately fails (the "CHoCH in chop"
+# clutter). 0.3% requires the re-anchored level to be a real distance away, so
+# breaking it is a genuine reversal -- measured to remove exactly those premature
+# CHoCH while staying neutral on the other timeframes.
+_REANCHOR_MIN_PRICE_GAP_PCT = 0.003
+
 _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
     TimeFrame.M1: TimeFrame.H1,
     TimeFrame.M5: TimeFrame.H1,
@@ -364,6 +374,10 @@ def load_dashboard_data(
         # See InternalStructureDetector.reanchor_mode.
         reanchor_mode="chain",
         reanchor_chain_threshold=2,
+        # Reject a re-anchored reversal reference that sits within this fraction
+        # of current price: a hair-trigger reference produces a mid-range CHoCH
+        # that immediately fails (the chop clutter). See _REANCHOR_MIN_PRICE_GAP_PCT.
+        reanchor_min_price_gap_pct=_REANCHOR_MIN_PRICE_GAP_PCT,
         # Retire a stale cycle (same as the major detector above): the internal
         # detector is what the chart renders for all timeframes, and on coarse
         # ones its bearish/bullish leg can stay pinned to the origin reversal

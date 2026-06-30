@@ -9,6 +9,7 @@ import pytest
 from liquidity_hunter.core.domain import (
     Candle,
     MarketDirection,
+    MarketStructure,
     StructureEvent,
     StructureScope,
     TimeFrame,
@@ -1196,6 +1197,65 @@ def test_chain_reanchors_stale_reference_to_local_level() -> None:
     assert off_bull_choch == []
     assert len(chain_bull_choch) == 1
     assert chain_bull_choch[0].reference_price_level == 150.0
+
+
+def test_invalid_reanchor_min_price_gap_pct_raises() -> None:
+    with pytest.raises(ValueError, match="reanchor_min_price_gap_pct"):
+        InternalStructureDetector(reanchor_min_price_gap_pct=0)
+
+
+def test_reanchor_min_price_gap_suppresses_hair_trigger_choch() -> None:
+    """`reanchor_min_price_gap_pct` blocks a re-anchor whose local level sits
+    almost on top of price (the hair-trigger that produces a mid-range CHoCH
+    that then fails). This is the chain scenario of
+    `test_chain_reanchors_stale_reference_to_local_level` shifted up by 10,000
+    so the same vertical structure spans a much smaller *fraction* of price: the
+    re-anchor level (10,150) is only ~0.69% above the advance close (10,080). A
+    0.02 gap requires a wider separation, so the re-anchor is refused and no
+    bullish CHoCH fires; without the gate it fires (as in the base scenario)."""
+    base = 10000.0
+    highs = [base + 150.0] * 14
+    lows = [base + 140.0] * 14
+    highs[1] = base + 200.0  # bootstraps active_high at the leg origin
+    lows[3] = base + 130.0  # bootstraps active_low
+    lows[5] = base + 110.0  # bearish advance 1
+    lows[7] = base + 90.0  # bearish advance 2
+    lows[9] = base + 70.0  # bearish advance 3 -> chain threshold -> re-anchor
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, base + 150.0, base + 110.0, close=base + 120.0)
+    candles[7] = make_candle(7, base + 150.0, base + 90.0, close=base + 100.0)
+    candles[9] = make_candle(9, base + 150.0, base + 70.0, close=base + 80.0)
+    candles[11] = make_candle(11, base + 160.0, base + 140.0, close=base + 158.0)
+    candles[12] = make_candle(12, base + 155.0, base + 140.0, close=base + 152.0)
+
+    def bull_choch(events: list[MarketStructure]) -> list[MarketStructure]:
+        return [
+            e
+            for e in events
+            if e.event is StructureEvent.CHANGE_OF_CHARACTER
+            and e.direction is MarketDirection.BULLISH
+        ]
+
+    no_gate = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=1,
+        confluence_filter=False,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=3,
+    ).detect(candles)
+    gated = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=1,
+        confluence_filter=False,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=3,
+        reanchor_min_price_gap_pct=0.02,
+    ).detect(candles)
+
+    assert len(bull_choch(no_gate)) == 1
+    assert bull_choch(no_gate)[0].reference_price_level == base + 150.0
+    assert bull_choch(gated) == []
 
 
 def test_invalid_stale_reanchor_candles_raises() -> None:
