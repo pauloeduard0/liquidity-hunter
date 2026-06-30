@@ -272,17 +272,6 @@ def _reanchor_bos_close_break(
     return result
 
 
-def _latest_structure_direction(events: list[MarketStructure]) -> MarketDirection:
-    """The `direction` of the most recent `MarketStructure` event, or NEUTRAL.
-
-    Used as the higher timeframe trend context: the prevailing bias implied
-    by the latest confirmed BOS/CHoCH on the swing structure.
-    """
-    if not events:
-        return MarketDirection.NEUTRAL
-    return max(events, key=lambda event: event.timestamp).direction
-
-
 def load_dashboard_data(
     provider: OHLCVProvider | None = None,
     symbol: str = "BTCUSDT",
@@ -329,7 +318,7 @@ def load_dashboard_data(
     # The major (swing) detector runs on the full buffered series. Its BOS are
     # re-anchored to the formed level's close-break (same as the internal
     # detector) to keep the two consistent.
-    all_major_events = SwingStructureDetector(
+    major_detector = SwingStructureDetector(
         swing_lookback=swing_lookback,
         confluence_filter=confluence_filter,
         # Mirror the internal detector's online re-anchor: see the internal
@@ -343,7 +332,8 @@ def load_dashboard_data(
         stale_reanchor_candles=_STALE_REANCHOR_CANDLES.get(
             timeframe, _DEFAULT_STALE_REANCHOR_CANDLES
         ),
-    ).detect(buffered_candles)
+    )
+    all_major_events = major_detector.detect(buffered_candles)
     all_major_events = _reanchor_bos_close_break(all_major_events, buffered_candles)
     market_structure_events = [
         e for e in all_major_events if visible_start <= e.timestamp <= visible_end
@@ -407,12 +397,18 @@ def load_dashboard_data(
     htf = _HIGHER_TIMEFRAME_MAP.get(timeframe)
     if htf is not None:
         htf_candles = provider.get_ohlcv(symbol, htf, _HIGHER_TIMEFRAME_CANDLE_LIMIT)
-        htf_events = SwingStructureDetector(
+        htf_detector = SwingStructureDetector(
             swing_lookback=swing_lookback, confluence_filter=confluence_filter
-        ).detect(htf_candles)
-        higher_timeframe_direction = _latest_structure_direction(htf_events)
+        )
+        htf_detector.detect(htf_candles)
+        # Use the detector's state-machine trend, not the last event's direction:
+        # the latter flips on a descriptive HH/HL/LH/LL pivot or a LIQUIDITY_SWEEP
+        # whose `direction` is the pivot/wick side rather than the standing trend
+        # (e.g. a higher-low retrace in a bearish leg read as "bullish").
+        higher_timeframe_direction = htf_detector.final_trend
     else:
-        higher_timeframe_direction = _latest_structure_direction(market_structure_events)
+        # Top timeframe (no higher TF): use the major detector's own trend.
+        higher_timeframe_direction = major_detector.final_trend
 
     retail_bias = RetailTrapAnalyzer().analyze(
         symbol=symbol,

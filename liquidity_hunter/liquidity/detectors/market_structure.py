@@ -145,6 +145,14 @@ class SwingStructureDetector(MarketStructureDetector):
         self._reanchor_mode = reanchor_mode
         self._reanchor_chain_threshold = reanchor_chain_threshold
         self._stale_reanchor_candles = stale_reanchor_candles
+        # The state-machine trend after the most recent `detect()` call. This is
+        # the single source of truth for "the standing trend" -- unlike the last
+        # emitted event's `direction`, it is unaffected by descriptive HH/HL/LH/LL
+        # labels or LIQUIDITY_SWEEPs (whose `direction` is the pivot/wick side,
+        # not the trend) and it resolves CHOCH_FAILED correctly (the trend
+        # reverts to the opposite of the failed CHoCH's `direction`). NEUTRAL
+        # until `detect()` runs.
+        self.final_trend: MarketDirection = MarketDirection.NEUTRAL
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -889,6 +897,7 @@ class SwingStructureDetector(MarketStructureDetector):
             # candles since this pivot. Updated even on a wick-only break.
             prev_any_pivot_index = current_index
 
+        self.final_trend = trend
         return events
 
     @staticmethod
