@@ -1034,6 +1034,24 @@ from a prior leg bleeds in), whereas in-detector `trend`/`prev_*_bos_extreme` ar
 already correct. Not mirrored into `SwingStructureDetector` (coarse lookback has
 far fewer impulsive gaps and is not drawn).
 
+**Re-anchor min-price-gap guard** (`InternalStructureDetector` only, as of
+2026-06-30): `reanchor_min_price_gap_pct` (constructor default `None` = off;
+wired in `load_dashboard_data` via `_REANCHOR_MIN_PRICE_GAP_PCT = 0.003`) guards
+the *output* of `reanchor_opposite` (every trigger — chain, stale, displacement):
+it refuses to set the reversal reference to a local extreme closer than this
+fraction to current price. A `"chain"` or staleness re-anchor in a tight lateral
+range can land `validated_choch_<side>` on a local high/low sitting almost on top
+of price; that reference is hair-trigger, so a trivial bounce confirms a
+mid-range CHoCH that immediately fails (the "CHoCH in chop" clutter — e.g. an M5
+bullish CHoCH the chain re-anchor wrote ~0.1% above price, which then failed).
+Requiring a minimum gap makes breaking the re-anchored level a genuine reversal.
+Measured purely additive-or-cleaner: on M5 it removes exactly the spurious CHoCH
+(its `CHOCH_FAILED` count drops) while staying **neutral on the coarser
+timeframes** (whose re-anchors already land far from price — D1's `CHOCH_FAILED`
+are legitimate failed macro reversals, not chop, and are unaffected). A
+leg-displacement gate (`reanchor_chain_min_displacement_pct`) was prototyped first
+but **rejected by measurement** (inert on M30/D1, destabilizing on M5).
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a
