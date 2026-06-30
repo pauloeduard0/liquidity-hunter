@@ -1069,6 +1069,27 @@ blind-impulse establish case the chain was added for (e.g. the H4 June drop) is
 unaffected. Measured: removes the degraded M5 CHoCH, net-neutral on M15/M30/H4,
 trims a couple chain-tightening CHoCH on H1/D1.
 
+**BOS pullback wick filter** (`InternalStructureDetector` only, as of
+2026-06-30): `bos_pullback_max_wick_pct` (constructor default `None` = off; wired
+**`0.4`** in `load_dashboard_data` via `_BOS_PULLBACK_MAX_WICK_PCT`) filters the
+pullback pivot that *confirms* a BOS. A BOS confirms when a pivot forms in the
+opposite direction (a high pivot for a bearish BOS, a low for a bullish BOS); with
+a small swing lookback that pivot can be a single-candle **wick** — the candle
+spikes to the extreme intrabar but its body closes far away (e.g. an M5 bearish
+BOS confirmed by a candle that wicked up to 58,732 then closed near its low at
+58,350 and made a new low) — so the BOS prints off a "pullback" that never
+retraced. When set, the confirming pivot candle's pivot-side wick
+(`_pullback_quality_ok`: upper wick for a high pivot, lower for a low pivot) must
+be at most this fraction of its range; a wick-only spike does not confirm and the
+pending BOS is **kept alive** so a later, real-bodied pullback confirms it instead
+(or it never confirms if none forms). Because the confirming pullback also seeds
+`candidate_choch_<side>`, the filter propagates correctly into CHoCH detection
+(the reversal reference anchors to a genuine pullback too) rather than being a
+cosmetic mark drop. Adjusting the swing lookback was measured and rejected as a
+fix (it coarsens all structure globally and doesn't target the wick). With the
+flag off the output is byte-for-byte identical. Not mirrored into
+`SwingStructureDetector` (the major detector is not drawn).
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a

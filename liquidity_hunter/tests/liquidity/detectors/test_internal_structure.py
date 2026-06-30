@@ -1255,6 +1255,65 @@ def test_chain_establish_only_does_not_tighten_a_fresh_validated_reference() -> 
     assert bull_choch(establish_only) == []
 
 
+def test_invalid_bos_pullback_max_wick_pct_raises() -> None:
+    with pytest.raises(ValueError, match="bos_pullback_max_wick_pct"):
+        InternalStructureDetector(bos_pullback_max_wick_pct=0)
+    with pytest.raises(ValueError, match="bos_pullback_max_wick_pct"):
+        InternalStructureDetector(bos_pullback_max_wick_pct=1.5)
+
+
+def test_bos_pullback_wick_filter_rejects_wick_only_pullback() -> None:
+    """A BOS confirmed by a single-candle wick pullback is suppressed by
+    `bos_pullback_max_wick_pct`, but the same BOS confirms when a *real*-bodied
+    pullback forms instead.
+
+    A bearish advance (close below 130) leaves a pending BOS; the confirming high
+    pivot is candle 7. In the wick case candle 7 spikes to 180 intrabar but its
+    body closes near the low (a rejection wick), so with the filter it does not
+    confirm; in the body case candle 7 closes near its 180 high (a real bounce),
+    so it confirms in both."""
+
+    def series(pullback_close: float) -> list[Candle]:
+        highs = [150.0] * 10
+        lows = [140.0] * 10
+        highs[1] = 200.0  # origin high
+        lows[3] = 130.0  # bootstrap active_low
+        lows[5] = 110.0  # bearish advance -> pending BOS (pullback ref 200)
+        highs[7] = 180.0  # confirming high pivot (LH)
+        c = make_series(highs, lows)
+        c[5] = make_candle(5, 150.0, 110.0, close=120.0)
+        # candle 7 spikes to 180; its close decides wick vs body.
+        c[7] = make_candle(7, 180.0, 140.0, close=pullback_close)
+        return c
+
+    def bearish_bos(events: list[MarketStructure]) -> list[MarketStructure]:
+        return [
+            e
+            for e in events
+            if e.event is StructureEvent.BREAK_OF_STRUCTURE
+            and e.direction is MarketDirection.BEARISH
+        ]
+
+    # Wick pullback: close 145 -> upper wick (180-145=35) is 0.78 of range (45).
+    wick = make_candle(7, 180.0, 140.0, close=145.0)
+    assert (wick.high - max(wick.open, wick.close)) / (wick.high - wick.low) > 0.4
+    # Body pullback: close 178 -> upper wick (180-178=2) is ~0.04 of range.
+
+    def run(pullback_close: float, max_wick: float | None) -> list[MarketStructure]:
+        return InternalStructureDetector(
+            swing_lookback=1,
+            persistence_candles=1,
+            confluence_filter=False,
+            bos_pullback_max_wick_pct=max_wick,
+        ).detect(series(pullback_close))
+
+    # No filter: both wick and body pullbacks confirm the BOS.
+    assert len(bearish_bos(run(145.0, None))) == 1
+    # Filter on: the wick pullback no longer confirms, the bodied one still does.
+    assert bearish_bos(run(145.0, 0.4)) == []
+    assert len(bearish_bos(run(178.0, 0.4))) == 1
+
+
 def test_invalid_reanchor_min_price_gap_pct_raises() -> None:
     with pytest.raises(ValueError, match="reanchor_min_price_gap_pct"):
         InternalStructureDetector(reanchor_min_price_gap_pct=0)

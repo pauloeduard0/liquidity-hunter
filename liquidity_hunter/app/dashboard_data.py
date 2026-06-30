@@ -112,6 +112,14 @@ _IMPULSE_BOS_DISPLACEMENT_PCT = 0.015
 # CHoCH while staying neutral on the other timeframes.
 _REANCHOR_MIN_PRICE_GAP_PCT = 0.003
 
+# Max pivot-side wick fraction for a pullback that *confirms* a BOS
+# (`InternalStructureDetector.bos_pullback_max_wick_pct`). A small swing lookback
+# can pick a single-candle wick (a spike whose body closes far away) as the
+# confirming pullback, so a BOS prints off a "pullback" that never retraced. 0.4
+# requires the pivot candle's body+opposite side to be >=60% of its range; a
+# wick-dominant spike does not confirm and the BOS waits for a real pullback.
+_BOS_PULLBACK_MAX_WICK_PCT = 0.4
+
 _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
     TimeFrame.M1: TimeFrame.H1,
     TimeFrame.M5: TimeFrame.H1,
@@ -400,6 +408,11 @@ def load_dashboard_data(
         # confirms no pullback, so the state machine alone emits no intermediate
         # BOS). Deduped against the real BOS -- only fills the gaps.
         impulse_bos_displacement_pct=_IMPULSE_BOS_DISPLACEMENT_PCT,
+        # A BOS must confirm off a real pullback, not a single-candle wick spike:
+        # the confirming pivot candle's pivot-side wick must be <= this fraction
+        # of its range, else the BOS waits for a genuine pullback. See
+        # _BOS_PULLBACK_MAX_WICK_PCT.
+        bos_pullback_max_wick_pct=_BOS_PULLBACK_MAX_WICK_PCT,
     ).detect(internal_candles)
     # Re-time each BOS to the first close beyond the formed level it broke
     # (dropping wick-only continuations), before the visible filter and POI.

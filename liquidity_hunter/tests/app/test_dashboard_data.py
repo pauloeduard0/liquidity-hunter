@@ -225,6 +225,9 @@ def test_load_dashboard_data_internal_structure_events_use_internal_scope() -> N
         close=135.0,
         taker_buy_volume=0.3,
     )
+    # The confirming LH pullback closes near its high (a real bounce, not a
+    # midpoint doji) so it passes the BOS pullback wick filter.
+    candles[17] = make_candle(17, int_highs[17], int_lows[17], symbol="BTCUSDT", close=178.0)
 
     data = load_dashboard_data(
         provider=_FakeProvider(candles),

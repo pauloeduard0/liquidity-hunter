@@ -307,6 +307,20 @@ class InternalStructureDetector(MarketStructureDetector):
     immediately fails -- so requiring a minimum gap makes breaking the
     re-anchored level a real reversal rather than noise.
 
+    `bos_pullback_max_wick_pct` (default `None` = off) filters the pullback pivot
+    that *confirms* a BOS. A BOS confirms when a pivot forms in the opposite
+    direction (a high pivot for a bearish BOS, a low for a bullish BOS); with a
+    small swing lookback that pivot can be a single-candle **wick** (the candle
+    spikes to the extreme intrabar but its body closes far away), so the BOS is
+    confirmed by a "pullback" that never really retraced. When set, the pullback
+    pivot candle's pivot-side wick (`_pullback_quality_ok`) must be at most this
+    fraction of its range; a wick-only spike does not confirm and the pending BOS
+    is kept alive so a *later, real* pullback confirms it instead (or it never
+    confirms if none forms). Because the confirming pullback also seeds the
+    CHoCH `candidate_choch_<side>`, this makes the reversal reference anchor to a
+    genuine pullback too -- the filter propagates correctly into CHoCH detection
+    rather than being a cosmetic mark drop.
+
     `stale_reanchor_candles` (default `None` = off) is a separate *staleness*
     re-anchor, independent of `reanchor_mode`: when the trend runs this many
     candles past its last BOS / trend flip (`last_advance_index`, set in `emit`)
@@ -330,6 +344,7 @@ class InternalStructureDetector(MarketStructureDetector):
         reanchor_min_price_gap_pct: float | None = None,
         stale_reanchor_candles: int | None = None,
         impulse_bos_displacement_pct: float | None = None,
+        bos_pullback_max_wick_pct: float | None = None,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -343,6 +358,8 @@ class InternalStructureDetector(MarketStructureDetector):
             raise ValueError("stale_reanchor_candles must be at least 1")
         if impulse_bos_displacement_pct is not None and impulse_bos_displacement_pct <= 0:
             raise ValueError("impulse_bos_displacement_pct must be positive")
+        if bos_pullback_max_wick_pct is not None and not 0 < bos_pullback_max_wick_pct <= 1:
+            raise ValueError("bos_pullback_max_wick_pct must be in (0, 1]")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
         self._low_detector = SwingLowDetector(lookback=swing_lookback)
         self._persistence_candles = persistence_candles
@@ -353,6 +370,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._reanchor_min_price_gap_pct = reanchor_min_price_gap_pct
         self._stale_reanchor_candles = stale_reanchor_candles
         self._impulse_bos_displacement_pct = impulse_bos_displacement_pct
+        self._bos_pullback_max_wick_pct = bos_pullback_max_wick_pct
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -676,30 +694,36 @@ class InternalStructureDetector(MarketStructureDetector):
                         and price < pb.price
                         and (last_bearish_bos_origin is None or price < last_bearish_bos_origin)
                     ):
-                        emit(
-                            pending_bos.close_break_timestamp,
-                            StructureEvent.BREAK_OF_STRUCTURE,
-                            MarketDirection.BEARISH,
-                            pending_bos.breaking_pivot.price,
-                            pending_bos.floor
-                            if pending_bos.floor is not None
-                            else pending_bos.ref_price,
-                            origin_price_level=price,
-                        )
-                        last_bearish_bos_price = pending_bos.breaking_pivot.price
-                        last_bearish_bos_origin = price
-                        # This BOS's pullback (the confirming LH) is the
-                        # *provisional* CHoCH reference; it is promoted to
-                        # validated_choch_high only once a continuation (the
-                        # next bearish BOS) confirms this BOS.
-                        candidate_choch_high = pivot
-                        # The bearish CHoCH is now confirmed by an *emitted* BOS
-                        # (a state-advance alone leaves a still-pending BOS that
-                        # may never emit, so the CHoCH could still fail): retire
-                        # its origin and drop the stashed bullish ceiling here.
-                        bear_choch_origin = None
-                        pre_choch_bull_bos_high = None
-                    pending_bos = None
+                        if self._pullback_quality_ok(candles[current_index], high_pivot=True):
+                            emit(
+                                pending_bos.close_break_timestamp,
+                                StructureEvent.BREAK_OF_STRUCTURE,
+                                MarketDirection.BEARISH,
+                                pending_bos.breaking_pivot.price,
+                                pending_bos.floor
+                                if pending_bos.floor is not None
+                                else pending_bos.ref_price,
+                                origin_price_level=price,
+                            )
+                            last_bearish_bos_price = pending_bos.breaking_pivot.price
+                            last_bearish_bos_origin = price
+                            # This BOS's pullback (the confirming LH) is the
+                            # *provisional* CHoCH reference; it is promoted to
+                            # validated_choch_high only once a continuation (the
+                            # next bearish BOS) confirms this BOS.
+                            candidate_choch_high = pivot
+                            # The bearish CHoCH is now confirmed by an *emitted*
+                            # BOS (a state-advance alone leaves a still-pending BOS
+                            # that may never emit, so the CHoCH could still fail):
+                            # retire its origin and drop the stashed bullish ceiling.
+                            bear_choch_origin = None
+                            pre_choch_bull_bos_high = None
+                            pending_bos = None
+                        # else: the pullback pivot is a wick-only spike (fails the
+                        # quality filter); keep the pending BOS alive so a later,
+                        # real pullback can confirm it instead of this wick.
+                    else:
+                        pending_bos = None
 
                 # Validated reference takes priority; choch_origin_high is the
                 # blind-spot fallback after a prior CHoCH (see declarations).
@@ -1040,29 +1064,35 @@ class InternalStructureDetector(MarketStructureDetector):
                         and price > pb.price
                         and (last_bullish_bos_origin is None or price > last_bullish_bos_origin)
                     ):
-                        emit(
-                            pending_bos.close_break_timestamp,
-                            StructureEvent.BREAK_OF_STRUCTURE,
-                            MarketDirection.BULLISH,
-                            pending_bos.breaking_pivot.price,
-                            pending_bos.floor
-                            if pending_bos.floor is not None
-                            else pending_bos.ref_price,
-                            origin_price_level=price,
-                        )
-                        last_bullish_bos_price = pending_bos.breaking_pivot.price
-                        last_bullish_bos_origin = price
-                        # Provisional CHoCH reference (see bearish mirror above):
-                        # promoted only once a continuation (the next bullish
-                        # BOS) confirms this BOS.
-                        candidate_choch_low = pivot
-                        # The bullish CHoCH is now confirmed by an *emitted* BOS
-                        # (a state-advance alone leaves a still-pending BOS that
-                        # may never emit, so the CHoCH could still fail): retire
-                        # its origin and drop the stashed bearish floor here.
-                        bull_choch_origin = None
-                        pre_choch_bear_bos_low = None
-                    pending_bos = None
+                        if self._pullback_quality_ok(candles[current_index], high_pivot=False):
+                            emit(
+                                pending_bos.close_break_timestamp,
+                                StructureEvent.BREAK_OF_STRUCTURE,
+                                MarketDirection.BULLISH,
+                                pending_bos.breaking_pivot.price,
+                                pending_bos.floor
+                                if pending_bos.floor is not None
+                                else pending_bos.ref_price,
+                                origin_price_level=price,
+                            )
+                            last_bullish_bos_price = pending_bos.breaking_pivot.price
+                            last_bullish_bos_origin = price
+                            # Provisional CHoCH reference (see bearish mirror
+                            # above): promoted only once a continuation (the next
+                            # bullish BOS) confirms this BOS.
+                            candidate_choch_low = pivot
+                            # The bullish CHoCH is now confirmed by an *emitted*
+                            # BOS (a state-advance alone leaves a still-pending BOS
+                            # that may never emit, so the CHoCH could still fail):
+                            # retire its origin and drop the stashed bearish floor.
+                            bull_choch_origin = None
+                            pre_choch_bear_bos_low = None
+                            pending_bos = None
+                        # else: the pullback pivot is a wick-only spike (fails the
+                        # quality filter); keep the pending BOS alive so a later,
+                        # real pullback can confirm it instead of this wick.
+                    else:
+                        pending_bos = None
 
                 # Validated reference takes priority; choch_origin_low is the
                 # blind-spot fallback after a prior CHoCH (see declarations).
@@ -1420,6 +1450,31 @@ class InternalStructureDetector(MarketStructureDetector):
         merged = [*events, *(s for s in staged_bos if not duplicates_real(s))]
         merged.sort(key=lambda e: e.timestamp)
         return merged
+
+    def _pullback_quality_ok(self, candle: Candle, *, high_pivot: bool) -> bool:
+        """Whether a confirming pullback pivot is a *real* bounce, not a wick.
+
+        A BOS confirms when a pullback pivot forms in the opposite direction (a
+        high pivot for a bearish BOS, a low pivot for a bullish BOS). With a small
+        swing lookback that pivot can be a single-candle wick (the candle spikes
+        to the extreme intrabar but its body closes far away), so the BOS is
+        confirmed by a "pullback" that never really retraced. When
+        `bos_pullback_max_wick_pct` is set, the pivot-side wick of that candle
+        (the upper wick for a high pivot, the lower wick for a low pivot) must be
+        at most this fraction of the candle's range; an emptier body (wick-only
+        spike) fails. `None` (default) disables the check.
+        """
+        max_wick = self._bos_pullback_max_wick_pct
+        if max_wick is None:
+            return True
+        rng = candle.high - candle.low
+        if rng <= 0:
+            return True
+        if high_pivot:
+            wick = candle.high - max(candle.open, candle.close)
+        else:
+            wick = min(candle.open, candle.close) - candle.low
+        return wick / rng <= max_wick
 
     @staticmethod
     def _extreme(current: Pivot | None, candidate: Pivot | None, *, higher: bool) -> Pivot | None:
