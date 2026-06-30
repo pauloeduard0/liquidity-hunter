@@ -1052,6 +1052,23 @@ are legitimate failed macro reversals, not chop, and are unaffected). A
 leg-displacement gate (`reanchor_chain_min_displacement_pct`) was prototyped first
 but **rejected by measurement** (inert on M30/D1, destabilizing on M5).
 
+**Chain re-anchor establish-only** (`InternalStructureDetector` only, as of
+2026-06-30): `reanchor_chain_establish_only` (constructor default `False`; wired
+**`True`** in `load_dashboard_data`) restricts the `"chain"` trigger to
+*establishing* a reversal reference that has gone blind (the opposite-side
+`validated_choch_<side>` is `None`, as in a clean impulse that nulled it) — it
+never *tightens* a reference that already exists. The chain trigger exists for the
+blind-impulse case; when a fresh `validated_choch_<side>` was just promoted from a
+real pullback, tightening it down to a shallower in-leg high degrades the CHoCH
+reference to a weak pullback, so a small reclaim fires a premature CHoCH (e.g. an
+M5 bullish CHoCH the chain wrote at a shallow 58,861 local high after a good 59,316
+pullback had already been promoted — distinct from the gap-guard case, since that
+level was a legitimate distance from price). With this set, a present reference is
+left for the staleness re-anchor to tighten only once genuinely stale; the
+blind-impulse establish case the chain was added for (e.g. the H4 June drop) is
+unaffected. Measured: removes the degraded M5 CHoCH, net-neutral on M15/M30/H4,
+trims a couple chain-tightening CHoCH on H1/D1.
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a

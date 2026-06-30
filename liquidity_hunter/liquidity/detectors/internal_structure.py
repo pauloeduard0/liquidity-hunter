@@ -287,6 +287,18 @@ class InternalStructureDetector(MarketStructureDetector):
     untouched. (Staging the skipped intermediate BOS of an impulse is a deferred
     follow-up; this re-anchors only the reversal references.)
 
+    `reanchor_chain_establish_only` (default `False`) restricts the `"chain"`
+    trigger to *establishing* a reversal reference that has gone blind (the
+    opposite-side `validated_choch_<side>` is `None`, as in a clean impulse that
+    nulled it), never *tightening* one that already exists. The chain trigger
+    exists for the blind-impulse case; when a fresh `validated_choch_<side>` was
+    just promoted from a real pullback, tightening it down to a shallower in-leg
+    extreme degrades the CHoCH reference to a weak pullback (so a small reclaim
+    fires a CHoCH that should have needed the genuine pullback). With this set,
+    a present reference is left for the staleness re-anchor to tighten only once
+    it is actually stale; the blind-impulse establish case (which the chain was
+    added for) is unaffected.
+
     `reanchor_min_price_gap_pct` (default `None` = off) guards the *output* of
     every re-anchor trigger (chain, stale, displacement): `reanchor_opposite`
     refuses to set the reversal reference to a local extreme closer than this
@@ -314,6 +326,7 @@ class InternalStructureDetector(MarketStructureDetector):
         confluence_filter: bool = False,
         reanchor_mode: str = "off",
         reanchor_chain_threshold: int = 3,
+        reanchor_chain_establish_only: bool = False,
         reanchor_min_price_gap_pct: float | None = None,
         stale_reanchor_candles: int | None = None,
         impulse_bos_displacement_pct: float | None = None,
@@ -336,6 +349,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._confluence_filter = confluence_filter
         self._reanchor_mode = reanchor_mode
         self._reanchor_chain_threshold = reanchor_chain_threshold
+        self._reanchor_chain_establish_only = reanchor_chain_establish_only
         self._reanchor_min_price_gap_pct = reanchor_min_price_gap_pct
         self._stale_reanchor_candles = stale_reanchor_candles
         self._impulse_bos_displacement_pct = impulse_bos_displacement_pct
@@ -962,6 +976,10 @@ class InternalStructureDetector(MarketStructureDetector):
                             if (
                                 self._reanchor_mode == "chain"
                                 and bos_chain >= self._reanchor_chain_threshold
+                                and (
+                                    not self._reanchor_chain_establish_only
+                                    or validated_choch_low is None
+                                )
                             ):
                                 seg_start = max(0, prev_any_pivot_index + 1)
                                 # Re-anchor to the candle that actually formed the
@@ -1322,6 +1340,10 @@ class InternalStructureDetector(MarketStructureDetector):
                             if (
                                 self._reanchor_mode == "chain"
                                 and bos_chain >= self._reanchor_chain_threshold
+                                and (
+                                    not self._reanchor_chain_establish_only
+                                    or validated_choch_high is None
+                                )
                             ):
                                 seg_start = max(0, prev_any_pivot_index + 1)
                                 # Re-anchor to the candle that actually formed the

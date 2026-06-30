@@ -1199,6 +1199,62 @@ def test_chain_reanchors_stale_reference_to_local_level() -> None:
     assert chain_bull_choch[0].reference_price_level == 150.0
 
 
+def test_chain_establish_only_does_not_tighten_a_fresh_validated_reference() -> None:
+    """`reanchor_chain_establish_only` stops the chain trigger from *tightening*
+    a freshly promoted `validated_choch_high` down to a shallower in-leg high.
+
+    A real LH pullback (180) confirms a bearish BOS and a continuation low (90)
+    promotes it to `validated_choch_high=180`. That same continuation advance hits
+    the chain threshold (2): with `establish_only=False` the chain re-anchors the
+    reference down to the local default high (150), so a reclaim to 160 fires a
+    bullish CHoCH at the degraded 150 level; with `establish_only=True` the fresh
+    180 reference is left intact, so the same 160 reclaim (below 180) fires no
+    CHoCH — exactly the weak-pullback CHoCH the gate suppresses."""
+    highs = [150.0] * 14
+    lows = [140.0] * 14
+    highs[1] = 200.0  # origin high
+    lows[3] = 130.0  # bootstrap active_low
+    lows[5] = 110.0  # bearish advance 1 -> pending BOS (pullback ref 200)
+    highs[6] = 180.0  # LH pullback -> confirms BOS, candidate_choch_high=180
+    lows[7] = 90.0  # advance 2 -> promotes validated_choch_high=180, chain hits 2
+    highs[11] = 160.0  # reclaim (above the degraded 150, below the fresh 180)
+    highs[12] = 155.0  # persistence candle
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 150.0, 110.0, close=120.0)
+    candles[6] = make_candle(6, 180.0, 140.0, close=175.0)
+    candles[7] = make_candle(7, 150.0, 90.0, close=100.0)
+    candles[11] = make_candle(11, 160.0, 140.0, close=158.0)
+    candles[12] = make_candle(12, 155.0, 140.0, close=152.0)
+
+    def bull_choch(events: list[MarketStructure]) -> list[MarketStructure]:
+        return [
+            e
+            for e in events
+            if e.event is StructureEvent.CHANGE_OF_CHARACTER
+            and e.direction is MarketDirection.BULLISH
+        ]
+
+    tightening = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=1,
+        confluence_filter=False,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+    ).detect(candles)
+    establish_only = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=1,
+        confluence_filter=False,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+    ).detect(candles)
+
+    assert [e.reference_price_level for e in bull_choch(tightening)] == [150.0]
+    assert bull_choch(establish_only) == []
+
+
 def test_invalid_reanchor_min_price_gap_pct_raises() -> None:
     with pytest.raises(ValueError, match="reanchor_min_price_gap_pct"):
         InternalStructureDetector(reanchor_min_price_gap_pct=0)

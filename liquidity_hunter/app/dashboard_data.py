@@ -374,6 +374,12 @@ def load_dashboard_data(
         # See InternalStructureDetector.reanchor_mode.
         reanchor_mode="chain",
         reanchor_chain_threshold=2,
+        # The chain trigger only *establishes* a blind reversal reference (an
+        # impulse nulled it), never *tightens* a fresh one promoted from a real
+        # pullback -- otherwise it degrades the CHoCH reference to a shallow
+        # in-leg high so a weak reclaim fires a premature CHoCH. Staleness still
+        # tightens genuinely-stale references.
+        reanchor_chain_establish_only=True,
         # Reject a re-anchored reversal reference that sits within this fraction
         # of current price: a hair-trigger reference produces a mid-range CHoCH
         # that immediately fails (the chop clutter). See _REANCHOR_MIN_PRICE_GAP_PCT.
