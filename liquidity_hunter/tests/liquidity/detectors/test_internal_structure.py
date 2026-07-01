@@ -493,6 +493,60 @@ def test_state_machine_hierarchy_choch_then_bos() -> None:
     assert second_bullish.event is StructureEvent.BREAK_OF_STRUCTURE
 
 
+def test_first_bos_of_leg_references_choch_extreme_not_trailing() -> None:
+    """The FIRST BOS of a new leg must reference the CHoCH's confirming extreme
+    (the fundo/topo the reversal formed), not the trailing reference that
+    ratchets to a shallow retrace pivot during the pullback.
+
+    Setup: bearish -> bullish CHoCH (confirming high = 180) -> a lower-high
+    retrace at 176 trails ``active_high`` down -> a bullish continuation BOS.
+    Before the CHoCH-seed fix the BOS reported 176 (the trailing lower-high);
+    it must report 180 (the CHoCH high) so, via the close-break re-anchor, it
+    confirms only on a close above the level the reversal actually launched from.
+    """
+    highs = [150.0] * 44
+    lows = [140.0] * 44
+    highs[1] = 200.0
+    lows[3] = 100.0
+    lows[5] = 80.0
+    highs[7] = 170.0
+    lows[9] = 60.0
+    highs[11] = 165.0
+    # A lower-high retrace after the CHoCH: trails active_high down to 176 (the
+    # shallow level the pre-fix code would wrongly report as the BOS reference).
+    highs[18] = 176.0
+    # Bullish continuation BOS, then an HL pullback (L100) to confirm it.
+    highs[21] = 250.0
+    lows[23] = 100.0
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 150.0, 80.0, close=90.0)
+    candles[9] = make_candle(9, 150.0, 60.0, close=70.0)
+    # Bullish CHoCH: sustained break above validated_choch_high=170, confirming
+    # high (the topo the reversal formed) = 180.
+    candles[14] = make_candle(14, high=175.0, low=140.0, close=172.0)
+    candles[15] = make_candle(15, high=180.0, low=150.0, close=175.0)
+    candles[16] = make_candle(16, high=178.0, low=150.0, close=171.0)
+    candles[21] = make_candle(21, high=250.0, low=140.0, close=248.0)
+
+    detector = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=2, confluence_filter=False
+    )
+    events = detector.detect(candles)
+
+    bullish_bos = [
+        e
+        for e in events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BULLISH
+    ]
+    assert bullish_bos, "Expected a bullish continuation BOS."
+    first_bos = bullish_bos[0]
+    assert first_bos.price_level == 250.0
+    # The CHoCH confirming high (180), NOT the trailing lower-high retrace (176).
+    assert first_bos.reference_price_level == 180.0
+
+
 def test_trend_state_does_not_leak_on_liquidity_sweep() -> None:
     """A sweep of the CHoCH level must not flip the trend.  With pullback-
     based BOS, the second bearish BOS (at L50) needs an LH pullback to
@@ -1312,6 +1366,60 @@ def test_bos_pullback_wick_filter_rejects_wick_only_pullback() -> None:
     # Filter on: the wick pullback no longer confirms, the bodied one still does.
     assert bearish_bos(run(145.0, 0.4)) == []
     assert len(bearish_bos(run(178.0, 0.4))) == 1
+
+
+def test_stage_wick_rejected_bos_adds_continuation_mark_without_confirming_state() -> None:
+    """`stage_wick_rejected_bos` adds an *additive* mark for a *continuation* BOS
+    the wick filter kept out of the state machine, without confirming it into the
+    CHoCH promotion.
+
+    A first bearish BOS confirms off a bodied pullback (candle 7), establishing the
+    staircase floor (80). A second, continuation advance (candle 9, low 60) is
+    confirmed only by a wick pullback (candle 11 spikes to 155 but closes at 142),
+    which `bos_pullback_max_wick_pct` rejects -- so the state machine emits no BOS
+    for it. With `stage_wick_rejected_bos` that break gets a mark at the breaking
+    low (60) referencing the floor it broke (80), because the leg genuinely closed
+    beyond the level. Only continuations with a real staircase floor are staged
+    (the first-of-leg break, floor `None`, is never staged from the stale
+    `ref_price` fallback). The mark is purely visual -- it does not seed a
+    `candidate_choch_<side>`, so no `change_of_character` appears."""
+
+    highs = [150.0] * 15
+    lows = [140.0] * 15
+    highs[1] = 200.0  # origin high
+    lows[3] = 90.0  # bootstrap active_low
+    lows[5] = 80.0  # advance 1 (first BOS of the leg, floor None)
+    highs[7] = 160.0  # bodied pullback -> confirms BOS 1, floor becomes 80
+    lows[9] = 60.0  # advance 2 (continuation, floor 80)
+    highs[11] = 155.0  # wick pullback -> would confirm BOS 2 but is rejected
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 150.0, 80.0, close=85.0)
+    candles[7] = make_candle(7, 160.0, 145.0, close=158.0)  # bodied (small wick)
+    candles[9] = make_candle(9, 150.0, 60.0, close=65.0)
+    candles[11] = make_candle(11, 155.0, 140.0, close=142.0)  # wick (large upper wick)
+
+    def run(stage: bool) -> list[MarketStructure]:
+        return InternalStructureDetector(
+            swing_lookback=1,
+            persistence_candles=1,
+            confluence_filter=False,
+            bos_pullback_max_wick_pct=0.4,
+            stage_wick_rejected_bos=stage,
+        ).detect(candles)
+
+    def bos(events: list[MarketStructure]) -> list[MarketStructure]:
+        return [e for e in events if e.event is StructureEvent.BREAK_OF_STRUCTURE]
+
+    off = bos(run(False))
+    on = bos(run(True))
+    # Off: only the first (bodied-confirmed) BOS; the wick continuation is suppressed.
+    assert [(e.price_level, e.reference_price_level) for e in off] == [(80.0, 90.0)]
+    # On: the same real BOS plus one additive continuation mark at 60 referencing 80.
+    assert [(e.price_level, e.reference_price_level) for e in on] == [(80.0, 90.0), (60.0, 80.0)]
+    assert on[1].direction is MarketDirection.BEARISH
+    assert on[1].scope is StructureScope.INTERNAL
+    # The staged mark is purely visual -- it does not seed a CHoCH.
+    assert [e for e in run(True) if e.event is StructureEvent.CHANGE_OF_CHARACTER] == []
 
 
 def test_invalid_reanchor_min_price_gap_pct_raises() -> None:

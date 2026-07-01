@@ -490,8 +490,17 @@ re-exported from `liquidity_hunter.data`.
   ratchets to the breaking pivot — rather than the trailing `active_<side>` the
   state machine advanced on. So a continuation BOS reports (and plots at) the
   prior swing extreme it actually broke, forming a clean descending/ascending
-  staircase of levels. The unconstrained first BOS of a leg (`floor is None`)
-  falls back to the trailing reference. The state machine, trailing references,
+  staircase of levels. The **first BOS of a leg** is seeded at the trend flip:
+  `prev_bear_bos_extreme`/`prev_bull_bos_extreme` (the reported-floor tracker) is
+  set at each CHoCH to the CHoCH's *confirming* extreme (`price` at the flip — the
+  fundo/topo the reversal formed), so that first BOS references the level the leg
+  actually launched from and, via the close-break re-anchor, confirms only on a
+  close beyond it — rather than the trailing `active_<side>` that ratchets to a
+  shallow retrace pivot during the pullback (the "reference climbs with trailing"
+  bug: e.g. an M30 first bearish BOS reporting a 62,402 higher-low instead of the
+  61,870 CHoCH fundo). This is distinct from the staircase *gate*
+  (`last_bear_bos_low`/`last_bull_bos_high`), seeded at the CHoCH with the *broken*
+  reference. The state machine, trailing references,
   and CHoCH promotion are unaffected — only the reported reference changes. A
   composition-level pass then re-times each BOS to the first *close* beyond that
   level and drops wick-only continuations (see `load_dashboard_data` below).
@@ -1089,6 +1098,28 @@ cosmetic mark drop. Adjusting the swing lookback was measured and rejected as a
 fix (it coarsens all structure globally and doesn't target the wick). With the
 flag off the output is byte-for-byte identical. Not mirrored into
 `SwingStructureDetector` (the major detector is not drawn).
+
+**Wick-rejected BOS staging** (`InternalStructureDetector` only, as of
+2026-07-01): `stage_wick_rejected_bos` (constructor default `False`; wired
+**`True`** in `load_dashboard_data`) is the *additive* complement to the wick
+filter above. When a continuation advance's only pullback is a wick (rejected by
+`bos_pullback_max_wick_pct`) and no *real* pullback ever confirms it before the
+trend flips, the state machine emits **no BOS** even though the leg genuinely
+closed beyond the staircase floor — a visibly-missing mark. This flag stages an
+**additive** `BREAK_OF_STRUCTURE` for that break (once per pending BOS, at the
+break's close and referencing the floor it broke), merged and deduped against the
+real BOS at the end exactly like the impulse staging (`impulse_bos_displacement_pct`).
+Crucially it **never touches the state machine or CHoCH promotion** — it does not
+seed `candidate_choch_<side>` — so, unlike relaxing the wick filter itself (which
+cascades: more confirmed BOS shift the trend state and can turn a correct reversal
+CHoCH into a premature one), it cannot change the CHoCH sequence. Purely a mark.
+A wick-rejected pending BOS that *later* gets a real bodied pullback still emits
+its normal BOS (which dedups the staged mark away), so staging only ever fills the
+genuinely-missing gaps. With the flag off the output is byte-for-byte identical.
+Not mirrored into `SwingStructureDetector` (not drawn). (Relaxing the wick filter
+to a neighborhood-corroboration test was prototyped first and **rejected by
+measurement**: it recovered the missing marks but cascaded downstream and
+destroyed a known-correct reversal CHoCH — the state-machine-vs-additive lesson.)
 
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A

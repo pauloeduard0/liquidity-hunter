@@ -413,6 +413,12 @@ def load_dashboard_data(
         # of its range, else the BOS waits for a genuine pullback. See
         # _BOS_PULLBACK_MAX_WICK_PCT.
         bos_pullback_max_wick_pct=_BOS_PULLBACK_MAX_WICK_PCT,
+        # A wick-only pullback keeps its BOS out of the state machine / CHoCH (so
+        # the reversal reference stays anchored to a genuine pullback), but the
+        # continuation still happened -- add an *additive* mark for it, deduped
+        # against the real BOS. Purely visual: it never feeds the state machine,
+        # so it cannot cascade into a wrong CHoCH.
+        stage_wick_rejected_bos=True,
     ).detect(internal_candles)
     # Re-time each BOS to the first close beyond the formed level it broke
     # (dropping wick-only continuations), before the visible filter and POI.

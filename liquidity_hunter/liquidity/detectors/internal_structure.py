@@ -229,6 +229,11 @@ class _PendingBOS:
     # broken) rather than the trailing pivot, so the BOS plots at the level it
     # structurally broke; `None` falls back to `ref_price`.
     floor: float | None
+    # Whether an *additive* mark has already been staged for this pending BOS
+    # after a wick-only pullback (guards against double-staging when several
+    # wicky pullbacks form before -- or instead of -- a real one). Only used
+    # when `stage_wick_rejected_bos` is set. See the wick-reject staging below.
+    staged: bool = False
 
 
 class InternalStructureDetector(MarketStructureDetector):
@@ -321,6 +326,20 @@ class InternalStructureDetector(MarketStructureDetector):
     genuine pullback too -- the filter propagates correctly into CHoCH detection
     rather than being a cosmetic mark drop.
 
+    `stage_wick_rejected_bos` (default `False`) is the *additive* complement to
+    `bos_pullback_max_wick_pct`: when a continuation advance is confirmed only by a
+    wick pullback (rejected above) and no *real* pullback ever confirms it before
+    the trend flips, the state machine emits no BOS even though the leg closed
+    beyond the staircase floor -- a visibly-missing mark. When set, that break gets
+    an **additive** `BREAK_OF_STRUCTURE` (once per pending BOS, at the break's close
+    referencing the floor), staged and deduped against the real BOS at the end like
+    the impulse staging. It never touches the state machine or CHoCH promotion (it
+    does not seed `candidate_choch_<side>`), so -- unlike relaxing the wick filter,
+    which cascades trend state and can corrupt a later reversal CHoCH -- it cannot
+    change the CHoCH sequence; it only fills a genuinely-missing mark. A pending BOS
+    that later gets a real pullback still emits its normal BOS (deduping the staged
+    mark). With the flag off the output is byte-for-byte identical.
+
     `stale_reanchor_candles` (default `None` = off) is a separate *staleness*
     re-anchor, independent of `reanchor_mode`: when the trend runs this many
     candles past its last BOS / trend flip (`last_advance_index`, set in `emit`)
@@ -345,6 +364,7 @@ class InternalStructureDetector(MarketStructureDetector):
         stale_reanchor_candles: int | None = None,
         impulse_bos_displacement_pct: float | None = None,
         bos_pullback_max_wick_pct: float | None = None,
+        stage_wick_rejected_bos: bool = False,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -371,6 +391,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._stale_reanchor_candles = stale_reanchor_candles
         self._impulse_bos_displacement_pct = impulse_bos_displacement_pct
         self._bos_pullback_max_wick_pct = bos_pullback_max_wick_pct
+        self._stage_wick_rejected_bos = stage_wick_rejected_bos
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -456,10 +477,13 @@ class InternalStructureDetector(MarketStructureDetector):
         last_bull_bos_high: float | None = None
         # The extreme of the *previous* BOS in the current leg, used as the
         # emitted `reference_price_level` (the formed level the continuation
-        # broke). Unlike the staircase floor it is *not* seeded at a CHoCH --
-        # `None` for the first BOS of a leg -- so that first BOS reports the
-        # trailing reference it actually broke instead of plotting on the CHoCH's
-        # own line.
+        # broke). Seeded at a CHoCH with the CHoCH's *confirming* extreme (the
+        # fundo/topo the reversal formed -- `price` at the trend flip), so the
+        # FIRST BOS of the leg references that structural low/high and, via the
+        # close-break re-anchor, confirms only on a close beyond it -- rather than
+        # the trailing `active_<side>` that ratchets to a shallow higher-low /
+        # lower-high during the pullback (the "reference climbs with trailing"
+        # bug). Reset to `None` for the *opposite* (irrelevant) side at each flip.
         prev_bear_bos_extreme: float | None = None
         prev_bull_bos_extreme: float | None = None
         # The *origin* of an unconfirmed CHoCH: the swing the CHoCH move launched
@@ -719,9 +743,40 @@ class InternalStructureDetector(MarketStructureDetector):
                             bear_choch_origin = None
                             pre_choch_bull_bos_high = None
                             pending_bos = None
-                        # else: the pullback pivot is a wick-only spike (fails the
-                        # quality filter); keep the pending BOS alive so a later,
-                        # real pullback can confirm it instead of this wick.
+                        elif (
+                            self._stage_wick_rejected_bos
+                            and not pending_bos.staged
+                            and pending_bos.floor is not None
+                        ):
+                            # Wick-only pullback: the filter (correctly) keeps this
+                            # break out of the state machine / CHoCH promotion, so the
+                            # reversal reference stays anchored to a genuine pullback
+                            # and nothing cascades. But the continuation *did* happen
+                            # -- the leg closed beyond the staircase floor -- so add an
+                            # ADDITIVE mark for it (once), merged and deduped against
+                            # the real BOS at the end like the impulse staging. Only
+                            # *continuation* breaks (a real staircase `floor`, not the
+                            # first-of-leg `ref_price` fallback which can be a stale
+                            # far-off trailing level) are staged, so the mark always
+                            # plots at the prior swing extreme it broke. The pending BOS
+                            # stays alive so a later real pullback can still confirm it
+                            # into the state machine (that emitted BOS then dedups this
+                            # mark away).
+                            pending_bos.staged = True
+                            staged_bos.append(
+                                MarketStructure(
+                                    symbol=symbol,
+                                    timeframe=timeframe,
+                                    timestamp=pending_bos.close_break_timestamp,
+                                    event=StructureEvent.BREAK_OF_STRUCTURE,
+                                    direction=MarketDirection.BEARISH,
+                                    price_level=pending_bos.breaking_pivot.price,
+                                    reference_price_level=pending_bos.floor,
+                                    scope=StructureScope.INTERNAL,
+                                )
+                            )
+                        # else: wick-only pullback; keep the pending BOS alive so a
+                        # later, real pullback can confirm it instead of this wick.
                     else:
                         pending_bos = None
 
@@ -859,9 +914,13 @@ class InternalStructureDetector(MarketStructureDetector):
                     pre_choch_bull_bos_high = None
                     last_bull_bos_high = choch_high_ref.price
                     last_bear_bos_low = None
-                    # New leg: no previous BOS yet -> the first BOS reports the
-                    # trailing reference, not the seeded CHoCH level.
-                    prev_bull_bos_extreme = None
+                    # New leg: seed the reported staircase floor with the CHoCH's
+                    # confirming high (the topo the reversal formed) so the FIRST
+                    # BOS of the leg references that structural high -- and, via the
+                    # close-break re-anchor, confirms only on a close above it --
+                    # rather than the trailing `active_high` that ratchets down to a
+                    # shallow lower-high during the pullback.
+                    prev_bull_bos_extreme = price
                     prev_bear_bos_extreme = None
                     pending_bos = None
                     last_bullish_bos_price = None
@@ -1088,9 +1147,33 @@ class InternalStructureDetector(MarketStructureDetector):
                             bull_choch_origin = None
                             pre_choch_bear_bos_low = None
                             pending_bos = None
-                        # else: the pullback pivot is a wick-only spike (fails the
-                        # quality filter); keep the pending BOS alive so a later,
-                        # real pullback can confirm it instead of this wick.
+                        elif (
+                            self._stage_wick_rejected_bos
+                            and not pending_bos.staged
+                            and pending_bos.floor is not None
+                        ):
+                            # Mirror of the bearish case: a wick-only pullback stays
+                            # out of the state machine / CHoCH, but the continuation
+                            # close beyond the floor gets an ADDITIVE mark (once),
+                            # deduped against the real BOS at the end. Only continuation
+                            # breaks with a real staircase `floor` are staged (never the
+                            # first-of-leg `ref_price` fallback), so the reference is
+                            # always the prior swing extreme it broke.
+                            pending_bos.staged = True
+                            staged_bos.append(
+                                MarketStructure(
+                                    symbol=symbol,
+                                    timeframe=timeframe,
+                                    timestamp=pending_bos.close_break_timestamp,
+                                    event=StructureEvent.BREAK_OF_STRUCTURE,
+                                    direction=MarketDirection.BULLISH,
+                                    price_level=pending_bos.breaking_pivot.price,
+                                    reference_price_level=pending_bos.floor,
+                                    scope=StructureScope.INTERNAL,
+                                )
+                            )
+                        # else: wick-only pullback; keep the pending BOS alive so a
+                        # later, real pullback can confirm it instead of this wick.
                     else:
                         pending_bos = None
 
@@ -1227,9 +1310,13 @@ class InternalStructureDetector(MarketStructureDetector):
                     pre_choch_bear_bos_low = None
                     last_bear_bos_low = choch_low_ref.price
                     last_bull_bos_high = None
-                    # New leg: no previous BOS yet -> the first BOS reports the
-                    # trailing reference, not the seeded CHoCH level.
-                    prev_bear_bos_extreme = None
+                    # New leg: seed the reported staircase floor with the CHoCH's
+                    # confirming low (the fundo the reversal formed) so the FIRST
+                    # BOS of the leg references that structural low -- and, via the
+                    # close-break re-anchor, confirms only on a close below it --
+                    # rather than the trailing `active_low` that ratchets up to a
+                    # shallow higher-low during the pullback.
+                    prev_bear_bos_extreme = price
                     prev_bull_bos_extreme = None
                     pending_bos = None
                     last_bullish_bos_price = None
@@ -1447,7 +1534,25 @@ class InternalStructureDetector(MarketStructureDetector):
                 for real in real_bos
             )
 
-        merged = [*events, *(s for s in staged_bos if not duplicates_real(s))]
+        # Accept each staged BOS unless it duplicates a real emitted BOS or an
+        # already-accepted staged one at the *same* close-break candle (the impulse
+        # and wick-reject stagers can both fire for one advance -- same direction,
+        # timestamp and price level -- so keep a single mark).
+        accepted: list[MarketStructure] = []
+        for staged in sorted(staged_bos, key=lambda e: e.timestamp):
+            if duplicates_real(staged):
+                continue
+            if any(
+                other.direction is staged.direction
+                and other.timestamp == staged.timestamp
+                and abs(other.price_level - staged.price_level)
+                <= abs(staged.price_level) * _STAGED_BOS_DEDUP_PCT
+                for other in accepted
+            ):
+                continue
+            accepted.append(staged)
+
+        merged = [*events, *accepted]
         merged.sort(key=lambda e: e.timestamp)
         return merged
 
