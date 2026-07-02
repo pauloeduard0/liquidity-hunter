@@ -1521,3 +1521,81 @@ def test_stale_reanchor_surfaces_local_choch_where_off_finds_none() -> None:
     assert len(stale_bull_choch) >= 1
     ref = stale_bull_choch[0].reference_price_level
     assert ref is not None and ref < 64766.0
+
+
+# --- Leg-origin CHoCH reference (`bos_leg_origin_choch_ref`) ----------------
+#
+# Sequence (lookback=1, persistence_candles=2):
+#   index  1: high 200 -> bootstrap active_high
+#   index  3: low   90 -> bootstrap active_low (and pending_low)
+#   index  5: high 210 -> BOS bullish state advance (close 205 > 200);
+#                         leg-origin snapshot (pullback_ref) = 90
+#   index  7: low  100 -> HL (100 > 90) confirms the BOS -> emission.
+#                         Flag ON: validated_choch_low := 90 (the leg origin,
+#                         structural). Flag OFF: no validated ref (no
+#                         continuation yet).
+#   index  9: low   95 -> breaks the trailing active_low (100), closes hold
+#                         below it (98, 97).
+#                         Flag OFF: CHoCH bearish vs the trailing 100
+#                         (cold-start fallback). Flag ON: 95 > 90 does not
+#                         reach the leg origin -> LIQUIDITY_SWEEP only.
+#   index 11: low   80 -> sustained break below 90 (closes 85, 86, 86).
+#                         Flag ON: CHoCH bearish vs the leg origin 90.
+_LEG_ORIGIN_HIGHS = [150.0] * 18
+for _i, _v in {1: 200.0, 5: 210.0}.items():
+    _LEG_ORIGIN_HIGHS[_i] = _v
+_LEG_ORIGIN_LOWS = [140.0] * 18
+for _i, _v in {3: 90.0, 7: 100.0, 9: 95.0, 11: 80.0}.items():
+    _LEG_ORIGIN_LOWS[_i] = _v
+
+
+def _leg_origin_series() -> list[Candle]:
+    candles = make_series(_LEG_ORIGIN_HIGHS, _LEG_ORIGIN_LOWS)
+    candles[5] = make_candle(5, 210.0, 140.0, close=205.0)
+    candles[9] = make_candle(9, 150.0, 95.0, close=98.0)
+    candles[10] = make_candle(10, 150.0, 96.0, close=97.0)
+    candles[11] = make_candle(11, 150.0, 80.0, close=85.0)
+    candles[12] = make_candle(12, 150.0, 84.0, close=86.0)
+    candles[13] = make_candle(13, 150.0, 85.0, close=86.0)
+    return candles
+
+
+def test_leg_origin_choch_ref_uses_bos_leg_origin() -> None:
+    """With `bos_leg_origin_choch_ref`, the confirmed BOS promotes the low its
+    leg rose from (90) to the bearish-CHoCH reference at emission: the shallow
+    break of the trailing HL (95 < 100) is only a sweep, and the CHoCH fires on
+    the sustained break of the leg origin, referencing it."""
+    events = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=2,
+        confluence_filter=False,
+        bos_leg_origin_choch_ref=True,
+    ).detect(_leg_origin_series())
+
+    chochs = [e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
+    assert len(chochs) == 1
+    assert chochs[0].direction is MarketDirection.BEARISH
+    assert chochs[0].reference_price_level == 90.0
+    sweeps = [e for e in events if e.event is StructureEvent.LIQUIDITY_SWEEP]
+    assert any(s.price_level == 95.0 for s in sweeps)
+
+
+def test_leg_origin_choch_ref_off_falls_back_to_trailing_reference() -> None:
+    """Same series with the flag off: no continuation ever promotes a
+    validated reference, so the CHoCH falls back to the trailing active_low
+    (100) and fires on the shallower break -- the behavior the flag changes."""
+    events = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=2,
+        confluence_filter=False,
+    ).detect(_leg_origin_series())
+
+    chochs = [e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
+    assert chochs
+    assert chochs[0].direction is MarketDirection.BEARISH
+    assert chochs[0].reference_price_level == 100.0
+
+
+def test_invalid_bos_leg_origin_release_gap_pct_raises() -> None:
+    with pytest.raises(ValueError, match="bos_leg_origin_release_gap_pct"):
+        InternalStructureDetector(bos_leg_origin_release_gap_pct=0)

@@ -340,6 +340,45 @@ class InternalStructureDetector(MarketStructureDetector):
     that later gets a real pullback still emits its normal BOS (deduping the staged
     mark). With the flag off the output is byte-for-byte identical.
 
+    `bos_leg_origin_choch_ref` (default `False`) promotes the **leg origin** of a
+    confirmed BOS -- the extreme the breaking leg launched from
+    (`_PendingBOS.pullback_ref`: the low a bullish leg rose from / the high a
+    bearish leg dropped from) -- directly to the opposite `validated_choch_<side>`
+    at BOS *emission*, without waiting for the continuation gate: the close-break
+    plus a confirming pullback is itself the continuation evidence.
+
+    - **Every emitted BOS refreshes** the reference to its own leg origin,
+      replacing the current one unconditionally -- even to a looser (more
+      distant) level. Structure wins over a re-anchored local extreme, and the
+      reference always reflects the *most recent* confirmed break's origin.
+    - Re-anchors (`reanchor_opposite`, every trigger) refuse to overwrite a
+      *structural* reference while it remains **reachable** -- within
+      `bos_leg_origin_release_gap_pct` of current price (`None` = always
+      immune). So a stale-window slide cannot ratchet the reversal reference
+      away from the genuine leg origin (e.g. an H4 CHoCH firing at a sliding
+      local low instead of the fundo the leg actually launched from). Once the
+      leg has run away beyond the gap, the re-anchor regains authority: holding
+      the CHoCH hostage to an unreachable level re-opens the stuck-trend
+      pathology (an impulsive leg can emit no BOS for months, so the refresh
+      alone cannot keep the reference local). (A stricter variant -- promote
+      only over blind/re-anchored references and let a structural one keep the
+      continuation gate, with no release -- was measured and rejected: the
+      first structural reference pins for the whole leg and coarse timeframes
+      lose entire reversal sequences.)
+    - Under this flag a re-anchor writes its synthetic level ONLY into
+      `validated_choch_<side>`; the trailing `active_<side>` and the pullback
+      candidate keep their genuine swing pivots. Otherwise the re-anchor level
+      would feed the next BOS's `pullback_ref` snapshot and be laundered into a
+      "structural" leg origin at emission (measured: an M30 leg-origin ref of
+      63650 -- a stale-window artifact -- instead of the genuine 65469 fundo).
+    - The continuation-gated candidate promotion still runs on top (a genuine
+      continuation tightens the reference to the newer post-BOS pullback until
+      that BOS's own emission refreshes it).
+
+    Provenance is tracked per side (`validated_choch_<side>_structural`), reset
+    when a CHoCH/`CHOCH_FAILED` consumes the reference. With the flag off the
+    output is byte-for-byte identical.
+
     `stale_reanchor_candles` (default `None` = off) is a separate *staleness*
     re-anchor, independent of `reanchor_mode`: when the trend runs this many
     candles past its last BOS / trend flip (`last_advance_index`, set in `emit`)
@@ -365,6 +404,8 @@ class InternalStructureDetector(MarketStructureDetector):
         impulse_bos_displacement_pct: float | None = None,
         bos_pullback_max_wick_pct: float | None = None,
         stage_wick_rejected_bos: bool = False,
+        bos_leg_origin_choch_ref: bool = False,
+        bos_leg_origin_release_gap_pct: float | None = None,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -392,6 +433,10 @@ class InternalStructureDetector(MarketStructureDetector):
         self._impulse_bos_displacement_pct = impulse_bos_displacement_pct
         self._bos_pullback_max_wick_pct = bos_pullback_max_wick_pct
         self._stage_wick_rejected_bos = stage_wick_rejected_bos
+        if bos_leg_origin_release_gap_pct is not None and bos_leg_origin_release_gap_pct <= 0:
+            raise ValueError("bos_leg_origin_release_gap_pct must be positive")
+        self._bos_leg_origin_choch_ref = bos_leg_origin_choch_ref
+        self._bos_leg_origin_release_gap_pct = bos_leg_origin_release_gap_pct
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -441,6 +486,15 @@ class InternalStructureDetector(MarketStructureDetector):
         # *continuation-confirmed* bearish BOS. Mirror for validated_choch_low.
         validated_choch_high: Pivot | None = None
         validated_choch_low: Pivot | None = None
+        # Provenance of validated_choch_<side>: True when it was set
+        # *structurally* (a continuation-gated pullback promotion, or a BOS
+        # leg-origin promotion under `bos_leg_origin_choch_ref`), False when it
+        # was written by a re-anchor (stale/chain) or is unset. Only consulted
+        # when `bos_leg_origin_choch_ref` is enabled: a structural reference is
+        # authoritative -- re-anchors must not overwrite it, and a newer BOS's
+        # leg origin replaces it only through the continuation gate.
+        validated_choch_high_structural = False
+        validated_choch_low_structural = False
         # The pullback (origin) of the most recent BOS in each direction, still
         # *provisional*: promoted to validated_choch_<side> only once a
         # continuation (the next BOS in that direction) confirms its BOS. If
@@ -571,6 +625,7 @@ class InternalStructureDetector(MarketStructureDetector):
             """
             nonlocal active_high, active_low
             nonlocal validated_choch_high, validated_choch_low
+            nonlocal validated_choch_high_structural, validated_choch_low_structural
             nonlocal choch_origin_high, choch_origin_low
             nonlocal candidate_choch_high, candidate_choch_low
             new = Pivot(price=level, timestamp=ts)
@@ -586,6 +641,26 @@ class InternalStructureDetector(MarketStructureDetector):
                     return False
                 if min_gap is not None and (level - current_price) / current_price < min_gap:
                     return False
+                # A *structural* reference (a BOS leg origin or a promoted
+                # pullback) is authoritative while it remains *reachable*:
+                # re-anchors must not slide it (see `bos_leg_origin_choch_ref`).
+                # But once the leg has run away -- the reference sits farther
+                # than `bos_leg_origin_release_gap_pct` from current price --
+                # holding the CHoCH hostage to that unreachable level re-opens
+                # the stuck-trend pathology (e.g. an impulsive drop that emits
+                # no BOS for months), so the re-anchor may act again.
+                if (
+                    self._bos_leg_origin_choch_ref
+                    and validated_choch_high is not None
+                    and validated_choch_high_structural
+                ):
+                    release = self._bos_leg_origin_release_gap_pct
+                    if (
+                        release is None
+                        or (validated_choch_high.price - current_price) / current_price
+                        <= release
+                    ):
+                        return False
                 # Only *tighten* the effective reversal reference (the one the
                 # CHoCH actually uses, in priority order), never *loosen* it. Using
                 # max(all refs) let a far-away trailing `active_high` mask a lower
@@ -597,23 +672,51 @@ class InternalStructureDetector(MarketStructureDetector):
                 effective_high = validated_choch_high or choch_origin_high or active_high
                 if effective_high is not None and level >= effective_high.price:
                     return False
-                active_high = new
+                # Under `bos_leg_origin_choch_ref`, a synthetic re-anchor level
+                # lives ONLY in `validated_choch_<side>`: the trailing
+                # `active_<side>` and the pullback candidate are genuine swing
+                # pivots that feed the leg-origin snapshot (`pullback_ref`) of a
+                # future BOS, and overwriting them here would launder the
+                # re-anchor level into a "structural" leg origin at the next
+                # emission.
+                if not self._bos_leg_origin_choch_ref:
+                    active_high = new
+                    candidate_choch_high = None
                 validated_choch_high = new
+                validated_choch_high_structural = False
                 choch_origin_high = None
-                candidate_choch_high = None
                 return True
             if trend is MarketDirection.BULLISH:
                 if level >= current_price:
                     return False
                 if min_gap is not None and (current_price - level) / current_price < min_gap:
                     return False
+                # Mirror of the bearish branch: never slide a structural
+                # reference while it remains reachable (see
+                # `bos_leg_origin_choch_ref` / `bos_leg_origin_release_gap_pct`).
+                if (
+                    self._bos_leg_origin_choch_ref
+                    and validated_choch_low is not None
+                    and validated_choch_low_structural
+                ):
+                    release = self._bos_leg_origin_release_gap_pct
+                    if (
+                        release is None
+                        or (current_price - validated_choch_low.price) / current_price
+                        <= release
+                    ):
+                        return False
                 effective_low = validated_choch_low or choch_origin_low or active_low
                 if effective_low is not None and level <= effective_low.price:
                     return False
-                active_low = new
+                # Mirror of the bearish branch: keep genuine pivots out of the
+                # re-anchor's reach under `bos_leg_origin_choch_ref`.
+                if not self._bos_leg_origin_choch_ref:
+                    active_low = new
+                    candidate_choch_low = None
                 validated_choch_low = new
+                validated_choch_low_structural = False
                 choch_origin_low = None
-                candidate_choch_low = None
                 return True
             return False
 
@@ -736,6 +839,22 @@ class InternalStructureDetector(MarketStructureDetector):
                             # validated_choch_high only once a continuation (the
                             # next bearish BOS) confirms this BOS.
                             candidate_choch_high = pivot
+                            # Leg-origin CHoCH promotion (see
+                            # `bos_leg_origin_choch_ref`): the high this BOS's leg
+                            # dropped from becomes the bullish-CHoCH reference at
+                            # emission -- the close-break plus this confirming LH
+                            # is itself the continuation evidence. Every emitted
+                            # BOS *refreshes* the reference to its own leg origin
+                            # (structure wins, even over a tighter level), so a
+                            # structural reference never goes stale -- which is
+                            # what makes barring re-anchors from sliding it safe.
+                            if (
+                                self._bos_leg_origin_choch_ref
+                                and pending_bos.pullback_ref is not None
+                            ):
+                                validated_choch_high = pending_bos.pullback_ref
+                                validated_choch_high_structural = True
+                                choch_origin_high = None
                             # The bearish CHoCH is now confirmed by an *emitted*
                             # BOS (a state-advance alone leaves a still-pending BOS
                             # that may never emit, so the CHoCH could still fail):
@@ -821,6 +940,8 @@ class InternalStructureDetector(MarketStructureDetector):
                     pending_low = None
                     validated_choch_high = None
                     validated_choch_low = None
+                    validated_choch_high_structural = False
+                    validated_choch_low_structural = False
                     candidate_choch_high = None
                     candidate_choch_low = None
                     # Bullish trend resumes: cap the staircase at its genuine
@@ -892,6 +1013,8 @@ class InternalStructureDetector(MarketStructureDetector):
                     # chain rebuilds them from scratch (provisional -> validated).
                     validated_choch_high = None
                     validated_choch_low = None
+                    validated_choch_high_structural = False
+                    validated_choch_low_structural = False
                     candidate_choch_high = None
                     candidate_choch_low = None
                     # Arm the opposite-side origin (the bottom of the bearish leg
@@ -1004,6 +1127,7 @@ class InternalStructureDetector(MarketStructureDetector):
                                 and price > bull_leg_high
                             ):
                                 validated_choch_low = candidate_choch_low
+                                validated_choch_low_structural = True
                                 choch_origin_low = None
                             if bull_leg_high is None or price > bull_leg_high:
                                 bull_leg_high = price
@@ -1140,6 +1264,18 @@ class InternalStructureDetector(MarketStructureDetector):
                             # above): promoted only once a continuation (the next
                             # bullish BOS) confirms this BOS.
                             candidate_choch_low = pivot
+                            # Leg-origin CHoCH promotion (mirror of the bearish
+                            # case above): the low this BOS's leg rose from
+                            # becomes the bearish-CHoCH reference at emission;
+                            # every emitted BOS refreshes it to its own leg
+                            # origin.
+                            if (
+                                self._bos_leg_origin_choch_ref
+                                and pending_bos.pullback_ref is not None
+                            ):
+                                validated_choch_low = pending_bos.pullback_ref
+                                validated_choch_low_structural = True
+                                choch_origin_low = None
                             # The bullish CHoCH is now confirmed by an *emitted*
                             # BOS (a state-advance alone leaves a still-pending BOS
                             # that may never emit, so the CHoCH could still fail):
@@ -1218,6 +1354,8 @@ class InternalStructureDetector(MarketStructureDetector):
                     pending_high = None
                     validated_choch_low = None
                     validated_choch_high = None
+                    validated_choch_low_structural = False
+                    validated_choch_high_structural = False
                     candidate_choch_high = None
                     candidate_choch_low = None
                     # Bearish trend resumes: floor the staircase at its genuine
@@ -1288,6 +1426,8 @@ class InternalStructureDetector(MarketStructureDetector):
                     # chain rebuilds them from scratch (provisional -> validated).
                     validated_choch_low = None
                     validated_choch_high = None
+                    validated_choch_low_structural = False
+                    validated_choch_high_structural = False
                     candidate_choch_high = None
                     candidate_choch_low = None
                     # Arm the opposite-side origin (the top of the bullish leg
@@ -1398,6 +1538,7 @@ class InternalStructureDetector(MarketStructureDetector):
                                 and price < bear_leg_low
                             ):
                                 validated_choch_high = candidate_choch_high
+                                validated_choch_high_structural = True
                                 choch_origin_high = None
                             if bear_leg_low is None or price < bear_leg_low:
                                 bear_leg_low = price

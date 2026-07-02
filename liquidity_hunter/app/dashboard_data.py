@@ -112,6 +112,18 @@ _IMPULSE_BOS_DISPLACEMENT_PCT = 0.015
 # CHoCH while staying neutral on the other timeframes.
 _REANCHOR_MIN_PRICE_GAP_PCT = 0.003
 
+# Release gap for the leg-origin CHoCH reference
+# (`InternalStructureDetector.bos_leg_origin_release_gap_pct`). A structural
+# reference (the fundo/topo a confirmed BOS's leg launched from) is immune to
+# re-anchors while it sits within this fraction of current price -- the
+# conservative reversal level stays authoritative (e.g. the H4 May CHoCH firing
+# at the 78128 leg origin instead of a stale-window local low). Beyond it, the
+# leg has run away from its origin and the staleness re-anchor may act again,
+# preserving the un-stick behavior on impulsive legs that emit no BOS for long
+# stretches (e.g. the H4 February drop). 4% measured best: 5% degrades M15, 6%
+# loses the H4 April CHoCH.
+_BOS_LEG_ORIGIN_RELEASE_GAP_PCT = 0.04
+
 # Max pivot-side wick fraction for a pullback that *confirms* a BOS
 # (`InternalStructureDetector.bos_pullback_max_wick_pct`). A small swing lookback
 # can pick a single-candle wick (a spike whose body closes far away) as the
@@ -419,6 +431,15 @@ def load_dashboard_data(
         # against the real BOS. Purely visual: it never feeds the state machine,
         # so it cannot cascade into a wrong CHoCH.
         stage_wick_rejected_bos=True,
+        # Every confirmed BOS promotes its leg origin (the fundo/topo the
+        # breaking leg launched from) directly to the opposite CHoCH reference,
+        # and re-anchors cannot slide that structural reference while it stays
+        # within the release gap of price -- so the reversal CHoCH fires at the
+        # level the leg actually launched from rather than a stale-window local
+        # extreme. Once the leg runs away beyond the gap, the staleness
+        # re-anchor regains authority (the un-stick pathologies stay fixed).
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_pct=_BOS_LEG_ORIGIN_RELEASE_GAP_PCT,
     ).detect(internal_candles)
     # Re-time each BOS to the first close beyond the formed level it broke
     # (dropping wick-only continuations), before the visible filter and POI.

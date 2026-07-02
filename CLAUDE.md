@@ -1121,6 +1121,39 @@ to a neighborhood-corroboration test was prototyped first and **rejected by
 measurement**: it recovered the missing marks but cascaded downstream and
 destroyed a known-correct reversal CHoCH — the state-machine-vs-additive lesson.)
 
+**Leg-origin CHoCH reference** (`InternalStructureDetector` only, as of
+2026-07-02): `bos_leg_origin_choch_ref` (constructor default `False`; wired
+**`True`** in `load_dashboard_data`, with `bos_leg_origin_release_gap_pct =
+_BOS_LEG_ORIGIN_RELEASE_GAP_PCT = 0.04`). Every *emitted* BOS promotes its **leg
+origin** — the extreme the breaking leg launched from (`_PendingBOS.pullback_ref`:
+the fundo a bullish leg rose from / the topo a bearish leg dropped from) — directly
+to the opposite `validated_choch_<side>` at emission, marked *structural*
+(`validated_choch_<side>_structural`), replacing the current reference
+unconditionally (even to a looser level — structure wins). The close-break plus the
+confirming pullback is itself the continuation evidence, so the CHoCH reference no
+longer waits for the continuation gate (which still runs on top and can tighten to
+the newer post-BOS pullback). Two companion rules make it hold:
+(1) **re-anchors (stale/chain) refuse to slide a structural reference while it is
+reachable** — within `bos_leg_origin_release_gap_pct` (4%) of current price; beyond
+that gap the leg has run away and the staleness re-anchor regains authority
+(otherwise an impulsive leg that emits no BOS for months pins the reference and
+coarse timeframes lose whole reversal sequences — the H4 Feb→Mar regime collapse,
+measured); (2) under the flag a re-anchor writes its synthetic level **only into
+`validated_choch_<side>`**, never into `active_<side>`/`candidate_choch_<side>`,
+whose genuine swing pivots feed the leg-origin snapshot — otherwise the re-anchor
+level gets laundered into a "structural" leg origin at the next emission (measured:
+an M30 leg-origin of 63650, a stale-window artifact, instead of the genuine 65469
+fundo). Motivating cases (measured, `limit=1200`): the M30 bearish CHoCH fires
+17/06 08:00 against the 15/06 leg origin 65469 (instead of 18/06 against a
+stale-re-anchor 64525), and the H4 May bearish CHoCH fires 17/05 against the
+78128 mínima of the 04/05 BOS (instead of a sliding stale-window low 78713).
+Neutral on H1/D1 counts; M15 loses one whipsaw pair; M5 gains 2 `CHOCH_FAILED`
+(accepted, 4-day window). Threshold measured: 5% degrades M15, 6% loses the H4
+April CHoCH. Two stricter variants were **rejected by measurement**: hybrid
+promote-only-over-re-anchored refs (first structural ref pins the whole leg) and
+an unconditional re-anchor bar (same pinning). With the flag off the output is
+byte-for-byte identical. Not mirrored into `SwingStructureDetector` (not drawn).
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a
