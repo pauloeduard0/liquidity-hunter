@@ -586,12 +586,16 @@ class InternalStructureDetector(MarketStructureDetector):
                     return False
                 if min_gap is not None and (level - current_price) / current_price < min_gap:
                     return False
-                refs = [
-                    r.price
-                    for r in (active_high, validated_choch_high, choch_origin_high)
-                    if r is not None
-                ]
-                if refs and level >= max(refs):
+                # Only *tighten* the effective reversal reference (the one the
+                # CHoCH actually uses, in priority order), never *loosen* it. Using
+                # max(all refs) let a far-away trailing `active_high` mask a lower
+                # `validated_choch_high`, so a staleness re-anchor could push the
+                # reversal reference *further* from price (loosening it) during a
+                # deep in-trend pullback -- the opposite of the un-stick intent --
+                # and clear the candidate that would have validated the genuine
+                # reversal level.
+                effective_high = validated_choch_high or choch_origin_high or active_high
+                if effective_high is not None and level >= effective_high.price:
                     return False
                 active_high = new
                 validated_choch_high = new
@@ -603,12 +607,8 @@ class InternalStructureDetector(MarketStructureDetector):
                     return False
                 if min_gap is not None and (current_price - level) / current_price < min_gap:
                     return False
-                refs = [
-                    r.price
-                    for r in (active_low, validated_choch_low, choch_origin_low)
-                    if r is not None
-                ]
-                if refs and level <= min(refs):
+                effective_low = validated_choch_low or choch_origin_low or active_low
+                if effective_low is not None and level <= effective_low.price:
                     return False
                 active_low = new
                 validated_choch_low = new
