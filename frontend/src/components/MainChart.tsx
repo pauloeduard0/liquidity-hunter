@@ -264,40 +264,16 @@ function structureLineEndTime(
   return supersededAt.length > 0 ? (Math.min(...supersededAt) as UTCTimestamp) : lastCandleTime
 }
 
-function poiBoxEndTime(
-  zone: POIZone,
-  internalEvents: MarketStructure[],
-  lastCandleTime: UTCTimestamp,
-): UTCTimestamp {
-  const zoneTime = toUtcTimestamp(zone.created_at)
-
-  const secondBosTime = internalEvents
-    .filter(
-      (e) =>
-        e.scope === 'internal' &&
-        e.event === 'break_of_structure' &&
-        e.direction === zone.direction &&
-        toUtcTimestamp(e.timestamp) > zoneTime,
-    )
-    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))[1]
-
-  const oppositeDirection = zone.direction === 'bullish' ? 'bearish' : 'bullish'
-  const oppositeChoch = internalEvents
-    .filter(
-      (e) =>
-        e.scope === 'internal' &&
-        e.event === 'change_of_character' &&
-        e.direction === oppositeDirection &&
-        toUtcTimestamp(e.timestamp) > zoneTime,
-    )
-    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))[0]
-
-  const candidates: UTCTimestamp[] = []
-  if (secondBosTime) candidates.push(toUtcTimestamp(secondBosTime.timestamp))
-  if (oppositeChoch) candidates.push(toUtcTimestamp(oppositeChoch.timestamp))
-
-  return candidates.length > 0
-    ? (Math.min(...candidates) as UTCTimestamp)
+// A POI box spans the zone's real lifecycle: it stays open (full width) while
+// the zone is ACTIVE — an armed order block price may still return to — and
+// closes at the candle that retired it (`mitigated_at`, the RTO close-back
+// candle, so the box's right edge meets the RTO marker; `invalidated_at` for
+// zones rendered while invalidated). Structure events after zone creation do
+// not cut the box short: a CHoCH can fire before the RTO touch.
+function poiBoxEndTime(zone: POIZone, lastCandleTime: UTCTimestamp): UTCTimestamp {
+  const lifecycleEnd = zone.mitigated_at ?? zone.invalidated_at
+  return lifecycleEnd
+    ? toUtcTimestamp(lifecycleEnd)
     : ((lastCandleTime + 9_999_999) as UTCTimestamp)
 }
 
@@ -363,6 +339,36 @@ function selectVisibleLiquidationBands(
     selected.push(...hits.slice(recentHits.length, recentHits.length + (LIQ_MAX_BANDS - selected.length)))
   }
   return selected
+}
+
+// Chart-only declutter for POI order blocks: an ACTIVE zone legitimately
+// extends to the right edge while armed, so over time far-from-price ones
+// accumulate as clutter. Keep only the most recent few per direction, and only
+// those within a price window derived from the *visible candle range* — not a
+// fixed % of price, which would need retuning per asset/timeframe volatility.
+// Mitigated zones are time-bounded history and pass through untouched.
+const POI_MAX_ACTIVE_PER_DIRECTION = 3
+const POI_PRICE_WINDOW_RANGE_FRACTION = 0.35
+
+function selectVisiblePoiZones(
+  zones: POIZone[],
+  currentPrice: number,
+  visiblePriceRange: number,
+): POIZone[] {
+  const window = visiblePriceRange * POI_PRICE_WINDOW_RANGE_FRACTION
+  // Distance from current price to the zone itself (0 when price is inside it).
+  const distance = (z: POIZone) =>
+    Math.max(z.price_low - currentPrice, currentPrice - z.price_high, 0)
+  const active = zones.filter((z) => z.status === 'active' && distance(z) <= window)
+  const byRecency = (a: POIZone, b: POIZone) =>
+    Date.parse(b.created_at) - Date.parse(a.created_at)
+  const takeRecent = (direction: POIZone['direction']) =>
+    active
+      .filter((z) => z.direction === direction)
+      .sort(byRecency)
+      .slice(0, POI_MAX_ACTIVE_PER_DIRECTION)
+  const mitigated = zones.filter((z) => z.status === 'mitigated')
+  return [...mitigated, ...takeRecent('bullish'), ...takeRecent('bearish')]
 }
 
 function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker<Time>[] {
@@ -915,16 +921,21 @@ export function MainChart({
 
     // POI order block zones and RTO sweeps
     {
+      const visiblePriceRange =
+        Math.max(...data.candles.map((c) => c.high)) -
+        Math.min(...data.candles.map((c) => c.low))
       const poiBoxes: POIBox[] = []
-      for (const zone of data.poi_zones ?? []) {
-        if (zone.status === 'invalidated') continue
-
+      for (const zone of selectVisiblePoiZones(
+        data.poi_zones ?? [],
+        data.current_price,
+        visiblePriceRange,
+      )) {
         const isMitigated = zone.status === 'mitigated'
         const dirStyle = POI_BOX_STYLES[zone.direction] ?? POI_BOX_STYLES.mitigated
         const style = isMitigated
           ? { border: dirStyle.border + 'aa', fill: dirStyle.border + '18' }
           : dirStyle
-        const endTime = poiBoxEndTime(zone, data.internal_structure_events, lastCandleTime)
+        const endTime = poiBoxEndTime(zone, lastCandleTime)
         const dirIcon = zone.direction === 'bullish' ? '▲' : '▼'
 
         poiBoxes.push({
