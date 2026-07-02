@@ -14,6 +14,7 @@ from liquidity_hunter.core.domain import (
     LongShortRatio,
     MarketDirection,
     MarketStructure,
+    OIRegime,
     OpenInterestPoint,
     RetailPositioning,
     StructureEvent,
@@ -109,14 +110,18 @@ class _FakeFuturesProvider(FuturesDataProvider):
         funding_rate: float = 0.0006,
         ratio: float = 1.85,
         oi: tuple[float, float] = (1000.0, 1200.0),
+        oi_points: list[OpenInterestPoint] | None = None,
     ) -> None:
         self._funding_rate = funding_rate
         self._ratio = ratio
         self._oi = oi
+        self._oi_points = oi_points
 
     def get_open_interest_history(
         self, symbol: str, timeframe: TimeFrame, limit: int = 500
     ) -> list[OpenInterestPoint]:
+        if self._oi_points is not None:
+            return self._oi_points
         return [
             OpenInterestPoint(symbol=symbol, timestamp=_FUTURES_TS, open_interest=value)
             for value in self._oi
@@ -351,10 +356,36 @@ def test_load_dashboard_data_degrades_when_futures_unavailable() -> None:
         futures_provider=_RaisingFuturesProvider(),
     )
 
-    # Spot-only symbol: liquidation map is absent but the rest is intact.
+    # Spot-only symbol: liquidation map and OI analysis are absent but the
+    # rest is intact.
     assert data.liquidation_map is None
+    assert data.oi_analysis is None
     assert data.candles == candles
     assert data.narrative is not None
+
+
+def test_load_dashboard_data_populates_oi_analysis() -> None:
+    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+    # An OI sample per candle, steadily rising, while the series tail drifts
+    # down (the last window's closes fall ~1%): price down + OI up.
+    oi_points = [
+        OpenInterestPoint(
+            symbol="BTCUSDT", timestamp=candle.timestamp, open_interest=1000.0 + i * 10
+        )
+        for i, candle in enumerate(candles)
+    ]
+
+    data = load_dashboard_data(
+        provider=_FakeProvider(candles),
+        symbol="BTCUSDT",
+        futures_provider=_FakeFuturesProvider(oi_points=oi_points),
+    )
+
+    assert data.oi_analysis is not None
+    assert data.oi_analysis.coverage_start == candles[0].timestamp
+    regime = data.oi_analysis.current_regime
+    assert regime is not None
+    assert regime.regime is OIRegime.SHORT_BUILDUP
 
 
 def test_structural_anchor_index_picks_most_recent_low() -> None:

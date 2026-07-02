@@ -57,6 +57,15 @@ export type NarrativeEventType =
 
 export type AnomalySeverity = 'low' | 'medium' | 'high'
 
+export type OIRegime =
+  | 'long_buildup'
+  | 'short_covering'
+  | 'short_buildup'
+  | 'long_liquidation'
+  | 'flat'
+
+export type OIParticipation = 'new_money' | 'covering' | 'flush' | 'flat'
+
 export interface Candle {
   symbol: string
   timeframe: TimeFrame
@@ -243,6 +252,39 @@ export interface MarketNarrative {
   confluence_total: number
 }
 
+export interface OIRegimeReading {
+  symbol: string
+  timeframe: TimeFrame
+  timestamp: string
+  regime: OIRegime
+  price_change_pct: number
+  oi_change_pct: number
+  window_candles: number
+  intensity: number
+  description: string
+}
+
+export interface OIQualifiedEvent {
+  symbol: string
+  timeframe: TimeFrame
+  event_timestamp: string
+  event_type: StructureEvent
+  direction: MarketDirection
+  price_level: number
+  oi_delta_pct: number
+  participation: OIParticipation
+  description: string
+}
+
+export interface OIAnalysis {
+  symbol: string
+  timeframe: TimeFrame
+  current_regime: OIRegimeReading | null
+  qualified_events: OIQualifiedEvent[]
+  coverage_start: string | null
+  coverage_end: string | null
+}
+
 export interface DashboardData {
   symbol: string
   timeframe: TimeFrame
@@ -261,4 +303,5 @@ export interface DashboardData {
   liquidity_heatmap: LiquidityHeatmap | null
   liquidation_map: LeverageLiquidationMap | null
   narrative: MarketNarrative | null
+  oi_analysis: OIAnalysis | null
 }

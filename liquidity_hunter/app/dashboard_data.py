@@ -10,13 +10,17 @@ from datetime import datetime
 
 from liquidity_hunter.core.domain import (
     Candle,
+    FundingRate,
     LeverageLiquidationMap,
     LiquidityHeatmap,
     LiquidityZone,
+    LongShortRatio,
     ManipulationCycle,
     MarketDirection,
     MarketNarrative,
     MarketStructure,
+    OIAnalysis,
+    OpenInterestPoint,
     StructureEvent,
     TimeFrame,
 )
@@ -46,6 +50,7 @@ from liquidity_hunter.psychology import (
     BehaviorDivergenceAnalyzer,
     LeverageLiquidationEstimator,
     ManipulationCycleDetector,
+    OIRegimeAnalyzer,
     RetailBiasEstimate,
     RetailTrapAnalyzer,
 )
@@ -144,6 +149,12 @@ _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
 
 _HIGHER_TIMEFRAME_CANDLE_LIMIT = 100
 
+# OI points fed to the leverage-liquidation estimator: its
+# `open_interest_change_pct` is measured first-to-last over the series it
+# receives, so cap it at the pre-existing 500-point horizon even when a longer
+# OI history was fetched for the OI regime analysis.
+_LIQUIDATION_OI_POINTS = 500
+
 # Extra candles fetched before the visible window so the internal-structure
 # detector has history to bootstrap from before reaching the candles actually
 # shown on the dashboard. This bounds the region the structural anchor (below)
@@ -183,6 +194,7 @@ class DashboardData:
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
+    oi_analysis: OIAnalysis | None = None
 
 
 def _structural_anchor_index(candles: list[Candle], visible_start: datetime) -> int:
@@ -553,15 +565,40 @@ def load_dashboard_data(
         retail_bias=retail_bias,
     )
 
-    liquidation_map = _build_liquidation_map(
+    # One futures fetch feeds both the liquidation map and the OI analysis.
+    # The OI history is requested for the whole visible window (the provider
+    # paginates past Binance's 500-row cap, clamped to its ~30-day retention),
+    # so structure events across the chart can be OI-qualified.
+    futures_state = _fetch_futures_state(
         futures_provider if futures_provider is not None else BinanceFuturesDataProvider(),
         symbol=symbol,
         timeframe=timeframe,
-        current_price=current_price,
-        candles=candles,
-        liquidity_zones=liquidity_zones,
-        poi_zones=poi_zones,
+        oi_limit=limit,
     )
+    if futures_state is None:
+        liquidation_map = None
+        oi_analysis = None
+    else:
+        open_interest, funding, long_short = futures_state
+        liquidation_map = LeverageLiquidationEstimator().estimate(
+            symbol=symbol,
+            timeframe=timeframe,
+            current_price=current_price,
+            candles=candles,
+            liquidity_zones=liquidity_zones,
+            # Keep the estimator's OI-change horizon at its historical 500
+            # points; the longer series fetched for the OI analysis would
+            # silently stretch `open_interest_change_pct` otherwise.
+            open_interest=open_interest[-_LIQUIDATION_OI_POINTS:],
+            funding=funding,
+            long_short=long_short,
+            poi_zones=poi_zones,
+        )
+        oi_analysis = OIRegimeAnalyzer().analyze(
+            candles=candles,
+            open_interest=open_interest,
+            structure_events=internal_structure_events,
+        )
 
     data = DashboardData(
         symbol=symbol,
@@ -580,6 +617,7 @@ def load_dashboard_data(
         behavior_divergences=behavior_divergences,
         liquidity_heatmap=liquidity_heatmap,
         liquidation_map=liquidation_map,
+        oi_analysis=oi_analysis,
     )
 
     from liquidity_hunter.app.narrative import NarrativeEngine
@@ -588,37 +626,28 @@ def load_dashboard_data(
     return replace(data, narrative=narrative)
 
 
-def _build_liquidation_map(
+def _fetch_futures_state(
     futures_provider: FuturesDataProvider,
     symbol: str,
     timeframe: TimeFrame,
-    current_price: float,
-    candles: list[Candle],
-    liquidity_zones: list[LiquidityZone],
-    poi_zones: list[POIZone],
-) -> LeverageLiquidationMap | None:
-    """Fetch futures market state and estimate the leverage-liquidation map.
+    oi_limit: int,
+) -> tuple[list[OpenInterestPoint], list[FundingRate], list[LongShortRatio]] | None:
+    """Fetch perpetual-futures market state (OI history, funding, long/short).
 
     Degrades to ``None`` if futures data is unavailable (e.g. the symbol has no
     perpetual contract, or the venue is unreachable), so the dashboard still
-    renders for spot-only symbols.
+    renders for spot-only symbols — the liquidation map and OI analysis both
+    become ``None``.
     """
     try:
-        open_interest = futures_provider.get_open_interest_history(symbol, timeframe)
+        open_interest = futures_provider.get_open_interest_history(
+            symbol, timeframe, limit=oi_limit
+        )
         funding = futures_provider.get_funding_rate_history(symbol)
         long_short = futures_provider.get_long_short_ratio(symbol, timeframe)
     except DataProviderError:
-        logger.warning("Futures data unavailable for %s; skipping liquidation map", symbol)
+        logger.warning(
+            "Futures data unavailable for %s; skipping liquidation map and OI analysis", symbol
+        )
         return None
-
-    return LeverageLiquidationEstimator().estimate(
-        symbol=symbol,
-        timeframe=timeframe,
-        current_price=current_price,
-        candles=candles,
-        liquidity_zones=liquidity_zones,
-        open_interest=open_interest,
-        funding=funding,
-        long_short=long_short,
-        poi_zones=poi_zones,
-    )
+    return open_interest, funding, long_short

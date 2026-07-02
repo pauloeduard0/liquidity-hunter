@@ -3,6 +3,7 @@
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any, TypeVar
 
 import ccxt
@@ -37,6 +38,25 @@ _FUTURES_PERIOD: dict[TimeFrame, str] = {
 }
 _DEFAULT_PERIOD = "1h"
 
+_PERIOD_MS: dict[str, int] = {
+    "5m": 5 * 60_000,
+    "15m": 15 * 60_000,
+    "30m": 30 * 60_000,
+    "1h": 60 * 60_000,
+    "4h": 4 * 60 * 60_000,
+    "1d": 24 * 60 * 60_000,
+}
+
+# Binance caps each open-interest-history request at 500 rows and only keeps
+# ~30 days of history at all; requests beyond either bound are paginated /
+# clamped in `get_open_interest_history`. A `startTime` at (or beyond) exactly
+# 30 days ago is rejected with -1130 "parameter 'startTime' is invalid", so the
+# clamp keeps a safety margin inside the boundary (also absorbing clock drift
+# between us and the venue).
+_OI_MAX_ROWS_PER_REQUEST = 500
+_OI_HISTORY_MAX_DAYS = 30
+_OI_HISTORY_CLAMP_MARGIN_MS = 60 * 60_000  # 1 hour
+
 
 class BinanceFuturesDataProvider(FuturesDataProvider):
     """Fetches perpetual-futures market state from Binance USDT-M via CCXT."""
@@ -58,12 +78,59 @@ class BinanceFuturesDataProvider(FuturesDataProvider):
     ) -> list[OpenInterestPoint]:
         period = _FUTURES_PERIOD.get(timeframe, _DEFAULT_PERIOD)
         swap_symbol = self._swap_symbol(symbol)
-        rows = self._call(
-            lambda: self._exchange.fetch_open_interest_history(swap_symbol, period, limit=limit),
-            symbol,
-            "open interest history",
+        if limit <= _OI_MAX_ROWS_PER_REQUEST:
+            rows = self._call(
+                lambda: self._exchange.fetch_open_interest_history(
+                    swap_symbol, period, limit=limit
+                ),
+                symbol,
+                "open interest history",
+            )
+            return [self._to_open_interest(symbol, row) for row in rows]
+        return self._paginated_open_interest(symbol, swap_symbol, period, limit)
+
+    def _paginated_open_interest(
+        self, symbol: str, swap_symbol: str, period: str, limit: int
+    ) -> list[OpenInterestPoint]:
+        """Page forward through open-interest history to exceed the 500-row cap.
+
+        Starts at the requested window's beginning (clamped to Binance's ~30-day
+        retention) and pages forward with `since` until "now" is reached or the
+        venue stops returning new rows. Rows are de-duplicated by timestamp, so
+        overlapping pages are harmless.
+        """
+        period_ms = _PERIOD_MS.get(period, _PERIOD_MS[_DEFAULT_PERIOD])
+        now_ms = self._exchange.milliseconds()
+        retention_floor = (
+            now_ms - _OI_HISTORY_MAX_DAYS * 86_400_000 + _OI_HISTORY_CLAMP_MARGIN_MS
         )
-        return [self._to_open_interest(symbol, row) for row in rows]
+        since = max(now_ms - limit * period_ms, retention_floor)
+        by_timestamp: dict[int, dict[str, Any]] = {}
+        while since < now_ms:
+            page = self._call(
+                partial(self._fetch_oi_page, swap_symbol, period, since),
+                symbol,
+                "open interest history",
+            )
+            if not page:
+                break
+            for row in page:
+                by_timestamp[int(row["timestamp"])] = row
+            last_ts = int(page[-1]["timestamp"])
+            next_since = last_ts + period_ms
+            if next_since <= since:
+                break  # no forward progress; avoid an infinite loop
+            since = next_since
+        ordered = [by_timestamp[ts] for ts in sorted(by_timestamp)][-limit:]
+        return [self._to_open_interest(symbol, row) for row in ordered]
+
+    def _fetch_oi_page(
+        self, swap_symbol: str, period: str, since: int
+    ) -> list[dict[str, Any]]:
+        page: list[dict[str, Any]] = self._exchange.fetch_open_interest_history(
+            swap_symbol, period, since=since, limit=_OI_MAX_ROWS_PER_REQUEST
+        )
+        return page
 
     def get_funding_rate_history(self, symbol: str, limit: int = 500) -> list[FundingRate]:
         swap_symbol = self._swap_symbol(symbol)

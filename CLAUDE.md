@@ -172,6 +172,17 @@ and `validate_assignment=True`. New entities should follow this pattern.
   `intensity` (0-100), and a time span: `start_time` (when the entry cluster
   formed) and `end_time` (when price first reached the liquidation level — the
   pool was consumed — or `None` if still live).
+- **`OIRegimeReading`** / **`OIQualifiedEvent`** / **`OIAnalysis`** — joint
+  price × open-interest observations, defined in `core/domain/oi_analysis.py`.
+  `OIRegimeReading` classifies the most recent window into the classic futures
+  matrix (`OIRegime`: `LONG_BUILDUP` price↑+OI↑, `SHORT_COVERING` price↑+OI↓,
+  `SHORT_BUILDUP` price↓+OI↑, `LONG_LIQUIDATION` price↓+OI↓, `FLAT` below the
+  significance floors), with `price_change_pct`, `oi_change_pct`,
+  `window_candles`, `intensity` (0-100). `OIQualifiedEvent` attaches OI context
+  to a structure event (`participation`, `OIParticipation`: `NEW_MONEY` OI
+  rising into the break / `COVERING` OI falling / `FLUSH` sharp OI drop on a
+  sweep / `FLAT`). `OIAnalysis` aggregates both plus the OI series' coverage
+  span (`coverage_start`/`coverage_end`).
 - **`MarketNarrative`** — synthesized institutional narrative for a
   symbol/timeframe snapshot, defined in `core/domain/narrative.py`. Fields:
   `symbol`, `timeframe`, `timestamp`, `phase` (`ManipulationPhase | None`),
@@ -221,7 +232,11 @@ Full architecture rationale, including SOLID notes, is documented in
   account ratio uses the implicit `fapiDataGetGlobalLongShortAccountRatio`
   (raw `BTCUSDT` symbol). `TimeFrame` maps to Binance's fixed futures-data
   periods (`_FUTURES_PERIOD`). Same `retry_with_backoff` + error translation
-  as `BinanceDataProvider`.
+  as `BinanceDataProvider`. `get_open_interest_history` **paginates** past
+  Binance's 500-row per-request cap when `limit > 500` (paging forward with
+  `since`, de-duplicated by timestamp), clamped to Binance's ~30-day OI
+  retention with a 1-hour safety margin inside the boundary (a `startTime`
+  at exactly −30d is rejected with error -1130).
 
 - **`data/providers/binance_futures_ohlcv.py`** — `BinanceFuturesOHLCVProvider`,
   an `OHLCVProvider` (sibling to `BinanceDataProvider`) that fetches **candles**
@@ -655,7 +670,24 @@ documented in `liquidity_hunter/docs/psychology.md`.
   wick reaches the liquidation level, `None` if never — still live). The
   hit-scan runs only for the top-`_MAX_BANDS` bands.
 
-All six are re-exported from `liquidity_hunter.psychology`.
+- **`psychology/analyzers/oi_regime.py`** — `OIRegimeAnalyzer`: produces an
+  `OIAnalysis` from candles + `OpenInterestPoint` history + structure events.
+  `analyze(candles, open_interest, structure_events) -> OIAnalysis`. Two
+  outputs: (1) **current regime** — the price × OI matrix over a rolling
+  window (timeframe-adaptive `_TIMEFRAME_WINDOW`, same values as
+  `BehaviorDivergenceAnalyzer`), `FLAT` unless both `min_price_change_pct`
+  (default 0.2%) and `min_oi_change_pct` (default 0.3%) floors are met,
+  intensity saturating at 4× each floor; (2) **event qualification** — for
+  each BOS/CHoCH/`LIQUIDITY_SWEEP` (pivot labels and `CHOCH_FAILED` are
+  skipped), the OI delta measured from `window` candles before the event
+  through **one candle after** it (OI samples mark period ends, so the
+  breaking candle's own OI change lands at the next sample — required to see
+  a sweep's liquidation flush). A sweep with OI dropping ≥ `flush_oi_drop_pct`
+  (default 0.5%) is a `FLUSH`; otherwise ±`min_oi_change_pct` splits
+  `NEW_MONEY`/`COVERING`/`FLAT`. Events outside OI coverage are skipped, not
+  guessed. OI alignment is by bisect (latest sample at/before each timestamp).
+
+All seven are re-exported from `liquidity_hunter.psychology`.
 
 ### Scoring layer (`liquidity_hunter/scoring`)
 
@@ -695,7 +727,8 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `behavior_divergences` (`list[BehaviorDivergence]`),
   `liquidity_heatmap` (`LiquidityHeatmap | None`),
   `liquidation_map` (`LeverageLiquidationMap | None`), and
-  `narrative` (`MarketNarrative | None`) for one symbol/timeframe.
+  `narrative` (`MarketNarrative | None`), and `oi_analysis`
+  (`OIAnalysis | None`) for one symbol/timeframe.
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=1200, swing_lookback=..., internal_swing_lookback=..., confluence_filter=True)`**
   — fetches a single buffered candle series (`buffered_candles`) and derives the
   visible `candles` from its tail (`buffered_candles[-limit:]`; no separate fetch
@@ -767,12 +800,20 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `LiquidityHeatmapEngine().build(...)` populates `liquidity_heatmap`. A
   separate `futures_provider` arg (`FuturesDataProvider | None`, defaults to
   `BinanceFuturesDataProvider()`) fetches open interest / funding /
-  long-short ratio, fed to `LeverageLiquidationEstimator().estimate(...)` to
-  populate `liquidation_map`. The futures fetch is wrapped in try/except
-  `DataProviderError` (`_build_liquidation_map`): a symbol with no perpetual
-  contract, or an unreachable venue, degrades to `liquidation_map=None`
-  rather than failing the whole snapshot. Tests must inject a fake
-  `futures_provider` to avoid network.
+  long-short ratio **once** (`_fetch_futures_state`, OI requested with
+  `limit=limit` so the paginated history spans the visible window, capped by
+  Binance's ~30-day OI retention). The state feeds both
+  `LeverageLiquidationEstimator().estimate(...)` (→ `liquidation_map`; it
+  receives only the tail `_LIQUIDATION_OI_POINTS = 500` OI points so its
+  `open_interest_change_pct` horizon is unchanged) and
+  `OIRegimeAnalyzer().analyze(candles, open_interest,
+  internal_structure_events)` (→ `oi_analysis` — the internal events are the
+  ones the chart renders, so the qualified events match the drawn labels).
+  The fetch is wrapped in try/except `DataProviderError`: a symbol with no
+  perpetual contract, or an unreachable venue, degrades to
+  `liquidation_map=None` **and** `oi_analysis=None` rather than failing the
+  whole snapshot. Tests must inject a fake `futures_provider` to avoid
+  network.
 
   Finally, `NarrativeEngine().build(data)` synthesizes all outputs into a
   `MarketNarrative` (timeline, anomalies, phase-dependent summary,
@@ -837,7 +878,8 @@ only on `app` and `core` (an alternative presentation layer to
   `RetailBiasEstimate`, `POIZone`, `RTOSweepEvent`, `ManipulationCycle`) are
   already `DomainModel`s and serialize as-is. `poi_zones`,
   `poi_sweep_events`, `manipulation_cycles`, `behavior_divergences`,
-  `liquidity_heatmap`, `liquidation_map`, and `narrative` fields are included.
+  `liquidity_heatmap`, `liquidation_map`, `narrative`, and `oi_analysis`
+  fields are included.
 
 Tested with FastAPI's `TestClient` in `liquidity_hunter/tests/api/test_main.py`.
 
@@ -940,7 +982,21 @@ selector.
   `ManipulationCycleStatus`, `BehaviorDivergence`, `DivergenceType`,
   `LiquidityHeatmap`, `HeatmapBucket`, `LeverageLiquidationMap`,
   `LiquidationBand`, `MarketNarrative`, `NarrativeEvent`, `NarrativeAnomaly`,
-  `NarrativeEventType`, `AnomalySeverity`.
+  `NarrativeEventType`, `AnomalySeverity`, `OIAnalysis`, `OIRegimeReading`,
+  `OIQualifiedEvent`, `OIRegime`, `OIParticipation`.
+
+- **OI regime surfaces** (frontend): `KpiRow` renders a fifth **"OI Regime"**
+  card (grid is `md:grid-cols-5`; the `LoadingSkeleton` in `App.tsx` matches)
+  from `data.oi_analysis.current_regime` — regime label + price-direction
+  icon, directional colors for the buildup regimes and amber for the
+  unwinding ones, sub-line `OI ±x% · Px ±y%`, and a badge: `✓ CONFLUENT` /
+  `⚠ DIVERGENT` compares a buildup regime's conviction direction against the
+  HTF trend, `⚠ UNWIND` flags covering/liquidation regimes; `—` when
+  `oi_analysis` is null (spot-only symbol). `MainChart` appends an OI
+  participation suffix to structure event labels via
+  `OI_PARTICIPATION_SUFFIX` (`⊕` new money, `⊖` covering, `⚡` flush; FLAT
+  adds nothing), keyed by `event_timestamp|event_type` from
+  `oi_analysis.qualified_events`.
 - **`frontend/src/theme.ts`** — color constants for POI zones, structure
   events, manipulation cycle boxes (`MANIPULATION_BOX_STYLES`), volume delta,
   RSI, the liquidity heatmap gradient, leverage-liquidation bands
@@ -1309,6 +1365,22 @@ API schema. Frontend renders the bands via `LiquidationBandsPrimitive`
 (time-bounded boxes, warm color per leverage tier: 10x amber → 100x crimson)
 behind a `⊟ Liq` toolbar toggle, decluttered to a near-price subset (live pools
 + recent hits, ±8%, ≤12) while the full set stays in the API for backtesting.
+
+**OI regime analysis** (as of 2026-07-02): `OIRegimeAnalyzer` (psychology)
+joins open interest with price to read *who is behind the move*: the
+price × OI matrix as a rolling current regime (long/short buildup = new money,
+short covering / long liquidation = unwinding) plus per-event qualification of
+the internal BOS/CHoCH/SWEEP stream (`NEW_MONEY`/`COVERING`/`FLUSH`/`FLAT`),
+measured through one candle *after* the event so a sweep's liquidation flush
+(which lands on the next OI sample) is caught.
+`BinanceFuturesDataProvider.get_open_interest_history` paginates past the
+500-row cap (clamped to Binance's ~30-day retention +1h margin — a `startTime`
+at exactly −30d gets error -1130), so OI covers the visible window on intraday
+timeframes; on D1 coverage is ~30 points and most structure events fall
+outside it (regime still shown, events unqualified — intended degradation).
+Wired into `DashboardData.oi_analysis` + API. Frontend: "OI Regime" KPI card
+(with HTF-trend confluence badge) and `⊕`/`⊖`/`⚡` suffixes on structure
+labels. Historical continuation-frequency stats were deliberately deferred.
 
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /

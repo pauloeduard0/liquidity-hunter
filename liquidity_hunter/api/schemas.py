@@ -18,6 +18,7 @@ from liquidity_hunter.core.domain import (
     MarketDirection,
     MarketNarrative,
     MarketStructure,
+    OIAnalysis,
     TimeFrame,
 )
 from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
@@ -48,3 +49,4 @@ class DashboardDataResponse(BaseModel):
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
+    oi_analysis: OIAnalysis | None = None

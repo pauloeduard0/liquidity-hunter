@@ -1,4 +1,4 @@
-import type { DashboardData } from '../types/dashboard'
+import type { DashboardData, OIRegime } from '../types/dashboard'
 import type { MarketDirection, RetailPositioning } from '../types/dashboard'
 
 const DIRECTION_CONFIG: Record<MarketDirection, { color: string; icon: string }> = {
@@ -12,6 +12,23 @@ const BIAS_CONFIG: Record<RetailPositioning, { color: string }> = {
   short: { color: '#ef5350' },
   neutral: { color: '#8a8f9c' },
 }
+
+// Conviction regimes (new money entering) take directional colors; unwinding
+// regimes (positions closing, no new money behind the move) are amber
+// warnings regardless of price direction.
+const OI_REGIME_CONFIG: Record<
+  OIRegime,
+  { label: string; color: string; icon: string; conviction: MarketDirection | null }
+> = {
+  long_buildup: { label: 'Long Buildup', color: '#26a69a', icon: '▲', conviction: 'bullish' },
+  short_buildup: { label: 'Short Buildup', color: '#ef5350', icon: '▼', conviction: 'bearish' },
+  short_covering: { label: 'Short Covering', color: '#ff9800', icon: '▲', conviction: null },
+  long_liquidation: { label: 'Long Liquidation', color: '#ff9800', icon: '▼', conviction: null },
+  flat: { label: 'Flat', color: '#8a8f9c', icon: '◆', conviction: null },
+}
+
+const fmtPct = (value: number) =>
+  `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
 
 interface KpiCardProps {
   label: string
@@ -101,8 +118,28 @@ export function KpiRow({ data }: KpiRowProps) {
     ? data.ranked_zones[0].zone.zone_type.replace(/_/g, ' ')
     : undefined
 
+  // OI Regime: the joint price x open-interest reading. Buildup regimes
+  // (new money) get a confluence badge against the HTF trend; unwinding
+  // regimes flag the move as running on position closing, not fresh money.
+  const oiRegime = data.oi_analysis?.current_regime ?? null
+  const oiCfg = oiRegime ? OI_REGIME_CONFIG[oiRegime.regime] : null
+  let oiBadge: { text: string; color: string } | undefined
+  if (oiRegime && oiCfg) {
+    if (oiCfg.conviction && direction !== 'neutral') {
+      oiBadge =
+        oiCfg.conviction === direction
+          ? { text: '✓ CONFLUENT', color: '#26a69a' }
+          : { text: '⚠ DIVERGENT', color: '#ef5350' }
+    } else if (oiRegime.regime === 'short_covering' || oiRegime.regime === 'long_liquidation') {
+      oiBadge = { text: '⚠ UNWIND', color: '#ff9800' }
+    }
+  }
+  const oiSub = oiRegime
+    ? `OI ${fmtPct(oiRegime.oi_change_pct)} · Px ${fmtPct(oiRegime.price_change_pct)}`
+    : 'no futures OI data'
+
   return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
       <KpiCard label={`${data.symbol} Price`} value={price} />
       <KpiCard
         label="Retail Bias"
@@ -121,6 +158,13 @@ export function KpiRow({ data }: KpiRowProps) {
         label="HTF Trend"
         value={`${dirCfg.icon} ${direction.charAt(0).toUpperCase()}${direction.slice(1)}`}
         accent={dirCfg.color}
+      />
+      <KpiCard
+        label="OI Regime"
+        value={oiCfg ? `${oiCfg.icon} ${oiCfg.label}` : '—'}
+        accent={oiCfg?.color}
+        badge={oiBadge}
+        sub={oiSub}
       />
     </div>
   )

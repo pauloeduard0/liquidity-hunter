@@ -17,6 +17,8 @@ from liquidity_hunter.core.domain.enums import (
     ManipulationPhase,
     MarketDirection,
     NarrativeEventType,
+    OIParticipation,
+    OIRegime,
     POIZoneStatus,
     RetailPositioning,
     StructureEvent,
@@ -40,6 +42,11 @@ from liquidity_hunter.core.domain.narrative import (
     MarketNarrative,
     NarrativeAnomaly,
     NarrativeEvent,
+)
+from liquidity_hunter.core.domain.oi_analysis import (
+    OIAnalysis,
+    OIQualifiedEvent,
+    OIRegimeReading,
 )
 from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
 from liquidity_hunter.core.domain.retail_bias import RetailBias
@@ -68,6 +75,11 @@ __all__ = [
     "NarrativeAnomaly",
     "NarrativeEvent",
     "NarrativeEventType",
+    "OIAnalysis",
+    "OIParticipation",
+    "OIQualifiedEvent",
+    "OIRegime",
+    "OIRegimeReading",
     "OpenInterestPoint",
     "POIZone",
     "POIZoneStatus",

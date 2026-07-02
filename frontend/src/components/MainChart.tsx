@@ -23,7 +23,7 @@ import {
   LiquidationBandsPrimitive,
   type LiquidationBandInput,
 } from '../charting/LiquidationBandsPrimitive'
-import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, POIZone } from '../types/dashboard'
+import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -47,6 +47,16 @@ import {
 
 const TOP_N_ZONES = 5
 const MAX_INTERNAL_SWEEPS = 3
+
+// Suffix appended to a structure event label when the OI analysis qualified
+// it: ⊕ new money behind the break, ⊖ break driven by position unwinding,
+// ⚡ sweep that flushed leveraged positions. FLAT adds nothing.
+const OI_PARTICIPATION_SUFFIX: Record<OIParticipation, string> = {
+  new_money: '⊕',
+  covering: '⊖',
+  flush: '⚡',
+  flat: '',
+}
 
 const MAIN_CHART_RATIO = 0.68
 const DELTA_CHART_RATIO = 0.16
@@ -880,8 +890,19 @@ export function MainChart({
         (event.event !== 'liquidity_sweep' || recentSweeps.has(event)),
     )
 
+    // OI qualification per structure event (keyed by timestamp + type), so
+    // each BOS/CHoCH/SWEEP label can carry its participation suffix.
+    const oiSuffixByEvent = new Map<string, string>()
+    for (const qualified of data.oi_analysis?.qualified_events ?? []) {
+      const suffix = OI_PARTICIPATION_SUFFIX[qualified.participation]
+      if (suffix) {
+        oiSuffixByEvent.set(`${qualified.event_timestamp}|${qualified.event_type}`, suffix)
+      }
+    }
+
     for (const event of structureEvents) {
       const style = STRUCTURE_EVENT_STYLES[event.event]
+      const oiSuffix = oiSuffixByEvent.get(`${event.timestamp}|${event.event}`)
       const directionIcon = TREND_ICONS[event.direction] ?? ''
       const startTime = toUtcTimestamp(event.timestamp)
       const endTime = structureLineEndTime(event, scopeEvents, lastCandleTime)
@@ -915,7 +936,7 @@ export function MainChart({
         time: startTime,
         price: linePrice,
         color: style.color,
-        text: `${style.label} ${directionIcon}`,
+        text: `${style.label} ${directionIcon}${oiSuffix ? ` ${oiSuffix}` : ''}`,
       })
     }
 

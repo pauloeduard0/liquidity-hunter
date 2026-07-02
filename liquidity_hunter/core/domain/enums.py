@@ -118,6 +118,30 @@ class DivergenceType(str, Enum):
     ABSORPTION = "absorption"
 
 
+class OIRegime(str, Enum):
+    """Joint price/open-interest regime over a recent window.
+
+    The classic futures matrix: rising OI means *new* positions entering
+    (conviction behind the move), falling OI means positions closing (the
+    move is unwinding, not fresh money).
+    """
+
+    LONG_BUILDUP = "long_buildup"  # price up + OI up: new longs entering
+    SHORT_COVERING = "short_covering"  # price up + OI down: shorts closing
+    SHORT_BUILDUP = "short_buildup"  # price down + OI up: new shorts entering
+    LONG_LIQUIDATION = "long_liquidation"  # price down + OI down: longs closing
+    FLAT = "flat"  # no meaningful price or OI displacement
+
+
+class OIParticipation(str, Enum):
+    """Open-interest behavior around a structure event."""
+
+    NEW_MONEY = "new_money"  # OI rising into the event: fresh positioning
+    COVERING = "covering"  # OI falling: the move is position unwinding
+    FLUSH = "flush"  # sharp OI drop on a sweep: leveraged positions liquidated
+    FLAT = "flat"  # no meaningful OI change
+
+
 class NarrativeEventType(str, Enum):
     """Classification of a narrative timeline event."""
 
