@@ -717,6 +717,17 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   prior swing extreme, found by scanning back for a matching low/high), so the
   frontend can start the line at the level's origin. The same pass runs on the
   major detector's events too (`all_major_events`), keeping the two consistent.
+  A second pass, **`_drop_pre_break_reference_bos`** (both streams, after the
+  re-anchor), drops any continuation BOS whose `reference_timestamp` predates
+  the confirming close of the previous same-direction BOS in the same leg: a
+  wick that poked beyond the still-unbroken prior BOS level ratchets the
+  detector's staircase extreme, so the next continuation would report that
+  pre-break wick as the formed level it broke — but a reference may only come
+  from price action *after* the prior break confirms. A CHoCH resets the
+  constraint for its direction (the first BOS of a leg references the
+  CHoCH-seeded level, formed before the flip); BOS without a resolved
+  `reference_timestamp` are kept. Same-timestamp BOS are judged
+  earlier-formed-reference first (the earlier structural break).
   `confluence_filter` is exposed for tests that exercise state-machine logic
   without needing emission-quality filters. `higher_timeframe_direction` is
   the `direction` of the most recent `MarketStructure` event in
@@ -994,6 +1005,32 @@ starts the BOS line at the level's origin and runs it to the break. The pass
 runs on both `all_internal_events` and `all_major_events`. Both detectors' state
 machines, trailing references, and CHoCH promotion are untouched — only the
 reported BOS reference/timestamp change.
+
+**Pre-break-reference BOS drop** (**both detectors**, composition level, as of
+2026-07-02): `_drop_pre_break_reference_bos` runs right after
+`_reanchor_bos_close_break` on both streams. A wick that pokes beyond the
+still-unbroken prior BOS level (a failed break attempt) still ratchets the
+detector's staircase extreme (`prev_*_bos_extreme`), so the *next* continuation
+BOS would report that pre-break wick as the formed level it broke (the M15
+motivating case: a 09:45 candle wicked 61447 above the unbroken 61322 level and
+closed 61159; after the 11:45 close finally broke 61322, a 12:45 BOS printed
+against 61447). The rule: a continuation BOS whose `reference_timestamp`
+strictly predates the confirming close (`timestamp`) of the previous
+same-direction BOS in the same leg is **dropped** — a reference may only come
+from price action after the prior break confirms. A CHoCH resets the constraint
+for its direction (the first BOS of a leg legitimately references the
+CHoCH-seeded pre-flip level); unresolved `reference_timestamp` → kept.
+Same-timestamp BOS are judged earlier-formed-reference first, so a staged mark
+re-timed onto the same confirming candle as the real BOS is judged against it
+deterministically. The detectors' state machines and CHoCH promotion are
+untouched (composition-level, per the additive-over-state-machine lesson).
+Measured (`limit=1200`, BTCUSDT): removes exactly the M15 12:45/61447 BOS
+(internal + major), plus the same wick-attempt pathology on M5 (a staged
+backwards-staircase mark), M30 (64362 wick vs 64250 level), H1 internal (61870
+wick vs 62232), H1 major, and one D1 major (a 2023 31500 wick); every dropped
+event was verified as `high > prior level && close < prior level` (or the
+bearish mirror) formed before the prior BOS's close. Zero events added, H4
+untouched.
 
 **Staleness re-anchor** (**both detectors**, as of 2026-06-29):
 `stale_reanchor_candles` (constructor default `None` = off; wired in

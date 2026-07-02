@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from liquidity_hunter.app.dashboard_data import (
     _STRUCTURAL_ANCHOR_REGION,
+    _drop_pre_break_reference_bos,
     _structural_anchor_index,
     load_dashboard_data,
 )
@@ -12,6 +13,7 @@ from liquidity_hunter.core.domain import (
     FundingRate,
     LongShortRatio,
     MarketDirection,
+    MarketStructure,
     OpenInterestPoint,
     RetailPositioning,
     StructureEvent,
@@ -390,3 +392,112 @@ def test_structural_anchor_index_ignores_extreme_outside_region() -> None:
     candles = make_series(highs, lows)
 
     assert _structural_anchor_index(candles, candles[n - 5].timestamp) == n - 60
+
+
+def _structure_event(
+    minute: int,
+    event: StructureEvent,
+    direction: MarketDirection,
+    *,
+    reference_minute: int | None = None,
+) -> MarketStructure:
+    return MarketStructure(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.M15,
+        timestamp=datetime(2026, 7, 2, 0, minute, tzinfo=UTC),
+        event=event,
+        direction=direction,
+        price_level=100.0,
+        reference_price_level=90.0,
+        reference_timestamp=(
+            datetime(2026, 7, 2, 0, reference_minute, tzinfo=UTC)
+            if reference_minute is not None
+            else None
+        ),
+        scope=StructureScope.INTERNAL,
+    )
+
+
+def test_drop_pre_break_reference_bos_drops_wick_attempt_reference() -> None:
+    # BOS at :10; the next continuation's reference formed at :05 -- while the
+    # first BOS was still unbroken (a wick attempt at its level) -- so it is
+    # pre-break liquidity, not structure of the new leg.
+    events = [
+        _structure_event(10, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH),
+        _structure_event(
+            20, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, reference_minute=5
+        ),
+    ]
+
+    kept = _drop_pre_break_reference_bos(events)
+
+    assert [e.timestamp.minute for e in kept] == [10]
+
+
+def test_drop_pre_break_reference_bos_keeps_post_break_reference() -> None:
+    # Reference formed at :15, after the prior BOS's confirming close at :10:
+    # a genuine formed level of the new leg. Equality (:10) is also kept -- the
+    # break candle's own extreme forms as part of the break.
+    events = [
+        _structure_event(10, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH),
+        _structure_event(
+            20, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, reference_minute=15
+        ),
+        _structure_event(
+            30, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, reference_minute=20
+        ),
+    ]
+
+    assert _drop_pre_break_reference_bos(events) == events
+
+
+def test_drop_pre_break_reference_bos_choch_starts_new_leg() -> None:
+    # The first BOS of a leg references the CHoCH-seeded level, which formed
+    # before the flip -- the CHoCH resets the constraint for its direction.
+    events = [
+        _structure_event(10, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH),
+        _structure_event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _structure_event(30, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        _structure_event(
+            40, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, reference_minute=5
+        ),
+    ]
+
+    assert _drop_pre_break_reference_bos(events) == events
+
+
+def test_drop_pre_break_reference_bos_keeps_unresolved_reference() -> None:
+    # No reference_timestamp resolved: nothing to judge, keep the event.
+    events = [
+        _structure_event(10, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH),
+        _structure_event(20, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH),
+    ]
+
+    assert _drop_pre_break_reference_bos(events) == events
+
+
+def test_drop_pre_break_reference_bos_tracks_directions_independently() -> None:
+    # A bearish BOS does not constrain the bullish staircase (and vice versa).
+    events = [
+        _structure_event(10, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH),
+        _structure_event(
+            20, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, reference_minute=5
+        ),
+    ]
+
+    assert _drop_pre_break_reference_bos(events) == events
+
+
+def test_drop_pre_break_reference_bos_same_timestamp_judges_earlier_reference_first() -> None:
+    # Two BOS re-timed to the same confirming candle: the one whose reference
+    # formed earlier is the earlier structural break -- it is kept and sets the
+    # leg's close, so the later-referenced (staged) one is judged against it
+    # and dropped, regardless of list order.
+    first_of_leg = _structure_event(
+        20, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, reference_minute=5
+    )
+    staged = _structure_event(
+        20, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, reference_minute=15
+    )
+
+    assert _drop_pre_break_reference_bos([staged, first_of_leg]) == [first_of_leg]

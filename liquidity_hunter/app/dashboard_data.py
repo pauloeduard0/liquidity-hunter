@@ -302,6 +302,48 @@ def _reanchor_bos_close_break(
     return result
 
 
+def _drop_pre_break_reference_bos(
+    events: list[MarketStructure],
+) -> list[MarketStructure]:
+    """Drop continuation BOS whose reference formed before the prior BOS broke.
+
+    A wick that pokes beyond the active BOS level without closing (a failed
+    break attempt) still ratchets the detector's staircase extreme, so the
+    *next* continuation can report that wick as the formed level it broke --
+    but that level formed while the prior BOS was still unbroken. It is
+    pre-break liquidity, not structure of the new leg: a reference may only
+    come from price action *after* the confirming close of the previous
+    same-direction BOS in the same leg. Any continuation BOS whose
+    ``reference_timestamp`` predates that close is dropped.
+
+    A CHoCH starts a new leg (its first BOS references the CHoCH-seeded
+    level, which necessarily formed before the flip), so it resets the
+    constraint for its direction. Events without a resolved
+    ``reference_timestamp`` are kept -- there is nothing to judge. Runs after
+    ``_reanchor_bos_close_break`` so each BOS ``timestamp`` is its confirming
+    close and ``reference_timestamp`` the candle that formed the level.
+    """
+    result: list[MarketStructure] = []
+    last_bos_close: dict[MarketDirection, datetime] = {}
+    # Two BOS can re-time to the same confirming candle (one close clearing two
+    # levels at once); the one whose reference formed earlier is the earlier
+    # structural break, so it must be judged (and set the leg's close) first.
+    for event in sorted(events, key=lambda e: (e.timestamp, e.reference_timestamp or e.timestamp)):
+        if event.event is StructureEvent.CHANGE_OF_CHARACTER:
+            last_bos_close.pop(event.direction, None)
+        elif event.event is StructureEvent.BREAK_OF_STRUCTURE:
+            prior_close = last_bos_close.get(event.direction)
+            if (
+                prior_close is not None
+                and event.reference_timestamp is not None
+                and event.reference_timestamp < prior_close
+            ):
+                continue
+            last_bos_close[event.direction] = event.timestamp
+        result.append(event)
+    return result
+
+
 def load_dashboard_data(
     provider: OHLCVProvider | None = None,
     symbol: str = "BTCUSDT",
@@ -365,6 +407,7 @@ def load_dashboard_data(
     )
     all_major_events = major_detector.detect(buffered_candles)
     all_major_events = _reanchor_bos_close_break(all_major_events, buffered_candles)
+    all_major_events = _drop_pre_break_reference_bos(all_major_events)
     market_structure_events = [
         e for e in all_major_events if visible_start <= e.timestamp <= visible_end
     ]
@@ -444,6 +487,10 @@ def load_dashboard_data(
     # Re-time each BOS to the first close beyond the formed level it broke
     # (dropping wick-only continuations), before the visible filter and POI.
     all_internal_events = _reanchor_bos_close_break(all_internal_events, internal_candles)
+    # A reference may only form *after* the prior same-direction BOS broke: a
+    # continuation referencing a pre-break wick attempt at the prior level is
+    # dropped (pre-break liquidity, not structure of the new leg).
+    all_internal_events = _drop_pre_break_reference_bos(all_internal_events)
     internal_structure_events = [
         e for e in all_internal_events if visible_start <= e.timestamp <= visible_end
     ]
