@@ -15,9 +15,9 @@
     "semantic_hash": "29da2292139ae3c9e2e6372f5524d0b2"
   },
   "frontend/src/App.tsx": {
-    "mtime": 1783032598.0495198,
-    "ast_hash": "d96a8051438020e4c8cf151539de294b",
-    "semantic_hash": "d96a8051438020e4c8cf151539de294b"
+    "mtime": 1782765609.445636,
+    "ast_hash": "19a42df7cd818fed0c3df5075c1711dc",
+    "semantic_hash": "19a42df7cd818fed0c3df5075c1711dc"
   },
   "frontend/src/api/dashboard.ts": {
     "mtime": 1782310444.0966868,
@@ -55,9 +55,9 @@
     "semantic_hash": "cd511da36fc5108baa18e6bd002ee2bf"
   },
   "frontend/src/components/KpiRow.tsx": {
-    "mtime": 1783032591.00076,
-    "ast_hash": "844e66231659f35b7b77d4aeaa83ec73",
-    "semantic_hash": "844e66231659f35b7b77d4aeaa83ec73"
+    "mtime": 1782182096.530114,
+    "ast_hash": "7d6c842a0e05359a990caa06382a516d",
+    "semantic_hash": "7d6c842a0e05359a990caa06382a516d"
   },
   "frontend/src/components/Logo.tsx": {
     "mtime": 1782182096.530114,
@@ -65,9 +65,9 @@
     "semantic_hash": "e9f844635a5e65c10978c1771cad383a"
   },
   "frontend/src/components/MainChart.tsx": {
-    "mtime": 1783032626.0140495,
-    "ast_hash": "6930c7f76f09144e214360dc197f8585",
-    "semantic_hash": "6930c7f76f09144e214360dc197f8585"
+    "mtime": 1783013076.102723,
+    "ast_hash": "e938a4cac3735cef3c45c8a936c609fa",
+    "semantic_hash": "e938a4cac3735cef3c45c8a936c609fa"
   },
   "frontend/src/components/ManipulationCyclesPanel.tsx": {
     "mtime": 1782311265.1215546,
@@ -90,9 +90,9 @@
     "semantic_hash": "5664812196360b7d95da7ba5d4720810"
   },
   "frontend/src/types/dashboard.ts": {
-    "mtime": 1783032561.372176,
-    "ast_hash": "340428bb27cb6d4eefd0341e75f4c177",
-    "semantic_hash": "340428bb27cb6d4eefd0341e75f4c177"
+    "mtime": 1782317121.730273,
+    "ast_hash": "a7213ff549863389e689f611f33284e7",
+    "semantic_hash": "a7213ff549863389e689f611f33284e7"
   },
   "frontend/tsconfig.app.json": {
     "mtime": 1781211132.218215,
@@ -150,9 +150,9 @@
     "semantic_hash": "d4051182a5c178204ab2442ce739cebd"
   },
   "liquidity_hunter/api/schemas.py": {
-    "mtime": 1783031942.3852017,
-    "ast_hash": "5c0f205f9a35b2ca66e1a028beddf67f",
-    "semantic_hash": "5c0f205f9a35b2ca66e1a028beddf67f"
+    "mtime": 1782182096.5376952,
+    "ast_hash": "b9088d06acb0d8eaa1de3b3f7dd21309",
+    "semantic_hash": "b9088d06acb0d8eaa1de3b3f7dd21309"
   },
   "liquidity_hunter/app/__init__.py": {
     "mtime": 1782182096.5376952,
@@ -160,9 +160,9 @@
     "semantic_hash": "66ec05247414c437b87d3f4799412143"
   },
   "liquidity_hunter/app/dashboard_data.py": {
-    "mtime": 1783031933.9623263,
-    "ast_hash": "833ae2fcb730021f73ea002bbd6b3aa0",
-    "semantic_hash": "833ae2fcb730021f73ea002bbd6b3aa0"
+    "mtime": 1783014961.3987646,
+    "ast_hash": "6bf838000b83d4d475ef1571e8dbd12b",
+    "semantic_hash": "6bf838000b83d4d475ef1571e8dbd12b"
   },
   "liquidity_hunter/app/examples/__init__.py": {
     "mtime": 1781142430.8718488,
@@ -225,9 +225,9 @@
     "semantic_hash": "7f7df58db99b3bd2659d87f18914e97f"
   },
   "liquidity_hunter/core/domain/__init__.py": {
-    "mtime": 1783031781.397079,
-    "ast_hash": "32312d1b23563ac6ce7472f11e62d284",
-    "semantic_hash": "32312d1b23563ac6ce7472f11e62d284"
+    "mtime": 1782182096.5490673,
+    "ast_hash": "75add629b440eeb976b1119117cf80e7",
+    "semantic_hash": "75add629b440eeb976b1119117cf80e7"
   },
   "liquidity_hunter/core/domain/base.py": {
     "mtime": 1781141411.2053516,
@@ -245,9 +245,9 @@
     "semantic_hash": "475d96a9b54eab5fee6cfe3784e16f90"
   },
   "liquidity_hunter/core/domain/enums.py": {
-    "mtime": 1783031750.6405842,
-    "ast_hash": "86f94d8102e1268ebefee375d7533b88",
-    "semantic_hash": "86f94d8102e1268ebefee375d7533b88"
+    "mtime": 1782316516.0239725,
+    "ast_hash": "163953ddb3159748ef4b3b34728d1d03",
+    "semantic_hash": "163953ddb3159748ef4b3b34728d1d03"
   },
   "liquidity_hunter/core/domain/futures.py": {
     "mtime": 1782182096.5528579,
@@ -320,9 +320,9 @@
     "semantic_hash": "6ee03a0c2efa7ebaa5613ca825d52825"
   },
   "liquidity_hunter/data/providers/binance_futures.py": {
-    "mtime": 1783033217.379226,
-    "ast_hash": "eba5e939fc4c90060fb759e29d12e0a6",
-    "semantic_hash": "eba5e939fc4c90060fb759e29d12e0a6"
+    "mtime": 1782182096.560439,
+    "ast_hash": "de947639b69a82bfd0aad9f980b6aec8",
+    "semantic_hash": "de947639b69a82bfd0aad9f980b6aec8"
   },
   "liquidity_hunter/data/providers/binance_futures_ohlcv.py": {
     "mtime": 1782761564.5375383,
@@ -400,14 +400,14 @@
     "semantic_hash": "2f0d3ce82a79ddbf551ca0f41bd6117f"
   },
   "liquidity_hunter/psychology/__init__.py": {
-    "mtime": 1783031856.0928931,
-    "ast_hash": "a477085cda9e48a654d3dbed2088bd07",
-    "semantic_hash": "a477085cda9e48a654d3dbed2088bd07"
+    "mtime": 1782182096.5680203,
+    "ast_hash": "787b23f0cba7370dd495693db62ff762",
+    "semantic_hash": "787b23f0cba7370dd495693db62ff762"
   },
   "liquidity_hunter/psychology/analyzers/__init__.py": {
-    "mtime": 1783031851.2202318,
-    "ast_hash": "a51d4b7d83a4db482a7373ba8b4beb25",
-    "semantic_hash": "a51d4b7d83a4db482a7373ba8b4beb25"
+    "mtime": 1782182096.5718112,
+    "ast_hash": "ffbf3d5e5405cfffb371f777e6e9c477",
+    "semantic_hash": "ffbf3d5e5405cfffb371f777e6e9c477"
   },
   "liquidity_hunter/psychology/analyzers/base.py": {
     "mtime": 1781145569.19908,
@@ -515,9 +515,9 @@
     "semantic_hash": "8185022cac08b1c270bfb14efc5aee85"
   },
   "liquidity_hunter/tests/app/test_dashboard_data.py": {
-    "mtime": 1783032126.359956,
-    "ast_hash": "18f62d5daacda603601caf05a4aca0cc",
-    "semantic_hash": "18f62d5daacda603601caf05a4aca0cc"
+    "mtime": 1783014376.9828787,
+    "ast_hash": "c2e3d41c64804b716543bcfba3b0e393",
+    "semantic_hash": "c2e3d41c64804b716543bcfba3b0e393"
   },
   "liquidity_hunter/tests/app/test_liquidation_backtest.py": {
     "mtime": 1782182096.5793924,
@@ -575,9 +575,9 @@
     "semantic_hash": "88d94978348cde5af4e911d97314ed52"
   },
   "liquidity_hunter/tests/data/providers/test_binance_futures.py": {
-    "mtime": 1783032777.6478546,
-    "ast_hash": "4b58e0f56c64dd64d695aa8a8ba7941d",
-    "semantic_hash": "4b58e0f56c64dd64d695aa8a8ba7941d"
+    "mtime": 1782182096.583183,
+    "ast_hash": "e4745d9136bd5f7e7b5ffe9c438fe4e8",
+    "semantic_hash": "e4745d9136bd5f7e7b5ffe9c438fe4e8"
   },
   "liquidity_hunter/tests/data/providers/test_binance_futures_ohlcv.py": {
     "mtime": 1782761623.6225185,
@@ -710,9 +710,9 @@
     "semantic_hash": "70cdfc48b8e82d697d0e44f4d1993954"
   },
   "CLAUDE.md": {
-    "mtime": 1783033100.2814217,
-    "ast_hash": "b336edd8447d86c6055c7da54f608b02",
-    "semantic_hash": "b336edd8447d86c6055c7da54f608b02"
+    "mtime": 1783014697.150808,
+    "ast_hash": "cc33150d1abc297d1a5dd275c9baeaff",
+    "semantic_hash": "cc33150d1abc297d1a5dd275c9baeaff"
   },
   "README.md": {
     "mtime": 1782182096.5225327,
@@ -763,25 +763,5 @@
     "mtime": 1782182096.5225327,
     "ast_hash": "9161a531d95b2916a48d80075aa18498",
     "semantic_hash": "9161a531d95b2916a48d80075aa18498"
-  },
-  "liquidity_hunter/core/domain/oi_analysis.py": {
-    "mtime": 1783031764.139313,
-    "ast_hash": "a97d9d796b64e069a65beb873afced7e",
-    "semantic_hash": "a97d9d796b64e069a65beb873afced7e"
-  },
-  "liquidity_hunter/psychology/analyzers/oi_regime.py": {
-    "mtime": 1783031842.1767738,
-    "ast_hash": "0f039e12782b096c7a3a7eac6977b25c",
-    "semantic_hash": "0f039e12782b096c7a3a7eac6977b25c"
-  },
-  "liquidity_hunter/tests/psychology/test_oi_regime.py": {
-    "mtime": 1783032042.5571082,
-    "ast_hash": "97ef56d37b496c3aa3f4c7631d91f964",
-    "semantic_hash": "97ef56d37b496c3aa3f4c7631d91f964"
-  },
-  "graphify-out/memory/query_20260702_182917_como_um_choch_vira_um_poi_zone.md": {
-    "mtime": 1783016957.4345224,
-    "ast_hash": "5d41766f1ca8f4cff49749564d1c3df2",
-    "semantic_hash": "5d41766f1ca8f4cff49749564d1c3df2"
   }
 }
