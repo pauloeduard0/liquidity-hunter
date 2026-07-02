@@ -1,0 +1,19 @@
+# Local only, per the graphify docs ("Team setup")
+cost.json
+# Machine-specific interpreter/root pointers, regenerated on every graphify run
+.graphify_python
+.graphify_root
+# Local query-time state, regenerated on demand
+.vocab.txt
+.graphify_learning.json
+# Transient pipeline files (deleted at the end of a run, but never worth committing)
+.graphify_detect.json
+.graphify_extract.json
+.graphify_ast.json
+.graphify_semantic.json
+.graphify_analysis.json
+.graphify_chunk_*.json
+.graphify_uncached.txt
+.graphify_cached.json
+.graphify_semantic_new.json
+.needs_update

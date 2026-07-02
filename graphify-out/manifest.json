@@ -1,0 +1,767 @@
+{
+  ".claude/settings.local.json": {
+    "mtime": 1782992455.880672,
+    "ast_hash": "9bb299a5fa514ed9021c54d21b723b24",
+    "semantic_hash": "9bb299a5fa514ed9021c54d21b723b24"
+  },
+  "frontend/eslint.config.js": {
+    "mtime": 1781211132.2144053,
+    "ast_hash": "0355276bc79439afe3c53e3a2470ca1e",
+    "semantic_hash": "0355276bc79439afe3c53e3a2470ca1e"
+  },
+  "frontend/package.json": {
+    "mtime": 1781211171.055738,
+    "ast_hash": "29da2292139ae3c9e2e6372f5524d0b2",
+    "semantic_hash": "29da2292139ae3c9e2e6372f5524d0b2"
+  },
+  "frontend/src/App.tsx": {
+    "mtime": 1782765609.445636,
+    "ast_hash": "19a42df7cd818fed0c3df5075c1711dc",
+    "semantic_hash": "19a42df7cd818fed0c3df5075c1711dc"
+  },
+  "frontend/src/api/dashboard.ts": {
+    "mtime": 1782310444.0966868,
+    "ast_hash": "95aa9359e85af370c984f4a6e6abfc6e",
+    "semantic_hash": "95aa9359e85af370c984f4a6e6abfc6e"
+  },
+  "frontend/src/charting/HeatmapStripPrimitive.ts": {
+    "mtime": 1782182096.5225327,
+    "ast_hash": "44755bb7fb5cac8691f346a63e9726cc",
+    "semantic_hash": "44755bb7fb5cac8691f346a63e9726cc"
+  },
+  "frontend/src/charting/LineLabelsPrimitive.ts": {
+    "mtime": 1782182096.5263233,
+    "ast_hash": "20ff84c7dd9cdf2796473e8e96abb0f4",
+    "semantic_hash": "20ff84c7dd9cdf2796473e8e96abb0f4"
+  },
+  "frontend/src/charting/LiquidationBandsPrimitive.ts": {
+    "mtime": 1782182096.5263233,
+    "ast_hash": "0e676e43f1a639fefe8b7b820c348adc",
+    "semantic_hash": "0e676e43f1a639fefe8b7b820c348adc"
+  },
+  "frontend/src/charting/POIBoxesPrimitive.ts": {
+    "mtime": 1782182096.5263233,
+    "ast_hash": "c15c524036e3e4bbbe06f2a674c8ca2c",
+    "semantic_hash": "c15c524036e3e4bbbe06f2a674c8ca2c"
+  },
+  "frontend/src/components/BehaviorDivergencePanel.tsx": {
+    "mtime": 1782311265.7543666,
+    "ast_hash": "67f3fd74459417a0b8c2c023547d8af0",
+    "semantic_hash": "67f3fd74459417a0b8c2c023547d8af0"
+  },
+  "frontend/src/components/CollapsibleSection.tsx": {
+    "mtime": 1782182096.530114,
+    "ast_hash": "cd511da36fc5108baa18e6bd002ee2bf",
+    "semantic_hash": "cd511da36fc5108baa18e6bd002ee2bf"
+  },
+  "frontend/src/components/KpiRow.tsx": {
+    "mtime": 1782182096.530114,
+    "ast_hash": "7d6c842a0e05359a990caa06382a516d",
+    "semantic_hash": "7d6c842a0e05359a990caa06382a516d"
+  },
+  "frontend/src/components/Logo.tsx": {
+    "mtime": 1782182096.530114,
+    "ast_hash": "e9f844635a5e65c10978c1771cad383a",
+    "semantic_hash": "e9f844635a5e65c10978c1771cad383a"
+  },
+  "frontend/src/components/MainChart.tsx": {
+    "mtime": 1783013076.102723,
+    "ast_hash": "e938a4cac3735cef3c45c8a936c609fa",
+    "semantic_hash": "e938a4cac3735cef3c45c8a936c609fa"
+  },
+  "frontend/src/components/ManipulationCyclesPanel.tsx": {
+    "mtime": 1782311265.1215546,
+    "ast_hash": "fddd444116ddf7e4b4c249a15d800a26",
+    "semantic_hash": "fddd444116ddf7e4b4c249a15d800a26"
+  },
+  "frontend/src/components/NarrativePanel.tsx": {
+    "mtime": 1782182096.5339046,
+    "ast_hash": "fd56b2d9fd6b2ee430f393633d87e77d",
+    "semantic_hash": "fd56b2d9fd6b2ee430f393633d87e77d"
+  },
+  "frontend/src/main.tsx": {
+    "mtime": 1781211132.218215,
+    "ast_hash": "787e5a07efeb2bf6209d5937195f2f68",
+    "semantic_hash": "787e5a07efeb2bf6209d5937195f2f68"
+  },
+  "frontend/src/theme.ts": {
+    "mtime": 1782317130.5826027,
+    "ast_hash": "5664812196360b7d95da7ba5d4720810",
+    "semantic_hash": "5664812196360b7d95da7ba5d4720810"
+  },
+  "frontend/src/types/dashboard.ts": {
+    "mtime": 1782317121.730273,
+    "ast_hash": "a7213ff549863389e689f611f33284e7",
+    "semantic_hash": "a7213ff549863389e689f611f33284e7"
+  },
+  "frontend/tsconfig.app.json": {
+    "mtime": 1781211132.218215,
+    "ast_hash": "136630b5accce1ca50663df229534a26",
+    "semantic_hash": "136630b5accce1ca50663df229534a26"
+  },
+  "frontend/tsconfig.json": {
+    "mtime": 1781211132.218215,
+    "ast_hash": "a3d39fa780ebff65444de257f291ce6c",
+    "semantic_hash": "a3d39fa780ebff65444de257f291ce6c"
+  },
+  "frontend/tsconfig.node.json": {
+    "mtime": 1781211132.218215,
+    "ast_hash": "70bdd0a673bcfc0e828080b306e7c680",
+    "semantic_hash": "70bdd0a673bcfc0e828080b306e7c680"
+  },
+  "frontend/vite.config.ts": {
+    "mtime": 1781211215.53718,
+    "ast_hash": "92c6ddfd412545eb8bd33259f3bb1d47",
+    "semantic_hash": "92c6ddfd412545eb8bd33259f3bb1d47"
+  },
+  "liquidity_hunter/__init__.py": {
+    "mtime": 1781141440.0317743,
+    "ast_hash": "da9db0ad796eb0c12ea8c8c56b8befcb",
+    "semantic_hash": "da9db0ad796eb0c12ea8c8c56b8befcb"
+  },
+  "liquidity_hunter/api/__init__.py": {
+    "mtime": 1781210618.8340805,
+    "ast_hash": "44f964d81cabc3578a67aff2456a591a",
+    "semantic_hash": "44f964d81cabc3578a67aff2456a591a"
+  },
+  "liquidity_hunter/api/cache.py": {
+    "mtime": 1781210618.8340805,
+    "ast_hash": "6136fa773f110c319ff7cc2045675e96",
+    "semantic_hash": "6136fa773f110c319ff7cc2045675e96"
+  },
+  "liquidity_hunter/api/main.py": {
+    "mtime": 1781210618.8340805,
+    "ast_hash": "dcce15d1ceb220984ea8af324896f311",
+    "semantic_hash": "dcce15d1ceb220984ea8af324896f311"
+  },
+  "liquidity_hunter/api/routes/__init__.py": {
+    "mtime": 1781210618.8340805,
+    "ast_hash": "636e7071adf655bb6b880a856413649b",
+    "semantic_hash": "636e7071adf655bb6b880a856413649b"
+  },
+  "liquidity_hunter/api/routes/dashboard.py": {
+    "mtime": 1782762011.6658318,
+    "ast_hash": "2fa68abf0f88e99dad8d160700e22aec",
+    "semantic_hash": "2fa68abf0f88e99dad8d160700e22aec"
+  },
+  "liquidity_hunter/api/routes/health.py": {
+    "mtime": 1781210618.8340805,
+    "ast_hash": "d4051182a5c178204ab2442ce739cebd",
+    "semantic_hash": "d4051182a5c178204ab2442ce739cebd"
+  },
+  "liquidity_hunter/api/schemas.py": {
+    "mtime": 1782182096.5376952,
+    "ast_hash": "b9088d06acb0d8eaa1de3b3f7dd21309",
+    "semantic_hash": "b9088d06acb0d8eaa1de3b3f7dd21309"
+  },
+  "liquidity_hunter/app/__init__.py": {
+    "mtime": 1782182096.5376952,
+    "ast_hash": "66ec05247414c437b87d3f4799412143",
+    "semantic_hash": "66ec05247414c437b87d3f4799412143"
+  },
+  "liquidity_hunter/app/dashboard_data.py": {
+    "mtime": 1783014961.3987646,
+    "ast_hash": "6bf838000b83d4d475ef1571e8dbd12b",
+    "semantic_hash": "6bf838000b83d4d475ef1571e8dbd12b"
+  },
+  "liquidity_hunter/app/examples/__init__.py": {
+    "mtime": 1781142430.8718488,
+    "ast_hash": "53b13b5a6e9075684302e6aa06ab1f0e",
+    "semantic_hash": "53b13b5a6e9075684302e6aa06ab1f0e"
+  },
+  "liquidity_hunter/app/examples/backtest_liquidations.py": {
+    "mtime": 1782182096.5452766,
+    "ast_hash": "22c9496a5d9cdc8e821c6f2fea284955",
+    "semantic_hash": "22c9496a5d9cdc8e821c6f2fea284955"
+  },
+  "liquidity_hunter/app/examples/detect_btcusdt_liquidity.py": {
+    "mtime": 1781144078.3467555,
+    "ast_hash": "8f882bca608b63a55e6cf8b986845529",
+    "semantic_hash": "8f882bca608b63a55e6cf8b986845529"
+  },
+  "liquidity_hunter/app/examples/diagnose_reanchor.py": {
+    "mtime": 1782748920.8929355,
+    "ast_hash": "d54ed61003686a6991341d8eff211294",
+    "semantic_hash": "d54ed61003686a6991341d8eff211294"
+  },
+  "liquidity_hunter/app/examples/estimate_btcusdt_retail_bias.py": {
+    "mtime": 1781145650.4116275,
+    "ast_hash": "24697a00a5e3dd6641085d60ae64c231",
+    "semantic_hash": "24697a00a5e3dd6641085d60ae64c231"
+  },
+  "liquidity_hunter/app/examples/fetch_btcusdt_1h.py": {
+    "mtime": 1781142436.598879,
+    "ast_hash": "2132e144051490609d84603b77bd3090",
+    "semantic_hash": "2132e144051490609d84603b77bd3090"
+  },
+  "liquidity_hunter/app/examples/score_btcusdt_liquidity.py": {
+    "mtime": 1781144897.3201623,
+    "ast_hash": "755382d5a865389342afcb37650bbbbf",
+    "semantic_hash": "755382d5a865389342afcb37650bbbbf"
+  },
+  "liquidity_hunter/app/liquidation_backtest.py": {
+    "mtime": 1782182096.5452766,
+    "ast_hash": "2c01b5b10db7c9de67e86307012fd0f4",
+    "semantic_hash": "2c01b5b10db7c9de67e86307012fd0f4"
+  },
+  "liquidity_hunter/app/narrative.py": {
+    "mtime": 1782182096.5490673,
+    "ast_hash": "6ecc547361464c74c8bc1f2b833e542a",
+    "semantic_hash": "6ecc547361464c74c8bc1f2b833e542a"
+  },
+  "liquidity_hunter/config/__init__.py": {
+    "mtime": 1781141464.5673473,
+    "ast_hash": "7574b4fa6d3c7bef867537b091b35d7a",
+    "semantic_hash": "7574b4fa6d3c7bef867537b091b35d7a"
+  },
+  "liquidity_hunter/config/settings.py": {
+    "mtime": 1781141468.0996425,
+    "ast_hash": "a5de56ff7d98943a5b4a9d823e845caf",
+    "semantic_hash": "a5de56ff7d98943a5b4a9d823e845caf"
+  },
+  "liquidity_hunter/core/__init__.py": {
+    "mtime": 1782182096.5490673,
+    "ast_hash": "7f7df58db99b3bd2659d87f18914e97f",
+    "semantic_hash": "7f7df58db99b3bd2659d87f18914e97f"
+  },
+  "liquidity_hunter/core/domain/__init__.py": {
+    "mtime": 1782182096.5490673,
+    "ast_hash": "75add629b440eeb976b1119117cf80e7",
+    "semantic_hash": "75add629b440eeb976b1119117cf80e7"
+  },
+  "liquidity_hunter/core/domain/base.py": {
+    "mtime": 1781141411.2053516,
+    "ast_hash": "e7ec6b57fc4267e0256657500f2748b4",
+    "semantic_hash": "e7ec6b57fc4267e0256657500f2748b4"
+  },
+  "liquidity_hunter/core/domain/behavior_divergence.py": {
+    "mtime": 1782182096.5490673,
+    "ast_hash": "6fdc6f2725a5c0148484b426862c4c61",
+    "semantic_hash": "6fdc6f2725a5c0148484b426862c4c61"
+  },
+  "liquidity_hunter/core/domain/candle.py": {
+    "mtime": 1781204649.0159836,
+    "ast_hash": "475d96a9b54eab5fee6cfe3784e16f90",
+    "semantic_hash": "475d96a9b54eab5fee6cfe3784e16f90"
+  },
+  "liquidity_hunter/core/domain/enums.py": {
+    "mtime": 1782316516.0239725,
+    "ast_hash": "163953ddb3159748ef4b3b34728d1d03",
+    "semantic_hash": "163953ddb3159748ef4b3b34728d1d03"
+  },
+  "liquidity_hunter/core/domain/futures.py": {
+    "mtime": 1782182096.5528579,
+    "ast_hash": "1b898e3d2790f8d76af67ca3353542a8",
+    "semantic_hash": "1b898e3d2790f8d76af67ca3353542a8"
+  },
+  "liquidity_hunter/core/domain/liquidation.py": {
+    "mtime": 1782182096.5528579,
+    "ast_hash": "d06ce4fa5eb88c580c0d904925e2d7a2",
+    "semantic_hash": "d06ce4fa5eb88c580c0d904925e2d7a2"
+  },
+  "liquidity_hunter/core/domain/liquidity_heatmap.py": {
+    "mtime": 1782182096.5528579,
+    "ast_hash": "b487cdd44f6071943d9d78db3c92d443",
+    "semantic_hash": "b487cdd44f6071943d9d78db3c92d443"
+  },
+  "liquidity_hunter/core/domain/liquidity_zone.py": {
+    "mtime": 1781141427.8609946,
+    "ast_hash": "e072f763e8f1af61bfdc16f6debbef88",
+    "semantic_hash": "e072f763e8f1af61bfdc16f6debbef88"
+  },
+  "liquidity_hunter/core/domain/manipulation_cycle.py": {
+    "mtime": 1782182096.5566485,
+    "ast_hash": "74312b8f9a8e60364dc56b79254e19df",
+    "semantic_hash": "74312b8f9a8e60364dc56b79254e19df"
+  },
+  "liquidity_hunter/core/domain/market_structure.py": {
+    "mtime": 1782182096.5566485,
+    "ast_hash": "3362cd147835b8007c09faf649289416",
+    "semantic_hash": "3362cd147835b8007c09faf649289416"
+  },
+  "liquidity_hunter/core/domain/narrative.py": {
+    "mtime": 1782182096.5566485,
+    "ast_hash": "c7bb94b86369215dbdd977f13db5623a",
+    "semantic_hash": "c7bb94b86369215dbdd977f13db5623a"
+  },
+  "liquidity_hunter/core/domain/poi_zone.py": {
+    "mtime": 1782182096.5566485,
+    "ast_hash": "ce878e563675c069fe25b5626c3346e2",
+    "semantic_hash": "ce878e563675c069fe25b5626c3346e2"
+  },
+  "liquidity_hunter/core/domain/retail_bias.py": {
+    "mtime": 1781141436.127288,
+    "ast_hash": "dd964f91a41a2d8d0183697155dfd6ae",
+    "semantic_hash": "dd964f91a41a2d8d0183697155dfd6ae"
+  },
+  "liquidity_hunter/data/__init__.py": {
+    "mtime": 1782761749.3956246,
+    "ast_hash": "cb8e3ae981ef81f56e56b314e6ab490e",
+    "semantic_hash": "cb8e3ae981ef81f56e56b314e6ab490e"
+  },
+  "liquidity_hunter/data/exceptions.py": {
+    "mtime": 1781142385.0793986,
+    "ast_hash": "8e86a7486bd0be69868ce54a9e630c5e",
+    "semantic_hash": "8e86a7486bd0be69868ce54a9e630c5e"
+  },
+  "liquidity_hunter/data/providers/__init__.py": {
+    "mtime": 1782761749.3956246,
+    "ast_hash": "119ca3c148598697fbc90068464a5257",
+    "semantic_hash": "119ca3c148598697fbc90068464a5257"
+  },
+  "liquidity_hunter/data/providers/base.py": {
+    "mtime": 1782761749.3956246,
+    "ast_hash": "5ca84c63a19994347e04c5faa4ed1b9c",
+    "semantic_hash": "5ca84c63a19994347e04c5faa4ed1b9c"
+  },
+  "liquidity_hunter/data/providers/binance.py": {
+    "mtime": 1782761749.3956246,
+    "ast_hash": "6ee03a0c2efa7ebaa5613ca825d52825",
+    "semantic_hash": "6ee03a0c2efa7ebaa5613ca825d52825"
+  },
+  "liquidity_hunter/data/providers/binance_futures.py": {
+    "mtime": 1782182096.560439,
+    "ast_hash": "de947639b69a82bfd0aad9f980b6aec8",
+    "semantic_hash": "de947639b69a82bfd0aad9f980b6aec8"
+  },
+  "liquidity_hunter/data/providers/binance_futures_ohlcv.py": {
+    "mtime": 1782761564.5375383,
+    "ast_hash": "7aec6440d01e88036a239ef98253f95b",
+    "semantic_hash": "7aec6440d01e88036a239ef98253f95b"
+  },
+  "liquidity_hunter/data/providers/fallback.py": {
+    "mtime": 1782761573.827458,
+    "ast_hash": "b516ed42e100715a5517ee4b35d855a7",
+    "semantic_hash": "b516ed42e100715a5517ee4b35d855a7"
+  },
+  "liquidity_hunter/data/retry.py": {
+    "mtime": 1781142393.0834076,
+    "ast_hash": "a3545abe3493e86aac3387d4d2202bf9",
+    "semantic_hash": "a3545abe3493e86aac3387d4d2202bf9"
+  },
+  "liquidity_hunter/indicators/__init__.py": {
+    "mtime": 1781204649.0159836,
+    "ast_hash": "358a6cbdb4f09b7f90ff38cec3acd4ff",
+    "semantic_hash": "358a6cbdb4f09b7f90ff38cec3acd4ff"
+  },
+  "liquidity_hunter/indicators/volume_delta.py": {
+    "mtime": 1781204601.3029337,
+    "ast_hash": "53674f43b6bf0b2581787af25a4121fe",
+    "semantic_hash": "53674f43b6bf0b2581787af25a4121fe"
+  },
+  "liquidity_hunter/liquidity/__init__.py": {
+    "mtime": 1782182096.560439,
+    "ast_hash": "34cc0a37687fd57490be6a98a0cf634a",
+    "semantic_hash": "34cc0a37687fd57490be6a98a0cf634a"
+  },
+  "liquidity_hunter/liquidity/detectors/__init__.py": {
+    "mtime": 1782182096.5642297,
+    "ast_hash": "c6bf33345c9ed1f10c789d454f7740bf",
+    "semantic_hash": "c6bf33345c9ed1f10c789d454f7740bf"
+  },
+  "liquidity_hunter/liquidity/detectors/_common.py": {
+    "mtime": 1782748593.57694,
+    "ast_hash": "4016fefa534330c1db9d34ee07a94094",
+    "semantic_hash": "4016fefa534330c1db9d34ee07a94094"
+  },
+  "liquidity_hunter/liquidity/detectors/base.py": {
+    "mtime": 1781202456.1934848,
+    "ast_hash": "bd2c52abc6687eb55b90f22ca4ddfc0a",
+    "semantic_hash": "bd2c52abc6687eb55b90f22ca4ddfc0a"
+  },
+  "liquidity_hunter/liquidity/detectors/equal_levels.py": {
+    "mtime": 1781143995.9481914,
+    "ast_hash": "5b21c8c6629b64c6f5c4533ccffe8f75",
+    "semantic_hash": "5b21c8c6629b64c6f5c4533ccffe8f75"
+  },
+  "liquidity_hunter/liquidity/detectors/internal_structure.py": {
+    "mtime": 1782995419.821808,
+    "ast_hash": "2bceb8e65b923fcddc2f479390d11e36",
+    "semantic_hash": "2bceb8e65b923fcddc2f479390d11e36"
+  },
+  "liquidity_hunter/liquidity/detectors/market_structure.py": {
+    "mtime": 1782788359.5864873,
+    "ast_hash": "81c99194150b1cbf6e876239520e75f1",
+    "semantic_hash": "81c99194150b1cbf6e876239520e75f1"
+  },
+  "liquidity_hunter/liquidity/detectors/poi.py": {
+    "mtime": 1782182096.5680203,
+    "ast_hash": "fcace4e838cee869ff2b1670396b419c",
+    "semantic_hash": "fcace4e838cee869ff2b1670396b419c"
+  },
+  "liquidity_hunter/liquidity/detectors/swing_points.py": {
+    "mtime": 1781143983.864719,
+    "ast_hash": "5a05445f6da7f8642bb151f8de992010",
+    "semantic_hash": "5a05445f6da7f8642bb151f8de992010"
+  },
+  "liquidity_hunter/liquidity/mitigation.py": {
+    "mtime": 1782182096.5680203,
+    "ast_hash": "2f0d3ce82a79ddbf551ca0f41bd6117f",
+    "semantic_hash": "2f0d3ce82a79ddbf551ca0f41bd6117f"
+  },
+  "liquidity_hunter/psychology/__init__.py": {
+    "mtime": 1782182096.5680203,
+    "ast_hash": "787b23f0cba7370dd495693db62ff762",
+    "semantic_hash": "787b23f0cba7370dd495693db62ff762"
+  },
+  "liquidity_hunter/psychology/analyzers/__init__.py": {
+    "mtime": 1782182096.5718112,
+    "ast_hash": "ffbf3d5e5405cfffb371f777e6e9c477",
+    "semantic_hash": "ffbf3d5e5405cfffb371f777e6e9c477"
+  },
+  "liquidity_hunter/psychology/analyzers/base.py": {
+    "mtime": 1781145569.19908,
+    "ast_hash": "a660109c85195f7bc13a9e31c87e4343",
+    "semantic_hash": "a660109c85195f7bc13a9e31c87e4343"
+  },
+  "liquidity_hunter/psychology/analyzers/behavior_divergence.py": {
+    "mtime": 1782182096.5718112,
+    "ast_hash": "5e4532e7309f56a1cd29e201d715d6c0",
+    "semantic_hash": "5e4532e7309f56a1cd29e201d715d6c0"
+  },
+  "liquidity_hunter/psychology/analyzers/leverage_liquidation.py": {
+    "mtime": 1782182096.5718112,
+    "ast_hash": "059cb522f700a2d03764f05a4b052932",
+    "semantic_hash": "059cb522f700a2d03764f05a4b052932"
+  },
+  "liquidity_hunter/psychology/analyzers/manipulation_cycle.py": {
+    "mtime": 1782182096.5718112,
+    "ast_hash": "2dffd0a6c7dd5d42ec88e3ee60068911",
+    "semantic_hash": "2dffd0a6c7dd5d42ec88e3ee60068911"
+  },
+  "liquidity_hunter/psychology/analyzers/retail_trap.py": {
+    "mtime": 1781145594.6798582,
+    "ast_hash": "0ebbf6814c92eccbbbf06091bfd7b311",
+    "semantic_hash": "0ebbf6814c92eccbbbf06091bfd7b311"
+  },
+  "liquidity_hunter/psychology/models.py": {
+    "mtime": 1781145562.4745562,
+    "ast_hash": "34beded11a0023b802848ab2e271abe2",
+    "semantic_hash": "34beded11a0023b802848ab2e271abe2"
+  },
+  "liquidity_hunter/scoring/__init__.py": {
+    "mtime": 1782182096.5756018,
+    "ast_hash": "57546f753fbbc7bebbf348e715d9136d",
+    "semantic_hash": "57546f753fbbc7bebbf348e715d9136d"
+  },
+  "liquidity_hunter/scoring/engine.py": {
+    "mtime": 1781144826.4446213,
+    "ast_hash": "3f32c65142e3360460656f460ee06015",
+    "semantic_hash": "3f32c65142e3360460656f460ee06015"
+  },
+  "liquidity_hunter/scoring/heatmap.py": {
+    "mtime": 1782182096.5756018,
+    "ast_hash": "c01685e497004c27720e720350c6b750",
+    "semantic_hash": "c01685e497004c27720e720350c6b750"
+  },
+  "liquidity_hunter/scoring/models.py": {
+    "mtime": 1781144811.5589116,
+    "ast_hash": "c5b31585e9e5d180f0a4ca8538dff707",
+    "semantic_hash": "c5b31585e9e5d180f0a4ca8538dff707"
+  },
+  "liquidity_hunter/scoring/weights.py": {
+    "mtime": 1781144806.9536462,
+    "ast_hash": "d3d9f7907f666ce14a895a471e3ed45f",
+    "semantic_hash": "d3d9f7907f666ce14a895a471e3ed45f"
+  },
+  "liquidity_hunter/tests/__init__.py": {
+    "mtime": 1781141493.268706,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/api/__init__.py": {
+    "mtime": 1781210618.8340805,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/api/test_main.py": {
+    "mtime": 1782762052.8737707,
+    "ast_hash": "d9f7bc870b89978e9df667b71741715a",
+    "semantic_hash": "d9f7bc870b89978e9df667b71741715a"
+  },
+  "liquidity_hunter/tests/app/__init__.py": {
+    "mtime": 1781141493.268706,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/app/examples/__init__.py": {
+    "mtime": 1781142474.0035684,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/app/examples/test_backtest_liquidations.py": {
+    "mtime": 1782182096.5756018,
+    "ast_hash": "1c82fc10a92a861d4c0e1c26f7af9306",
+    "semantic_hash": "1c82fc10a92a861d4c0e1c26f7af9306"
+  },
+  "liquidity_hunter/tests/app/examples/test_detect_btcusdt_liquidity.py": {
+    "mtime": 1781144116.2246273,
+    "ast_hash": "a1488ba7a6ca212f01859e5b2e1f1448",
+    "semantic_hash": "a1488ba7a6ca212f01859e5b2e1f1448"
+  },
+  "liquidity_hunter/tests/app/examples/test_estimate_btcusdt_retail_bias.py": {
+    "mtime": 1781145654.7985883,
+    "ast_hash": "3ebb7c88bb6f884deb9fd1e39cbdb4d9",
+    "semantic_hash": "3ebb7c88bb6f884deb9fd1e39cbdb4d9"
+  },
+  "liquidity_hunter/tests/app/examples/test_fetch_btcusdt_1h.py": {
+    "mtime": 1781204649.0159836,
+    "ast_hash": "b3b9bd903188f063f8a69af2a316ead5",
+    "semantic_hash": "b3b9bd903188f063f8a69af2a316ead5"
+  },
+  "liquidity_hunter/tests/app/examples/test_score_btcusdt_liquidity.py": {
+    "mtime": 1781144910.7652366,
+    "ast_hash": "8185022cac08b1c270bfb14efc5aee85",
+    "semantic_hash": "8185022cac08b1c270bfb14efc5aee85"
+  },
+  "liquidity_hunter/tests/app/test_dashboard_data.py": {
+    "mtime": 1783014376.9828787,
+    "ast_hash": "c2e3d41c64804b716543bcfba3b0e393",
+    "semantic_hash": "c2e3d41c64804b716543bcfba3b0e393"
+  },
+  "liquidity_hunter/tests/app/test_liquidation_backtest.py": {
+    "mtime": 1782182096.5793924,
+    "ast_hash": "50d6905807933f23c8672b9bf4f65f14",
+    "semantic_hash": "50d6905807933f23c8672b9bf4f65f14"
+  },
+  "liquidity_hunter/tests/app/test_narrative.py": {
+    "mtime": 1782182096.5793924,
+    "ast_hash": "7a67c6df6f4f61c7ed2623906e86c0cb",
+    "semantic_hash": "7a67c6df6f4f61c7ed2623906e86c0cb"
+  },
+  "liquidity_hunter/tests/core/__init__.py": {
+    "mtime": 1781141493.268706,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/core/domain/__init__.py": {
+    "mtime": 1781141493.268706,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/core/domain/test_futures.py": {
+    "mtime": 1782182096.5793924,
+    "ast_hash": "04bd933152b6acb4e65cd80973fe6b78",
+    "semantic_hash": "04bd933152b6acb4e65cd80973fe6b78"
+  },
+  "liquidity_hunter/tests/core/domain/test_liquidation.py": {
+    "mtime": 1782182096.583183,
+    "ast_hash": "4cdfadab4b1d4cdbe6cbefe20917ad32",
+    "semantic_hash": "4cdfadab4b1d4cdbe6cbefe20917ad32"
+  },
+  "liquidity_hunter/tests/core/domain/test_models.py": {
+    "mtime": 1781278179.9136634,
+    "ast_hash": "03d7934d9957e89be587df2901f58a8a",
+    "semantic_hash": "03d7934d9957e89be587df2901f58a8a"
+  },
+  "liquidity_hunter/tests/core/domain/test_narrative.py": {
+    "mtime": 1782182096.583183,
+    "ast_hash": "7f8367223dd9a6b52a507e790aac8217",
+    "semantic_hash": "7f8367223dd9a6b52a507e790aac8217"
+  },
+  "liquidity_hunter/tests/data/__init__.py": {
+    "mtime": 1781141493.268706,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/data/providers/__init__.py": {
+    "mtime": 1781142471.5017493,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/data/providers/test_binance.py": {
+    "mtime": 1781204649.0159836,
+    "ast_hash": "88d94978348cde5af4e911d97314ed52",
+    "semantic_hash": "88d94978348cde5af4e911d97314ed52"
+  },
+  "liquidity_hunter/tests/data/providers/test_binance_futures.py": {
+    "mtime": 1782182096.583183,
+    "ast_hash": "e4745d9136bd5f7e7b5ffe9c438fe4e8",
+    "semantic_hash": "e4745d9136bd5f7e7b5ffe9c438fe4e8"
+  },
+  "liquidity_hunter/tests/data/providers/test_binance_futures_ohlcv.py": {
+    "mtime": 1782761623.6225185,
+    "ast_hash": "e550f8b2b24f9ae3ebf7170457f39bdb",
+    "semantic_hash": "e550f8b2b24f9ae3ebf7170457f39bdb"
+  },
+  "liquidity_hunter/tests/data/providers/test_fallback.py": {
+    "mtime": 1782761636.7706463,
+    "ast_hash": "70bb9c9799e312e0fd6a3aad827de581",
+    "semantic_hash": "70bb9c9799e312e0fd6a3aad827de581"
+  },
+  "liquidity_hunter/tests/data/test_retry.py": {
+    "mtime": 1781142444.2914886,
+    "ast_hash": "9795b7541d1e88364a1a9e12633702e7",
+    "semantic_hash": "9795b7541d1e88364a1a9e12633702e7"
+  },
+  "liquidity_hunter/tests/indicators/__init__.py": {
+    "mtime": 1781141493.268706,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/indicators/test_volume_delta.py": {
+    "mtime": 1781204614.9507296,
+    "ast_hash": "a12f3ab8679e2ad17b7a2fc3e516052f",
+    "semantic_hash": "a12f3ab8679e2ad17b7a2fc3e516052f"
+  },
+  "liquidity_hunter/tests/liquidity/__init__.py": {
+    "mtime": 1781141493.268706,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/liquidity/detectors/__init__.py": {
+    "mtime": 1781144069.6511161,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/liquidity/detectors/_factories.py": {
+    "mtime": 1781306811.3742483,
+    "ast_hash": "d5b4abf14208b5a5d090395759326572",
+    "semantic_hash": "d5b4abf14208b5a5d090395759326572"
+  },
+  "liquidity_hunter/tests/liquidity/detectors/data/btcusdt_1h_2026_06_02_08.json": {
+    "mtime": 1782182096.583183,
+    "ast_hash": "e1fe8b5909077fa02d08a60cfe040673",
+    "semantic_hash": "e1fe8b5909077fa02d08a60cfe040673"
+  },
+  "liquidity_hunter/tests/liquidity/detectors/test__common.py": {
+    "mtime": 1782182096.5869737,
+    "ast_hash": "a0a5b7bb9cbfc71eb232b1f801d0d923",
+    "semantic_hash": "a0a5b7bb9cbfc71eb232b1f801d0d923"
+  },
+  "liquidity_hunter/tests/liquidity/detectors/test_equal_levels.py": {
+    "mtime": 1781144066.956816,
+    "ast_hash": "3f48eedd0504f2da39d20e1d3390cb86",
+    "semantic_hash": "3f48eedd0504f2da39d20e1d3390cb86"
+  },
+  "liquidity_hunter/tests/liquidity/detectors/test_internal_structure.py": {
+    "mtime": 1782994580.5396154,
+    "ast_hash": "09a771edfea0d8533a75f1384ae433b2",
+    "semantic_hash": "09a771edfea0d8533a75f1384ae433b2"
+  },
+  "liquidity_hunter/tests/liquidity/detectors/test_market_structure.py": {
+    "mtime": 1782763621.0074224,
+    "ast_hash": "9c17d4fec77ff548633418a4973e3db2",
+    "semantic_hash": "9c17d4fec77ff548633418a4973e3db2"
+  },
+  "liquidity_hunter/tests/liquidity/detectors/test_swing_points.py": {
+    "mtime": 1781144044.390327,
+    "ast_hash": "3ceaeea14b37981716df27649e87dad7",
+    "semantic_hash": "3ceaeea14b37981716df27649e87dad7"
+  },
+  "liquidity_hunter/tests/liquidity/test_mitigation.py": {
+    "mtime": 1782182096.5907643,
+    "ast_hash": "2e3a01e5d0a19f0efb2af8c5bab8fdbe",
+    "semantic_hash": "2e3a01e5d0a19f0efb2af8c5bab8fdbe"
+  },
+  "liquidity_hunter/tests/psychology/__init__.py": {
+    "mtime": 1781141493.268706,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/psychology/_factories.py": {
+    "mtime": 1781278179.9175975,
+    "ast_hash": "050c97b4dca40d0f7c9dbf932ec9b28f",
+    "semantic_hash": "050c97b4dca40d0f7c9dbf932ec9b28f"
+  },
+  "liquidity_hunter/tests/psychology/test_behavior_divergence.py": {
+    "mtime": 1782182096.5907643,
+    "ast_hash": "28e388cdc6d14f904afd3d5d70081743",
+    "semantic_hash": "28e388cdc6d14f904afd3d5d70081743"
+  },
+  "liquidity_hunter/tests/psychology/test_leverage_liquidation.py": {
+    "mtime": 1782182096.5907643,
+    "ast_hash": "6e4a0eea94f0556319d0430af5492f6e",
+    "semantic_hash": "6e4a0eea94f0556319d0430af5492f6e"
+  },
+  "liquidity_hunter/tests/psychology/test_manipulation_cycle.py": {
+    "mtime": 1782182096.5907643,
+    "ast_hash": "3b0185db69a425641459be013e3fa083",
+    "semantic_hash": "3b0185db69a425641459be013e3fa083"
+  },
+  "liquidity_hunter/tests/psychology/test_retail_trap.py": {
+    "mtime": 1781145636.8044994,
+    "ast_hash": "e52feaedabc4335ebd732828f90b8043",
+    "semantic_hash": "e52feaedabc4335ebd732828f90b8043"
+  },
+  "liquidity_hunter/tests/scoring/__init__.py": {
+    "mtime": 1781141493.268706,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "liquidity_hunter/tests/scoring/_factories.py": {
+    "mtime": 1781144860.2390566,
+    "ast_hash": "519f9feb92a55da509dfad2fc7abfe1c",
+    "semantic_hash": "519f9feb92a55da509dfad2fc7abfe1c"
+  },
+  "liquidity_hunter/tests/scoring/test_engine.py": {
+    "mtime": 1781144888.9974039,
+    "ast_hash": "29c17eabbdeeda141cf5662271e66837",
+    "semantic_hash": "29c17eabbdeeda141cf5662271e66837"
+  },
+  "liquidity_hunter/tests/scoring/test_heatmap.py": {
+    "mtime": 1782182096.594555,
+    "ast_hash": "6ea632da7dcc2681a63f3d05e0927b6a",
+    "semantic_hash": "6ea632da7dcc2681a63f3d05e0927b6a"
+  },
+  "pyproject.toml": {
+    "mtime": 1782182096.594555,
+    "ast_hash": "70cdfc48b8e82d697d0e44f4d1993954",
+    "semantic_hash": "70cdfc48b8e82d697d0e44f4d1993954"
+  },
+  "CLAUDE.md": {
+    "mtime": 1783014697.150808,
+    "ast_hash": "cc33150d1abc297d1a5dd275c9baeaff",
+    "semantic_hash": "cc33150d1abc297d1a5dd275c9baeaff"
+  },
+  "README.md": {
+    "mtime": 1782182096.5225327,
+    "ast_hash": "c25e6c27fdc2abc6a4eec65786b6365d",
+    "semantic_hash": "c25e6c27fdc2abc6a4eec65786b6365d"
+  },
+  "frontend/README.md": {
+    "mtime": 1781211132.2144053,
+    "ast_hash": "f6e3faf55d738cf2affe1b44195f27cf",
+    "semantic_hash": "f6e3faf55d738cf2affe1b44195f27cf"
+  },
+  "frontend/index.html": {
+    "mtime": 1782182096.5225327,
+    "ast_hash": "48892b6cee1efead3cbf62d68a839d14",
+    "semantic_hash": "48892b6cee1efead3cbf62d68a839d14"
+  },
+  "liquidity_hunter/docs/architecture.md": {
+    "mtime": 1781141519.2464974,
+    "ast_hash": "be5dcc880b0e833ea1e211c9929d723d",
+    "semantic_hash": "be5dcc880b0e833ea1e211c9929d723d"
+  },
+  "liquidity_hunter/docs/estrutura_bos_choch.md": {
+    "mtime": 1782995298.6779613,
+    "ast_hash": "ea30361b05fd88277c6690ab580d9b98",
+    "semantic_hash": "ea30361b05fd88277c6690ab580d9b98"
+  },
+  "liquidity_hunter/docs/psychology.md": {
+    "mtime": 1781145807.0278227,
+    "ast_hash": "c9c3ab88292e6b735d38c3ba7547bf2f",
+    "semantic_hash": "c9c3ab88292e6b735d38c3ba7547bf2f"
+  },
+  "liquidity_hunter/docs/scoring.md": {
+    "mtime": 1781144852.2788126,
+    "ast_hash": "50c8af94469a3f487ef02bd3bd8c7c2a",
+    "semantic_hash": "50c8af94469a3f487ef02bd3bd8c7c2a"
+  },
+  "requirements-dev.txt": {
+    "mtime": 1781141530.5501785,
+    "ast_hash": "b59c5a4b08ab5f86831064725a1006ad",
+    "semantic_hash": "b59c5a4b08ab5f86831064725a1006ad"
+  },
+  "requirements.txt": {
+    "mtime": 1781142425.3144727,
+    "ast_hash": "104069326ff4cdefd810d2fc3721dc33",
+    "semantic_hash": "104069326ff4cdefd810d2fc3721dc33"
+  },
+  "frontend/public/favicon.svg": {
+    "mtime": 1782182096.5225327,
+    "ast_hash": "9161a531d95b2916a48d80075aa18498",
+    "semantic_hash": "9161a531d95b2916a48d80075aa18498"
+  }
+}
