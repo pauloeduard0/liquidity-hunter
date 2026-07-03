@@ -1188,7 +1188,13 @@ class InternalStructureDetector(MarketStructureDetector):
                                     or validated_choch_low is None
                                 )
                             ):
-                                seg_start = max(0, prev_any_pivot_index + 1)
+                                # An outside-bar candle can register as both a high
+                                # and low pivot at the same index; when that pivot
+                                # was just processed, prev_any_pivot_index ==
+                                # current_index, so clamp seg_start to current_index
+                                # rather than let it exceed it (which would slice to
+                                # empty and crash `min()` below).
+                                seg_start = min(max(0, prev_any_pivot_index + 1), current_index)
                                 # Re-anchor to the candle that actually formed the
                                 # recent in-leg low (its timestamp anchors the CHoCH
                                 # line's origin), not the advance pivot's timestamp.
@@ -1603,7 +1609,13 @@ class InternalStructureDetector(MarketStructureDetector):
                                     or validated_choch_high is None
                                 )
                             ):
-                                seg_start = max(0, prev_any_pivot_index + 1)
+                                # An outside-bar candle can register as both a high
+                                # and low pivot at the same index; when that pivot
+                                # was just processed, prev_any_pivot_index ==
+                                # current_index, so clamp seg_start to current_index
+                                # rather than let it exceed it (which would slice to
+                                # empty and crash `max()` below).
+                                seg_start = min(max(0, prev_any_pivot_index + 1), current_index)
                                 # Re-anchor to the candle that actually formed the
                                 # recent in-leg high (its timestamp anchors the CHoCH
                                 # line's origin), not the advance pivot's timestamp.
