@@ -1293,6 +1293,34 @@ BOS — the reference correctly ratchets when a newer BOS activates). Measured:
 outranks the pending origin so the staleness re-anchor retains authority over
 a long-lived pending. Gated behind `bos_leg_origin_choch_ref`.
 
+**Cold-start fallback suppressed in the unconfirmed-CHoCH window**
+(`InternalStructureDetector`, as of 2026-07-03, third same-day follow-up):
+the `active_<side>` cold-start fallback in the CHoCH reference chain is
+**suppressed while an unconfirmed CHoCH's origin is armed**
+(`bear_choch_origin`/`bull_choch_origin`) — inside that provisional window
+the designed reversal exit is `CHOCH_FAILED` at the origin, and the fallback
+was undercutting it at a far weaker level. Motivating case (SOLUSDT H1
+2026-06-23, verified by instrumentation): the 06-20 `CHOCH_FAILED` reset all
+refs and armed nothing (one-shot); the 06-22 bearish CHoCH then fired via the
+`active_low` fallback (so `via_validated=False` armed no blind-spot origin);
+no bearish BOS had activated yet (the 68.07 fundo was the flip pivot itself),
+so the bullish side was fully blind — validated/pending/origin all `None` —
+and the check fell to the trailing 69.63 LH, firing a premature bullish CHoCH
+(failed next day) while `bear_choch_origin` sat at 74.97. With the
+suppression: the 70.36 rally is a sweep, the trend stays bearish, the drop
+prints the missing bearish continuation BOS (64.66 breaking the 68.07 fundo,
+then 64.00), and the genuine bullish CHoCH fires 06-26 against 69.64 (the
+newest BOS's leg origin), confirmed by the 70.97→73.91 bullish BOS staircase.
+Measured: ETH 1h / BTC 1h / BTC 4h zero diffs; ETH 30m drops 3 whipsaw CHoCH
+in the 06-30–07-02 chop (5 flips → 2 CHoCH + 1 honest `CHOCH_FAILED`, plus
+the missing 07-03 bullish BOS); ETH 4h/1d reshape only Dec-2024 regions where
+the same pattern held (D1: the 3744 reversal attempt now closes with
+`CHOCH_FAILED` at its 3302 origin and the Feb-2025 crash BOS references it —
+instead of a double bearish CHoCH). Real-data regression fixture:
+`tests/liquidity/detectors/data/solusdt_1h_2026_06_13_27.json` (5-column
+rows: ts/open/high/low/close — open matters for the wick filter). Gated
+behind `bos_leg_origin_choch_ref`.
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a

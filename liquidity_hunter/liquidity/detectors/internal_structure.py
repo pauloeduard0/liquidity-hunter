@@ -399,6 +399,19 @@ class InternalStructureDetector(MarketStructureDetector):
       so the staleness re-anchor keeps its authority over a long-lived
       pending. A CHoCH triggered via the pending origin counts as
       validated-triggered (it arms the opposite blind-spot origin).
+    - The **`active_<side>` cold-start fallback is suppressed while an
+      unconfirmed CHoCH's origin is armed** (`bear_choch_origin` /
+      `bull_choch_origin`): the fallback exists for the bootstrap phase only,
+      and inside the provisional post-CHoCH window the designed reversal exit
+      is `CHOCH_FAILED` at the origin -- letting the fallback fire a CHoCH at
+      a shallow trailing LH/HL undercuts that at a far weaker level (the
+      SOLUSDT H1 2026-06-23 case: a fully-blind side -- the prior bearish
+      CHoCH was itself fallback-triggered after a `CHOCH_FAILED` reset, so
+      nothing was armed or promoted -- fired a premature bullish CHoCH at the
+      69.63 LH and it failed the next day, while the CHoCH origin sat at
+      74.97). Structural references (validated/pending/blind-spot origin)
+      still apply if present; once the origin retires (confirming BOS or
+      trend flip) the fallback is available again.
 
     Provenance is tracked per side (`validated_choch_<side>_structural`), reset
     when a CHoCH/`CHOCH_FAILED` consumes the reference. With the flag off the
@@ -968,11 +981,24 @@ class InternalStructureDetector(MarketStructureDetector):
                 via_validated = (
                     validated_choch_high is not None or pending_leg_origin_high is not None
                 )
+                # The trailing `active_high` cold-start fallback exists for the
+                # bootstrap phase only (no structural reference built yet).
+                # While an unconfirmed bearish CHoCH's origin is armed
+                # (`bear_choch_origin`, awaiting its confirming BOS), the
+                # bullish exit from that provisional structure is CHOCH_FAILED
+                # at the origin -- letting the fallback fire a CHoCH at a
+                # shallow trailing LH undercuts it at a far weaker level (the
+                # SOLUSDT H1 2026-06-23 case: premature CHoCH at the 69.63 LH,
+                # failed next day, while the CHoCH origin sat at 74.97). The
+                # structural references above still apply if they exist.
+                fallback_active_high = active_high
+                if self._bos_leg_origin_choch_ref and bear_choch_origin is not None:
+                    fallback_active_high = None
                 choch_high_ref = (
                     validated_choch_high
                     or pending_leg_origin_high
                     or choch_origin_high
-                    or active_high
+                    or fallback_active_high
                 )
                 if (
                     trend is MarketDirection.BEARISH
@@ -1421,11 +1447,19 @@ class InternalStructureDetector(MarketStructureDetector):
                 via_validated = (
                     validated_choch_low is not None or pending_leg_origin_low is not None
                 )
+                # Mirror of the high side: while an unconfirmed bullish
+                # CHoCH's origin is armed (`bull_choch_origin`), the bearish
+                # exit from the provisional structure is CHOCH_FAILED at that
+                # origin, so the trailing `active_low` cold-start fallback is
+                # suppressed.
+                fallback_active_low = active_low
+                if self._bos_leg_origin_choch_ref and bull_choch_origin is not None:
+                    fallback_active_low = None
                 choch_low_ref = (
                     validated_choch_low
                     or pending_leg_origin_low
                     or choch_origin_low
-                    or active_low
+                    or fallback_active_low
                 )
                 if (
                     trend is MarketDirection.BULLISH

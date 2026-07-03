@@ -1764,3 +1764,95 @@ def test_leg_origin_reclaim_promotion_requires_flag() -> None:
         and e.direction is MarketDirection.BULLISH
     ]
     assert chochs == []
+
+
+# --- Real-data regression: fallback CHoCH inside an unconfirmed-CHoCH window
+_SOL_WINDOW_DATA = Path(__file__).parent / "data" / "solusdt_1h_2026_06_13_27.json"
+
+
+def _load_sol_window_candles() -> list[Candle]:
+    rows = json.loads(_SOL_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="SOLUSDT",
+            timeframe=TimeFrame.H1,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def test_real_window_unconfirmed_choch_suppresses_fallback_choch() -> None:
+    """Real SOLUSDT H1 regression (2026-06-23): while a bearish CHoCH is
+    unconfirmed (its origin armed at 74.97, no bearish BOS yet), the bullish
+    exit from the provisional structure is CHOCH_FAILED at that origin -- the
+    `active_high` cold-start fallback must not fire a premature CHoCH at the
+    shallow trailing 69.63 LH. The side was fully blind (the 06-22 bearish
+    CHoCH was itself fallback-triggered after a CHOCH_FAILED reset, so it
+    armed no blind-spot origin, and no BOS had emitted to promote anything).
+
+    With the suppression: the 70.36 rally is a sweep, the drop to 64.66
+    prints the bearish continuation BOS the trend called for, and the
+    genuine bullish CHoCH fires on 06-26 against 69.64 -- the leg origin of
+    the newest activated BOS. Detector args mirror `load_dashboard_data`'s
+    H1 wiring.
+    """
+    events = InternalStructureDetector(
+        swing_lookback=4,
+        persistence_candles=2,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=80,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_pct=0.04,
+    ).detect(_load_sol_window_candles())
+
+    june_23 = datetime(2026, 6, 23, tzinfo=UTC)
+    june_26 = datetime(2026, 6, 26, tzinfo=UTC)
+    premature = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and june_23 <= e.timestamp < june_26
+    ]
+    assert premature == []
+
+    reclaim_sweeps = [
+        e
+        for e in events
+        if e.event is StructureEvent.LIQUIDITY_SWEEP
+        and e.direction is MarketDirection.BULLISH
+        and e.price_level == 70.36
+    ]
+    assert len(reclaim_sweeps) == 1
+
+    continuation_bos = [
+        e
+        for e in events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and e.price_level == 64.66
+    ]
+    assert len(continuation_bos) == 1
+
+    genuine_chochs = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp >= june_26
+    ]
+    assert genuine_chochs
+    assert genuine_chochs[0].reference_price_level == 69.64
