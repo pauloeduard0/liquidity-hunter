@@ -1599,3 +1599,92 @@ def test_leg_origin_choch_ref_off_falls_back_to_trailing_reference() -> None:
 def test_invalid_bos_leg_origin_release_gap_pct_raises() -> None:
     with pytest.raises(ValueError, match="bos_leg_origin_release_gap_pct"):
         InternalStructureDetector(bos_leg_origin_release_gap_pct=0)
+
+
+# --- Leg-origin promotion when a pending BOS dies on an origin reclaim ------
+#
+# Replicates the ETHUSDT H1 2026-06-06 missing-CHoCH case. Sequence
+# (lookback=1, persistence_candles=2, bos_pullback_max_wick_pct=0.4):
+#   index  1: high 300 -> bootstrap active_high
+#   index  3: low  150 -> bootstrap active_low
+#   index  5: low  140 (close 145) -> bearish BOS advance #1 (pb=300)
+#   index  7: high 280 (close 278, clean body) -> confirms/emits BOS #1;
+#                        leg-origin promotes validated_choch_high := 300,
+#                        candidate_choch_high := 280
+#   index  9: low  130 (close 133) -> advance #2; continuation gate promotes
+#                        candidate 280 -> validated_choch_high := 280;
+#                        new pending BOS pb=280
+#   index 11: high 200 (close 160, upper wick 50% > 40%) -> pullback
+#                        WICK-REJECTED; pending stays alive; LOWER_HIGH;
+#                        active_high trails to 200 (the true leg-3 origin)
+#   index 13: low  120 (close 124) -> advance #3; pending BOS pb=200
+#   index 15: high 250 (closes 245, 246 hold above 200) -> 250 > pb 200:
+#                        the pending BOS is discarded -- price reclaimed the
+#                        leg origin with no pullback ever confirming it. The
+#                        origin must be promoted at the kill, so the CHoCH
+#                        fires against 200; without the promotion the
+#                        reference stays at the stale 280 and the reversal
+#                        never confirms (the ETHUSDT 1618.85-vs-1793.66 miss).
+_ORIGIN_RECLAIM_HIGHS = [160.0] * 18
+for _i, _v in {1: 300.0, 7: 280.0, 11: 200.0, 15: 250.0, 16: 248.0, 17: 246.0}.items():
+    _ORIGIN_RECLAIM_HIGHS[_i] = _v
+_ORIGIN_RECLAIM_LOWS = [155.0] * 18
+for _i, _v in {3: 150.0, 5: 140.0, 9: 130.0, 13: 120.0, 16: 240.0, 17: 238.0}.items():
+    _ORIGIN_RECLAIM_LOWS[_i] = _v
+
+
+def _origin_reclaim_series() -> list[Candle]:
+    candles = make_series(_ORIGIN_RECLAIM_HIGHS, _ORIGIN_RECLAIM_LOWS)
+    candles[5] = make_candle(5, 160.0, 140.0, close=145.0)
+    candles[7] = make_candle(7, 280.0, 155.0, close=278.0)
+    candles[9] = make_candle(9, 160.0, 130.0, close=133.0)
+    candles[11] = make_candle(11, 200.0, 155.0, close=160.0)
+    candles[13] = make_candle(13, 160.0, 120.0, close=124.0)
+    # The reclaim: three consecutive closes above the 200 leg origin
+    # (persistence window = breaking candle + persistence_candles).
+    candles[15] = make_candle(15, 250.0, 155.0, close=245.0)
+    candles[16] = make_candle(16, 248.0, 240.0, close=246.0)
+    candles[17] = make_candle(17, 246.0, 238.0, close=244.0)
+    return candles
+
+
+def test_leg_origin_promoted_when_pending_bos_origin_reclaimed() -> None:
+    """A pending BOS killed because price reclaimed its leg origin promotes
+    that origin to the CHoCH reference: the CHoCH fires against the reclaimed
+    origin (200) instead of degrading to sweeps below the stale 280."""
+    events = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=2,
+        confluence_filter=False,
+        bos_leg_origin_choch_ref=True,
+        bos_pullback_max_wick_pct=0.4,
+    ).detect(_origin_reclaim_series())
+
+    chochs = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+    ]
+    assert len(chochs) == 1
+    assert chochs[0].reference_price_level == 200.0
+
+
+def test_leg_origin_reclaim_promotion_requires_flag() -> None:
+    """Same series with `bos_leg_origin_choch_ref` off: the kill does not
+    promote, the reference stays at the continuation-promoted 280, and no
+    bullish CHoCH fires (250 < 280)."""
+    events = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=2,
+        confluence_filter=False,
+        bos_pullback_max_wick_pct=0.4,
+    ).detect(_origin_reclaim_series())
+
+    chochs = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+    ]
+    assert chochs == []

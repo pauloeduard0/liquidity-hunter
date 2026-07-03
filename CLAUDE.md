@@ -1247,6 +1247,29 @@ promote-only-over-re-anchored refs (first structural ref pins the whole leg) and
 an unconditional re-anchor bar (same pinning). With the flag off the output is
 byte-for-byte identical. Not mirrored into `SwingStructureDetector` (not drawn).
 
+**Leg-origin promotion on origin-reclaim kill** (`InternalStructureDetector`,
+as of 2026-07-03): a *pending* BOS (close-break advanced, awaiting its
+confirming pullback) that is discarded because the next opposite pivot is
+already **beyond its leg origin** (`price > pullback_ref` bearish / `<`
+bullish) now promotes that origin to `validated_choch_<side>` (structural)
+before being dropped, so the CHoCH check on that same pivot evaluates against
+it. Rationale: the state machine already treated the advance as real
+(staircase/leg extremes ratcheted), and the reclaim of the leg origin *is* the
+conservative reversal — but emission-only promotion missed it whenever the
+pullback was wick-rejected (`bos_pullback_max_wick_pct`) and price then
+reclaimed the origin directly. Motivating case (measured, ETHUSDT H1,
+`limit=1200`): the 06/06 04:00 bearish BOS's leg origin 1618.85 was never
+promoted (its 1592.80 pullback was wick-rejected; the staged mark drew the BOS
+but stages never promote), the reference stayed at the stale 1793.66, and the
+whole 06/07 rally to 1721.57 printed as sweeps with no bullish CHoCH. With the
+fix the CHoCH fires 06-07 08:00 against 1618.85 and the bullish leg develops
+(BOS 1721.57). Measured elsewhere: same-pattern improvements only — ETH D1's
+Dec→Feb decline gets its bearish CHoCH on 12-19 instead of 02-02 (which
+correctly becomes a continuation BOS), BTC 4h finds an earlier 01-02 bullish
+CHoCH, ETH 4h gains one honest CHoCH+`CHOCH_FAILED` whipsaw pair, M30/H1 refs
+tighten slightly. Gated behind `bos_leg_origin_choch_ref` (off = byte-for-byte
+identical).
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a

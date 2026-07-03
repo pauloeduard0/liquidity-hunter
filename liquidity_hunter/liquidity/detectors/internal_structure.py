@@ -374,6 +374,18 @@ class InternalStructureDetector(MarketStructureDetector):
     - The continuation-gated candidate promotion still runs on top (a genuine
       continuation tightens the reference to the newer post-BOS pullback until
       that BOS's own emission refreshes it).
+    - A pending BOS **killed by an origin reclaim** also promotes: when the
+      next opposite pivot is already beyond the pending BOS's `pullback_ref`
+      (no valid pullback ever confirmed the close-break), the state machine
+      had still treated the advance as real (staircase/leg extremes
+      ratcheted), and the reclaim of the leg origin is precisely the
+      conservative reversal being missed -- so the origin is promoted before
+      the pending BOS is discarded and the CHoCH check on that same pivot
+      evaluates against it. Without this, the reference stays pinned to a
+      stale far-off level and the reversal degrades into sweeps (the ETHUSDT
+      H1 2026-06-06 case: leg origin 1618.85 never promoted after its
+      pullback was wick-rejected, reference stuck at 1793.66, the whole rally
+      to 1721 labeled sweeps with no CHoCH).
 
     Provenance is tracked per side (`validated_choch_<side>_structural`), reset
     when a CHoCH/`CHOCH_FAILED` consumes the reference. With the flag off the
@@ -897,6 +909,26 @@ class InternalStructureDetector(MarketStructureDetector):
                         # else: wick-only pullback; keep the pending BOS alive so a
                         # later, real pullback can confirm it instead of this wick.
                     else:
+                        # No valid pullback ever confirmed this close-break: this
+                        # high pivot already reclaimed the leg origin itself
+                        # (price > pullback_ref). The state machine treated the
+                        # advance as real (staircase/leg extremes ratcheted), so
+                        # under `bos_leg_origin_choch_ref` the reversal reference
+                        # must follow: promote the leg origin the pending BOS
+                        # carried before discarding it -- it is exactly the level
+                        # this reclaim is a reversal *of*. Otherwise the CHoCH
+                        # reference stays pinned to a stale far-off level and the
+                        # reversal happening right now degrades into sweeps. The
+                        # CHoCH check below runs on this same pivot against the
+                        # promoted level.
+                        if (
+                            self._bos_leg_origin_choch_ref
+                            and pb is not None
+                            and price > pb.price
+                        ):
+                            validated_choch_high = pb
+                            validated_choch_high_structural = True
+                            choch_origin_high = None
                         pending_bos = None
 
                 # Validated reference takes priority; choch_origin_high is the
@@ -1317,6 +1349,21 @@ class InternalStructureDetector(MarketStructureDetector):
                         # else: wick-only pullback; keep the pending BOS alive so a
                         # later, real pullback can confirm it instead of this wick.
                     else:
+                        # Mirror of the bearish case above: this low pivot already
+                        # lost the leg origin itself (price < pullback_ref), so no
+                        # valid pullback ever confirmed the close-break. Promote
+                        # the leg origin the pending BOS carried before discarding
+                        # it -- the level this breakdown is a reversal *of* -- so
+                        # the CHoCH check below evaluates against it instead of a
+                        # stale far-off reference.
+                        if (
+                            self._bos_leg_origin_choch_ref
+                            and pb is not None
+                            and price < pb.price
+                        ):
+                            validated_choch_low = pb
+                            validated_choch_low_structural = True
+                            choch_origin_low = None
                         pending_bos = None
 
                 # Validated reference takes priority; choch_origin_low is the
