@@ -129,6 +129,20 @@ _REANCHOR_MIN_PRICE_GAP_PCT = 0.003
 # loses the H4 April CHoCH.
 _BOS_LEG_ORIGIN_RELEASE_GAP_PCT = 0.04
 
+# Volatility-normalized release gap (`bos_leg_origin_release_gap_atr`, takes
+# precedence over the fixed pct above, which stays as fallback for degenerate
+# series). A fixed 4% is worth ~8 ATR on BTC 30m (the guard nearly always held,
+# pinning whipsaw CHoCH/CHOCH_FAILED pairs across the June drop) but under 1 ATR
+# on SOL D1 (a single average candle released it), so what "reachable" means
+# depended on the asset/timeframe. N x mean true-range%% of the series keeps the
+# release at the same number of typical candles everywhere. Measured 2026-07-03
+# (BTC/ETH/SOL x 30m/1h/4h/1d, limit=1200): N in [2, 3] is a stable plateau
+# (identical outputs); 8/12 combos unchanged vs the fixed 4%; BTC 30m resolves
+# the 06-23..26 drop into one bearish CHoCH + BOS staircase (was 3 whipsaw
+# pairs) and drops the 06-27..30 chop flips; N=4 reverts to fixed-pct behavior
+# on the fine timeframes.
+_BOS_LEG_ORIGIN_RELEASE_GAP_ATR = 3.0
+
 # Max pivot-side wick fraction for a pullback that *confirms* a BOS
 # (`InternalStructureDetector.bos_pullback_max_wick_pct`). A small swing lookback
 # can pick a single-candle wick (a spike whose body closes far away) as the
@@ -495,6 +509,9 @@ def load_dashboard_data(
         # re-anchor regains authority (the un-stick pathologies stay fixed).
         bos_leg_origin_choch_ref=True,
         bos_leg_origin_release_gap_pct=_BOS_LEG_ORIGIN_RELEASE_GAP_PCT,
+        # Volatility-normalized release gap (takes precedence; the fixed pct
+        # above is the fallback for series too short to measure a range).
+        bos_leg_origin_release_gap_atr=_BOS_LEG_ORIGIN_RELEASE_GAP_ATR,
     ).detect(internal_candles)
     # Re-time each BOS to the first close beyond the formed level it broke
     # (dropping wick-only continuations), before the visible filter and POI.

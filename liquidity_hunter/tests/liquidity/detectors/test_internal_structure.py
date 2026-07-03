@@ -1601,6 +1601,11 @@ def test_invalid_bos_leg_origin_release_gap_pct_raises() -> None:
         InternalStructureDetector(bos_leg_origin_release_gap_pct=0)
 
 
+def test_invalid_bos_leg_origin_release_gap_atr_raises() -> None:
+    with pytest.raises(ValueError, match="bos_leg_origin_release_gap_atr"):
+        InternalStructureDetector(bos_leg_origin_release_gap_atr=-1.0)
+
+
 # --- Leg-origin promotion when a pending BOS dies on an origin reclaim ------
 #
 # Replicates the ETHUSDT H1 2026-06-06 missing-CHoCH case. Sequence
@@ -1856,3 +1861,126 @@ def test_real_window_unconfirmed_choch_suppresses_fallback_choch() -> None:
     ]
     assert genuine_chochs
     assert genuine_chochs[0].reference_price_level == 69.64
+
+
+_BTC_30M_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "btcusdt_30m_2026_06_05_07_02.json"
+)
+
+
+def _load_btc_30m_window_candles() -> list[Candle]:
+    rows = json.loads(_BTC_30M_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="BTCUSDT",
+            timeframe=TimeFrame.M30,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _btc_30m_detector(
+    *,
+    release_gap_pct: float | None = None,
+    release_gap_atr: float | None = None,
+) -> InternalStructureDetector:
+    """Production M30 wiring (`load_dashboard_data`), release gap injectable."""
+    return InternalStructureDetector(
+        swing_lookback=5,
+        persistence_candles=2,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=80,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_pct=release_gap_pct,
+        bos_leg_origin_release_gap_atr=release_gap_atr,
+    )
+
+
+def test_release_gap_atr_matches_equivalent_pct_and_takes_precedence() -> None:
+    """`bos_leg_origin_release_gap_atr=N` must behave exactly like a fixed
+    `bos_leg_origin_release_gap_pct` equal to N x the series' mean true-range
+    fraction, and must take precedence over a simultaneously-passed pct: on
+    this window the fixed 4% and the ATR gap produce different event streams
+    (see the whipsaw regression test below), so if the pct silently won the
+    equality against the ATR-equivalent run would fail.
+    """
+    candles = _load_btc_30m_window_candles()
+    mean_tr_pct = sum(
+        max(
+            curr.high - curr.low,
+            abs(curr.high - prev.close),
+            abs(curr.low - prev.close),
+        )
+        / curr.close
+        for prev, curr in zip(candles, candles[1:], strict=False)
+    ) / (len(candles) - 1)
+
+    atr_events = _btc_30m_detector(
+        release_gap_pct=0.04, release_gap_atr=3.0
+    ).detect(candles)
+    equivalent_pct_events = _btc_30m_detector(
+        release_gap_pct=3.0 * mean_tr_pct
+    ).detect(candles)
+    assert atr_events == equivalent_pct_events
+
+    fixed_pct_events = _btc_30m_detector(release_gap_pct=0.04).detect(candles)
+    assert fixed_pct_events != atr_events
+
+
+def test_real_window_atr_release_gap_resolves_choch_whipsaw() -> None:
+    """Real BTCUSDT M30 regression (2026-06-23..26): with the fixed 4% release
+    gap (~8.5 ATR on this timeframe) the structural reference stayed pinned
+    through the June drop and every bounce fired a bullish CHoCH that then
+    failed -- three whipsaw CHoCH/CHOCH_FAILED pairs across a 63k -> 58k
+    decline. The volatility-normalized gap (3 x mean true-range%) lets the
+    staleness re-anchor act at the same "typical candle" distance as on
+    coarser timeframes, resolving the drop into one bearish CHoCH at the leg
+    origin plus a bearish BOS staircase.
+    """
+    candles = _load_btc_30m_window_candles()
+    events = _btc_30m_detector(
+        release_gap_pct=0.04, release_gap_atr=3.0
+    ).detect(candles)
+
+    drop_start = datetime(2026, 6, 23, tzinfo=UTC)
+    drop_end = datetime(2026, 6, 27, tzinfo=UTC)
+    whipsaws = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BULLISH
+        and drop_start <= e.timestamp < drop_end
+    ]
+    assert whipsaws == []
+
+    bearish_chochs = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BEARISH
+        and drop_start <= e.timestamp < drop_end
+    ]
+    assert len(bearish_chochs) == 1
+    assert bearish_chochs[0].reference_price_level == 63833.4
+
+    staircase = [
+        e.price_level
+        for e in events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and drop_start <= e.timestamp < drop_end
+    ]
+    assert staircase == [59060.0, 58030.0]

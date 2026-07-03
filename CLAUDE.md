@@ -1227,7 +1227,9 @@ confirming pullback is itself the continuation evidence, so the CHoCH reference 
 longer waits for the continuation gate (which still runs on top and can tighten to
 the newer post-BOS pullback). Two companion rules make it hold:
 (1) **re-anchors (stale/chain) refuse to slide a structural reference while it is
-reachable** — within `bos_leg_origin_release_gap_pct` (4%) of current price; beyond
+reachable** — within the release gap of current price (originally
+`bos_leg_origin_release_gap_pct` = 4%; since 2026-07-03 volatility-normalized,
+see "Volatility-normalized release gap" below); beyond
 that gap the leg has run away and the staleness re-anchor regains authority
 (otherwise an impulsive leg that emits no BOS for months pins the reference and
 coarse timeframes lose whole reversal sequences — the H4 Feb→Mar regime collapse,
@@ -1320,6 +1322,32 @@ instead of a double bearish CHoCH). Real-data regression fixture:
 `tests/liquidity/detectors/data/solusdt_1h_2026_06_13_27.json` (5-column
 rows: ts/open/high/low/close — open matters for the wick filter). Gated
 behind `bos_leg_origin_choch_ref`.
+
+**Volatility-normalized release gap** (`InternalStructureDetector`, as of
+2026-07-03): `bos_leg_origin_release_gap_atr` (constructor default `None` = off;
+wired **`3.0`** in `load_dashboard_data` via `_BOS_LEG_ORIGIN_RELEASE_GAP_ATR`,
+taking precedence over the fixed `bos_leg_origin_release_gap_pct = 0.04`, which
+stays as fallback for series too short to measure a range). The structural-ref
+release gap becomes `N × mean true-range%` of the detected series instead of a
+fixed fraction of price, so "reachable" means the same number of typical candles
+on every asset/timeframe. Motivation (measured): the fixed 4% was worth **8.5
+ATR on BTC 30m** (the guard held almost always, pinning the reversal reference
+through the 06-23..26 June drop so every bounce fired a bullish CHoCH that then
+failed — three whipsaw CHoCH/`CHOCH_FAILED` pairs across a 63k→58k decline)
+but **0.6 ATR on SOL D1** (one average candle released it — no guard at all).
+Measured (BTC/ETH/SOL × 30m/1h/4h/1d, `limit=1200`): **N ∈ [2, 3] is a stable
+plateau** (byte-identical outputs); 8/12 combos unchanged vs the fixed 4% (all
+SOL, all H4, BTC D1 — the leg-origin motivating cases M30 17/06 and H4 May
+78128 intact); BTC 30m resolves the June drop into one bearish CHoCH at the
+63833 leg origin + a 59060→58030 bearish BOS staircase and drops the 06-27..30
+chop flips (3 trend flips in ~30h); BTC 1h moves the 06-22 CHoCH 1h earlier
+with a tighter ref; ETH 30m gains one whipsaw pair 06-20/21 (accepted); ETH 1d
+reshapes an Aug–Sep-2023 region (tighter CHoCH ref 1684 vs 1808, the missing
+09-11 continuation BOS appears). N=4 reverts to fixed-pct behavior on the fine
+timeframes. Real-data regression fixture:
+`tests/liquidity/detectors/data/btcusdt_30m_2026_06_05_07_02.json` (whipsaw
+resolution + an ATR≡equivalent-pct equivalence/precedence test). Off = the
+fixed-pct behavior, byte-for-byte.
 
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A

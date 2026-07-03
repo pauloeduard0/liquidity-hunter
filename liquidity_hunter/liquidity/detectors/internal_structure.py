@@ -182,6 +182,7 @@ Every emitted `MarketStructure` has `scope = StructureScope.INTERNAL`.
 
 from dataclasses import dataclass
 from datetime import datetime
+from statistics import fmean
 
 from liquidity_hunter.core.domain import (
     Candle,
@@ -352,9 +353,19 @@ class InternalStructureDetector(MarketStructureDetector):
       distant) level. Structure wins over a re-anchored local extreme, and the
       reference always reflects the *most recent* confirmed break's origin.
     - Re-anchors (`reanchor_opposite`, every trigger) refuse to overwrite a
-      *structural* reference while it remains **reachable** -- within
-      `bos_leg_origin_release_gap_pct` of current price (`None` = always
-      immune). So a stale-window slide cannot ratchet the reversal reference
+      *structural* reference while it remains **reachable** -- within the
+      release gap of current price (`None` = always immune). The gap is
+      `bos_leg_origin_release_gap_pct` (a fixed fraction of price) or, when
+      `bos_leg_origin_release_gap_atr` is set (taking precedence),
+      N x the series' mean true-range% -- volatility-normalized, so "reachable"
+      means the same number of typical candles on every asset/timeframe. A
+      fixed percentage is worth ~8 ATR on a calm 30m chart but under 1 ATR on
+      a volatile daily (measured 2026-07-03: 4% pinned three whipsaw
+      CHoCH/`CHOCH_FAILED` pairs across the BTC 30m June drop that N=3
+      resolves into one bearish CHoCH plus a BOS staircase, and never held on
+      SOL D1; N in [2, 3] measured as a stable plateau, N=4 reverts to the
+      fixed-pct behavior on fine timeframes).
+      So a stale-window slide cannot ratchet the reversal reference
       away from the genuine leg origin (e.g. an H4 CHoCH firing at a sliding
       local low instead of the fundo the leg actually launched from). Once the
       leg has run away beyond the gap, the re-anchor regains authority: holding
@@ -444,6 +455,7 @@ class InternalStructureDetector(MarketStructureDetector):
         stage_wick_rejected_bos: bool = False,
         bos_leg_origin_choch_ref: bool = False,
         bos_leg_origin_release_gap_pct: float | None = None,
+        bos_leg_origin_release_gap_atr: float | None = None,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -473,13 +485,38 @@ class InternalStructureDetector(MarketStructureDetector):
         self._stage_wick_rejected_bos = stage_wick_rejected_bos
         if bos_leg_origin_release_gap_pct is not None and bos_leg_origin_release_gap_pct <= 0:
             raise ValueError("bos_leg_origin_release_gap_pct must be positive")
+        if bos_leg_origin_release_gap_atr is not None and bos_leg_origin_release_gap_atr <= 0:
+            raise ValueError("bos_leg_origin_release_gap_atr must be positive")
         self._bos_leg_origin_choch_ref = bos_leg_origin_choch_ref
         self._bos_leg_origin_release_gap_pct = bos_leg_origin_release_gap_pct
+        self._bos_leg_origin_release_gap_atr = bos_leg_origin_release_gap_atr
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
 
         pivots = collect_pivots(candles, self._high_detector, self._low_detector)
+
+        # Effective structural-reference release gap: when
+        # `bos_leg_origin_release_gap_atr` is set, the gap is N x the series'
+        # mean true-range% -- the same nominal N then means the same number of
+        # "typical candles" of distance on every asset/timeframe, where a fixed
+        # percentage is worth ~8 ATR on a calm 30m chart but under 1 ATR on a
+        # volatile daily (measured 2026-07-03: the fixed 4% pinned whipsaw
+        # CHoCH pairs on BTC 30m and never held on SOL D1). Falls back to the
+        # fixed `bos_leg_origin_release_gap_pct` when unset (or the series is
+        # too short to measure a range).
+        release_gap = self._bos_leg_origin_release_gap_pct
+        if self._bos_leg_origin_release_gap_atr is not None and len(candles) > 1:
+            mean_tr_pct = fmean(
+                max(
+                    curr.high - curr.low,
+                    abs(curr.high - prev.close),
+                    abs(curr.low - prev.close),
+                )
+                / curr.close
+                for prev, curr in zip(candles, candles[1:], strict=False)
+            )
+            release_gap = self._bos_leg_origin_release_gap_atr * mean_tr_pct
 
         symbol = candles[0].symbol
         timeframe = candles[0].timeframe
@@ -683,7 +720,7 @@ class InternalStructureDetector(MarketStructureDetector):
                 # pullback) is authoritative while it remains *reachable*:
                 # re-anchors must not slide it (see `bos_leg_origin_choch_ref`).
                 # But once the leg has run away -- the reference sits farther
-                # than `bos_leg_origin_release_gap_pct` from current price --
+                # than the release gap from current price --
                 # holding the CHoCH hostage to that unreachable level re-opens
                 # the stuck-trend pathology (e.g. an impulsive drop that emits
                 # no BOS for months), so the re-anchor may act again.
@@ -692,11 +729,10 @@ class InternalStructureDetector(MarketStructureDetector):
                     and validated_choch_high is not None
                     and validated_choch_high_structural
                 ):
-                    release = self._bos_leg_origin_release_gap_pct
                     if (
-                        release is None
+                        release_gap is None
                         or (validated_choch_high.price - current_price) / current_price
-                        <= release
+                        <= release_gap
                     ):
                         return False
                 # Only *tighten* the effective reversal reference (the one the
@@ -731,17 +767,16 @@ class InternalStructureDetector(MarketStructureDetector):
                     return False
                 # Mirror of the bearish branch: never slide a structural
                 # reference while it remains reachable (see
-                # `bos_leg_origin_choch_ref` / `bos_leg_origin_release_gap_pct`).
+                # `bos_leg_origin_choch_ref` and the release gap above).
                 if (
                     self._bos_leg_origin_choch_ref
                     and validated_choch_low is not None
                     and validated_choch_low_structural
                 ):
-                    release = self._bos_leg_origin_release_gap_pct
                     if (
-                        release is None
+                        release_gap is None
                         or (current_price - validated_choch_low.price) / current_price
-                        <= release
+                        <= release_gap
                     ):
                         return False
                 effective_low = validated_choch_low or choch_origin_low or active_low
