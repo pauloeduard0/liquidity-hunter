@@ -1670,6 +1670,82 @@ def test_leg_origin_promoted_when_pending_bos_origin_reclaimed() -> None:
     assert chochs[0].reference_price_level == 200.0
 
 
+def test_pending_bos_leg_origin_blocks_premature_choch() -> None:
+    """A still-pending BOS (all pullback attempts wick-rejected) contributes
+    its leg origin to the CHoCH reference chain: a shallow reclaim above the
+    trailing active_high but below the origin is only a sweep, and the CHoCH
+    fires once the origin itself is reclaimed (the ETHUSDT H1 2026-06-25
+    premature-CHoCH case).
+
+    Sequence (lookback=1, persistence=2, wick filter 0.4):
+      index  1: high 200 -> bootstrap active_high
+      index  3: low  150 -> bootstrap active_low
+      index  5: low  140 (close 145) -> BOS advance out of NEUTRAL; pending
+                          BOS carries leg origin 200
+      index  7: high 170 (close 157, wick 50%) -> pullback WICK-REJECTED;
+                          pending alive; active_high trails to 170
+      index  9: high 185 (close 172, wick 43%) -> wick-rejected again; the
+                          break above active_high 170 sustains, but 185 < 200
+                          (the pending leg origin) -> LIQUIDITY_SWEEP, not a
+                          CHoCH at the shallow 170
+      index 12: high 210 (closes 207/206/205 hold above 200) -> origin
+                          reclaimed: pending killed, origin promoted, CHoCH
+                          fires against 200.
+    """
+    highs = [160.0] * 16
+    high_spikes = {
+        1: 200.0, 7: 170.0, 9: 185.0, 10: 175.0, 11: 176.0,
+        12: 210.0, 13: 208.0, 14: 207.0,
+    }
+    for i, v in high_spikes.items():
+        highs[i] = v
+    lows = [155.0] * 16
+    for i, v in {3: 150.0, 5: 140.0, 10: 168.0, 11: 167.0, 12: 175.0, 13: 202.0, 14: 202.0}.items():
+        lows[i] = v
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 160.0, 140.0, close=145.0)
+    candles[7] = make_candle(7, 170.0, 155.0, close=157.0)
+    candles[9] = make_candle(9, 185.0, 155.0, close=172.0)
+    candles[10] = make_candle(10, 175.0, 168.0, close=173.0)
+    candles[11] = make_candle(11, 176.0, 167.0, close=174.0)
+    candles[12] = make_candle(12, 210.0, 175.0, close=207.0)
+    candles[13] = make_candle(13, 208.0, 202.0, close=206.0)
+    candles[14] = make_candle(14, 207.0, 202.0, close=205.0)
+
+    events = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=2,
+        confluence_filter=False,
+        bos_leg_origin_choch_ref=True,
+        bos_pullback_max_wick_pct=0.4,
+    ).detect(candles)
+
+    chochs = [e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
+    assert len(chochs) == 1
+    assert chochs[0].direction is MarketDirection.BULLISH
+    assert chochs[0].reference_price_level == 200.0
+    sweeps = [
+        e
+        for e in events
+        if e.event is StructureEvent.LIQUIDITY_SWEEP
+        and e.direction is MarketDirection.BULLISH
+    ]
+    assert any(s.price_level == 185.0 for s in sweeps)
+
+    # Flag off: the blind side falls back to the trailing active_high (170)
+    # and the shallow reclaim fires a premature CHoCH -- the behavior the
+    # pending-leg-origin chain inclusion suppresses.
+    events_off = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=2,
+        confluence_filter=False,
+        bos_pullback_max_wick_pct=0.4,
+    ).detect(candles)
+    chochs_off = [e for e in events_off if e.event is StructureEvent.CHANGE_OF_CHARACTER]
+    assert chochs_off
+    assert chochs_off[0].reference_price_level == 170.0
+
+
 def test_leg_origin_reclaim_promotion_requires_flag() -> None:
     """Same series with `bos_leg_origin_choch_ref` off: the kill does not
     promote, the reference stays at the continuation-promoted 280, and no

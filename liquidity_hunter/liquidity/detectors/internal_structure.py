@@ -386,6 +386,19 @@ class InternalStructureDetector(MarketStructureDetector):
       H1 2026-06-06 case: leg origin 1618.85 never promoted after its
       pullback was wick-rejected, reference stuck at 1793.66, the whole rally
       to 1721 labeled sweeps with no CHoCH).
+    - A **still-pending BOS contributes its leg origin to the CHoCH reference
+      chain** (`validated or pending.pullback_ref or choch_origin or
+      active_<side>`): while every pullback attempt is wick-rejected the
+      pending stays alive and neither emission nor the reclaim kill has
+      promoted yet -- without this, a side blinded by a prior CHoCH (validated
+      and origin both `None`, e.g. after a fallback-triggered CHoCH that armed
+      no origin) falls back to the trailing `active_<side>` and a shallow
+      reclaim fires a premature CHoCH (the ETHUSDT H1 2026-06-25 case: CHoCH
+      at the wick-rejected 1629.15 LH while the pending BOS carried the
+      genuine 1692 leg origin). `validated` still outranks the pending origin
+      so the staleness re-anchor keeps its authority over a long-lived
+      pending. A CHoCH triggered via the pending origin counts as
+      validated-triggered (it arms the opposite blind-spot origin).
 
     Provenance is tracked per side (`validated_choch_<side>_structural`), reset
     when a CHoCH/`CHOCH_FAILED` consumes the reference. With the flag off the
@@ -933,8 +946,34 @@ class InternalStructureDetector(MarketStructureDetector):
 
                 # Validated reference takes priority; choch_origin_high is the
                 # blind-spot fallback after a prior CHoCH (see declarations).
-                via_validated = validated_choch_high is not None
-                choch_high_ref = validated_choch_high or choch_origin_high or active_high
+                # Under `bos_leg_origin_choch_ref`, a still-pending BOS (state
+                # advanced on a close-break, awaiting its confirming pullback)
+                # contributes its leg origin ahead of the blind-spot fallbacks:
+                # while every pullback attempt is wick-rejected the pending
+                # stays alive and neither emission nor the origin-reclaim kill
+                # has promoted yet -- without this, a side blinded by a prior
+                # CHoCH falls back to the trailing `active_high` and a shallow
+                # reclaim fires a premature CHoCH (the ETHUSDT H1 2026-06-25
+                # case: CHoCH at the wick-rejected 1629.15 LH while the pending
+                # BOS carried the genuine 1692 leg origin). `validated` still
+                # wins so the staleness re-anchor keeps its authority over a
+                # long-lived pending.
+                pending_leg_origin_high: Pivot | None = None
+                if (
+                    self._bos_leg_origin_choch_ref
+                    and pending_bos is not None
+                    and pending_bos.direction is MarketDirection.BEARISH
+                ):
+                    pending_leg_origin_high = pending_bos.pullback_ref
+                via_validated = (
+                    validated_choch_high is not None or pending_leg_origin_high is not None
+                )
+                choch_high_ref = (
+                    validated_choch_high
+                    or pending_leg_origin_high
+                    or choch_origin_high
+                    or active_high
+                )
                 if (
                     trend is MarketDirection.BEARISH
                     and bear_choch_origin is not None
@@ -1368,8 +1407,26 @@ class InternalStructureDetector(MarketStructureDetector):
 
                 # Validated reference takes priority; choch_origin_low is the
                 # blind-spot fallback after a prior CHoCH (see declarations).
-                via_validated = validated_choch_low is not None
-                choch_low_ref = validated_choch_low or choch_origin_low or active_low
+                # Mirror of the high side: a still-pending bullish BOS
+                # contributes its leg origin (the fundo the leg rose from)
+                # ahead of the blind-spot fallbacks (see the bearish case for
+                # rationale).
+                pending_leg_origin_low: Pivot | None = None
+                if (
+                    self._bos_leg_origin_choch_ref
+                    and pending_bos is not None
+                    and pending_bos.direction is MarketDirection.BULLISH
+                ):
+                    pending_leg_origin_low = pending_bos.pullback_ref
+                via_validated = (
+                    validated_choch_low is not None or pending_leg_origin_low is not None
+                )
+                choch_low_ref = (
+                    validated_choch_low
+                    or pending_leg_origin_low
+                    or choch_origin_low
+                    or active_low
+                )
                 if (
                     trend is MarketDirection.BULLISH
                     and bull_choch_origin is not None

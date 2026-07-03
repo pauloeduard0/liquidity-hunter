@@ -1270,6 +1270,29 @@ CHoCH, ETH 4h gains one honest CHoCH+`CHOCH_FAILED` whipsaw pair, M30/H1 refs
 tighten slightly. Gated behind `bos_leg_origin_choch_ref` (off = byte-for-byte
 identical).
 
+**Pending-BOS leg origin in the CHoCH reference chain**
+(`InternalStructureDetector`, as of 2026-07-03, same-day follow-up to the
+above): while a pending BOS is **alive** (close-break advanced, every pullback
+attempt wick-rejected so it neither emitted nor got killed), its
+`pullback_ref` now participates in the CHoCH reference chain: `validated or
+pending.pullback_ref or choch_origin or active_<side>` (`via_validated`
+treats a pending-origin trigger like a validated one). Motivating case
+(ETHUSDT H1 2026-06-25, verified by state instrumentation): the 06-23 bearish
+CHoCH was fallback-triggered (armed no blind-spot origin) and reset the
+validated refs; the 06-24 BOS (staged mark at 1633) never emitted — both its
+pullbacks (1629.15, 1660.56) were wick-rejected — so nothing ever promoted;
+the bullish-CHoCH check fell back to the trailing `active_high` = 1629.15 and
+the 1660.56 pivot fired a premature mid-range CHoCH, while the pending BOS
+carried the genuine 1692 leg origin the whole time. With the fix: 06-25
+becomes a sweep, the 06-25 13:00 close-break of 1551 correctly emits as a
+continuation BOS (the wrong CHoCH had flipped the trend and eaten it), the
+06-26 `CHOCH_FAILED` disappears with its premature CHoCH, and the bullish
+CHoCH fires 06-27 10:00 against 1583 (the leg origin of the newest activated
+BOS — the reference correctly ratchets when a newer BOS activates). Measured:
+**zero diffs** on ETH 30m/4h/1d and BTC 1h/4h — surgical. `validated` still
+outranks the pending origin so the staleness re-anchor retains authority over
+a long-lived pending. Gated behind `bos_leg_origin_choch_ref`.
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a
