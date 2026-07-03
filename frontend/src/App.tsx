@@ -9,8 +9,14 @@ import { ManipulationCyclesPanel } from './components/ManipulationCyclesPanel'
 import { NarrativePanel } from './components/NarrativePanel'
 import type { DashboardData, TimeFrame } from './types/dashboard'
 
-const SYMBOL = 'BTCUSDT'
 const REFRESH_INTERVAL_MS = 5_000
+
+const SYMBOL_OPTIONS: { value: string; label: string }[] = [
+  { value: 'BTCUSDT', label: 'BTC' },
+  { value: 'ETHUSDT', label: 'ETH' },
+  { value: 'SOLUSDT', label: 'SOL' },
+  { value: 'NEARUSDT', label: 'NEAR' },
+]
 
 const TIMEFRAME_OPTIONS: { value: TimeFrame; label: string }[] = [
   { value: '5m', label: '5M' },
@@ -40,7 +46,7 @@ function LoadingSkeleton() {
   )
 }
 
-function StatusBar({ data }: { data: DashboardData | null }) {
+function StatusBar({ data, symbol }: { data: DashboardData | null; symbol: string }) {
   const now = new Date()
   const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
 
@@ -55,7 +61,7 @@ function StatusBar({ data }: { data: DashboardData | null }) {
           <span className="text-[10px] font-medium text-[#26a69a]">LIVE</span>
         </div>
         <span className="text-[10px] text-[#3d4455]">|</span>
-        <span className="font-mono text-[10px] text-[#5d6477]">{SYMBOL}</span>
+        <span className="font-mono text-[10px] text-[#5d6477]">{symbol}</span>
       </div>
       <div className="flex items-center gap-3">
         {data && (
@@ -77,6 +83,7 @@ function StatusBar({ data }: { data: DashboardData | null }) {
 }
 
 function App() {
+  const [symbol, setSymbol] = useState<string>('BTCUSDT')
   const [timeframe, setTimeframe] = useState<TimeFrame>('1h')
   const [chartTimeframe, setChartTimeframe] = useState<TimeFrame>('1h')
   const [data, setData] = useState<DashboardData | null>(null)
@@ -100,6 +107,14 @@ function App() {
     setChartTimeframe(tf)
   }
 
+  const switchSymbol = (sym: string) => {
+    if (sym === symbol) return
+    setData(null)
+    setChartData(null)
+    setError(null)
+    setSymbol(sym)
+  }
+
   const switchChartTimeframe = (tf: TimeFrame) => {
     if (tf === chartTimeframe) return
     setChartData(null)
@@ -111,7 +126,7 @@ function App() {
     let cancelled = false
 
     const load = () => {
-      fetchDashboardData({ symbol: SYMBOL, timeframe })
+      fetchDashboardData({ symbol, timeframe })
         .then((result) => {
           if (!cancelled) setData(result)
         })
@@ -127,7 +142,7 @@ function App() {
       cancelled = true
       clearInterval(interval)
     }
-  }, [timeframe])
+  }, [symbol, timeframe])
 
   // Fetch chart-only data when chart timeframe diverges from global
   useEffect(() => {
@@ -136,7 +151,7 @@ function App() {
     let cancelled = false
 
     const load = () => {
-      fetchDashboardData({ symbol: SYMBOL, timeframe: chartTimeframe })
+      fetchDashboardData({ symbol, timeframe: chartTimeframe })
         .then((result) => {
           if (!cancelled) setChartData(result)
         })
@@ -152,7 +167,7 @@ function App() {
       cancelled = true
       clearInterval(interval)
     }
-  }, [chartTimeframe, timeframe])
+  }, [symbol, chartTimeframe, timeframe])
 
   // Tick the clock in the status bar
   useEffect(() => {
@@ -177,10 +192,22 @@ function App() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Symbol badge */}
-          <div className="mr-2 flex items-center gap-1.5 rounded-md border border-[#1a1f2e] bg-[#0f1319] px-3 py-1.5">
-            <span className="text-[10px] font-bold tracking-wider text-[#5d6477]">SYM</span>
-            <span className="font-mono text-xs font-semibold text-[#d1d4dc]">{SYMBOL}</span>
+          {/* Symbol selector */}
+          <div className="mr-2 flex rounded-md border border-[#1a1f2e] bg-[#0f1319] p-0.5">
+            {SYMBOL_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => switchSymbol(opt.value)}
+                className="relative rounded-[5px] px-3 py-1.5 font-mono text-xs font-semibold tracking-wide transition-all duration-200"
+                style={{
+                  color: symbol === opt.value ? '#e1e4ec' : '#5d6477',
+                  backgroundColor: symbol === opt.value ? '#1a1f2e' : 'transparent',
+                  boxShadow: symbol === opt.value ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
 
           {/* Timeframe selector */}
@@ -227,7 +254,7 @@ function App() {
                 <div className="flex items-center justify-between border-b border-[#1a1f2e] px-3 py-1.5">
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-[11px] font-semibold text-[#9ca3b4]">
-                      {SYMBOL}
+                      {symbol}
                     </span>
                     <span className="text-[10px] text-[#3d4455]">•</span>
                     <div className="flex items-center rounded border border-[#1a1f2e] bg-[#0a0d14] p-px">
@@ -314,7 +341,7 @@ function App() {
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col p-1">
-                  <MainChart key={chartTimeframe} data={chartData ?? data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} />
+                  <MainChart key={`${symbol}-${chartTimeframe}`} data={chartData ?? data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} />
                 </div>
               </div>
 
@@ -351,7 +378,7 @@ function App() {
       </main>
 
       {/* ── Status Bar ───────────────────────────────────────── */}
-      <StatusBar data={data} />
+      <StatusBar data={data} symbol={symbol} />
     </div>
   )
 }
