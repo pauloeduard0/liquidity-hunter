@@ -63,6 +63,19 @@ const DELTA_CHART_RATIO = 0.16
 const MIN_TOTAL_HEIGHT = 500
 const PRICE_SCALE_MIN_WIDTH = 110
 
+// Split the available height across the three panes. When the indicator panes
+// (volume delta + RSI) are minimized, the main candlestick pane takes the whole
+// height and the others collapse to 0.
+function paneHeights(totalHeight: number, showIndicators: boolean) {
+  if (!showIndicators) {
+    return { mainHeight: totalHeight, deltaHeight: 0, rsiHeight: 0 }
+  }
+  const mainHeight = Math.round(totalHeight * MAIN_CHART_RATIO)
+  const deltaHeight = Math.round(totalHeight * DELTA_CHART_RATIO)
+  const rsiHeight = totalHeight - mainHeight - deltaHeight
+  return { mainHeight, deltaHeight, rsiHeight }
+}
+
 const RSI_PERIOD = 14
 const DIV_PIVOT_LOOKBACK = 5
 const DIV_RANGE_LOWER = 5
@@ -467,6 +480,10 @@ interface MainChartProps {
   showLiquidationBands?: boolean
   liquidationLiveOnly?: boolean
   showSweptZones?: boolean
+  showOrderBlocks?: boolean
+  showSweeps?: boolean
+  showEqlZones?: boolean
+  showIndicators?: boolean
 }
 
 export function MainChart({
@@ -477,6 +494,10 @@ export function MainChart({
   showLiquidationBands = true,
   liquidationLiveOnly = false,
   showSweptZones = true,
+  showOrderBlocks = true,
+  showSweeps = true,
+  showEqlZones = true,
+  showIndicators = true,
 }: MainChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const mainContainerRef = useRef<HTMLDivElement>(null)
@@ -499,6 +520,9 @@ export function MainChart({
   const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const hasFittedRef = useRef(false)
   const isSyncingRef = useRef(false)
+  // Read by the ResizeObserver (created once) so it recomputes pane heights
+  // against the current minimize state. Kept in sync by the effect below.
+  const showIndicatorsRef = useRef(showIndicators)
 
   useEffect(() => {
     const wrapper = wrapperRef.current
@@ -508,9 +532,8 @@ export function MainChart({
     if (!wrapper || !mainContainer || !deltaContainer || !rsiContainer) return
 
     const totalHeight = Math.max(wrapper.clientHeight, MIN_TOTAL_HEIGHT)
-    const mainHeight = Math.round(totalHeight * MAIN_CHART_RATIO)
-    const deltaHeight = Math.round(totalHeight * DELTA_CHART_RATIO)
-    const rsiHeight = totalHeight - mainHeight - deltaHeight
+    const indicatorsOpen = showIndicatorsRef.current
+    const { mainHeight, deltaHeight, rsiHeight } = paneHeights(totalHeight, indicatorsOpen)
 
     const chartOptions = {
       layout: {
@@ -530,7 +553,9 @@ export function MainChart({
       ...chartOptions,
       width: mainContainer.clientWidth,
       height: mainHeight,
-      timeScale: { ...chartOptions.timeScale, visible: false },
+      // The RSI pane normally carries the visible time axis; when the indicator
+      // panes are minimized the main pane shows it instead.
+      timeScale: { ...chartOptions.timeScale, visible: !indicatorsOpen },
       rightPriceScale: { minimumWidth: PRICE_SCALE_MIN_WIDTH },
     })
     chartRef.current = chart
@@ -675,9 +700,7 @@ export function MainChart({
 
     const ro = new ResizeObserver(() => {
       const h = Math.max(wrapper.clientHeight, MIN_TOTAL_HEIGHT)
-      const mh = Math.round(h * MAIN_CHART_RATIO)
-      const dh = Math.round(h * DELTA_CHART_RATIO)
-      const rh = h - mh - dh
+      const { mainHeight: mh, deltaHeight: dh, rsiHeight: rh } = paneHeights(h, showIndicatorsRef.current)
       chart.applyOptions({ width: mainContainer.clientWidth, height: mh })
       deltaChart.applyOptions({ width: deltaContainer.clientWidth, height: dh })
       rsiChart.applyOptions({ width: rsiContainer.clientWidth, height: rh })
@@ -707,6 +730,30 @@ export function MainChart({
       hasFittedRef.current = false
     }
   }, [])
+
+  // Toggle the volume-delta / RSI panes: give the main pane the full height and
+  // move the visible time axis onto it while minimized, restore the split when open.
+  useEffect(() => {
+    const wrapper = wrapperRef.current
+    const chart = chartRef.current
+    const deltaChart = deltaChartRef.current
+    const rsiChart = rsiChartRef.current
+    const mainContainer = mainContainerRef.current
+    const deltaContainer = deltaContainerRef.current
+    const rsiContainer = rsiContainerRef.current
+    showIndicatorsRef.current = showIndicators
+    if (!wrapper || !chart || !deltaChart || !rsiChart || !mainContainer || !deltaContainer || !rsiContainer) return
+
+    const h = Math.max(wrapper.clientHeight, MIN_TOTAL_HEIGHT)
+    const { mainHeight, deltaHeight, rsiHeight } = paneHeights(h, showIndicators)
+    chart.applyOptions({
+      width: mainContainer.clientWidth,
+      height: mainHeight,
+      timeScale: { visible: !showIndicators },
+    })
+    deltaChart.applyOptions({ width: deltaContainer.clientWidth, height: deltaHeight })
+    rsiChart.applyOptions({ width: rsiContainer.clientWidth, height: rsiHeight })
+  }, [showIndicators])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -807,7 +854,7 @@ export function MainChart({
 
     const labels: LineLabel[] = []
 
-    for (const scored of data.ranked_zones.slice(0, TOP_N_ZONES)) {
+    for (const scored of showEqlZones ? data.ranked_zones.slice(0, TOP_N_ZONES) : []) {
       const { zone, score } = scored
       const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
       const label = ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type
@@ -887,7 +934,7 @@ export function MainChart({
     const structureEvents = scopeEvents.filter(
       (event) =>
         event.event in STRUCTURE_EVENT_STYLES &&
-        (event.event !== 'liquidity_sweep' || recentSweeps.has(event)),
+        (event.event !== 'liquidity_sweep' || (showSweeps && recentSweeps.has(event))),
     )
 
     // OI qualification per structure event (keyed by timestamp + type), so
@@ -946,11 +993,9 @@ export function MainChart({
         Math.max(...data.candles.map((c) => c.high)) -
         Math.min(...data.candles.map((c) => c.low))
       const poiBoxes: POIBox[] = []
-      for (const zone of selectVisiblePoiZones(
-        data.poi_zones ?? [],
-        data.current_price,
-        visiblePriceRange,
-      )) {
+      for (const zone of showOrderBlocks
+        ? selectVisiblePoiZones(data.poi_zones ?? [], data.current_price, visiblePriceRange)
+        : []) {
         const isMitigated = zone.status === 'mitigated'
         const dirStyle = POI_BOX_STYLES[zone.direction] ?? POI_BOX_STYLES.mitigated
         const style = isMitigated
@@ -971,7 +1016,7 @@ export function MainChart({
       }
       poiBoxesPrimitiveRef.current?.setBoxes(poiBoxes)
 
-      for (const rto of data.poi_sweep_events ?? []) {
+      for (const rto of showSweeps ? data.poi_sweep_events ?? [] : []) {
         const color = RTO_COLORS[rto.direction] ?? '#888888'
         const midPrice = (rto.zone_price_low + rto.zone_price_high) / 2
         labels.push({
@@ -1038,18 +1083,18 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones])
+  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">
       <div ref={mainContainerRef} className="w-full" />
-      <div className="relative w-full border-t border-[#1e222d]">
+      <div className={`relative w-full border-t border-[#1e222d] ${showIndicators ? '' : 'hidden'}`}>
         <span className="pointer-events-none absolute left-2 top-1 z-10 text-xs text-[#8a8f9c]">
           Volume Delta
         </span>
         <div ref={deltaContainerRef} className="w-full" />
       </div>
-      <div className="relative w-full border-t border-[#1e222d]">
+      <div className={`relative w-full border-t border-[#1e222d] ${showIndicators ? '' : 'hidden'}`}>
         <span className="pointer-events-none absolute left-2 top-1 z-10 text-xs text-[#8a8f9c]">
           RSI ({RSI_PERIOD})
         </span>

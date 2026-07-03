@@ -16,6 +16,7 @@ const SYMBOL_OPTIONS: { value: string; label: string }[] = [
   { value: 'ETHUSDT', label: 'ETH' },
   { value: 'SOLUSDT', label: 'SOL' },
   { value: 'NEARUSDT', label: 'NEAR' },
+  { value: 'AAVEUSDT', label: 'AAVE' },
 ]
 
 const TIMEFRAME_OPTIONS: { value: TimeFrame; label: string }[] = [
@@ -89,12 +90,16 @@ function App() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [chartData, setChartData] = useState<DashboardData | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [manipChartVisible, setManipChartVisible] = useState(true)
-  const [divChartVisible, setDivChartVisible] = useState(true)
-  const [heatmapVisible, setHeatmapVisible] = useState(true)
+  const [manipChartVisible, setManipChartVisible] = useState(false)
+  const [divChartVisible, setDivChartVisible] = useState(false)
+  const [heatmapVisible, setHeatmapVisible] = useState(false)
   const [liquidationVisible, setLiquidationVisible] = useState(false)
   const [liquidationLiveOnly, setLiquidationLiveOnly] = useState(false)
   const [sweptZonesVisible, setSweptZonesVisible] = useState(false)
+  const [obVisible, setObVisible] = useState(false)
+  const [sweepVisible, setSweepVisible] = useState(false)
+  const [eqlVisible, setEqlVisible] = useState(false)
+  const [indicatorsVisible, setIndicatorsVisible] = useState(false)
   const [, setTick] = useState(0)
 
   const chartDiverged = chartTimeframe !== timeframe
@@ -286,8 +291,44 @@ function App() {
                     )}
                     <button
                       type="button"
-                      onClick={() => setHeatmapVisible((v) => !v)}
+                      onClick={() => setObVisible((v) => !v)}
                       className={`ml-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        obVisible
+                          ? 'bg-[#2979ff22] text-[#2979ff]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle order block (POI) zones"
+                    >
+                      ▦ OB
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSweepVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        sweepVisible
+                          ? 'bg-[#ab47bc22] text-[#ab47bc]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle liquidity sweep (SWEEP + RTO) markers"
+                    >
+                      ⌇ Sweep
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEqlVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        eqlVisible
+                          ? 'bg-[#26a69a22] text-[#26a69a]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle liquidity target zone lines (EQH/EQL, OB, FVG, swings)"
+                    >
+                      ═ EQL
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHeatmapVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         heatmapVisible
                           ? 'bg-[#ef535022] text-[#ef5350]'
                           : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
@@ -324,6 +365,18 @@ function App() {
                     >
                       ⊟ Swept
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setIndicatorsVisible((v) => !v)}
+                      className={`ml-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        indicatorsVisible
+                          ? 'bg-[#42a5f522] text-[#42a5f5]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle volume delta / RSI indicator panes"
+                    >
+                      {indicatorsVisible ? '▾' : '▸'} Vol/RSI
+                    </button>
                   </div>
                   <div className="flex items-center gap-2 text-[10px] text-[#3d4455]">
                     {(() => {
@@ -341,7 +394,7 @@ function App() {
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col p-1">
-                  <MainChart key={`${symbol}-${chartTimeframe}`} data={chartData ?? data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} />
+                  <MainChart key={`${symbol}-${chartTimeframe}`} data={chartData ?? data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} />
                 </div>
               </div>
 
