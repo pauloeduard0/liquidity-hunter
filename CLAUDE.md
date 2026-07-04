@@ -1380,6 +1380,39 @@ exemption on the SOL H1 fixture (barrier 10 ≡ off, the 06-26 CHoCH vs 69.64
 intact). Off = byte-for-byte identical. Not mirrored into
 `SwingStructureDetector` (not drawn).
 
+**Shallow-pullback leg-origin promotion** (`InternalStructureDetector`, as of
+2026-07-03): `bos_leg_origin_min_pullback_atr` (constructor default `None` =
+off; requires `bos_leg_origin_choch_ref`; wired **`1.5`** in
+`load_dashboard_data` for **M15/M30/H1** via `_BOS_LEG_ORIGIN_MIN_PULLBACK_ATR`).
+The leg origin a BOS promotes to the opposite CHoCH reference is normally the
+trailing pivot at the state-advance (`active_high` for a bearish BOS /
+`active_low` for a bullish one) — the *immediate* pullback high/low. When that
+immediate pullback is **shallow** — its height (`active_high − active_low`) is
+less than N × the series' mean true-range% of price — it is a minor secondary
+high/low well inside the correction, so the CHoCH line lands at a small pivot
+rather than the correction's visible top/bottom. In that case the origin is
+promoted instead to the correction's **extreme** pivot (`pending_high`/
+`pending_low`, already the most extreme high/low accumulated for the leg), but
+only when that extreme is genuinely beyond the immediate pullback. The reference
+then sits at the visible leg top/bottom; and because it is higher/lower, a
+premature poke through the shallow level is reclassified as a `LIQUIDITY_SWEEP`
+and the reversal CHoCH fires once price reclaims the true extreme. Motivating
+case (measured, AAVEUSDT H1 `limit=1200`): the bullish CHoCH ref goes 86.59 →
+**87.82** (the correction top, the 07-01 02:00 swing high), firing 07-03 on the
+reclaim instead of 07-02 on the 88.49 poke that fell straight back to 84.28.
+Only the promoted origin changes — the state machine, trailing references, and
+continuation gate are untouched. Measured (BTC/ETH/SOL/AAVE × 5m..1d): **N=1.5**
+is the minimum that catches the AAVE target (immediate depth 1.42 × ATR); every
+intraday change is a whipsaw CHoCH/`CHOCH_FAILED` pair reclassified to a sweep
+(AAVE 30m/1h, BTC 30m, SOL 1h), M15 near-neutral. **M5 is excluded** (noisy,
+net-adds marks) and **4h/1d excluded** (they reshape already-tuned coarse
+regions, e.g. BTC 4h May 78128 → 78713 — needs visual review), mirroring the
+weak-ref barrier's intraday scope. Real-data regression fixture:
+`tests/liquidity/detectors/data/aaveusdt_1h_2026_06_20_07_04.json` (337-candle
+self-contained window; off → CHoCH ref 86.59 @ 07-02, on → 87.82 @ 07-03). Off
+= byte-for-byte identical. Not mirrored into `SwingStructureDetector` (not
+drawn).
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a

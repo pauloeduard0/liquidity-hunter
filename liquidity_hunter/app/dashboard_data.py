@@ -65,10 +65,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_SWING_LOOKBACK = 10
 
 _INTERNAL_STRUCTURE_PARAMS: dict[TimeFrame, tuple[int, int]] = {
-    TimeFrame.M5: (2, 5),
-    TimeFrame.M15: (3, 8),
-    TimeFrame.M30: (5, 12),
-    TimeFrame.H1: (5, 12),
+    TimeFrame.M5: (3, 2),
+    TimeFrame.M15: (6, 2),
+    TimeFrame.M30: (5, 2),
+    TimeFrame.H1: (4, 2),
     TimeFrame.H4: (5, 8),
     TimeFrame.D1: (5, 8),
     TimeFrame.W1: (5, 12),
@@ -142,6 +142,30 @@ _BOS_LEG_ORIGIN_RELEASE_GAP_PCT = 0.04
 # pairs) and drops the 06-27..30 chop flips; N=4 reverts to fixed-pct behavior
 # on the fine timeframes.
 _BOS_LEG_ORIGIN_RELEASE_GAP_ATR = 3.0
+
+# Shallow-pullback leg-origin promotion on the intraday timeframes
+# (`InternalStructureDetector.bos_leg_origin_min_pullback_atr`). When a BOS's
+# immediate pullback (the last swing low->high before the break) retraced less
+# than N x mean true-range%% of price, the leg origin promoted to the CHoCH
+# reference is a shallow secondary high/low well below/above the correction's
+# true extreme, so the CHoCH line sits at a minor pivot rather than the visible
+# leg top. Promoting to the correction's extreme pivot (`pending_high`/
+# `pending_low`) puts the reference at the visible top/bottom -- and, because
+# the reference is now higher/lower, a premature poke through the shallow level
+# is reclassified as a sweep and the reversal CHoCH fires once price reclaims
+# the true top (the AAVE H1 07-02 case: CHoCH ref 86.59 -> 87.82). Measured
+# 2026-07-03 (BTC/ETH/SOL/AAVE x 5m..1d): N=1.5 is the minimum that catches the
+# AAVE target (immediate depth 1.42 x ATR); every intraday change is a whipsaw
+# CHoCH/CHOCH_FAILED pair reclassified to a sweep (AAVE 30m/1h, BTC 30m, SOL
+# 1h), M15 near-neutral. M5 is noisy (net-adds marks) and 4h/1d reshape
+# already-tuned coarse regions (e.g. BTC 4h May 78128 -> 78713), so both are
+# left off -- mirroring the weak-ref barrier's intraday scope. `.get()` -> None
+# (off) for the excluded timeframes.
+_BOS_LEG_ORIGIN_MIN_PULLBACK_ATR: dict[TimeFrame, float] = {
+    TimeFrame.M15: 1.5,
+    TimeFrame.M30: 1.5,
+    TimeFrame.H1: 1.5,
+}
 
 # Max pivot-side wick fraction for a pullback that *confirms* a BOS
 # (`InternalStructureDetector.bos_pullback_max_wick_pct`). A small swing lookback
@@ -537,6 +561,10 @@ def load_dashboard_data(
         # Volatility-normalized release gap (takes precedence; the fixed pct
         # above is the fallback for series too short to measure a range).
         bos_leg_origin_release_gap_atr=_BOS_LEG_ORIGIN_RELEASE_GAP_ATR,
+        # Shallow-pullback leg-origin promotion: when the immediate pullback that
+        # anchored the CHoCH reference retraced < N x ATR%, use the correction's
+        # extreme pivot instead, so the CHoCH line sits at the visible leg top.
+        bos_leg_origin_min_pullback_atr=_BOS_LEG_ORIGIN_MIN_PULLBACK_ATR.get(timeframe),
         # New-cycle barrier: a CHoCH against a weak (re-anchored/fallback)
         # reference needs a longer sustained hold on the intraday timeframes;
         # structural references keep the base persistence.

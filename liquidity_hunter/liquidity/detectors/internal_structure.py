@@ -448,6 +448,27 @@ class InternalStructureDetector(MarketStructureDetector):
     cost is bounded at a few candles of confirmation delay. With the value
     `None` the output is byte-for-byte identical.
 
+    `bos_leg_origin_min_pullback_atr` (default `None` = off; requires
+    `bos_leg_origin_choch_ref`) is the **shallow-pullback leg-origin
+    promotion**. The leg origin a BOS promotes to the opposite CHoCH reference
+    is normally the trailing pivot at the state-advance (`active_high` for a
+    bearish BOS / `active_low` for a bullish one) -- the *immediate* pullback
+    high/low. When that immediate pullback is shallow -- its height
+    (`active_high - active_low`) is less than N x the series' mean true-range%%
+    of price -- it is a minor secondary high/low well inside the correction, so
+    the CHoCH line ends up at a small pivot rather than the correction's visible
+    top/bottom. In that case the origin is promoted instead to the correction's
+    *extreme* pivot (`pending_high`/`pending_low`, already the most extreme high/
+    low accumulated for the leg), but only when that extreme is genuinely beyond
+    the immediate pullback. The reference then sits at the visible leg top; and
+    because it is higher/lower, a premature poke through the shallow level is a
+    sweep and the reversal CHoCH fires once price reclaims the true extreme (the
+    AAVEUSDT H1 2026-07-02 case: bullish CHoCH ref 86.59 -> 87.82, firing 07-03
+    on the reclaim instead of 07-02 on the poke that fell straight back). Only
+    the promoted origin changes; the state machine, trailing references, and
+    continuation gate are untouched. With `None` the output is byte-for-byte
+    identical.
+
     `stale_reanchor_candles` (default `None` = off) is a separate *staleness*
     re-anchor, independent of `reanchor_mode`: when the trend runs this many
     candles past its last BOS / trend flip (`last_advance_index`, set in `emit`)
@@ -476,6 +497,7 @@ class InternalStructureDetector(MarketStructureDetector):
         bos_leg_origin_choch_ref: bool = False,
         bos_leg_origin_release_gap_pct: float | None = None,
         bos_leg_origin_release_gap_atr: float | None = None,
+        bos_leg_origin_min_pullback_atr: float | None = None,
         choch_weak_ref_persistence_candles: int | None = None,
     ) -> None:
         if persistence_candles < 1:
@@ -508,6 +530,8 @@ class InternalStructureDetector(MarketStructureDetector):
             raise ValueError("bos_leg_origin_release_gap_pct must be positive")
         if bos_leg_origin_release_gap_atr is not None and bos_leg_origin_release_gap_atr <= 0:
             raise ValueError("bos_leg_origin_release_gap_atr must be positive")
+        if bos_leg_origin_min_pullback_atr is not None and bos_leg_origin_min_pullback_atr <= 0:
+            raise ValueError("bos_leg_origin_min_pullback_atr must be positive")
         if (
             choch_weak_ref_persistence_candles is not None
             and choch_weak_ref_persistence_candles < 1
@@ -516,6 +540,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._bos_leg_origin_choch_ref = bos_leg_origin_choch_ref
         self._bos_leg_origin_release_gap_pct = bos_leg_origin_release_gap_pct
         self._bos_leg_origin_release_gap_atr = bos_leg_origin_release_gap_atr
+        self._bos_leg_origin_min_pullback_atr = bos_leg_origin_min_pullback_atr
         self._choch_weak_ref_persistence_candles = choch_weak_ref_persistence_candles
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
@@ -532,8 +557,15 @@ class InternalStructureDetector(MarketStructureDetector):
         # CHoCH pairs on BTC 30m and never held on SOL D1). Falls back to the
         # fixed `bos_leg_origin_release_gap_pct` when unset (or the series is
         # too short to measure a range).
-        release_gap = self._bos_leg_origin_release_gap_pct
-        if self._bos_leg_origin_release_gap_atr is not None and len(candles) > 1:
+        # Mean true-range as a fraction of price, computed once when any
+        # volatility-normalized feature needs it (the release gap and/or the
+        # shallow-pullback leg-origin promotion). `None` when unused or the
+        # series is too short to measure a range.
+        mean_tr_pct: float | None = None
+        if (
+            self._bos_leg_origin_release_gap_atr is not None
+            or self._bos_leg_origin_min_pullback_atr is not None
+        ) and len(candles) > 1:
             mean_tr_pct = fmean(
                 max(
                     curr.high - curr.low,
@@ -543,6 +575,8 @@ class InternalStructureDetector(MarketStructureDetector):
                 / curr.close
                 for prev, curr in zip(candles, candles[1:], strict=False)
             )
+        release_gap = self._bos_leg_origin_release_gap_pct
+        if self._bos_leg_origin_release_gap_atr is not None and mean_tr_pct is not None:
             release_gap = self._bos_leg_origin_release_gap_atr * mean_tr_pct
 
         symbol = candles[0].symbol
@@ -1351,6 +1385,23 @@ class InternalStructureDetector(MarketStructureDetector):
                                     )
                                 )
                             pullback_ref_snapshot = active_low
+                            # Shallow-pullback promotion (mirror of the bearish
+                            # case): a minor retrace (active_high -> active_low)
+                            # well above the correction's true bottom promotes the
+                            # origin to the lowest low pivot of the correction
+                            # (`pending_low`). See `bos_leg_origin_min_pullback_atr`.
+                            if (
+                                self._bos_leg_origin_choch_ref
+                                and self._bos_leg_origin_min_pullback_atr is not None
+                                and mean_tr_pct is not None
+                                and active_high is not None
+                                and active_low is not None
+                                and pending_low is not None
+                                and pending_low.price < active_low.price
+                                and (active_high.price - active_low.price) / active_low.price
+                                < self._bos_leg_origin_min_pullback_atr * mean_tr_pct
+                            ):
+                                pullback_ref_snapshot = pending_low
                             # Mirror of the bearish case: consecutive highs with
                             # no intervening low pivot reset active_low to None,
                             # so inherit the prior pending BOS's pullback ref --
@@ -1830,6 +1881,25 @@ class InternalStructureDetector(MarketStructureDetector):
                                     )
                                 )
                             pullback_ref_snapshot = active_high
+                            # Shallow-pullback promotion: the immediate pullback
+                            # (active_low -> active_high) is a minor retrace well
+                            # below the correction's true top; promote the origin
+                            # to the highest high pivot of the correction
+                            # (`pending_high`) so the CHoCH reference sits at the
+                            # visible leg top, not a shallow secondary high. See
+                            # `bos_leg_origin_min_pullback_atr`.
+                            if (
+                                self._bos_leg_origin_choch_ref
+                                and self._bos_leg_origin_min_pullback_atr is not None
+                                and mean_tr_pct is not None
+                                and active_high is not None
+                                and active_low is not None
+                                and pending_high is not None
+                                and pending_high.price > active_high.price
+                                and (active_high.price - active_low.price) / active_high.price
+                                < self._bos_leg_origin_min_pullback_atr * mean_tr_pct
+                            ):
+                                pullback_ref_snapshot = pending_high
                             # Consecutive lows with no intervening high pivot
                             # (an impulsive leg) reset active_high to None on the
                             # first advance, so a later advance would carry a

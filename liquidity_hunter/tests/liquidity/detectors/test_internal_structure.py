@@ -2068,3 +2068,99 @@ def test_structural_ref_choch_exempt_from_barrier() -> None:
         and e.timestamp >= datetime(2026, 6, 26, tzinfo=UTC)
     )
     assert structural_choch.reference_price_level == 69.64
+
+
+def test_invalid_bos_leg_origin_min_pullback_atr_raises() -> None:
+    with pytest.raises(ValueError, match="bos_leg_origin_min_pullback_atr"):
+        InternalStructureDetector(bos_leg_origin_min_pullback_atr=0)
+
+
+# --- Shallow-pullback leg-origin promotion (AAVEUSDT H1 2026-07-02) ---------
+#
+# The bearish leg that dropped from ~86.6 to 82.7 launched from a shallow
+# secondary lower-high (86.59) sitting well below the correction's true top
+# (the 87.82 swing high). Its immediate pullback (active_low 84.91 ->
+# active_high 86.59) retraced only 1.94% of price -- 1.42 x the series' mean
+# true range -- so `bos_leg_origin_min_pullback_atr=1.5` promotes the CHoCH
+# reference to the correction's extreme pivot (87.82) instead of the shallow
+# 86.59. Raising the reference then reclassifies the premature 07-02 poke
+# (which spiked to 88.49 and fell straight back to 84.28) as a sweep, and the
+# bullish CHoCH fires only once price reclaims the true top on 07-03 (-> 91.05).
+_AAVE_1H_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "aaveusdt_1h_2026_06_20_07_04.json"
+)
+
+
+def _load_aave_1h_window_candles() -> list[Candle]:
+    rows = json.loads(_AAVE_1H_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="AAVEUSDT",
+            timeframe=TimeFrame.H1,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _aave_1h_detector(min_pullback_atr: float | None) -> InternalStructureDetector:
+    """Production H1 wiring (`load_dashboard_data`), shallow-pullback flag
+    injectable."""
+    return InternalStructureDetector(
+        swing_lookback=4,
+        persistence_candles=2,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=80,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_atr=3.0,
+        bos_leg_origin_min_pullback_atr=min_pullback_atr,
+        choch_weak_ref_persistence_candles=4,
+    )
+
+
+def _late_bullish_chochs(events: list[MarketStructure]) -> list[MarketStructure]:
+    return [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp >= datetime(2026, 7, 1, tzinfo=UTC)
+    ]
+
+
+def test_shallow_pullback_off_anchors_choch_at_secondary_high() -> None:
+    """With the promotion off, the bullish CHoCH anchors at the shallow
+    secondary high (86.59), firing early on the 07-02 poke."""
+    events = _aave_1h_detector(None).detect(_load_aave_1h_window_candles())
+
+    chochs = _late_bullish_chochs(events)
+    assert len(chochs) == 1
+    assert chochs[0].timestamp == datetime(2026, 7, 2, 11, tzinfo=UTC)
+    assert chochs[0].reference_price_level == 86.59
+
+
+def test_shallow_pullback_promotes_choch_to_correction_top() -> None:
+    """`bos_leg_origin_min_pullback_atr=1.5` promotes the shallow leg origin to
+    the correction's true top: the CHoCH reference is 87.82 (not 86.59) and it
+    fires only once price reclaims it on 07-03 (the 07-02 poke is now a sweep)."""
+    events = _aave_1h_detector(1.5).detect(_load_aave_1h_window_candles())
+
+    chochs = _late_bullish_chochs(events)
+    assert len(chochs) == 1
+    assert chochs[0].timestamp == datetime(2026, 7, 3, 13, tzinfo=UTC)
+    assert chochs[0].reference_price_level == 87.82
+    # The reference is anchored at the pivot that formed the correction top, so
+    # the frontend draws the CHoCH line from the leg's origin, not the break.
+    assert chochs[0].reference_timestamp == datetime(2026, 7, 1, 2, tzinfo=UTC)
