@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_SWING_LOOKBACK = 10
 
 _INTERNAL_STRUCTURE_PARAMS: dict[TimeFrame, tuple[int, int]] = {
-    TimeFrame.M5: (3, 2),
+    TimeFrame.M5: (6, 4),
     TimeFrame.M15: (6, 2),
     TimeFrame.M30: (5, 2),
     TimeFrame.H1: (4, 2),

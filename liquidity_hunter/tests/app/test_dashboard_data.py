@@ -217,24 +217,26 @@ def test_load_dashboard_data_derives_trend_from_market_structure() -> None:
 
 def test_load_dashboard_data_internal_structure_events_use_internal_scope() -> None:
     # Extended series: bearish BOS at L130 confirmed by LH pullback at H180.
-    int_highs = [150.0] * 20
-    int_highs[2] = 200.0
-    int_highs[17] = 180.0
-    int_lows = [145.0] * 20
-    int_lows[7] = 140.0
-    int_lows[12] = 130.0
+    # Pivot spacing sized for the production M5 internal swing lookback (6):
+    # each pivot needs 6 flat candles on both sides to form.
+    int_highs = [150.0] * 34
+    int_highs[6] = 200.0
+    int_highs[27] = 180.0
+    int_lows = [145.0] * 34
+    int_lows[13] = 140.0
+    int_lows[20] = 130.0
     candles = make_series(int_highs, int_lows, symbol="BTCUSDT")
-    candles[12] = make_candle(
-        12,
-        int_highs[12],
-        int_lows[12],
+    candles[20] = make_candle(
+        20,
+        int_highs[20],
+        int_lows[20],
         symbol="BTCUSDT",
         close=135.0,
         taker_buy_volume=0.3,
     )
     # The confirming LH pullback closes near its high (a real bounce, not a
     # midpoint doji) so it passes the BOS pullback wick filter.
-    candles[17] = make_candle(17, int_highs[17], int_lows[17], symbol="BTCUSDT", close=178.0)
+    candles[27] = make_candle(27, int_highs[27], int_lows[27], symbol="BTCUSDT", close=178.0)
 
     data = load_dashboard_data(
         provider=_FakeProvider(candles),
