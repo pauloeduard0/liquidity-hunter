@@ -151,6 +151,31 @@ _BOS_LEG_ORIGIN_RELEASE_GAP_ATR = 3.0
 # wick-dominant spike does not confirm and the BOS waits for a real pullback.
 _BOS_PULLBACK_MAX_WICK_PCT = 0.4
 
+# New-cycle CHoCH barrier on the intraday timeframes
+# (`InternalStructureDetector.choch_weak_ref_persistence_candles`): a CHoCH
+# about to fire against a *weak* reference (a synthetic re-anchor level or the
+# trailing cold-start fallback -- not a level a leg actually launched from)
+# must hold for this many candles instead of the base `persistence_candles`.
+# With the intraday base persistence at 2, a brief poke through a weak level
+# was enough to start (and dirty) a new cycle that then failed. Structural
+# references (leg origin, candidate promotion, blind-spot origin) keep the
+# base persistence -- the conservative CHoCH is not delayed. Measured
+# 2026-07-03 (BTC/ETH/SOL x 5m/15m/30m/1h, barrier 3/4/5): every removal is a
+# whipsaw CHoCH/CHOCH_FAILED pair (BTC 5m double-flip chop, BTC 15m two pairs
+# with the bearish continuation staircase restored, BTC 30m 06-12 pair at 4+,
+# SOL 30m one pair); costs are two small delays of genuine weak-ref CHoCH
+# (ETH 30m 9h, ETH 15m one candle). 4 chosen: catches everything 3 does plus
+# the BTC 30m pair, while 5 starts delaying a genuine BTC 30m reversal CHoCH
+# by 6h. Coarse timeframes (H4+, base persistence 8+) are left alone.
+# (M1 deliberately absent: its detector params fall to the default base
+# persistence of 12, which a barrier of 4 would *weaken*, not harden.)
+_CHOCH_WEAK_REF_PERSISTENCE: dict[TimeFrame, int] = {
+    TimeFrame.M5: 4,
+    TimeFrame.M15: 4,
+    TimeFrame.M30: 4,
+    TimeFrame.H1: 4,
+}
+
 _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
     TimeFrame.M1: TimeFrame.H1,
     TimeFrame.M5: TimeFrame.H1,
@@ -512,6 +537,10 @@ def load_dashboard_data(
         # Volatility-normalized release gap (takes precedence; the fixed pct
         # above is the fallback for series too short to measure a range).
         bos_leg_origin_release_gap_atr=_BOS_LEG_ORIGIN_RELEASE_GAP_ATR,
+        # New-cycle barrier: a CHoCH against a weak (re-anchored/fallback)
+        # reference needs a longer sustained hold on the intraday timeframes;
+        # structural references keep the base persistence.
+        choch_weak_ref_persistence_candles=_CHOCH_WEAK_REF_PERSISTENCE.get(timeframe),
     ).detect(internal_candles)
     # Re-time each BOS to the first close beyond the formed level it broke
     # (dropping wick-only continuations), before the visible filter and POI.

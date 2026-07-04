@@ -1349,6 +1349,37 @@ timeframes. Real-data regression fixture:
 resolution + an ATR≡equivalent-pct equivalence/precedence test). Off = the
 fixed-pct behavior, byte-for-byte.
 
+**New-cycle CHoCH barrier** (`InternalStructureDetector`, as of 2026-07-03):
+`choch_weak_ref_persistence_candles` (constructor default `None` = off; wired
+**`4`** in `load_dashboard_data` for M5/M15/M30/H1 via
+`_CHOCH_WEAK_REF_PERSISTENCE` — coarse timeframes with base persistence 8+ are
+left alone, and M1 is deliberately absent since its default base of 12 would be
+*weakened* by 4). A CHoCH about to fire against a **weak** reference — a
+synthetic re-anchor level (`validated_choch_<side>` present but not
+`_structural`; only `reanchor_opposite` writes those) or the trailing
+`active_<side>` cold-start fallback — must sustain for this many candles
+instead of the base `persistence_candles`. **Structural** references (leg
+origin, continuation-promoted candidate, live pending-BOS origin, blind-spot
+`choch_origin_<side>`) keep the base persistence: the conservative CHoCH is
+never delayed. The `CHOCH_FAILED` check also keeps the base persistence (the
+escape valve that undoes a wrong cycle must not be delayed). Rationale: with
+intraday base persistence at 2, a brief poke through a weak local level was
+enough to flip the trend and start a dirty cycle ("às vezes é só um sweep e já
+cria CHoCH de novo ciclo"); a genuine reversal holds past the barrier anyway,
+so the cost is bounded at a few candles of confirmation delay. Measured
+(BTC/ETH/SOL × 5m/15m/30m/1h, barrier 3/4/5, `limit=1200`): every removal is a
+whipsaw CHoCH/`CHOCH_FAILED` pair — BTC 5m double-flip chop (two CHoCH 15 min
+apart), BTC 15m two pairs (restoring the 06-30 bearish continuation
+staircase), BTC 30m 06-12 pair (needs 4+), SOL 30m one pair; ETH 5m / SOL
+5m/15m/1h / BTC 1h / ETH 1h untouched. Costs: one genuine weak-ref CHoCH
+delayed 9h (ETH 30m, same level), one delayed 1 candle (ETH 15m). **4
+chosen**: strictly better than 3 (adds the BTC 30m pair at no observed cost),
+while 5 starts delaying a genuine BTC 30m reversal CHoCH by 6h. Tests: weak-ref
+delay on the BTC 30m fixture (06-07 23:00 → 06-08 01:30, same ref), structural
+exemption on the SOL H1 fixture (barrier 10 ≡ off, the 06-26 CHoCH vs 69.64
+intact). Off = byte-for-byte identical. Not mirrored into
+`SwingStructureDetector` (not drawn).
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a

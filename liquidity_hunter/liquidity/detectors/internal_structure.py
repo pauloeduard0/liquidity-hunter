@@ -428,6 +428,26 @@ class InternalStructureDetector(MarketStructureDetector):
     when a CHoCH/`CHOCH_FAILED` consumes the reference. With the flag off the
     output is byte-for-byte identical.
 
+    `choch_weak_ref_persistence_candles` (default `None` = off) is the
+    **new-cycle barrier**: a CHoCH about to fire against a *weak* reference
+    uses this persistence instead of `persistence_candles`. A reference is
+    weak when it is a synthetic re-anchor level (`validated_choch_<side>`
+    present but not structural -- only `reanchor_opposite` writes those) or
+    the trailing `active_<side>` cold-start fallback; it is *structural* (base
+    persistence, no delay) when it is a leg origin, a continuation-promoted
+    candidate, a live pending BOS's origin, or the blind-spot
+    `choch_origin_<side>` -- levels a leg actually launched from. Weak
+    references sit at local extremes, so a brief poke through one is often
+    just a sweep; demanding a longer sustained hold keeps those pokes from
+    flipping the trend and starting a dirty cycle (they are reported as
+    `LIQUIDITY_SWEEP` instead, or the CHoCH simply confirms later once a
+    window does hold). The `CHOCH_FAILED` check always keeps the base
+    persistence: it is the escape valve that undoes a wrong cycle, and
+    delaying it holds the wrong trend longer. A genuine reversal off a weak
+    reference still fires -- a real move holds well past the barrier -- so the
+    cost is bounded at a few candles of confirmation delay. With the value
+    `None` the output is byte-for-byte identical.
+
     `stale_reanchor_candles` (default `None` = off) is a separate *staleness*
     re-anchor, independent of `reanchor_mode`: when the trend runs this many
     candles past its last BOS / trend flip (`last_advance_index`, set in `emit`)
@@ -456,6 +476,7 @@ class InternalStructureDetector(MarketStructureDetector):
         bos_leg_origin_choch_ref: bool = False,
         bos_leg_origin_release_gap_pct: float | None = None,
         bos_leg_origin_release_gap_atr: float | None = None,
+        choch_weak_ref_persistence_candles: int | None = None,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -487,9 +508,15 @@ class InternalStructureDetector(MarketStructureDetector):
             raise ValueError("bos_leg_origin_release_gap_pct must be positive")
         if bos_leg_origin_release_gap_atr is not None and bos_leg_origin_release_gap_atr <= 0:
             raise ValueError("bos_leg_origin_release_gap_atr must be positive")
+        if (
+            choch_weak_ref_persistence_candles is not None
+            and choch_weak_ref_persistence_candles < 1
+        ):
+            raise ValueError("choch_weak_ref_persistence_candles must be at least 1")
         self._bos_leg_origin_choch_ref = bos_leg_origin_choch_ref
         self._bos_leg_origin_release_gap_pct = bos_leg_origin_release_gap_pct
         self._bos_leg_origin_release_gap_atr = bos_leg_origin_release_gap_atr
+        self._choch_weak_ref_persistence_candles = choch_weak_ref_persistence_candles
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -523,7 +550,12 @@ class InternalStructureDetector(MarketStructureDetector):
         index_by_timestamp = {candle.timestamp: index for index, candle in enumerate(candles)}
 
         def confirms_break(
-            start_index: int, end_index: int, level_price: float, *, bullish: bool
+            start_index: int,
+            end_index: int,
+            level_price: float,
+            *,
+            bullish: bool,
+            persistence: int | None = None,
         ) -> bool:
             return any(
                 is_sustained_break(
@@ -531,7 +563,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     index,
                     level_price,
                     bullish=bullish,
-                    persistence_candles=self._persistence_candles,
+                    persistence_candles=persistence or self._persistence_candles,
                 )
                 for index in range(start_index, end_index + 1)
             )
@@ -1035,6 +1067,33 @@ class InternalStructureDetector(MarketStructureDetector):
                     or choch_origin_high
                     or fallback_active_high
                 )
+                # New-cycle barrier (`choch_weak_ref_persistence_candles`): a
+                # CHoCH about to fire against a *weak* reference -- a synthetic
+                # re-anchor level (validated but not structural) or the trailing
+                # `active_<side>` cold-start fallback -- must hold for more
+                # candles than one breaking a genuine structural level (leg
+                # origin, pending origin, candidate promotion, blind-spot
+                # origin). Weak references sit at local extremes rather than at
+                # the level a leg actually launched from, so a brief poke
+                # through one is often just a sweep; demanding extra
+                # persistence keeps those from starting a new cycle. The
+                # CHOCH_FAILED check below is NOT hardened: it is the escape
+                # valve that undoes a wrong cycle, and delaying it holds the
+                # wrong trend longer.
+                choch_high_weak_ref = (
+                    validated_choch_high is not None
+                    and not validated_choch_high_structural
+                ) or (
+                    validated_choch_high is None
+                    and pending_leg_origin_high is None
+                    and choch_origin_high is None
+                )
+                choch_high_persistence = (
+                    self._choch_weak_ref_persistence_candles
+                    if choch_high_weak_ref
+                    and self._choch_weak_ref_persistence_candles is not None
+                    else self._persistence_candles
+                )
                 if (
                     trend is MarketDirection.BEARISH
                     and bear_choch_origin is not None
@@ -1113,6 +1172,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         current_index,
                         choch_high_ref.price,
                         bullish=True,
+                        persistence=choch_high_persistence,
                     )
                 ):
                     break_candle = candles[
@@ -1122,7 +1182,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             current_index,
                             choch_high_ref.price,
                             bullish=True,
-                            persistence_candles=self._persistence_candles,
+                            persistence_candles=choch_high_persistence,
                         )
                     ]
                     emit(
@@ -1496,6 +1556,24 @@ class InternalStructureDetector(MarketStructureDetector):
                     or choch_origin_low
                     or fallback_active_low
                 )
+                # Mirror of the high side: the new-cycle barrier applies when
+                # the reference about to be broken is weak (a synthetic
+                # re-anchor level or the trailing fallback), never to the
+                # CHOCH_FAILED escape valve below.
+                choch_low_weak_ref = (
+                    validated_choch_low is not None
+                    and not validated_choch_low_structural
+                ) or (
+                    validated_choch_low is None
+                    and pending_leg_origin_low is None
+                    and choch_origin_low is None
+                )
+                choch_low_persistence = (
+                    self._choch_weak_ref_persistence_candles
+                    if choch_low_weak_ref
+                    and self._choch_weak_ref_persistence_candles is not None
+                    else self._persistence_candles
+                )
                 if (
                     trend is MarketDirection.BULLISH
                     and bull_choch_origin is not None
@@ -1574,6 +1652,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         current_index,
                         choch_low_ref.price,
                         bullish=False,
+                        persistence=choch_low_persistence,
                     )
                 ):
                     break_candle = candles[
@@ -1583,7 +1662,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             current_index,
                             choch_low_ref.price,
                             bullish=False,
-                            persistence_candles=self._persistence_candles,
+                            persistence_candles=choch_low_persistence,
                         )
                     ]
                     emit(

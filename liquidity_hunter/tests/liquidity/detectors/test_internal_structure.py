@@ -1606,6 +1606,11 @@ def test_invalid_bos_leg_origin_release_gap_atr_raises() -> None:
         InternalStructureDetector(bos_leg_origin_release_gap_atr=-1.0)
 
 
+def test_invalid_choch_weak_ref_persistence_candles_raises() -> None:
+    with pytest.raises(ValueError, match="choch_weak_ref_persistence_candles"):
+        InternalStructureDetector(choch_weak_ref_persistence_candles=0)
+
+
 # --- Leg-origin promotion when a pending BOS dies on an origin reclaim ------
 #
 # Replicates the ETHUSDT H1 2026-06-06 missing-CHoCH case. Sequence
@@ -1890,6 +1895,7 @@ def _btc_30m_detector(
     *,
     release_gap_pct: float | None = None,
     release_gap_atr: float | None = None,
+    weak_choch_persistence: int | None = None,
 ) -> InternalStructureDetector:
     """Production M30 wiring (`load_dashboard_data`), release gap injectable."""
     return InternalStructureDetector(
@@ -1906,6 +1912,7 @@ def _btc_30m_detector(
         bos_leg_origin_choch_ref=True,
         bos_leg_origin_release_gap_pct=release_gap_pct,
         bos_leg_origin_release_gap_atr=release_gap_atr,
+        choch_weak_ref_persistence_candles=weak_choch_persistence,
     )
 
 
@@ -1984,3 +1991,80 @@ def test_real_window_atr_release_gap_resolves_choch_whipsaw() -> None:
         and drop_start <= e.timestamp < drop_end
     ]
     assert staircase == [59060.0, 58030.0]
+
+
+def test_weak_ref_choch_needs_barrier_persistence() -> None:
+    """A CHoCH firing against a *weak* reference (here the cold-start
+    fallback during the fixture's bootstrap) must hold for
+    `choch_weak_ref_persistence_candles` instead of the base persistence: the
+    same 64179.5 bullish CHoCH against 62942.4 confirms at 06-07 23:00 with
+    the base persistence of 2, but only at 06-08 01:30 (a window that holds 4
+    candles) with the barrier -- delayed, not lost, and against the same
+    reference.
+    """
+    candles = _load_btc_30m_window_candles()
+
+    def first_choch(events: list[MarketStructure]) -> MarketStructure:
+        return next(
+            e for e in events if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        )
+
+    base_choch = first_choch(
+        _btc_30m_detector(
+            release_gap_pct=0.04, release_gap_atr=3.0
+        ).detect(candles)
+    )
+    barrier_choch = first_choch(
+        _btc_30m_detector(
+            release_gap_pct=0.04, release_gap_atr=3.0, weak_choch_persistence=4
+        ).detect(candles)
+    )
+
+    assert base_choch.timestamp == datetime(2026, 6, 7, 23, 0, tzinfo=UTC)
+    assert barrier_choch.timestamp == datetime(2026, 6, 8, 1, 30, tzinfo=UTC)
+    assert base_choch.price_level == barrier_choch.price_level == 64179.5
+    assert (
+        base_choch.reference_price_level
+        == barrier_choch.reference_price_level
+        == 62942.4
+    )
+
+
+def test_structural_ref_choch_exempt_from_barrier() -> None:
+    """The new-cycle barrier applies only to weak references: on the SOLUSDT
+    H1 window every CHoCH fires via a structural reference (leg origin
+    family) or holds far past the barrier anyway, so even an absurd barrier
+    of 10 candles leaves the output byte-for-byte identical -- including the
+    genuine 06-26 bullish CHoCH against the 69.64 leg origin.
+    """
+    candles = _load_sol_window_candles()
+
+    def sol_detector(barrier: int | None) -> InternalStructureDetector:
+        return InternalStructureDetector(
+            swing_lookback=4,
+            persistence_candles=2,
+            reanchor_mode="chain",
+            reanchor_chain_threshold=2,
+            reanchor_chain_establish_only=True,
+            reanchor_min_price_gap_pct=0.003,
+            stale_reanchor_candles=80,
+            impulse_bos_displacement_pct=0.015,
+            bos_pullback_max_wick_pct=0.4,
+            stage_wick_rejected_bos=True,
+            bos_leg_origin_choch_ref=True,
+            bos_leg_origin_release_gap_pct=0.04,
+            choch_weak_ref_persistence_candles=barrier,
+        )
+
+    base_events = sol_detector(None).detect(candles)
+    barrier_events = sol_detector(10).detect(candles)
+    assert barrier_events == base_events
+
+    structural_choch = next(
+        e
+        for e in barrier_events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp >= datetime(2026, 6, 26, tzinfo=UTC)
+    )
+    assert structural_choch.reference_price_level == 69.64
