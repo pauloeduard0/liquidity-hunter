@@ -1444,6 +1444,47 @@ self-contained window). Off = byte-for-byte identical. Not mirrored into
 promotion (the candidate-continuation and reclaim-kill structural paths are
 untouched).
 
+**Close-confirmed reported staircase floor** (`InternalStructureDetector`, as
+of 2026-07-04, companion to the above): `bos_floor_require_close_break`
+(constructor default `False`; wired **`True`** in `load_dashboard_data`). The
+*reported* floor tracker (`prev_<side>_bos_extreme`, the level the next
+continuation BOS plots against) does **not** ratchet on an advance that only
+*wick-swept* it — pivot extreme beyond the current floor with no candle closing
+beyond it. Such a wick never established a new formed level (its own mark is
+dropped by `_reanchor_bos_close_break`), so the next continuation keeps
+referencing the last close-confirmed extreme instead of the wick. Narrow by
+design: an advance whose pivot never even *reached* the floor (a trailing-level
+break far short of it, e.g. range breakdowns inside a post-crash range months
+above the crash fundo) still ratchets — freezing there leaves later BOS
+reporting a level their leg never broke, and the composition re-anchor then
+drops the whole staircase (measured: AAVE D1 lost its 176→142→91 post-crash
+staircase under the broad freeze variant, which was rejected). Companion stash:
+the failed-CHoCH staircase restore previously set the reported tracker from the
+*gate* (`last_<side>_bos_<extreme>`), which legitimately ratchets on wick-only
+breaks — laundering the wick back into the reported floor across a provisional
+CHoCH. Under the flag, the reported tracker is stashed at each CHoCH alongside
+the gate (`pre_choch_<side>_bos_extreme`) and restored from its *own* stash
+(max/min'd with the CHoCH origin, whose break the failure itself
+close-confirmed). The state machine — gate, trend, CHoCH promotion — is
+untouched: only what an emitted BOS *reports* (and thus where the re-anchor
+confirms it) changes. Motivating case (measured, AAVEUSDT H1 `limit=1200`,
+same wick as the leg-origin case above): the 06-26 breakout BOS (px 87.99)
+reported the swept 77.94 wick instead of the close-confirmed 77.70 first top —
+the 06-17 wick advance ratcheted the tracker, and the 06-24 `CHOCH_FAILED`
+restore reinjected it from the gate. On, it reports 77.70. Measured
+(BTC/ETH/SOL/AAVE × 5m/15m/30m/1h/4h/1d): **zero marks lost**; 10 of 24 combos
+change and every change is a reference correction to the earlier
+close-confirmed level (BTC 30m 06-13: 64362.60 wick → 64250.00, the documented
+pre-break-drop wick; BTC 15m/30m 07-03: 62386.70 → 62180.00; ETH 1h/4h 06-02
+converge on 1965.48; ETH 1d 02-02: 3302.20 → 3100.00) or a mark *gain* (AAVE
+1d: the May-2026 crash BOS appears, ref the 05-08 91.85 retest low — off, it
+referenced the pre-break 85.67 and `_drop_pre_break_reference_bos` killed it).
+Real-data regression fixture:
+`tests/liquidity/detectors/data/aaveusdt_1h_2026_06_05_27.json` (552-candle
+self-contained window; off → 06-26 BOS ref 77.94, on → 77.70). Off =
+byte-for-byte identical. Not mirrored into `SwingStructureDetector` (not
+drawn).
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a

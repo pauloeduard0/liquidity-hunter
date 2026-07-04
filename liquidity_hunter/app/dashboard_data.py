@@ -572,6 +572,13 @@ def load_dashboard_data(
         # reference instead -- so the new-cycle barrier governs the resulting
         # CHoCH rather than it firing at base persistence off an unconfirmed break.
         bos_leg_origin_require_close_break=True,
+        # The reported staircase floor (the level the next continuation BOS
+        # plots against) likewise only ratchets on close-confirmed breaks: a
+        # wick that merely swept the prior BOS extreme (whose own mark
+        # _reanchor_bos_close_break drops) must not become the next
+        # continuation's reported reference, nor be reinjected into it via the
+        # failed-CHoCH staircase restore. The state-machine gate is untouched.
+        bos_floor_require_close_break=True,
         # New-cycle barrier: a CHoCH against a weak (re-anchored/fallback)
         # reference needs a longer sustained hold on the intraday timeframes;
         # structural references keep the base persistence.

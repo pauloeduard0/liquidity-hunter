@@ -2268,3 +2268,103 @@ def test_wick_only_leg_origin_weak_defers_choch_to_barrier_when_on() -> None:
         for e in events
     )
 
+
+# --- Reported staircase floor only ratchets on close-confirmed breaks ----------
+# Real AAVEUSDT H1 window (2026-06-05 .. 06-27), extending the fixture above.
+# The bullish leg tops at 77.70 (06-15 16:00 advance, close-confirmed). The
+# leg's only later break of that top is a single-candle *wick* to 77.94
+# (06-17 02:00, close 76.94) -- no candle ever closes above 77.70, but the
+# advance still ratchets the reported floor tracker to 77.94, and the wick then
+# survives the provisional bearish CHoCH (06-23) via the failed-CHoCH staircase
+# restore (06-24 restores the reported tracker from the gate). The breakout BOS
+# (06-26 06:00, px 87.99) therefore reports the swept wick 77.94 as the formed
+# level it broke instead of the close-confirmed 77.70 top. With
+# `bos_floor_require_close_break` on, a wick-only sweep of the reported floor
+# neither ratchets it nor gets reinjected by the restore (the tracker restores
+# from its own stash), so the BOS references 77.70.
+_AAVE_1H_FLOOR_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "aaveusdt_1h_2026_06_05_27.json"
+)
+
+
+def _load_aave_1h_floor_window_candles() -> list[Candle]:
+    rows = json.loads(_AAVE_1H_FLOOR_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="AAVEUSDT",
+            timeframe=TimeFrame.H1,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _aave_1h_floor_detector(floor_require_close_break: bool) -> InternalStructureDetector:
+    """Production H1 wiring, close-break floor-ratchet flag injectable."""
+    return InternalStructureDetector(
+        swing_lookback=4,
+        persistence_candles=2,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=80,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_atr=3.0,
+        choch_weak_ref_persistence_candles=4,
+        bos_leg_origin_min_pullback_atr=1.5,
+        bos_leg_origin_require_close_break=True,
+        bos_floor_require_close_break=floor_require_close_break,
+    )
+
+
+def _breakout_bos(events: list[MarketStructure]) -> MarketStructure:
+    [bos] = [
+        e
+        for e in events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 6, 26, 6, tzinfo=UTC)
+    ]
+    return bos
+
+
+def test_breakout_bos_references_wick_swept_top_when_off() -> None:
+    """With the flag off, the 06-17 wick (77.94, never closed above the 77.70
+    top) ratchets the reported floor and survives the failed-CHoCH restore, so
+    the 06-26 breakout BOS reports the wick as the level it broke."""
+    events = _aave_1h_floor_detector(floor_require_close_break=False).detect(
+        _load_aave_1h_floor_window_candles()
+    )
+
+    assert _breakout_bos(events).reference_price_level == 77.94
+
+
+def test_breakout_bos_references_close_confirmed_top_when_on() -> None:
+    """On, a wick-only sweep of the reported floor does not ratchet it (and the
+    failed-CHoCH restore uses the tracker's own stash, not the wick-ratcheted
+    gate), so the 06-26 breakout BOS references the close-confirmed 77.70 top.
+    The rest of the staircase is untouched (the 06-26 13:00 continuation still
+    references the 87.99 breakout pivot)."""
+    events = _aave_1h_floor_detector(floor_require_close_break=True).detect(
+        _load_aave_1h_floor_window_candles()
+    )
+
+    assert _breakout_bos(events).reference_price_level == 77.70
+    assert any(
+        e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 6, 26, 13, tzinfo=UTC)
+        and e.reference_price_level == 87.99
+        for e in events
+    )
+

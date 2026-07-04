@@ -506,6 +506,7 @@ class InternalStructureDetector(MarketStructureDetector):
         bos_leg_origin_release_gap_atr: float | None = None,
         bos_leg_origin_min_pullback_atr: float | None = None,
         bos_leg_origin_require_close_break: bool = False,
+        bos_floor_require_close_break: bool = False,
         choch_weak_ref_persistence_candles: int | None = None,
     ) -> None:
         if persistence_candles < 1:
@@ -550,6 +551,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._bos_leg_origin_release_gap_atr = bos_leg_origin_release_gap_atr
         self._bos_leg_origin_min_pullback_atr = bos_leg_origin_min_pullback_atr
         self._bos_leg_origin_require_close_break = bos_leg_origin_require_close_break
+        self._bos_floor_require_close_break = bos_floor_require_close_break
         self._choch_weak_ref_persistence_candles = choch_weak_ref_persistence_candles
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
@@ -712,6 +714,16 @@ class InternalStructureDetector(MarketStructureDetector):
         # reversal real. Lifecycle tied 1:1 to the matching `*_choch_origin`.
         pre_choch_bear_bos_low: float | None = None
         pre_choch_bull_bos_high: float | None = None
+        # Companion stash for the *reported* staircase floor tracker
+        # (`prev_<side>_bos_extreme`). The gate stash above holds the state
+        # machine's staircase, which legitimately ratchets on wick-only breaks;
+        # restoring the reported tracker *from the gate* on a failed CHoCH
+        # would launder such a wick into the next continuation's reported
+        # reference (the "second-top wick supersedes the real top" case). Only
+        # read when `bos_floor_require_close_break` is set; lifecycle mirrors
+        # the gate stash exactly.
+        pre_choch_bear_bos_extreme: float | None = None
+        pre_choch_bull_bos_extreme: float | None = None
         pending_bos: _PendingBOS | None = None
         last_bullish_bos_price: float | None = None
         last_bullish_bos_origin: float | None = None
@@ -1014,6 +1026,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             # retire its origin and drop the stashed bullish ceiling.
                             bear_choch_origin = None
                             pre_choch_bull_bos_high = None
+                            pre_choch_bull_bos_extreme = None
                             pending_bos = None
                         elif (
                             self._stage_wick_rejected_bos
@@ -1196,10 +1209,26 @@ class InternalStructureDetector(MarketStructureDetector):
                     last_bear_bos_low = None
                     # The bullish trend resumed -> its previous BOS extreme is the
                     # restored staircase floor (a genuine level, not a CHoCH seed).
-                    prev_bull_bos_extreme = last_bull_bos_high
+                    # Under the close-break floor rule the reported tracker is
+                    # restored from its OWN stash, not the gate: the gate may hold
+                    # a wick-only ratchet the reported floor never accepted, and
+                    # restoring from it would launder that wick into the next
+                    # continuation's reported reference. The CHoCH origin joins
+                    # via max(): the failure itself close-confirmed a break of it.
+                    if (
+                        self._bos_floor_require_close_break
+                        and pre_choch_bull_bos_extreme is not None
+                    ):
+                        prev_bull_bos_extreme = max(
+                            pre_choch_bull_bos_extreme, bear_choch_origin.price
+                        )
+                    else:
+                        prev_bull_bos_extreme = last_bull_bos_high
                     prev_bear_bos_extreme = None
                     pre_choch_bear_bos_low = None
                     pre_choch_bull_bos_high = None
+                    pre_choch_bear_bos_extreme = None
+                    pre_choch_bull_bos_extreme = None
                     # One-shot: a failed-CHoCH flip does NOT arm the opposite
                     # origin / blind-spot fallback, so failures cannot ping-pong.
                     choch_origin_high = None
@@ -1273,8 +1302,12 @@ class InternalStructureDetector(MarketStructureDetector):
                     # irrelevant in the new bullish leg.
                     # Stash the bearish floor in case this CHoCH later fails and
                     # the bearish trend has to resume from its genuine last BOS.
+                    # The reported floor tracker is stashed alongside (see the
+                    # bearish-CHoCH mirror): each is restored from its own stash.
                     pre_choch_bear_bos_low = last_bear_bos_low
+                    pre_choch_bear_bos_extreme = prev_bear_bos_extreme
                     pre_choch_bull_bos_high = None
+                    pre_choch_bull_bos_extreme = None
                     last_bull_bos_high = choch_high_ref.price
                     last_bear_bos_low = None
                     # New leg: seed the reported staircase floor with the CHoCH's
@@ -1390,8 +1423,29 @@ class InternalStructureDetector(MarketStructureDetector):
                             # continuation must break above this new high.
                             last_bull_bos_high = price
                             # This BOS's extreme becomes the formed level the next
-                            # bullish continuation will report as its reference.
-                            prev_bull_bos_extreme = price
+                            # bullish continuation will report as its reference --
+                            # unless this advance only *wick-swept* the reported
+                            # floor (pivot extreme beyond it, no close beyond it): a
+                            # wick that merely swept the prior BOS high did not
+                            # establish a new level, so the reported floor stays put
+                            # and the next continuation references the last
+                            # close-confirmed top, not this wick (the "second-top
+                            # wick supersedes the real top" case). An advance whose
+                            # pivot never even reached the floor (a trailing-level
+                            # break far short of it, e.g. inside a post-crash range)
+                            # still ratchets -- freezing there would leave later BOS
+                            # reporting a level their leg never broke, and the
+                            # close-break re-anchor would drop the whole staircase.
+                            # State machine / gate `last_bull_bos_high` unaffected.
+                            wick_swept_floor = (
+                                floor_at_advance is not None
+                                and price > floor_at_advance
+                                and not floor_did_close
+                            )
+                            if not (
+                                self._bos_floor_require_close_break and wick_swept_floor
+                            ):
+                                prev_bull_bos_extreme = price
                             # Stage an impulse BOS at this advance (mirror of the
                             # bearish case): displaces the prior BOS level upward by
                             # the threshold. Deduped against the real BOS later.
@@ -1574,6 +1628,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             # retire its origin and drop the stashed bearish floor.
                             bull_choch_origin = None
                             pre_choch_bear_bos_low = None
+                            pre_choch_bear_bos_extreme = None
                             pending_bos = None
                         elif (
                             self._stage_wick_rejected_bos
@@ -1722,10 +1777,24 @@ class InternalStructureDetector(MarketStructureDetector):
                     last_bull_bos_high = None
                     # The bearish trend resumed -> its previous BOS extreme is the
                     # restored staircase floor (a genuine level, not a CHoCH seed).
-                    prev_bear_bos_extreme = last_bear_bos_low
+                    # Mirror of the bullish restore: under the close-break floor
+                    # rule the reported tracker restores from its own stash (the
+                    # gate may hold a wick-only ratchet), min()'d with the origin
+                    # whose break the failure itself close-confirmed.
+                    if (
+                        self._bos_floor_require_close_break
+                        and pre_choch_bear_bos_extreme is not None
+                    ):
+                        prev_bear_bos_extreme = min(
+                            pre_choch_bear_bos_extreme, bull_choch_origin.price
+                        )
+                    else:
+                        prev_bear_bos_extreme = last_bear_bos_low
                     prev_bull_bos_extreme = None
                     pre_choch_bear_bos_low = None
                     pre_choch_bull_bos_high = None
+                    pre_choch_bear_bos_extreme = None
+                    pre_choch_bull_bos_extreme = None
                     # One-shot: a failed-CHoCH flip does NOT arm the opposite
                     # origin / blind-spot fallback, so failures cannot ping-pong.
                     choch_origin_low = None
@@ -1798,8 +1867,14 @@ class InternalStructureDetector(MarketStructureDetector):
                     # irrelevant in the new bearish leg.
                     # Stash the bullish ceiling in case this CHoCH later fails
                     # and the bullish trend resumes from its genuine last BOS.
+                    # The reported floor tracker is stashed alongside: it may sit
+                    # below the gate (a wick-only break ratchets the gate but not
+                    # the close-confirmed reported floor), and a failed CHoCH must
+                    # restore each from its own stash.
                     pre_choch_bull_bos_high = last_bull_bos_high
+                    pre_choch_bull_bos_extreme = prev_bull_bos_extreme
                     pre_choch_bear_bos_low = None
+                    pre_choch_bear_bos_extreme = None
                     last_bear_bos_low = choch_low_ref.price
                     last_bull_bos_high = None
                     # New leg: seed the reported staircase floor with the CHoCH's
@@ -1913,8 +1988,27 @@ class InternalStructureDetector(MarketStructureDetector):
                             # continuation must break below this new low.
                             last_bear_bos_low = price
                             # This BOS's extreme becomes the formed level the next
-                            # bearish continuation will report as its reference.
-                            prev_bear_bos_extreme = price
+                            # bearish continuation will report as its reference --
+                            # unless this advance only *wick-swept* the reported
+                            # floor (pivot extreme beyond it, no close beyond it):
+                            # such a wick did not establish a new level, so the
+                            # reported floor stays put and the next continuation
+                            # references the last close-confirmed bottom, not the
+                            # wick. An advance whose pivot never even reached the
+                            # floor (a trailing-level break far short of it) still
+                            # ratchets -- freezing there would leave later BOS
+                            # reporting a level their leg never broke, and the
+                            # close-break re-anchor would drop the whole staircase.
+                            # State machine / gate `last_bear_bos_low` unaffected.
+                            wick_swept_floor = (
+                                floor_at_advance is not None
+                                and price < floor_at_advance
+                                and not floor_did_close
+                            )
+                            if not (
+                                self._bos_floor_require_close_break and wick_swept_floor
+                            ):
+                                prev_bear_bos_extreme = price
                             # Stage an impulse BOS at this advance if it displaces
                             # the prior BOS level by the threshold. Recorded
                             # separately and deduped against the real BOS later, so
