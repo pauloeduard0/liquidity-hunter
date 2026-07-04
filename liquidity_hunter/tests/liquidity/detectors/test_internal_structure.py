@@ -2368,3 +2368,134 @@ def test_breakout_bos_references_close_confirmed_top_when_on() -> None:
         for e in events
     )
 
+
+# --- Candidate-continuation promotion is weak on a wick-only staircase break ---
+# Real AAVEUSDT H1, the full production internal-detector window (structural
+# anchor 2026-05-10 20:00 .. 07-04; the release-gap/min-pullback guards use the
+# series-wide mean true range, so a truncated window would not reproduce the
+# production state). Same wick as the fixtures above, but here the wick-leg BOS
+# never *emits* (window-dependent state), so the CHoCH reference comes from the
+# OTHER promotion path: the 06-17 02:00 state-advance (close above the trailing
+# 76.35; pivot wick 77.94 over the unbroken 77.70 staircase floor) promotes the
+# candidate pullback 72.25 via the continuation-gated step. With the flag off
+# that promotion is structural even though nothing ever closed above 77.70 --
+# so a premature bearish CHoCH fires 06-18 at base persistence and fails 06-20,
+# then a second whipsaw pair follows (06-23 05:00 at a degraded 74.45 ref,
+# failed 06-24 20:00). With the flag on, a wick-only staircase break promotes
+# the candidate as *weak*: both premature CHoCHs demote to sweeps, the one
+# honest bearish CHoCH fires 06-23 15:00 against 72.25 via the barrier (price
+# genuinely sustained below), fails honestly 06-24 10:00 when the rally
+# invalidates it -- and the breakout BOS confirms 06-24 22:00, on the first
+# close above the wick-swept 77.70 top, ~30h before the old 06-26 mark.
+_AAVE_1H_PRODUCTION_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "aaveusdt_1h_2026_05_10_07_04.json"
+)
+
+
+def _load_aave_1h_production_window_candles() -> list[Candle]:
+    rows = json.loads(_AAVE_1H_PRODUCTION_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="AAVEUSDT",
+            timeframe=TimeFrame.H1,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _aave_1h_production_detector(require_close_break: bool) -> InternalStructureDetector:
+    """Full production H1 wiring, close-break-structural flag injectable."""
+    return InternalStructureDetector(
+        swing_lookback=4,
+        persistence_candles=2,
+        confluence_filter=True,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=80,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_pct=0.04,
+        bos_leg_origin_release_gap_atr=3.0,
+        choch_weak_ref_persistence_candles=4,
+        bos_leg_origin_min_pullback_atr=1.5,
+        bos_leg_origin_require_close_break=require_close_break,
+        bos_floor_require_close_break=True,
+    )
+
+
+def test_wick_advance_candidate_promotion_fires_premature_chochs_when_off() -> None:
+    """Off: the candidate promoted at the wick advance is structural, so two
+    premature bearish CHoCH/CHOCH_FAILED whipsaw pairs print inside the window
+    where nothing ever closed above the 77.70 top."""
+    events = _aave_1h_production_detector(require_close_break=False).detect(
+        _load_aave_1h_production_window_candles()
+    )
+
+    bear = _bear_chochs(events)
+    in_window = [
+        e
+        for e in bear
+        if datetime(2026, 6, 17, tzinfo=UTC) <= e.timestamp <= datetime(2026, 6, 25, tzinfo=UTC)
+    ]
+    assert [(e.timestamp, e.reference_price_level) for e in in_window] == [
+        (datetime(2026, 6, 18, 15, tzinfo=UTC), 72.25),
+        (datetime(2026, 6, 23, 5, tzinfo=UTC), 74.45),
+    ]
+    # The premature CHoCH fired at base persistence precisely because the
+    # wick-advance promotion wrongly marked its reference structural.
+    assert in_window[0].reference_structural is True
+    # The breakout BOS only prints 06-26, referencing the close-confirmed top.
+    assert any(
+        e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 6, 26, 6, tzinfo=UTC)
+        and e.reference_price_level == 77.70
+        for e in events
+    )
+
+
+def test_wick_advance_candidate_promotion_weak_defers_choch_when_on() -> None:
+    """On: the wick-advance candidate promotion is weak, so the premature CHoCHs
+    demote to sweeps; one honest bearish CHoCH fires via the barrier and fails
+    honestly, and the breakout BOS confirms on the first close above 77.70."""
+    events = _aave_1h_production_detector(require_close_break=True).detect(
+        _load_aave_1h_production_window_candles()
+    )
+
+    bear = _bear_chochs(events)
+    in_window = [
+        e
+        for e in bear
+        if datetime(2026, 6, 17, tzinfo=UTC) <= e.timestamp <= datetime(2026, 6, 25, tzinfo=UTC)
+    ]
+    assert [(e.timestamp, e.reference_price_level) for e in in_window] == [
+        (datetime(2026, 6, 23, 15, tzinfo=UTC), 72.25),
+    ]
+    # The surviving CHoCH is classified (and rendered) as a weak-reference one:
+    # it fired via the new-cycle barrier, not the conservative sequence.
+    assert in_window[0].reference_structural is False
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 6, 24, 10, tzinfo=UTC)
+        for e in events
+    )
+    # The breakout BOS confirms at the first close above the wick-swept top.
+    assert any(
+        e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 6, 24, 22, tzinfo=UTC)
+        and e.reference_price_level == 77.70
+        for e in events
+    )

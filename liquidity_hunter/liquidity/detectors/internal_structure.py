@@ -1421,7 +1421,19 @@ class InternalStructureDetector(MarketStructureDetector):
                                 and price > bull_leg_high
                             ):
                                 validated_choch_low = candidate_choch_low
-                                validated_choch_low_structural = True
+                                # The continuation that justifies this promotion is
+                                # only close-confirmed if a candle closed beyond the
+                                # staircase floor. A wick-only new leg high (the
+                                # advance never closed past the prior BOS top --
+                                # `_reanchor_bos_close_break` hides its mark) makes
+                                # the promoted pullback a *weak* reference, so the
+                                # new-cycle barrier governs a CHoCH against it
+                                # instead of base persistence off an unconfirmed
+                                # break (mirror of the emitted-BOS leg-origin rule).
+                                validated_choch_low_structural = (
+                                    floor_did_close
+                                    or not self._bos_leg_origin_require_close_break
+                                )
                                 choch_origin_low = None
                             if bull_leg_high is None or price > bull_leg_high:
                                 bull_leg_high = price
@@ -1989,7 +2001,14 @@ class InternalStructureDetector(MarketStructureDetector):
                                 and price < bear_leg_low
                             ):
                                 validated_choch_high = candidate_choch_high
-                                validated_choch_high_structural = True
+                                # Mirror of the bullish case: a wick-only new leg
+                                # low (no candle closed past the prior BOS bottom)
+                                # promotes the pullback as a *weak* reference, so
+                                # the new-cycle barrier governs a CHoCH against it.
+                                validated_choch_high_structural = (
+                                    floor_did_close
+                                    or not self._bos_leg_origin_require_close_break
+                                )
                                 choch_origin_high = None
                             if bear_leg_low is None or price < bear_leg_low:
                                 bear_leg_low = price

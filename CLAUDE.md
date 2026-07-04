@@ -1452,9 +1452,38 @@ changes (−3/+1: the whipsaw CHoCH/`CHOCH_FAILED` pair plus a duplicate collaps
 into one clean 06-23 CHoCH). Real-data regression fixture:
 `tests/liquidity/detectors/data/aaveusdt_1h_2026_06_05_24.json` (457-candle
 self-contained window). Off = byte-for-byte identical. Not mirrored into
-`SwingStructureDetector` (not drawn); gates only the *emitted*-BOS leg-origin
-promotion (the candidate-continuation and reclaim-kill structural paths are
-untouched).
+`SwingStructureDetector` (not drawn); gates the *emitted*-BOS leg-origin
+promotion and (since the same day, see below) the candidate-continuation
+promotion; the reclaim-kill structural path is untouched.
+
+*Candidate-continuation extension (2026-07-04, same flag)*: the
+continuation-gated candidate promotion (`candidate_choch_<side>` →
+`validated_choch_<side>` on a new leg extreme) now also marks the promoted
+reference weak when the advance's staircase-floor break was wick-only
+(`floor_did_close` false — the same physical test). The emission gate alone was
+incomplete: on the production window the wick-leg BOS never *emits* (so the
+emission gate never runs), yet the wick advance itself — a new leg extreme by
+wick only — promoted the candidate as structural, and a CHoCH fired against it
+at base persistence with zero closes beyond the floor (user-reported: AAVE H1
+bearish CHoCH 06-23 against a leg whose only break of the 77.70 top was the
+06-17 wick; in the full window the premature CHoCH pair was 06-18/72.25 →
+failed 06-20, then 06-23/74.45 → failed 06-24). A blanket "skip promotion
+without a floor close" variant was **rejected by measurement**: it does not
+remove those CHoCHs (the reference arrives via the candidate path) and it
+destroys genuine wick-top reversals — AAVE H1 06-28 (99.29 wick top over the
+98.18 floor, then −15%: base catches the bearish CHoCH + staircase, the skip
+variant loses all of it) and BTC 1d's early Oct-2023 reversal — because a
+wick-only top is often exactly the SMC liquidity grab a reversal should be
+measured from. Weak-promote keeps those reversals (barrier persistence) while
+demoting the premature ones. Measured (BTC/ETH/SOL/AAVE × 5m..1d, all flags
+wired): **23/24 byte-identical**, only AAVE H1 changes — the two whipsaw pairs
+collapse to one honest CHoCH (06-23 15:00 vs 72.25, sustained hold, failed
+honestly 06-24 10:00) and the breakout BOS confirms 06-24 22:00 on the first
+close above 77.70 (~30h earlier), staircase 77.70 → 85.12 → 87.99. Real-data
+regression fixture: `tests/liquidity/detectors/data/aaveusdt_1h_2026_05_10_07_04.json`
+(1315 candles — the **full** production internal-detector slice from the
+structural anchor; the release-gap/min-pullback ATR guards use the series-wide
+mean true range, so a truncated window does not reproduce production state).
 
 **Close-confirmed reported staircase floor** (`InternalStructureDetector`, as
 of 2026-07-04, companion to the above): `bos_floor_require_close_break`
