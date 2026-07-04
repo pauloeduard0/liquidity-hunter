@@ -114,7 +114,14 @@ and `validate_assignment=True`. New entities should follow this pattern.
   broken CHoCH *origin* for `CHOCH_FAILED`), and `reference_timestamp` (for
   CHoCH: the timestamp of the LH/HL pivot promoted to `validated_choch_<side>`;
   for BOS: the candle that *formed* the broken level, so the line starts at the
-  level's origin — both used to anchor the line's start in the frontend). A
+  level's origin — both used to anchor the line's start in the frontend), and
+  `reference_structural` (`bool | None`; `InternalStructureDetector` CHoCH only:
+  whether the broken reference was a *structural* level — close-confirmed leg
+  origin / continuation-promoted pullback / pending-BOS origin / blind-spot
+  origin — or a *weak* one (re-anchor, wick-only-break promotion, cold-start
+  fallback), the same classification the new-cycle persistence barrier uses;
+  `None` for other events and the major detector — the frontend renders weak
+  CHoCH dimmed/dotted with a `*` suffix). A
   `CHOCH_FAILED` event marks a CHoCH
   that was invalidated before a confirming BOS (its `direction` is the failed
   CHoCH's direction); see the `InternalStructureDetector` notes.
@@ -927,7 +934,12 @@ selector.
   level — the prior swing extreme for BOS, the promoted LH/HL for CHoCH), so the
   line runs from the level's origin to where it was broken rather than starting
   at the break. SWEEP lines are drawn at `price_level` (the sweep wick's
-  extreme), starting at the event `timestamp`.
+  extreme), starting at the event `timestamp`. A CHoCH with
+  `reference_structural === false` (a weak reference — re-anchor/fallback level
+  or wick-only-break promotion, barrier-governed) renders **dotted and dimmed**
+  (`SparseDotted`, color + `99` alpha) with a `*` label suffix (`CHoCH* ▼`),
+  so a conservative-sequence CHoCH (structural leg origin, solid dashed
+  `CHoCH ▼`) is distinguishable at a glance.
 
 - **`frontend/src/components/ManipulationCyclesPanel.tsx`** —
   `ManipulationCyclesPanel` sidebar component: renders manipulation cycle

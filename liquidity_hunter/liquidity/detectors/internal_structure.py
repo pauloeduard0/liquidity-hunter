@@ -888,6 +888,7 @@ class InternalStructureDetector(MarketStructureDetector):
             reference_price_level: float,
             reference_timestamp: datetime | None = None,
             origin_price_level: float | None = None,
+            reference_structural: bool | None = None,
         ) -> None:
             nonlocal last_advance_index
             if event in (
@@ -908,6 +909,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     reference_timestamp=reference_timestamp,
                     origin_price_level=origin_price_level,
                     scope=StructureScope.INTERNAL,
+                    reference_structural=reference_structural,
                 )
             )
 
@@ -1269,6 +1271,10 @@ class InternalStructureDetector(MarketStructureDetector):
                         price,
                         choch_high_ref.price,
                         reference_timestamp=choch_high_ref.timestamp,
+                        # Surface the barrier's own classification so consumers
+                        # (the chart) can tell a conservative-sequence CHoCH
+                        # from one against a weak reference.
+                        reference_structural=not choch_high_weak_ref,
                     )
                     trend = MarketDirection.BULLISH
                     # The active low this rally launched from is the bullish
@@ -1835,6 +1841,9 @@ class InternalStructureDetector(MarketStructureDetector):
                         price,
                         choch_low_ref.price,
                         reference_timestamp=choch_low_ref.timestamp,
+                        # Mirror of the bullish case: expose whether this CHoCH
+                        # broke a structural or a weak (barrier-governed) level.
+                        reference_structural=not choch_low_weak_ref,
                     )
                     trend = MarketDirection.BEARISH
                     # The active high this drop launched from is the bearish

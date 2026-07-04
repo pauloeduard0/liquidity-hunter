@@ -968,10 +968,19 @@ export function MainChart({
           ? toUtcTimestamp(event.reference_timestamp)
           : startTime
 
+      // A CHoCH that broke a *weak* reference (a re-anchor/fallback level or a
+      // wick-only-break promotion -- the ones the new-cycle persistence barrier
+      // governs) renders dotted and dimmed with a `*` label suffix, so a
+      // conservative-sequence CHoCH (structural leg origin) is tellable at a
+      // glance.
+      const weakChoch =
+        event.event === 'change_of_character' && event.reference_structural === false
+      const lineColor = weakChoch ? `${style.color}99` : style.color
+
       const structureSeries = chart.addSeries(LineSeries, {
-        color: style.color,
+        color: lineColor,
         lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
+        lineStyle: weakChoch ? LineStyle.SparseDotted : LineStyle.Dashed,
         lastValueVisible: false,
         priceLineVisible: false,
         crosshairMarkerVisible: false,
@@ -982,8 +991,8 @@ export function MainChart({
       labels.push({
         time: startTime,
         price: linePrice,
-        color: style.color,
-        text: `${style.label} ${directionIcon}${oiSuffix ? ` ${oiSuffix}` : ''}`,
+        color: lineColor,
+        text: `${style.label}${weakChoch ? '*' : ''} ${directionIcon}${oiSuffix ? ` ${oiSuffix}` : ''}`,
       })
     }
 

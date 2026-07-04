@@ -102,6 +102,9 @@ export interface MarketStructure {
   reference_timestamp: string | null
   origin_price_level: number | null
   scope: StructureScope
+  /** CHoCH only: broken reference was structural (conservative sequence) vs
+   *  weak (re-anchor/fallback/wick-promoted, barrier-governed). Null elsewhere. */
+  reference_structural?: boolean | null
 }
 
 export interface ScoredLiquidityZone {
