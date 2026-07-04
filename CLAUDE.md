@@ -1413,6 +1413,37 @@ self-contained window; off → CHoCH ref 86.59 @ 07-02, on → 87.82 @ 07-03). O
 = byte-for-byte identical. Not mirrored into `SwingStructureDetector` (not
 drawn).
 
+**Close-confirmed structural leg origin** (`InternalStructureDetector`, as of
+2026-07-04): `bos_leg_origin_require_close_break` (constructor default `False`;
+requires `bos_leg_origin_choch_ref`; wired **`True`** in `load_dashboard_data`).
+A BOS's state machine advances on a close beyond the trailing `active_<side>`,
+but the leg origin it promotes to the opposite CHoCH reference is marked
+`validated_choch_<side>_structural = True` **only if a candle actually *closed*
+beyond the staircase floor** it reported (`_PendingBOS.floor`, checked with the
+same `find_close_break_index`). When the continuation merely *wicked* past the
+prior BOS level — the exact break `_reanchor_bos_close_break` drops from the
+visible marks anyway — the origin is still promoted to the CHoCH reference but
+as a **weak** reference (`_structural = False`), so the new-cycle barrier
+(`choch_weak_ref_persistence_candles`) governs the resulting CHoCH and
+re-anchors may still slide it, instead of it firing at base persistence off an
+unconfirmed break. This closes the gap between the wick-based staircase gate
+(which accepts a pivot whose wick beats the prior BOS high) and the close-based
+composition drop (which hides that BOS): the promotion now agrees with the
+mark. Motivating case (measured, AAVEUSDT H1 `limit=1200`): a bullish leg from
+the 72.61 fundo (06-16 14:00) makes its only new high over the prior 77.70 BOS
+top as a single-candle wick to 77.94 (06-17 02:00, close 76.94, no close above
+77.70). Off, 72.61 is structural → a 06-18 poke fires a premature bearish CHoCH
+that fails 06-20 (whipsaw); on, 72.61 is weak → the barrier defers the genuine
+bearish CHoCH to 06-23 at the same level. Measured (BTC/ETH/SOL/AAVE ×
+5m/15m/30m/1h/4h/1d): **23 of 24 combinations byte-identical**, only AAVE H1
+changes (−3/+1: the whipsaw CHoCH/`CHOCH_FAILED` pair plus a duplicate collapse
+into one clean 06-23 CHoCH). Real-data regression fixture:
+`tests/liquidity/detectors/data/aaveusdt_1h_2026_06_05_24.json` (457-candle
+self-contained window). Off = byte-for-byte identical. Not mirrored into
+`SwingStructureDetector` (not drawn); gates only the *emitted*-BOS leg-origin
+promotion (the candidate-continuation and reclaim-kill structural paths are
+untouched).
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a

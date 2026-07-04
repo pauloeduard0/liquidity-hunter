@@ -2164,3 +2164,107 @@ def test_shallow_pullback_promotes_choch_to_correction_top() -> None:
     # The reference is anchored at the pivot that formed the correction top, so
     # the frontend draws the CHoCH line from the leg's origin, not the break.
     assert chochs[0].reference_timestamp == datetime(2026, 7, 1, 2, tzinfo=UTC)
+
+
+# --- Leg origin promoted as *structural* only on a close-confirmed break -------
+# Real AAVEUSDT H1 window (2026-06-05 .. 06-24). Bullish trend from the 06-08
+# CHoCH. A pullback bottoms at 72.61 (06-16 14:00); the leg then rises and its
+# only new high over the prior 77.70 BOS top is a single-candle *wick* to 77.94
+# (06-17 02:00, close 76.94) -- no candle closes above 77.70. The state machine
+# still emits that continuation BOS (its close-break was against the lower
+# trailing 76.35), promoting the 72.61 leg origin to the bearish-CHoCH
+# reference. With `bos_leg_origin_require_close_break` off, that origin is
+# *structural* (base persistence), so the 06-18 poke to 70.64 fires a premature
+# bearish CHoCH that fails 06-20 (whipsaw). On, the wick-only break promotes
+# 72.61 as a *weak* reference, so the new-cycle barrier governs it and the
+# genuine bearish CHoCH fires once 06-23, at the same 72.61 level.
+_AAVE_1H_WICK_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "aaveusdt_1h_2026_06_05_24.json"
+)
+
+
+def _load_aave_1h_wick_window_candles() -> list[Candle]:
+    rows = json.loads(_AAVE_1H_WICK_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="AAVEUSDT",
+            timeframe=TimeFrame.H1,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _aave_1h_wick_detector(require_close_break: bool) -> InternalStructureDetector:
+    """Production H1 wiring, close-break-structural flag injectable."""
+    return InternalStructureDetector(
+        swing_lookback=4,
+        persistence_candles=2,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=80,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_atr=3.0,
+        choch_weak_ref_persistence_candles=4,
+        bos_leg_origin_require_close_break=require_close_break,
+    )
+
+
+def _bear_chochs(events: list[MarketStructure]) -> list[MarketStructure]:
+    return [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BEARISH
+    ]
+
+
+def test_wick_only_leg_origin_structural_fires_premature_choch_when_off() -> None:
+    """With the flag off, the wick-only continuation's leg origin (72.61) is a
+    structural reference at base persistence, so the 06-18 poke fires a premature
+    bearish CHoCH that then fails 06-20 (a whipsaw pair)."""
+    events = _aave_1h_wick_detector(require_close_break=False).detect(
+        _load_aave_1h_wick_window_candles()
+    )
+
+    bear = _bear_chochs(events)
+    assert bear[0].timestamp == datetime(2026, 6, 18, 15, tzinfo=UTC)
+    assert bear[0].reference_price_level == 72.61
+    # The premature reversal is invalidated two days later.
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 6, 20, 21, tzinfo=UTC)
+        for e in events
+    )
+
+
+def test_wick_only_leg_origin_weak_defers_choch_to_barrier_when_on() -> None:
+    """On, the wick-only break promotes 72.61 as a *weak* reference: the premature
+    06-18 CHoCH and its 06-20 failure are gone, and the genuine bearish CHoCH
+    fires once on 06-23 against the same 72.61 level."""
+    events = _aave_1h_wick_detector(require_close_break=True).detect(
+        _load_aave_1h_wick_window_candles()
+    )
+
+    bear = _bear_chochs(events)
+    assert len(bear) == 1
+    assert bear[0].timestamp == datetime(2026, 6, 23, 6, tzinfo=UTC)
+    assert bear[0].reference_price_level == 72.61
+    # No premature reversal to fail: the 06-20 CHOCH_FAILED is gone.
+    assert not any(
+        e.event is StructureEvent.CHOCH_FAILED and e.direction is MarketDirection.BEARISH
+        for e in events
+    )
+

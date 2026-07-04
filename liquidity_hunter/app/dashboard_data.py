@@ -565,6 +565,13 @@ def load_dashboard_data(
         # anchored the CHoCH reference retraced < N x ATR%, use the correction's
         # extreme pivot instead, so the CHoCH line sits at the visible leg top.
         bos_leg_origin_min_pullback_atr=_BOS_LEG_ORIGIN_MIN_PULLBACK_ATR.get(timeframe),
+        # A leg origin is only a *structural* CHoCH reference if the continuation
+        # actually *closed* beyond the prior BOS level. A BOS whose staircase
+        # break only wicked past that level (the mark is dropped by
+        # _reanchor_bos_close_break anyway) promotes its origin as a *weak*
+        # reference instead -- so the new-cycle barrier governs the resulting
+        # CHoCH rather than it firing at base persistence off an unconfirmed break.
+        bos_leg_origin_require_close_break=True,
         # New-cycle barrier: a CHoCH against a weak (re-anchored/fallback)
         # reference needs a longer sustained hold on the intraday timeframes;
         # structural references keep the base persistence.

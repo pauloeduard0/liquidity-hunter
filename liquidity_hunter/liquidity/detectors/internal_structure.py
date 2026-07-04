@@ -235,6 +235,13 @@ class _PendingBOS:
     # wicky pullbacks form before -- or instead of -- a real one). Only used
     # when `stage_wick_rejected_bos` is set. See the wick-reject staging below.
     staged: bool = False
+    # Whether a candle actually *closed* beyond the staircase floor (not just
+    # wicked past it) by the time the state advanced. When the continuation only
+    # poked the prior BOS level with a wick, the break is unconfirmed by close --
+    # so the leg origin it promotes is *not* a structural CHoCH reference (see
+    # `bos_leg_origin_require_close_break`). `True` when `floor` is `None` (the
+    # first BOS of a leg has no floor to close through) or the feature is off.
+    floor_closed: bool = True
 
 
 class InternalStructureDetector(MarketStructureDetector):
@@ -498,6 +505,7 @@ class InternalStructureDetector(MarketStructureDetector):
         bos_leg_origin_release_gap_pct: float | None = None,
         bos_leg_origin_release_gap_atr: float | None = None,
         bos_leg_origin_min_pullback_atr: float | None = None,
+        bos_leg_origin_require_close_break: bool = False,
         choch_weak_ref_persistence_candles: int | None = None,
     ) -> None:
         if persistence_candles < 1:
@@ -541,6 +549,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._bos_leg_origin_release_gap_pct = bos_leg_origin_release_gap_pct
         self._bos_leg_origin_release_gap_atr = bos_leg_origin_release_gap_atr
         self._bos_leg_origin_min_pullback_atr = bos_leg_origin_min_pullback_atr
+        self._bos_leg_origin_require_close_break = bos_leg_origin_require_close_break
         self._choch_weak_ref_persistence_candles = choch_weak_ref_persistence_candles
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
@@ -992,7 +1001,12 @@ class InternalStructureDetector(MarketStructureDetector):
                                 and pending_bos.pullback_ref is not None
                             ):
                                 validated_choch_high = pending_bos.pullback_ref
-                                validated_choch_high_structural = True
+                                # Only a close-confirmed break makes the leg origin
+                                # *structural*: a continuation that merely wicked the
+                                # prior BOS level promotes it as a weak reference (so
+                                # the new-cycle barrier governs the CHoCH and
+                                # re-anchors may still slide it).
+                                validated_choch_high_structural = pending_bos.floor_closed
                                 choch_origin_high = None
                             # The bearish CHoCH is now confirmed by an *emitted*
                             # BOS (a state-advance alone leaves a still-pending BOS
@@ -1338,6 +1352,21 @@ class InternalStructureDetector(MarketStructureDetector):
                         if close_idx is None:
                             wick_only_break = True
                         else:
+                            # Did any candle actually *close* beyond the staircase
+                            # floor (the prior BOS high), or did the leg only wick
+                            # past it? Reused below to gate both the reported-floor
+                            # ratchet and the leg-origin structural promotion.
+                            floor_did_close = (
+                                floor_at_advance is None
+                                or find_close_break_index(
+                                    candles,
+                                    prev_high_pivot_index + 1,
+                                    current_index,
+                                    floor_at_advance,
+                                    bullish=True,
+                                )
+                                is not None
+                            )
                             # Promote the previous bullish BOS's pullback to the
                             # validated bearish-CHoCH reference *only* if this
                             # break makes a NEW LEG HIGH (above bull_leg_high,
@@ -1463,6 +1492,16 @@ class InternalStructureDetector(MarketStructureDetector):
                             if not self._confluence_filter or bos_confluence(
                                 candles[close_idx], bullish=True
                             ):
+                                # A wick-only poke of the prior BOS high is not a
+                                # close-confirmed break, so the leg origin it carries
+                                # is not a structural CHoCH reference (see the
+                                # emission below). `floor_did_close` is the physical
+                                # fact (computed above); the flag decides whether to
+                                # act on it.
+                                floor_closed = (
+                                    not self._bos_leg_origin_require_close_break
+                                    or floor_did_close
+                                )
                                 pending_bos = _PendingBOS(
                                     direction=MarketDirection.BULLISH,
                                     breaking_pivot=pivot,
@@ -1470,6 +1509,7 @@ class InternalStructureDetector(MarketStructureDetector):
                                     close_break_timestamp=candles[close_idx].timestamp,
                                     pullback_ref=pullback_ref_snapshot,
                                     floor=floor_at_advance,
+                                    floor_closed=floor_closed,
                                 )
                 elif price < active_high.price:
                     emit(
@@ -1523,7 +1563,10 @@ class InternalStructureDetector(MarketStructureDetector):
                                 and pending_bos.pullback_ref is not None
                             ):
                                 validated_choch_low = pending_bos.pullback_ref
-                                validated_choch_low_structural = True
+                                # Mirror of the bearish case: only a close-confirmed
+                                # break makes the leg origin structural; a wick-only
+                                # continuation promotes it as a weak reference.
+                                validated_choch_low_structural = pending_bos.floor_closed
                                 choch_origin_low = None
                             # The bullish CHoCH is now confirmed by an *emitted*
                             # BOS (a state-advance alone leaves a still-pending BOS
@@ -1832,6 +1875,21 @@ class InternalStructureDetector(MarketStructureDetector):
                         if close_idx is None:
                             wick_only_break = True
                         else:
+                            # Mirror of the bullish case: did any candle *close*
+                            # beyond the staircase floor (the prior BOS low), or did
+                            # the leg only wick past it? Reused for the reported-floor
+                            # ratchet and the leg-origin structural promotion.
+                            floor_did_close = (
+                                floor_at_advance is None
+                                or find_close_break_index(
+                                    candles,
+                                    prev_low_pivot_index + 1,
+                                    current_index,
+                                    floor_at_advance,
+                                    bullish=False,
+                                )
+                                is not None
+                            )
                             # Promote the previous bearish BOS's pullback to the
                             # validated bullish-CHoCH reference *only* if this
                             # break makes a NEW LEG LOW (below bear_leg_low, the
@@ -1963,6 +2021,15 @@ class InternalStructureDetector(MarketStructureDetector):
                             if not self._confluence_filter or bos_confluence(
                                 candles[close_idx], bullish=False
                             ):
+                                # Mirror of the bullish case: a wick-only poke of
+                                # the prior BOS low is not a close-confirmed break,
+                                # so the leg origin it carries is not a structural
+                                # CHoCH reference (see the emission below).
+                                # `floor_did_close` is the physical fact (above).
+                                floor_closed = (
+                                    not self._bos_leg_origin_require_close_break
+                                    or floor_did_close
+                                )
                                 pending_bos = _PendingBOS(
                                     direction=MarketDirection.BEARISH,
                                     breaking_pivot=pivot,
@@ -1970,6 +2037,7 @@ class InternalStructureDetector(MarketStructureDetector):
                                     close_break_timestamp=candles[close_idx].timestamp,
                                     pullback_ref=pullback_ref_snapshot,
                                     floor=floor_at_advance,
+                                    floor_closed=floor_closed,
                                 )
                 elif price > active_low.price:
                     emit(
