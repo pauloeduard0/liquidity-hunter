@@ -362,7 +362,10 @@ re-exported from `liquidity_hunter.data`.
   structure, with `scope = StructureScope.INTERNAL` stamped on every emitted
   `MarketStructure` (see `app.dashboard_data.load_dashboard_data`, which runs
   it on the same candle series as `market_structure_events`, with a smaller
-  `internal_swing_lookback` to surface minor pivots within that series). Like
+  per-timeframe `swing_lookback`/`persistence_candles` to surface minor pivots
+  within that series — see `_INTERNAL_STRUCTURE_PARAMS` under `load_dashboard_data`).
+  A Portuguese walkthrough of the whole BOS/CHoCH pipeline lives in
+  `liquidity_hunter/docs/estrutura_bos_choch.md`. Like
   `SwingStructureDetector`, it sources swing pivots from
   `SwingHighDetector`/`SwingLowDetector` (`swing_lookback`) via the shared
   `_common.collect_pivots`, and maintains `pending_high`/`pending_low`
@@ -744,7 +747,7 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `liquidation_map` (`LeverageLiquidationMap | None`), and
   `narrative` (`MarketNarrative | None`), and `oi_analysis`
   (`OIAnalysis | None`) for one symbol/timeframe.
-- **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=1200, swing_lookback=..., internal_swing_lookback=..., confluence_filter=True)`**
+- **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=1200, swing_lookback=..., confluence_filter=False, futures_provider=...)`**
   — fetches a single buffered candle series (`buffered_candles`) and derives the
   visible `candles` from its tail (`buffered_candles[-limit:]`; no separate fetch
   for the visible window — its second fetch would be redundant and could race a
@@ -754,6 +757,11 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `InternalStructureDetector` on a **structurally anchored** slice of it to
   populate `market_structure_events` and `internal_structure_events`
   respectively, both filtered to the visible window. The internal detector's
+  base `swing_lookback`/`persistence_candles` are resolved **per timeframe** from
+  `_INTERNAL_STRUCTURE_PARAMS` (M5=`(6, 4)`, M15=`(6, 2)`, M30=`(5, 2)`,
+  H1=`(4, 2)`, H4=`(5, 8)`, D1=`(5, 8)`, W1=`(5, 12)`; `_DEFAULT_INTERNAL_PARAMS
+  = (5, 12)`) — so the constructor defaults (`2`/`5`) apply only to a
+  directly-built detector, not the production wiring. The internal detector's
   output is passed through **`_reanchor_bos_close_break`** before the visible
   filter (and before `POIDetector` consumes it): each `BREAK_OF_STRUCTURE` is
   re-timed to the first candle that *closes* beyond the formed level it broke
@@ -777,10 +785,14 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `reference_timestamp` are kept. Same-timestamp BOS are judged
   earlier-formed-reference first (the earlier structural break).
   `confluence_filter` is exposed for tests that exercise state-machine logic
-  without needing emission-quality filters. `higher_timeframe_direction` is
-  the `direction` of the most recent `MarketStructure` event in
-  `market_structure_events` (`_latest_structure_direction`), or `NEUTRAL` if
-  none detected yet.
+  without needing emission-quality filters. `higher_timeframe_direction` is the
+  **state-machine trend** (`SwingStructureDetector.final_trend`) of a separate
+  detector run on the **higher** timeframe (mapped via `_HIGHER_TIMEFRAME_MAP`,
+  fetched for `_HIGHER_TIMEFRAME_CANDLE_LIMIT` candles); for the top timeframe
+  (no higher TF) it falls back to the current `major_detector.final_trend`.
+  Using the detector's `final_trend` rather than the last event's `direction`
+  avoids spurious flips from descriptive HH/HL/LH/LL pivots or `LIQUIDITY_SWEEP`
+  events (whose `direction` is the pivot/wick side, not the standing trend).
 
   `buffered_candles` is fetched with an extra
   `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER = 300` candles of history prepended
@@ -876,7 +888,7 @@ only on `app` and `core` (an alternative presentation layer to
 
 - **`api/routes/health.py`** — `GET /api/health` returns `{"status": "ok"}`.
 - **`api/routes/dashboard.py`** — `GET /api/dashboard` (query params
-  `symbol`, `timeframe`, `limit`, `swing_lookback`, `internal_swing_lookback`,
+  `symbol`, `timeframe`, `limit`, `swing_lookback`,
   defaults matching `load_dashboard_data`) calls `load_dashboard_data`
   directly (no duplicated logic) and returns a `DashboardDataResponse`.
   Results are
