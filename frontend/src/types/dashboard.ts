@@ -105,6 +105,11 @@ export interface MarketStructure {
   /** CHoCH only: broken reference was structural (conservative sequence) vs
    *  weak (re-anchor/fallback/wick-promoted, barrier-governed). Null elsewhere. */
   reference_structural?: boolean | null
+  /** BOS only: a provisional live-edge continuation (floor closed-broken but its
+   *  confirming swing pivots have not formed yet). Rendered dimmed with a `?`;
+   *  superseded by the confirmed BOS once pivots form, or vanishes if the trend
+   *  flips first. False/absent for confirmed BOS. */
+  provisional?: boolean
 }
 
 export interface ScoredLiquidityZone {

@@ -975,12 +975,21 @@ export function MainChart({
       // glance.
       const weakChoch =
         event.event === 'change_of_character' && event.reference_structural === false
-      const lineColor = weakChoch ? `${style.color}99` : style.color
+      // A provisional BOS is a live-edge continuation whose floor already
+      // closed-broke but whose confirming swing pivots have not formed yet.
+      // Same dimmed/dotted treatment as a weak CHoCH, with a `?` suffix
+      // (`BOS? ▼`): it is superseded by the confirmed BOS once pivots form, or
+      // vanishes if the trend flips first.
+      const provisionalBos =
+        event.event === 'break_of_structure' && event.provisional === true
+      const dimmed = weakChoch || provisionalBos
+      const lineColor = dimmed ? `${style.color}99` : style.color
+      const labelSuffix = weakChoch ? '*' : provisionalBos ? '?' : ''
 
       const structureSeries = chart.addSeries(LineSeries, {
         color: lineColor,
         lineWidth: 1,
-        lineStyle: weakChoch ? LineStyle.SparseDotted : LineStyle.Dashed,
+        lineStyle: dimmed ? LineStyle.SparseDotted : LineStyle.Dashed,
         lastValueVisible: false,
         priceLineVisible: false,
         crosshairMarkerVisible: false,
@@ -992,7 +1001,7 @@ export function MainChart({
         time: startTime,
         price: linePrice,
         color: lineColor,
-        text: `${style.label}${weakChoch ? '*' : ''} ${directionIcon}${oiSuffix ? ` ${oiSuffix}` : ''}`,
+        text: `${style.label}${labelSuffix} ${directionIcon}${oiSuffix ? ` ${oiSuffix}` : ''}`,
       })
     }
 

@@ -2499,3 +2499,74 @@ def test_wick_advance_candidate_promotion_weak_defers_choch_when_on() -> None:
         and e.reference_price_level == 77.70
         for e in events
     )
+
+
+def _provisional_base_series() -> list[Candle]:
+    """Bearish BOS at index 7 (low 90, broke ref 100, confirmed by the LH at
+    index 9), then a live-edge tail: a bounce (index 11) and a final candle
+    (index 12) whose *close* (86) drops below the BOS floor (90) but which
+    cannot yet be a confirmed swing low (no candle follows it)."""
+    highs = [150.0, 200.0, 150.0, 150.0, 150.0, 200.0, 150.0, 150.0, 150.0, 180.0, 150.0]
+    lows = [140.0, 140.0, 140.0, 100.0, 140.0, 140.0, 140.0, 90.0, 140.0, 140.0, 140.0]
+    candles = make_series(highs, lows)
+    candles[7] = make_candle(7, 150.0, 90.0, close=95.0)
+    candles.append(make_candle(11, 150.0, 140.0, close=145.0))
+    candles.append(make_candle(12, 88.0, 85.0, close=86.0))
+    return candles
+
+
+def test_provisional_bos_emitted_on_live_edge_floor_close_break() -> None:
+    # The continuation closed below the staircase floor (90) but its confirming
+    # pivots have not formed yet, so under `emit_provisional_bos` a single
+    # provisional BOS marks the forming continuation at the floor.
+    candles = _provisional_base_series()
+
+    events = InternalStructureDetector(
+        swing_lookback=1, confluence_filter=False, emit_provisional_bos=True
+    ).detect(candles)
+
+    provisional = [e for e in events if e.provisional]
+    assert len(provisional) == 1
+    prov = provisional[0]
+    assert prov.event is StructureEvent.BREAK_OF_STRUCTURE
+    assert prov.direction is MarketDirection.BEARISH
+    assert prov.reference_price_level == 90.0  # the staircase floor it broke
+    assert prov.price_level == 85.0  # the live leg's extreme low
+    assert prov.timestamp == candles[12].timestamp  # first close below the floor
+    assert prov.reference_timestamp == candles[7].timestamp  # the floor's origin
+
+
+def test_provisional_bos_is_purely_additive() -> None:
+    # With the flag off the output is byte-for-byte the confirmed stream; the
+    # flag only *adds* provisional marks, never changes the confirmed events.
+    candles = _provisional_base_series()
+
+    off = InternalStructureDetector(
+        swing_lookback=1, confluence_filter=False, emit_provisional_bos=False
+    ).detect(candles)
+    on = InternalStructureDetector(
+        swing_lookback=1, confluence_filter=False, emit_provisional_bos=True
+    ).detect(candles)
+
+    assert not any(e.provisional for e in off)
+    assert [e.model_dump() for e in off] == [e.model_dump() for e in on if not e.provisional]
+
+
+def test_provisional_bos_not_emitted_on_choch_seed_level() -> None:
+    # A fresh CHoCH seeds the new leg's staircase floor with the CHoCH's own
+    # level, which price has necessarily already closed beyond (that is what
+    # confirmed the CHoCH). A provisional BOS there would just double the CHoCH
+    # line, so the continuation gate suppresses it: no provisional until a real
+    # BOS steps the leg beyond that seed.
+    candles = make_series(_TIEBREAK_HIGH_HIGHS, _TIEBREAK_HIGH_LOWS)
+    candles[5] = make_candle(5, 150.0, 80.0, close=90.0)
+    candles[11] = make_candle(11, 150.0, 60.0, close=70.0)
+    candles[15] = make_candle(15, 195.0, 140.0, close=194.0)  # bullish CHoCH (ref 190)
+    candles[16] = make_candle(16, 194.0, 191.0, close=193.0)  # closes above the seed
+
+    events = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=1, confluence_filter=False, emit_provisional_bos=True
+    ).detect(candles)
+
+    assert any(e.event is StructureEvent.CHANGE_OF_CHARACTER for e in events)
+    assert not any(e.provisional for e in events)

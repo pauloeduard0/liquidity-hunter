@@ -121,7 +121,15 @@ and `validate_assignment=True`. New entities should follow this pattern.
   origin — or a *weak* one (re-anchor, wick-only-break promotion, cold-start
   fallback), the same classification the new-cycle persistence barrier uses;
   `None` for other events and the major detector — the frontend renders weak
-  CHoCH dimmed/dotted with a `*` suffix). A
+  CHoCH dimmed/dotted with a `*` suffix), and `provisional` (`bool`, default
+  `False`; `BREAK_OF_STRUCTURE` only, `InternalStructureDetector` under
+  `emit_provisional_bos`): a *provisional* BOS is a live-edge continuation whose
+  staircase floor already *closed*-broke but whose confirming swing pivots have
+  not formed yet (the swing-lookback lag at the right edge). It appears only in
+  the last few candles of a leg — superseded by the confirmed BOS once the
+  pivots form, or it vanishes if the trend flips first (an intentional live-edge
+  repaint) — and the frontend renders it dimmed/dotted with a `?` suffix
+  (`BOS? ▼`), like a weak CHoCH. A
   `CHOCH_FAILED` event marks a CHoCH
   that was invalidated before a confirming BOS (its `direction` is the failed
   CHoCH's direction); see the `InternalStructureDetector` notes.
@@ -939,7 +947,11 @@ selector.
   or wick-only-break promotion, barrier-governed) renders **dotted and dimmed**
   (`SparseDotted`, color + `99` alpha) with a `*` label suffix (`CHoCH* ▼`),
   so a conservative-sequence CHoCH (structural leg origin, solid dashed
-  `CHoCH ▼`) is distinguishable at a glance.
+  `CHoCH ▼`) is distinguishable at a glance. A BOS with `provisional === true`
+  (a live-edge continuation whose floor closed-broke but whose confirming pivots
+  have not formed yet) gets the same dimmed/`SparseDotted` treatment with a `?`
+  suffix (`BOS? ▼`), so it reads as "forming" until the confirmed BOS supersedes
+  it (or it vanishes on a trend flip).
 
 - **`frontend/src/components/ManipulationCyclesPanel.tsx`** —
   `ManipulationCyclesPanel` sidebar component: renders manipulation cycle
@@ -990,7 +1002,8 @@ selector.
 
 - **`frontend/src/types/dashboard.ts`** — TypeScript types mirroring the API
   schema; includes `POIZone`, `RTOSweepEvent`, `MarketStructure` (with
-  `reference_timestamp`), `ManipulationCycle`, `ManipulationPhase`,
+  `reference_timestamp`, `reference_structural`, `provisional`),
+  `ManipulationCycle`, `ManipulationPhase`,
   `ManipulationCycleStatus`, `BehaviorDivergence`, `DivergenceType`,
   `LiquidityHeatmap`, `HeatmapBucket`, `LeverageLiquidationMap`,
   `LiquidationBand`, `MarketNarrative`, `NarrativeEvent`, `NarrativeAnomaly`,
@@ -1525,6 +1538,41 @@ Real-data regression fixture:
 self-contained window; off → 06-26 BOS ref 77.94, on → 77.70). Off =
 byte-for-byte identical. Not mirrored into `SwingStructureDetector` (not
 drawn).
+
+**Provisional live-edge BOS** (`InternalStructureDetector`, as of 2026-07-05):
+`emit_provisional_bos` (constructor default `False`; wired **`True`** in
+`load_dashboard_data`). At the right edge a continuation can *close* beyond the
+staircase floor (`last_bear_bos_low`/`last_bull_bos_high`) while its confirming
+swing pivots have not formed yet (the swing-lookback lag), so the state machine
+emits no BOS even though structure broke by close — the "why is there no BOS at
+the June low" case (BTC D1: price closed below the 59800 floor on 06-25 → new
+lows to 57758, but 57758 is not a confirmed pivot yet). When set, at the end of
+`detect` a single `MarketStructure` with `provisional=True` is emitted at the
+first candle that closed beyond the floor (`reference_price_level` = the floor,
+`reference_timestamp` = the floor's origin, `price_level` = the live leg
+extreme), computed from authoritative final state (trend + floor), **never
+re-derived outside the detector**. Purely additive (appended, excluded from the
+staged-BOS dedup; with the flag off the output is byte-for-byte identical) and
+**skipped by** `_reanchor_bos_close_break` / `_drop_pre_break_reference_bos`. The
+frontend renders it dimmed + `SparseDotted` with a `?` suffix (`BOS? ▼`), like a
+weak CHoCH; it is superseded by the confirmed BOS once pivots form, or vanishes
+if the trend flips first (an intentional live-edge repaint, honestly signaled by
+the dimmed style — the payoff is *only* the live edge, so a static backtest shows
+nothing; it is measured by **walk-forward replay**).
+*Continuation gate*: `bull_floor_from_bos` / `bear_floor_from_bos` track whether
+the current floor is a genuine BOS extreme (set `True` on a BOS advance, or a
+`CHOCH_FAILED` restore of the resumed trend's real floor) or merely *seeded* at a
+fresh CHoCH with that CHoCH's own level (`False`). The provisional emits only when
+the flag is `True`: a fresh CHoCH's seed level has necessarily already been
+closed beyond (that is what confirmed the CHoCH), so a provisional there just
+doubles the CHoCH line (the NEAR M15 clutter — a provisional bullish BOS on the
+1.965 bullish-CHoCH level). The `CHOCH_FAILED`-restore = `True` keeps the BTC D1
+59800 case (no new BOS since the flip, but the floor is the genuine 31/01 BOS
+low). Measured (walk-forward, BTC/ETH/SOL × 1h/4h/1d): **85% of resolved
+provisional marks confirm** (up from 67% without the gate — it removed the
+CHoCH-seed lead≈0 redundants and several repaints, keeping every genuine
+continuation), ~11-candle median lead. Not mirrored into `SwingStructureDetector`
+(not drawn).
 
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A

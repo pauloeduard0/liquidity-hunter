@@ -34,3 +34,13 @@ class MarketStructure(DomainModel):
     # -- the ones the new-cycle persistence barrier governs). `None` for other
     # event types and for detectors that do not classify their references.
     reference_structural: bool | None = None
+    # `BREAK_OF_STRUCTURE` only: a *provisional* BOS is a live-edge continuation
+    # whose staircase floor price has already *closed* beyond but whose
+    # confirming swing pivots have not formed yet (the swing-lookback lag at the
+    # right edge). It is emitted only by `InternalStructureDetector` under
+    # `emit_provisional_bos`, and only ever appears in the last few candles of a
+    # leg: once the pivots confirm it becomes a normal BOS (or the trend flips
+    # and it disappears -- an intentional live-edge repaint). The frontend
+    # renders it dimmed/dotted with a `?` suffix, like a weak CHoCH. `False` for
+    # confirmed BOS and all other events.
+    provisional: bool = False
