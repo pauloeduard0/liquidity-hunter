@@ -594,6 +594,17 @@ def load_dashboard_data(
         # provisional marks confirm, ~7-candle median lead; the repaints cluster
         # on counter-trend pushes into chop, so it reads as an honest "forming".
         emit_provisional_bos=True,
+        # Provisional (live-edge) CHoCH: mirror of the provisional BOS for the
+        # reversal. When a *structural* opposite-side CHoCH reference has been
+        # closed-broken in a sustained way (persistence consecutive closes beyond)
+        # but its confirming swing pivot has not formed yet (the swing-lookback
+        # lag), emit a dimmed forming CHoCH so the reversal is visible at the live
+        # edge instead of waiting ~lookback candles for the pivot. The SOL M15 case:
+        # price sustained a close-break below the 80.72 leg-origin reference but the
+        # fundo was too fresh to be a confirmed pivot, so the bearish CHoCH was
+        # invisible. Superseded by the confirmed CHoCH once the pivot forms, or it
+        # vanishes if price reclaims the level (a mere sweep). Purely additive.
+        emit_provisional_choch=True,
         # The CHoCH origin (the level a sustained break back through invalidates
         # the unconfirmed reversal, a CHOCH_FAILED) is the *deepest* extreme of
         # the reversed leg, not the trailing `active_<side>`. The trailing

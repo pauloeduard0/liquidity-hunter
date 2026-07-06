@@ -2678,3 +2678,78 @@ def test_choch_origin_leg_extreme_holds_and_fails_once_when_on() -> None:
     assert len(failed) == 1
     assert failed[0].reference_price_level == 1.967
     assert not any(e.reference_price_level == 2.004 for e in failed)
+
+
+_SOL_15M_PROV_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "solusdt_15m_2026_06_30_07_06.json"
+)
+
+
+def _load_sol_15m_prov_candles() -> list[Candle]:
+    rows = json.loads(_SOL_15M_PROV_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="SOLUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _sol_15m_prov_detector(emit_provisional_choch: bool) -> InternalStructureDetector:
+    # The production leg-origin flags build the structural CHoCH reference the
+    # provisional emission gates on; only `emit_provisional_choch` is toggled.
+    return InternalStructureDetector(
+        swing_lookback=6,
+        persistence_candles=2,
+        confluence_filter=False,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_require_close_break=True,
+        bos_floor_require_close_break=True,
+        choch_origin_leg_extreme=True,
+        emit_provisional_choch=emit_provisional_choch,
+    )
+
+
+def test_provisional_choch_off_is_byte_for_byte_identical() -> None:
+    """With the flag off, no provisional CHoCH is emitted: the SOL M15 live-edge
+    close-break below the 80.72 leg-origin reference stays invisible (the fundo
+    is too fresh to be a confirmed swing-low pivot), exactly as before."""
+    candles = _load_sol_15m_prov_candles()
+    events = _sol_15m_prov_detector(emit_provisional_choch=False).detect(candles)
+    assert not any(e.provisional for e in events)
+
+
+def test_provisional_choch_marks_forming_live_edge_reversal() -> None:
+    """On, a single provisional (dimmed) bearish CHoCH is appended at the live
+    edge: price sustained a close-break below the structural 80.72 reference (the
+    bullish BOS's leg origin) for `persistence_candles` closes, but its confirming
+    swing-low pivot has not formed yet. The emission is purely additive -- every
+    non-provisional event is byte-for-byte identical to the flag-off run."""
+    candles = _load_sol_15m_prov_candles()
+    off = _sol_15m_prov_detector(emit_provisional_choch=False).detect(candles)
+    on = _sol_15m_prov_detector(emit_provisional_choch=True).detect(candles)
+
+    provisional = [e for e in on if e.provisional]
+    assert len(provisional) == 1
+    prov = provisional[0]
+    assert prov.event is StructureEvent.CHANGE_OF_CHARACTER
+    assert prov.direction is MarketDirection.BEARISH
+    # Anchored at the structural leg-origin reference it broke (the 80.72 fundo
+    # the bullish BOS launched from), flagged structural, not weak.
+    assert prov.reference_price_level == 80.72
+    assert prov.reference_structural is True
+    assert prov.timestamp == datetime(2026, 7, 6, 3, 15, tzinfo=UTC)
+
+    # Purely additive: dropping the provisional recovers the flag-off stream.
+    non_provisional = [e for e in on if not e.provisional]
+    assert [(e.timestamp, e.event, e.price_level) for e in non_provisional] == [
+        (e.timestamp, e.event, e.price_level) for e in off
+    ]

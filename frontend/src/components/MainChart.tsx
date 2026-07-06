@@ -259,6 +259,7 @@ function structureLineEndTime(
           other.scope === event.scope &&
           other.direction === oppositeDirection &&
           other.event === 'change_of_character' &&
+          !other.provisional &&
           !isFailedChoch(other, allEvents) &&
           toUtcTimestamp(other.timestamp) > eventTime,
       )
@@ -274,6 +275,7 @@ function structureLineEndTime(
     .filter(
       (other) =>
         other.scope === event.scope &&
+        !other.provisional &&
         toUtcTimestamp(other.timestamp) > eventTime &&
         ((other.direction === event.direction &&
           (other.event === 'break_of_structure' ||
@@ -982,9 +984,16 @@ export function MainChart({
       // vanishes if the trend flips first.
       const provisionalBos =
         event.event === 'break_of_structure' && event.provisional === true
-      const dimmed = weakChoch || provisionalBos
+      // A provisional CHoCH is the mirror for a live-edge *reversal*: a
+      // structural CHoCH reference has been sustained-closed-broken but its
+      // confirming swing pivot has not formed yet. Same dimmed/dotted treatment
+      // with a `?` suffix (`CHoCH? ▼`): superseded by the confirmed CHoCH once
+      // the pivot forms, or it vanishes if price reclaims the level (a sweep).
+      const provisionalChoch =
+        event.event === 'change_of_character' && event.provisional === true
+      const dimmed = weakChoch || provisionalBos || provisionalChoch
       const lineColor = dimmed ? `${style.color}99` : style.color
-      const labelSuffix = weakChoch ? '*' : provisionalBos ? '?' : ''
+      const labelSuffix = weakChoch ? '*' : provisionalBos || provisionalChoch ? '?' : ''
 
       const structureSeries = chart.addSeries(LineSeries, {
         color: lineColor,

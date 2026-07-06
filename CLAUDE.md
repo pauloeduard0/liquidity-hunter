@@ -122,14 +122,17 @@ and `validate_assignment=True`. New entities should follow this pattern.
   fallback), the same classification the new-cycle persistence barrier uses;
   `None` for other events and the major detector — the frontend renders weak
   CHoCH dimmed/dotted with a `*` suffix), and `provisional` (`bool`, default
-  `False`; `BREAK_OF_STRUCTURE` only, `InternalStructureDetector` under
-  `emit_provisional_bos`): a *provisional* BOS is a live-edge continuation whose
-  staircase floor already *closed*-broke but whose confirming swing pivots have
-  not formed yet (the swing-lookback lag at the right edge). It appears only in
-  the last few candles of a leg — superseded by the confirmed BOS once the
-  pivots form, or it vanishes if the trend flips first (an intentional live-edge
-  repaint) — and the frontend renders it dimmed/dotted with a `?` suffix
-  (`BOS? ▼`), like a weak CHoCH. A
+  `False`; `InternalStructureDetector` only): a *provisional* mark is a live-edge
+  event whose confirming swing pivots have not formed yet (the swing-lookback lag
+  at the right edge). A provisional **BOS** (`BREAK_OF_STRUCTURE`, under
+  `emit_provisional_bos`) is a continuation whose staircase floor already
+  *closed*-broke; a provisional **CHoCH** (`CHANGE_OF_CHARACTER`, under
+  `emit_provisional_choch`) is a reversal whose *structural* CHoCH reference has
+  been sustained-*closed*-broken. Either appears only in the last few candles of a
+  leg — superseded by the confirmed event once the pivots form, or it vanishes if
+  the move fails first (an intentional live-edge repaint) — and the frontend
+  renders it dimmed/dotted with a `?` suffix (`BOS? ▼` / `CHoCH? ▼`), like a weak
+  CHoCH. A
   `CHOCH_FAILED` event marks a CHoCH
   that was invalidated before a confirming BOS (its `direction` is the failed
   CHoCH's direction); see the `InternalStructureDetector` notes.
@@ -959,11 +962,15 @@ selector.
   or wick-only-break promotion, barrier-governed) renders **dotted and dimmed**
   (`SparseDotted`, color + `99` alpha) with a `*` label suffix (`CHoCH* ▼`),
   so a conservative-sequence CHoCH (structural leg origin, solid dashed
-  `CHoCH ▼`) is distinguishable at a glance. A BOS with `provisional === true`
-  (a live-edge continuation whose floor closed-broke but whose confirming pivots
-  have not formed yet) gets the same dimmed/`SparseDotted` treatment with a `?`
-  suffix (`BOS? ▼`), so it reads as "forming" until the confirmed BOS supersedes
-  it (or it vanishes on a trend flip).
+  `CHoCH ▼`) is distinguishable at a glance. A BOS **or CHoCH** with
+  `provisional === true` (a live-edge continuation whose floor closed-broke, or a
+  live-edge reversal whose structural reference was sustained-closed-broken, but
+  whose confirming pivots have not formed yet) gets the same dimmed/`SparseDotted`
+  treatment with a `?` suffix (`BOS? ▼` / `CHoCH? ▼`), so it reads as "forming"
+  until the confirmed event supersedes it (or it vanishes if the move fails).
+  Provisional marks are also excluded from line *termination*
+  (`!other.provisional` in `structureLineEndTime`): a forming mark never truncates
+  a confirmed BOS/CHoCH line — it only draws its own dimmed line to the edge.
 
 - **`frontend/src/components/ManipulationCyclesPanel.tsx`** —
   `ManipulationCyclesPanel` sidebar component: renders manipulation cycle
@@ -1585,6 +1592,46 @@ provisional marks confirm** (up from 67% without the gate — it removed the
 CHoCH-seed lead≈0 redundants and several repaints, keeping every genuine
 continuation), ~11-candle median lead. Not mirrored into `SwingStructureDetector`
 (not drawn).
+
+**Provisional live-edge CHoCH** (`InternalStructureDetector`, as of 2026-07-06):
+`emit_provisional_choch` (constructor default `False`; wired **`True`** in
+`load_dashboard_data`). The mirror of the provisional BOS for the *reversal*: at
+the right edge a counter-trend move can *close*-break the standing **structural**
+CHoCH reference (`validated_choch_<side>` with `_structural=True`, e.g. a BOS
+leg-origin) for `persistence_candles` consecutive closes — the same sustained
+break the confirmed CHoCH demands — while its confirming swing-low/high pivot has
+not formed yet (the swing-lookback lag). The state machine emits no CHoCH, so a
+genuine forming reversal is invisible until the pivot confirms ~`swing_lookback`
+candles later — the SOL M15 case (price sustained a close-break below the 80.72
+leg-origin reference but the fundo was too fresh to be a confirmed pivot, so the
+bearish CHoCH did not render, only a `LIQUIDITY_SWEEP`). When set, at the end of
+`detect` a single `MarketStructure` with `provisional=True`,
+`event=CHANGE_OF_CHARACTER`, `reference_structural=True` is emitted at the first
+candle that started the sustained close-break (`reference_price_level` = the
+structural reference, `reference_timestamp` = its pivot, `price_level` = the live
+leg extreme), computed from authoritative final state — never re-derived outside
+the detector. Gates: **only a structural reference** qualifies (mirror of the BOS
+`floor_from_bos` gate — a weak re-anchor/fallback level would repaint as chop),
+and a poke that closes beyond for *fewer* than `persistence_candles` and reclaims
+is (correctly) just a sweep and emits nothing. A live-edge reversal **supersedes**
+a same-tail provisional BOS (`prov_event = None` — the two references are on
+opposite sides of price, so a double would draw a contradictory `BOS?`/`CHoCH?`
+pair). Purely additive (appended, off = byte-for-byte identical) and **skipped
+by** `_reanchor_bos_close_break` / `_drop_pre_break_reference_bos` (non-BOS) and
+by the frontend line-termination logic (a provisional mark never truncates a
+confirmed line — `!other.provisional` in `structureLineEndTime`). The frontend
+renders it dimmed + `SparseDotted` with a `?` suffix (`CHoCH? ▼`), like a
+provisional BOS; it is superseded by the confirmed CHoCH once the pivot forms, or
+vanishes if price reclaims the level (an intentional live-edge repaint). Measured
+(walk-forward, BTC/ETH/SOL/AAVE × 15m/30m/1h/4h, 350 steps): **~50% of resolved
+provisional marks confirm** (a lower bound — some "repaints" are ref re-anchors
+the exact-match missed, or confirmations just past the replay window), ~8-candle
+median lead. Reversals at the live edge are inherently more sweep-prone than
+continuations (hence lower than the BOS's 85%); the dimmed style is what
+communicates that. Real-data regression fixture:
+`tests/liquidity/detectors/data/solusdt_15m_2026_06_30_07_06.json` (500-candle
+self-contained window; off → no provisional, on → one bearish `CHoCH?` @ 80.72).
+Not mirrored into `SwingStructureDetector` (not drawn).
 
 **CHoCH origin = deepest leg extreme** (`InternalStructureDetector`, as of
 2026-07-05): `choch_origin_leg_extreme` (constructor default `False`; wired

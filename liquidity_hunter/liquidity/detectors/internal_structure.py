@@ -509,6 +509,7 @@ class InternalStructureDetector(MarketStructureDetector):
         bos_floor_require_close_break: bool = False,
         choch_weak_ref_persistence_candles: int | None = None,
         emit_provisional_bos: bool = False,
+        emit_provisional_choch: bool = False,
         choch_origin_leg_extreme: bool = False,
     ) -> None:
         if persistence_candles < 1:
@@ -556,6 +557,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._bos_floor_require_close_break = bos_floor_require_close_break
         self._choch_weak_ref_persistence_candles = choch_weak_ref_persistence_candles
         self._emit_provisional_bos = emit_provisional_bos
+        self._emit_provisional_choch = emit_provisional_choch
         self._choch_origin_leg_extreme = choch_origin_leg_extreme
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
@@ -2288,9 +2290,82 @@ class InternalStructureDetector(MarketStructureDetector):
                         provisional=True,
                     )
 
+        # Provisional live-edge CHoCH (only under `emit_provisional_choch`). Mirror
+        # of the provisional BOS for the *reversal*: since the last confirmed
+        # advance, if a *structural* opposite-side CHoCH reference exists and a
+        # sustained close-break of it has occurred -- `persistence_candles`
+        # consecutive closes beyond, the same bar the confirmed CHoCH requires --
+        # but its confirming swing pivot has not formed yet (the swing-lookback
+        # lag), a reversal has broken by close but is not yet a confirmed CHoCH.
+        # Emit a single CHANGE_OF_CHARACTER flagged `provisional=True` at that break
+        # so the chart shows the forming reversal dimmed; the confirmed CHoCH
+        # supersedes it once the pivot forms, and if price reclaims the level it
+        # simply disappears (a live-edge repaint, honestly communicated by the
+        # dimmed style). Only a *structural* reference qualifies (mirror of the BOS
+        # `floor_from_bos` gate) -- a weak re-anchor / fallback level would repaint
+        # as chop. A poke that closes below the level for fewer than
+        # `persistence_candles` and reclaims is (correctly) just a sweep, so it
+        # emits nothing. Computed from authoritative final state -- never
+        # re-derived outside the detector.
+        prov_choch_event: MarketStructure | None = None
+        if self._emit_provisional_choch and trend is not MarketDirection.NEUTRAL:
+            tail = candles[last_advance_index + 1 :] if last_advance_index >= 0 else []
+            # A bearish CHoCH forms in a bullish trend (breaks validated_choch_low);
+            # a bullish CHoCH in a bearish trend (breaks validated_choch_high).
+            bearish_choch = trend is MarketDirection.BULLISH
+            ref = validated_choch_low if bearish_choch else validated_choch_high
+            ref_structural = (
+                validated_choch_low_structural
+                if bearish_choch
+                else validated_choch_high_structural
+            )
+            need = self._persistence_candles
+            if ref is not None and ref.price > 0 and ref_structural and len(tail) >= need:
+                # First candle in the tail that STARTS a run of `need` consecutive
+                # closes beyond the reference (the sustained break the confirmed
+                # CHoCH also demands; the pivot lag is all it has not yet cleared).
+                break_i: int | None = None
+                for i in range(len(tail) - need + 1):
+                    if all(
+                        (c.close < ref.price if bearish_choch else c.close > ref.price)
+                        for c in tail[i : i + need]
+                    ):
+                        break_i = i
+                        break
+                if break_i is not None:
+                    beyond = tail[break_i:]
+                    extreme = (
+                        min(c.low for c in beyond)
+                        if bearish_choch
+                        else max(c.high for c in beyond)
+                    )
+                    prov_choch_event = MarketStructure(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        timestamp=tail[break_i].timestamp,
+                        event=StructureEvent.CHANGE_OF_CHARACTER,
+                        direction=(
+                            MarketDirection.BEARISH
+                            if bearish_choch
+                            else MarketDirection.BULLISH
+                        ),
+                        price_level=extreme,
+                        reference_price_level=ref.price,
+                        reference_timestamp=ref.timestamp,
+                        reference_structural=True,
+                        scope=StructureScope.INTERNAL,
+                        provisional=True,
+                    )
+                    # A live-edge reversal supersedes a live-edge continuation: the
+                    # two references sit on opposite sides of price, so a rare
+                    # same-tail double would draw a contradictory BOS?/CHoCH? pair.
+                    prov_event = None
+
         if not staged_bos:
             if prov_event is not None:
                 events.append(prov_event)
+            if prov_choch_event is not None:
+                events.append(prov_choch_event)
             return events
         # Merge staged impulse BOS, dropping any that duplicate a real emitted BOS
         # of the same direction (same advance pivot, hence the same price level
@@ -2327,6 +2402,8 @@ class InternalStructureDetector(MarketStructureDetector):
         merged = [*events, *accepted]
         if prov_event is not None:
             merged.append(prov_event)
+        if prov_choch_event is not None:
+            merged.append(prov_choch_event)
         merged.sort(key=lambda e: e.timestamp)
         return merged
 
