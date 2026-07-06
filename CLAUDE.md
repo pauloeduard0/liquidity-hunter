@@ -1586,6 +1586,38 @@ CHoCH-seed lead≈0 redundants and several repaints, keeping every genuine
 continuation), ~11-candle median lead. Not mirrored into `SwingStructureDetector`
 (not drawn).
 
+**CHoCH origin = deepest leg extreme** (`InternalStructureDetector`, as of
+2026-07-05): `choch_origin_leg_extreme` (constructor default `False`; wired
+**`True`** in `load_dashboard_data`). A CHoCH's *origin* — the level whose
+sustained break back through it (before a confirming BOS) invalidates the
+unconfirmed reversal as a `CHOCH_FAILED` — is now the **deepest extreme of the
+reversed leg** (`_extreme(active_<side>, pending_<side>)`), not the trailing
+`active_<side>` alone. The trailing reference ratchets toward the new high/low
+through the reversal leg's intermediate pivots, so by the time the CHoCH
+confirms it can sit right next to the new extreme, arming an *instant* failure
+on the first minor pullback and ping-ponging the trend into weak
+CHoCH/`CHOCH_FAILED` pairs — and because a failed CHoCH never emits an opposite
+CHoCH, the genuine reversal line never terminates and stretches across the
+chart. Motivating case (measured, NEARUSDT M5 `limit=1200`): a bullish CHoCH
+07-04 14:10 (a genuine +4% reversal to 2.039) whose true fundo was 1.967 but
+whose `active_low` had ratcheted up to a 2.004 higher-low near the top — off,
+it failed immediately at 2.004 and spawned a weak `CHoCH* ▲` and a second
+failure (the line ran to the chart edge); on, the origin is 1.967, the CHoCH
+holds through the shallow pullbacks and fails once honestly when price breaks
+the true fundo (03:40, ref 1.967), so its line pairs with that failure and
+terminates. Neither `active_<side>` nor `pending_<side>` alone is the fundo —
+`active_low` ratchets up through higher-lows, `pending_low` can retain a
+shallower early-leg low — so the *deeper* of the two is taken (mirror: the
+higher of `active_high`/`pending_high` for a bearish origin). Measured
+(BTC/ETH/SOL/AAVE/NEAR × 5m..1d, `limit=1200`): **`CHOCH_FAILED` drops ~33%**
+(63 → 42), converting whipsaw CHoCH/fail pairs into sweeps or holding CHoCHs
+(BOS count neutral, +17 sweeps); the few timeframes that gain CHoCHs (BTC 15m)
+are genuine chop where the added CHoCHs are `struct=True`. Real-data regression
+fixture: `tests/liquidity/detectors/data/nearusdt_5m_2026_07_04_05.json`
+(373-candle self-contained window; off → whipsaw with a `CHOCH_FAILED` @ 2.004,
+on → one `CHOCH_FAILED` @ 1.967). Off = byte-for-byte identical. Not mirrored
+into `SwingStructureDetector` (not drawn).
+
 **CHoCH confirmation** (`InternalStructureDetector`): the CHoCH reference is
 the **pullback (origin) of the most recent continuation-confirmed BOS**. A
 BOS's pullback (the confirming LH for bearish, HL for bullish) starts as a

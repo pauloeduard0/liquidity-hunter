@@ -509,6 +509,7 @@ class InternalStructureDetector(MarketStructureDetector):
         bos_floor_require_close_break: bool = False,
         choch_weak_ref_persistence_candles: int | None = None,
         emit_provisional_bos: bool = False,
+        choch_origin_leg_extreme: bool = False,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -555,6 +556,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._bos_floor_require_close_break = bos_floor_require_close_break
         self._choch_weak_ref_persistence_candles = choch_weak_ref_persistence_candles
         self._emit_provisional_bos = emit_provisional_bos
+        self._choch_origin_leg_extreme = choch_origin_leg_extreme
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -1293,10 +1295,25 @@ class InternalStructureDetector(MarketStructureDetector):
                         reference_structural=not choch_high_weak_ref,
                     )
                     trend = MarketDirection.BULLISH
-                    # The active low this rally launched from is the bullish
-                    # CHoCH's origin: a sustained break back below it (before a
-                    # confirming BOS) invalidates the CHoCH (CHOCH_FAILED).
-                    bull_choch_origin = active_low
+                    # The low this rally launched from is the bullish CHoCH's
+                    # origin: a sustained break back below it (before a confirming
+                    # BOS) invalidates the CHoCH (CHOCH_FAILED). Under
+                    # `choch_origin_leg_extreme` use the *deepest* low of the
+                    # reversed bearish leg -- the more extreme of the trailing
+                    # `active_low` and the accumulated `pending_low`. Neither alone
+                    # is reliable: `active_low` ratchets UP through the higher-lows
+                    # of the reversal rally (so at CHoCH confirm it can sit near the
+                    # new high -- the NEAR M5 bug: origin 2.004 just below a 2.039
+                    # top, arming an instant failure on the first pullback and
+                    # ping-ponging the trend), while `pending_low` can retain a
+                    # shallower early-leg low. The deeper of the two is the true
+                    # fundo the reversal launched from. With the flag off the
+                    # trailing `active_low` alone is used (byte-for-byte identical).
+                    bull_choch_origin = (
+                        self._extreme(active_low, pending_low, higher=False)
+                        if self._choch_origin_leg_extreme
+                        else active_low
+                    )
                     bear_choch_origin = None
                     active_low = pending_low
                     pending_low = None
@@ -1882,9 +1899,17 @@ class InternalStructureDetector(MarketStructureDetector):
                         reference_structural=not choch_low_weak_ref,
                     )
                     trend = MarketDirection.BEARISH
-                    # The active high this drop launched from is the bearish
-                    # CHoCH's origin (mirror of the bullish case).
-                    bear_choch_origin = active_high
+                    # The high this drop launched from is the bearish CHoCH's
+                    # origin (mirror of the bullish case): under
+                    # `choch_origin_leg_extreme`, the *highest* high of the reversed
+                    # bullish leg -- the more extreme of the trailing `active_high`
+                    # (which ratchets DOWN through the lower-highs of the reversal
+                    # drop) and the accumulated `pending_high`. Off -> `active_high`.
+                    bear_choch_origin = (
+                        self._extreme(active_high, pending_high, higher=True)
+                        if self._choch_origin_leg_extreme
+                        else active_high
+                    )
                     bull_choch_origin = None
                     active_high = pending_high
                     pending_high = None

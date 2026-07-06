@@ -2570,3 +2570,111 @@ def test_provisional_bos_not_emitted_on_choch_seed_level() -> None:
 
     assert any(e.event is StructureEvent.CHANGE_OF_CHARACTER for e in events)
     assert not any(e.provisional for e in events)
+
+
+# --- CHoCH origin = deepest leg extreme, not the trailing reference -----------
+# Real NEARUSDT M5 window (2026-07-04 00:00 .. 07-05 07:00). A bullish CHoCH
+# confirms 07-04 14:10 (a genuine +4% reversal to 2.039). The prior bearish
+# leg's true fundo is 1.967, but the trailing `active_low` had ratcheted UP
+# through the reversal rally's higher-lows to 2.004 (a HL near the new top).
+# With `choch_origin_leg_extreme` off, the CHoCH origin is that 2.004 trailing
+# low, so the first minor pullback below it "fails" the CHoCH (CHOCH_FAILED @
+# 2.004) and the trend ping-pongs into a weak CHoCH* and a second failure --
+# and the genuine CHoCH line never terminates (no opposite CHoCH), stretching
+# across the chart. On, the origin is the deepest leg low (1.967), so the CHoCH
+# holds through the pullbacks and fails once, honestly, when price finally
+# breaks the true fundo.
+_NEAR_5M_ORIGIN_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "nearusdt_5m_2026_07_04_05.json"
+)
+
+
+def _load_near_5m_origin_window_candles() -> list[Candle]:
+    rows = json.loads(_NEAR_5M_ORIGIN_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="NEARUSDT",
+            timeframe=TimeFrame.M5,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _near_5m_origin_detector(choch_origin_leg_extreme: bool) -> InternalStructureDetector:
+    # M5 production base params; the origin flag is what this test toggles.
+    return InternalStructureDetector(
+        swing_lookback=6,
+        persistence_candles=4,
+        choch_origin_leg_extreme=choch_origin_leg_extreme,
+    )
+
+
+def _bull_choch_at(events: list[MarketStructure], when: datetime) -> MarketStructure:
+    [choch] = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == when
+    ]
+    return choch
+
+
+def test_choch_origin_trailing_low_ping_pongs_when_off() -> None:
+    """With the flag off, the bullish CHoCH origin is the ratcheted trailing low
+    (2.004), so it fails immediately (CHOCH_FAILED @ 2.004) and the trend
+    ping-pongs: a weak CHoCH* and a second failure appear, and no single clean
+    failure resolves the leg."""
+    events = _near_5m_origin_detector(choch_origin_leg_extreme=False).detect(
+        _load_near_5m_origin_window_candles()
+    )
+
+    # The genuine bullish reversal still fires.
+    assert _bull_choch_at(events, datetime(2026, 7, 4, 14, 10, tzinfo=UTC))
+    # It fails at the ratcheted trailing origin 2.004, immediately.
+    failed = [e for e in events if e.event is StructureEvent.CHOCH_FAILED]
+    assert any(e.reference_price_level == 2.004 for e in failed)
+    # Ping-pong: a second weak bullish CHoCH forms on top and also fails.
+    bull_chochs = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp >= datetime(2026, 7, 4, 14, 10, tzinfo=UTC)
+    ]
+    assert len(bull_chochs) >= 2
+    assert len(failed) >= 2
+
+
+def test_choch_origin_leg_extreme_holds_and_fails_once_when_on() -> None:
+    """On, the origin is the deepest leg low (1.967): the CHoCH holds through the
+    shallow pullbacks and fails exactly once, when price breaks the true fundo --
+    so the reversal line terminates cleanly and the weak-CHoCH ping-pong is
+    gone."""
+    events = _near_5m_origin_detector(choch_origin_leg_extreme=True).detect(
+        _load_near_5m_origin_window_candles()
+    )
+
+    # The same genuine bullish reversal.
+    assert _bull_choch_at(events, datetime(2026, 7, 4, 14, 10, tzinfo=UTC))
+    # It is the ONLY bullish CHoCH in the window (no weak CHoCH* ping-pong).
+    bull_chochs = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp >= datetime(2026, 7, 4, 14, 10, tzinfo=UTC)
+    ]
+    assert len(bull_chochs) == 1
+    # Exactly one failure, at the true fundo 1.967 (not the ratcheted 2.004).
+    failed = [e for e in events if e.event is StructureEvent.CHOCH_FAILED]
+    assert len(failed) == 1
+    assert failed[0].reference_price_level == 1.967
+    assert not any(e.reference_price_level == 2.004 for e in failed)

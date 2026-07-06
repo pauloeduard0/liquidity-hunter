@@ -594,6 +594,19 @@ def load_dashboard_data(
         # provisional marks confirm, ~7-candle median lead; the repaints cluster
         # on counter-trend pushes into chop, so it reads as an honest "forming".
         emit_provisional_bos=True,
+        # The CHoCH origin (the level a sustained break back through invalidates
+        # the unconfirmed reversal, a CHOCH_FAILED) is the *deepest* extreme of
+        # the reversed leg, not the trailing `active_<side>`. The trailing
+        # reference ratchets toward the new high/low through the reversal leg's
+        # intermediate pivots, so at CHoCH confirm it can sit right next to the
+        # new extreme (the NEAR M5 case: a bullish CHoCH origin at 2.004 just
+        # below the 2.039 top), arming an instant failure on the first minor
+        # pullback and ping-ponging the trend into weak CHoCH/CHOCH_FAILED pairs
+        # -- so a genuine strong reversal never terminates its own line and it
+        # stretches across the chart. Measured (BTC/ETH/SOL/AAVE/NEAR x 5m..1d,
+        # limit=1200): CHOCH_FAILED drops ~33% (63 -> 42), converting whipsaw
+        # CHoCH/fail pairs into sweeps or holding CHoCHs.
+        choch_origin_leg_extreme=True,
     ).detect(internal_candles)
     # Re-time each BOS to the first close beyond the formed level it broke
     # (dropping wick-only continuations), before the visible filter and POI.
