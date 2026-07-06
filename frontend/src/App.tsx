@@ -96,6 +96,7 @@ function App() {
   const [liquidationVisible, setLiquidationVisible] = useState(false)
   const [liquidationLiveOnly, setLiquidationLiveOnly] = useState(false)
   const [sweptZonesVisible, setSweptZonesVisible] = useState(false)
+  const [huntWindowVisible, setHuntWindowVisible] = useState(false)
   const [obVisible, setObVisible] = useState(false)
   const [sweepVisible, setSweepVisible] = useState(false)
   const [eqlVisible, setEqlVisible] = useState(false)
@@ -367,6 +368,18 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setHuntWindowVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        huntWindowVisible
+                          ? 'bg-[#ffb30022] text-[#ffb300]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle the liquidity-hunt window shading (counter-trend flip → capture)"
+                    >
+                      ⚡ Hunt
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setIndicatorsVisible((v) => !v)}
                       className={`ml-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         indicatorsVisible
@@ -394,7 +407,7 @@ function App() {
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col p-1">
-                  <MainChart key={`${symbol}-${chartTimeframe}`} data={chartData ?? data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} />
+                  <MainChart key={`${symbol}-${chartTimeframe}`} data={chartData ?? data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} />
                 </div>
               </div>
 

@@ -17,6 +17,7 @@ import {
 } from 'lightweight-charts'
 
 import { LineLabelsPrimitive, type LineLabel } from '../charting/LineLabelsPrimitive'
+import { HuntWindowPrimitive, type HuntWindow } from '../charting/HuntWindowPrimitive'
 import { POIBoxesPrimitive, type POIBox } from '../charting/POIBoxesPrimitive'
 import { HeatmapStripPrimitive, type HeatmapBand } from '../charting/HeatmapStripPrimitive'
 import {
@@ -486,6 +487,7 @@ interface MainChartProps {
   showSweeps?: boolean
   showEqlZones?: boolean
   showIndicators?: boolean
+  showHuntWindow?: boolean
 }
 
 export function MainChart({
@@ -500,6 +502,7 @@ export function MainChart({
   showSweeps = true,
   showEqlZones = true,
   showIndicators = true,
+  showHuntWindow = false,
 }: MainChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const mainContainerRef = useRef<HTMLDivElement>(null)
@@ -515,6 +518,7 @@ export function MainChart({
   const rsiOverlaySeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const rsiDivSeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const labelsPrimitiveRef = useRef<LineLabelsPrimitive | null>(null)
+  const huntWindowPrimitiveRef = useRef<HuntWindowPrimitive | null>(null)
   const poiBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const manipBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const heatmapPrimitiveRef = useRef<HeatmapStripPrimitive | null>(null)
@@ -627,6 +631,11 @@ export function MainChart({
     const labelsPrimitive = new LineLabelsPrimitive()
     series.attachPrimitive(labelsPrimitive)
     labelsPrimitiveRef.current = labelsPrimitive
+
+    // Background shading (zOrder 'bottom'): painted beneath candles/overlays.
+    const huntWindowPrimitive = new HuntWindowPrimitive()
+    series.attachPrimitive(huntWindowPrimitive)
+    huntWindowPrimitiveRef.current = huntWindowPrimitive
 
     const poiBoxesPrimitive = new POIBoxesPrimitive()
     series.attachPrimitive(poiBoxesPrimitive)
@@ -1101,6 +1110,29 @@ export function MainChart({
         : []
     liquidationBandsPrimitiveRef.current?.setBands(liquidationBands)
 
+    // Liquidity-hunt window: full-height shading from the counter-trend flip
+    // to the capture that concluded the hunt (right edge while still running).
+    // Amber while the counter-trend entrants are still being consumed, green
+    // once the mapped pools were captured and OI stopped unwinding.
+    const hunt = data.liquidity_hunt
+    const huntWindows: HuntWindow[] = []
+    if (showHuntWindow && hunt && hunt.phase !== 'none' && hunt.counter_structure_timestamp) {
+      const captured = hunt.phase === 'captured'
+      const color = captured ? '#26a69a' : '#ff9800'
+      const sideWord = hunt.hunted_side === 'short' ? 'shorts' : 'longs'
+      huntWindows.push({
+        x0: toUtcTimestamp(hunt.counter_structure_timestamp),
+        x1:
+          captured && hunt.captured_at
+            ? toUtcTimestamp(hunt.captured_at)
+            : ((lastCandleTime + 9_999_999) as UTCTimestamp),
+        color,
+        fillColor: color + '0d',
+        label: captured ? `✓ ${sideWord} captured` : `⚡ hunting ${sideWord}`,
+      })
+    }
+    huntWindowPrimitiveRef.current?.setWindows(huntWindows)
+
     labelsPrimitiveRef.current?.setLabels(labels)
 
     if (!hasFittedRef.current) {
@@ -1110,7 +1142,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones])
+  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

@@ -1093,6 +1093,22 @@ selector.
   `· OI unwinding` while the regime still burns the hunted side; the full
   engine `description` is the card's hover title.
 
+- **Hunt window chart shading** (frontend, as of 2026-07-06):
+  `frontend/src/charting/HuntWindowPrimitive.ts` shades the liquidity-hunt
+  window as a **full-pane-height vertical band** on the main pane (modeled on
+  `POIBoxesPrimitive`, but a time span rather than a price box, and rendered
+  at `zOrder 'bottom'` so it paints *behind* the candles and every overlay).
+  `MainChart` fills it from `data.liquidity_hunt`: the band runs from
+  `counter_structure_timestamp` (the counter-trend flip candle, dashed
+  vertical edge) to `captured_at` when `phase === 'captured'`, or to the
+  right edge via the far-future-sentinel clamp while the hunt is still
+  running. Amber (`#ff9800`, ~5% fill) with a `⚡ hunting shorts|longs` label
+  at the top while active; green (`#26a69a`) with `✓ shorts|longs captured`
+  once concluded; nothing when `phase === 'none'`. Only the *current* hunt is
+  drawn (the state is a live snapshot, not a history of past windows).
+  Toggled by the `⚡ Hunt` toolbar button in `App.tsx` (`huntWindowVisible` →
+  the `showHuntWindow` prop on `MainChart`), **off by default**.
+
 - **OI regime surfaces** (frontend): `KpiRow` renders an **"OI Regime"**
   card (grid is `md:grid-cols-5`; the `LoadingSkeleton` in `App.tsx` matches)
   from `data.oi_analysis.current_regime` — regime label + price-direction
