@@ -284,6 +284,38 @@ export interface OIQualifiedEvent {
   description: string
 }
 
+export type LiquidityHuntPhase = 'none' | 'counter_trend' | 'hunt_in_progress' | 'captured'
+
+export type LiquidityHuntTargetKind = 'equal_level' | 'liquidation_band'
+
+export interface LiquidityHuntTarget {
+  kind: LiquidityHuntTargetKind
+  label: string
+  price_level: number
+  captured: boolean
+  captured_at: string | null
+}
+
+/** Who is the resting liquidity of the current move (counter-trend hunt state).
+ *  `hunted_side` is the positioning side whose stops/liquidations are the nearby
+ *  fuel; `captured` requires the full mapped pool set consumed AND open interest
+ *  no longer unwinding against that side. Purely observational. */
+export interface LiquidityHuntState {
+  symbol: string
+  timeframe: TimeFrame
+  phase: LiquidityHuntPhase
+  hunted_side: RetailPositioning
+  correction_direction: MarketDirection | null
+  counter_structure_timestamp: string | null
+  targets: LiquidityHuntTarget[]
+  targets_captured: number
+  targets_total: number
+  oi_unwinding: boolean
+  last_flush_timestamp: string | null
+  captured_at: string | null
+  description: string
+}
+
 export interface OIAnalysis {
   symbol: string
   timeframe: TimeFrame
@@ -312,4 +344,5 @@ export interface DashboardData {
   liquidation_map: LeverageLiquidationMap | null
   narrative: MarketNarrative | null
   oi_analysis: OIAnalysis | null
+  liquidity_hunt: LiquidityHuntState | null
 }

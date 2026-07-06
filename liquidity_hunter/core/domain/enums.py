@@ -142,6 +142,29 @@ class OIParticipation(str, Enum):
     FLAT = "flat"  # no meaningful OI change
 
 
+class LiquidityHuntPhase(str, Enum):
+    """Progress of a counter-trend liquidity hunt.
+
+    When the current timeframe's structure turns against the higher-timeframe
+    trend, the traders entering with that counter-move become the resting
+    liquidity the larger trend feeds on. These phases describe how far the
+    capture of the nearby opposing pools has progressed — an observation
+    about liquidity, not a recommendation.
+    """
+
+    NONE = "none"  # structure aligned with the higher timeframe (or unknown)
+    COUNTER_TREND = "counter_trend"  # counter-move active; opposing pools intact
+    HUNT_IN_PROGRESS = "hunt_in_progress"  # pools being consumed / OI unwinding
+    CAPTURED = "captured"  # mapped nearby pools consumed, OI no longer unwinding
+
+
+class LiquidityHuntTargetKind(str, Enum):
+    """What kind of resting-liquidity pool a hunt target is."""
+
+    EQUAL_LEVEL = "equal_level"  # equal highs/lows zone (clustered stops)
+    LIQUIDATION_BAND = "liquidation_band"  # projected leveraged-liquidation band
+
+
 class NarrativeEventType(str, Enum):
     """Classification of a narrative timeline event."""
 

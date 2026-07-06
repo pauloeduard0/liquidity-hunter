@@ -13,6 +13,7 @@ from liquidity_hunter.core.domain import (
     FundingRate,
     LeverageLiquidationMap,
     LiquidityHeatmap,
+    LiquidityHuntState,
     LiquidityZone,
     LongShortRatio,
     ManipulationCycle,
@@ -258,6 +259,7 @@ class DashboardData:
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
     oi_analysis: OIAnalysis | None = None
+    liquidity_hunt: LiquidityHuntState | None = None
 
 
 def _structural_anchor_index(candles: list[Candle], visible_start: datetime) -> int:
@@ -743,10 +745,14 @@ def load_dashboard_data(
         oi_analysis=oi_analysis,
     )
 
+    from liquidity_hunter.app.liquidity_hunt import LiquidityHuntEngine
     from liquidity_hunter.app.narrative import NarrativeEngine
 
+    # Both synthesizers read the fully assembled snapshot (they cross-reference
+    # outputs from every layer), so they run last, at the composition point.
     narrative = NarrativeEngine().build(data)
-    return replace(data, narrative=narrative)
+    liquidity_hunt = LiquidityHuntEngine().build(data)
+    return replace(data, narrative=narrative, liquidity_hunt=liquidity_hunt)
 
 
 def _fetch_futures_state(

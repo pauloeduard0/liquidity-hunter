@@ -13,6 +13,7 @@ from liquidity_hunter.core.domain import (
     Candle,
     LeverageLiquidationMap,
     LiquidityHeatmap,
+    LiquidityHuntState,
     LiquidityZone,
     ManipulationCycle,
     MarketDirection,
@@ -50,3 +51,4 @@ class DashboardDataResponse(BaseModel):
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
     oi_analysis: OIAnalysis | None = None
+    liquidity_hunt: LiquidityHuntState | None = None

@@ -10,6 +10,7 @@ from liquidity_hunter.app.liquidation_backtest import (
     LiquidationBacktester,
     LiquidationBacktestResult,
 )
+from liquidity_hunter.app.liquidity_hunt import LiquidityHuntEngine
 from liquidity_hunter.app.narrative import NarrativeEngine
 from liquidity_hunter.scoring import ScoredLiquidityZone
 
@@ -17,6 +18,7 @@ __all__ = [
     "DashboardData",
     "LiquidationBacktester",
     "LiquidationBacktestResult",
+    "LiquidityHuntEngine",
     "NarrativeEngine",
     "ScoredLiquidityZone",
     "load_dashboard_data",

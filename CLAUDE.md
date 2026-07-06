@@ -201,6 +201,21 @@ and `validate_assignment=True`. New entities should follow this pattern.
   rising into the break / `COVERING` OI falling / `FLUSH` sharp OI drop on a
   sweep / `FLAT`). `OIAnalysis` aggregates both plus the OI series' coverage
   span (`coverage_start`/`coverage_end`).
+- **`LiquidityHuntState`** / **`LiquidityHuntTarget`** — a descriptive reading
+  of *who is the resting liquidity* of the current move, defined in
+  `core/domain/liquidity_hunt.py`. When the current timeframe's structure runs
+  counter to the higher-timeframe trend, the counter-trend entrants become the
+  fuel: `hunted_side` (`RetailPositioning`: SHORT during a bearish correction
+  inside a bullish HTF, LONG mirrored), `phase` (`LiquidityHuntPhase`:
+  `NONE`/`COUNTER_TREND`/`HUNT_IN_PROGRESS`/`CAPTURED`), `targets` (the nearby
+  opposing pools — `LiquidityHuntTarget` with `kind` (`LiquidityHuntTargetKind`:
+  `EQUAL_LEVEL`/`LIQUIDATION_BAND`), `label`, `price_level`, `captured`,
+  `captured_at`; list capped at 8, counts in `targets_captured`/`targets_total`
+  cover the full set), `correction_direction`, `counter_structure_timestamp`
+  (the trend-flip event), `oi_unwinding`, `last_flush_timestamp`, `captured_at`,
+  `description`. `CAPTURED` requires **all** mapped pools consumed *and* OI no
+  longer unwinding against the hunted side — conservative by design (and never
+  reached with zero mapped pools: absence of pools is not evidence of capture).
 - **`MarketNarrative`** — synthesized institutional narrative for a
   symbol/timeframe snapshot, defined in `core/domain/narrative.py`. Fields:
   `symbol`, `timeframe`, `timestamp`, `phase` (`ManipulationPhase | None`),
@@ -215,7 +230,8 @@ and `validate_assignment=True`. New entities should follow this pattern.
 Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `LiquidityZoneType`, `StructureEvent`, `BiasSource`, `RetailPositioning`,
 `POIZoneStatus`, `ManipulationPhase`, `ManipulationCycleStatus`,
-`DivergenceType`, `NarrativeEventType`, `AnomalySeverity`) live in
+`DivergenceType`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`,
+`NarrativeEventType`, `AnomalySeverity`) live in
 `core/domain/enums.py`. Extend behavior by adding enum members rather than
 branching logic elsewhere (Open/Closed principle).
 
@@ -747,9 +763,10 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `manipulation_cycles` (`list[ManipulationCycle]`),
   `behavior_divergences` (`list[BehaviorDivergence]`),
   `liquidity_heatmap` (`LiquidityHeatmap | None`),
-  `liquidation_map` (`LeverageLiquidationMap | None`), and
-  `narrative` (`MarketNarrative | None`), and `oi_analysis`
-  (`OIAnalysis | None`) for one symbol/timeframe.
+  `liquidation_map` (`LeverageLiquidationMap | None`),
+  `narrative` (`MarketNarrative | None`), `oi_analysis`
+  (`OIAnalysis | None`), and `liquidity_hunt` (`LiquidityHuntState | None`)
+  for one symbol/timeframe.
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=1200, swing_lookback=..., confluence_filter=False, futures_provider=...)`**
   — fetches a single buffered candle series (`buffered_candles`) and derives the
   visible `candles` from its tail (`buffered_candles[-limit:]`; no separate fetch
@@ -847,8 +864,9 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 
   Finally, `NarrativeEngine().build(data)` synthesizes all outputs into a
   `MarketNarrative` (timeline, anomalies, phase-dependent summary,
-  confluence count). The engine runs last via `dataclasses.replace` since
-  it depends on the fully assembled `DashboardData`.
+  confluence count), and `LiquidityHuntEngine().build(data)` synthesizes the
+  `LiquidityHuntState`. Both run last via `dataclasses.replace` since they
+  depend on the fully assembled `DashboardData`.
 
 - **`app/narrative.py`** — `NarrativeEngine`: composition-level synthesizer
   that builds a `MarketNarrative` from a completed `DashboardData`. Lives in
@@ -873,8 +891,39 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   - **Confluence**: `(count, total)` — how many detection layers agree on
     direction (structure, manipulation cycle, behavior divergence, HTF).
 
-`DashboardData`, `NarrativeEngine`, and `ScoredLiquidityZone` are re-exported
-from `liquidity_hunter.app` for use by `dashboard`.
+- **`app/liquidity_hunt.py`** — `LiquidityHuntEngine`: composition-level
+  synthesizer that builds a `LiquidityHuntState` from a completed
+  `DashboardData` (like `NarrativeEngine`, it lives in `app/` because it
+  cross-references structure, liquidity, and psychology outputs).
+  `build(data) -> LiquidityHuntState`:
+  - **Current-TF trend**: replays `internal_structure_events`
+    (non-provisional BOS/CHoCH set the trend, `CHOCH_FAILED` reverts it;
+    pivot labels/sweeps ignored) into a trend + flip timestamp (the event
+    that started the current corrective leg). Counter-trend = that trend
+    opposes `higher_timeframe_direction` (the existing
+    `_HIGHER_TIMEFRAME_MAP` pair) → `hunted_side` SHORT under a bullish HTF,
+    LONG under a bearish one; aligned/neutral → phase `NONE`.
+  - **Targets** (`proximity_pct=0.02` of current price): equal-highs zones
+    (hunted shorts) / equal-lows (hunted longs) — intact if unmitigated and
+    beyond price, captured if `invalidated_at >= flip` (older sweeps are
+    excluded, they belong to prior legs) — plus `LiquidationBand`s on the
+    hunted side (`BUY_SIDE` above for shorts), live (`end_time=None`, beyond
+    price) = intact, `end_time >= flip` = captured; bands clustered within
+    0.4% are one pool (strongest member represents it, intact while any
+    member is live).
+  - **Evidence**: `last_flush_timestamp` = latest `OIQualifiedEvent` with
+    `participation=FLUSH` in the capture direction since the flip;
+    capture-side `LIQUIDITY_SWEEP` since the flip; `oi_unwinding` =
+    `current_regime` is `SHORT_COVERING` (hunted shorts) /
+    `LONG_LIQUIDATION` (hunted longs).
+  - **Phase**: `CAPTURED` only when all mapped pools are captured **and**
+    not `oi_unwinding` (`captured_at` = last capture); any capture / flush /
+    sweep / unwinding → `HUNT_IN_PROGRESS`; else `COUNTER_TREND`. With zero
+    mapped pools the state never reaches `CAPTURED` (conservative).
+
+`DashboardData`, `LiquidityHuntEngine`, `NarrativeEngine`, and
+`ScoredLiquidityZone` are re-exported from `liquidity_hunter.app` for use by
+`dashboard`.
 
 ### API layer (`liquidity_hunter/api`)
 
@@ -908,8 +957,8 @@ only on `app` and `core` (an alternative presentation layer to
   `RetailBiasEstimate`, `POIZone`, `RTOSweepEvent`, `ManipulationCycle`) are
   already `DomainModel`s and serialize as-is. `poi_zones`,
   `poi_sweep_events`, `manipulation_cycles`, `behavior_divergences`,
-  `liquidity_heatmap`, `liquidation_map`, `narrative`, and `oi_analysis`
-  fields are included.
+  `liquidity_heatmap`, `liquidation_map`, `narrative`, `oi_analysis`, and
+  `liquidity_hunt` fields are included.
 
 Tested with FastAPI's `TestClient` in `liquidity_hunter/tests/api/test_main.py`.
 
@@ -1027,9 +1076,24 @@ selector.
   `LiquidityHeatmap`, `HeatmapBucket`, `LeverageLiquidationMap`,
   `LiquidationBand`, `MarketNarrative`, `NarrativeEvent`, `NarrativeAnomaly`,
   `NarrativeEventType`, `AnomalySeverity`, `OIAnalysis`, `OIRegimeReading`,
-  `OIQualifiedEvent`, `OIRegime`, `OIParticipation`.
+  `OIQualifiedEvent`, `OIRegime`, `OIParticipation`, `LiquidityHuntState`,
+  `LiquidityHuntTarget`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`.
 
-- **OI regime surfaces** (frontend): `KpiRow` renders a fifth **"OI Regime"**
+- **Liquidity Hunt KPI card** (frontend, as of 2026-07-06): the KPI row reads
+  left-to-right as a story ending in the hunt "conclusion" card — the
+  **Price card was removed** to keep the grid at `md:grid-cols-5` (price
+  remains visible in the chart toolbar OHLC): Retail Bias, Dominant
+  Liquidity, HTF Trend, OI Regime, **Liquidity Hunt**. `huntCardProps` in
+  `KpiRow.tsx` maps `data.liquidity_hunt.phase` to presentation:
+  `none` → `◆ —` / "structure aligned with HTF"; `counter_trend` →
+  `Shorts = liquidity` (red, badge `⚠ INTACT`); `hunt_in_progress` →
+  `Hunting shorts` (amber, badge `⚡ ACTIVE`); `captured` →
+  `Shorts captured` (green, badge `✓ CLEARED`, capture time in the
+  sub-line). Sub-line shows `captured/total pools swept` plus
+  `· OI unwinding` while the regime still burns the hunted side; the full
+  engine `description` is the card's hover title.
+
+- **OI regime surfaces** (frontend): `KpiRow` renders an **"OI Regime"**
   card (grid is `md:grid-cols-5`; the `LoadingSkeleton` in `App.tsx` matches)
   from `data.oi_analysis.current_regime` — regime label + price-direction
   icon, directional colors for the buildup regimes and amber for the
@@ -1799,6 +1863,20 @@ outside it (regime still shown, events unqualified — intended degradation).
 Wired into `DashboardData.oi_analysis` + API. Frontend: "OI Regime" KPI card
 (with HTF-trend confluence badge) and `⊕`/`⊖`/`⚡` suffixes on structure
 labels. Historical continuation-frequency stats were deliberately deferred.
+
+**Liquidity hunt state** (as of 2026-07-06): `LiquidityHuntEngine` (app-level
+synthesizer) answers "who is the resting liquidity of the current move, and
+has it been captured yet" — the counter-trend trap question (an LTF CHoCH
+against the HTF trend makes its entrants the fuel; e.g. SOL H1 bearish CHoCH
+inside an H4 uptrend → shorts get swept before the correction can proceed).
+Combines the internal-structure trend vs HTF direction, nearby equal-level
+zones and liquidation bands (intact vs captured-since-the-flip), OI flush
+events, and the OI regime into a `LiquidityHuntState` with a strict `CAPTURED`
+gate (all mapped pools consumed **and** OI no longer unwinding). Wired into
+`DashboardData.liquidity_hunt` + API schema. Frontend: the KPI row's Price
+card was replaced by the **Liquidity Hunt** conclusion card (rightmost).
+Purely observational language throughout (who is the liquidity / when it was
+captured), per the research-platform constraint.
 
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /

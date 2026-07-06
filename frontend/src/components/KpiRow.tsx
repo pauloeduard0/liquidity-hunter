@@ -1,4 +1,4 @@
-import type { DashboardData, OIRegime } from '../types/dashboard'
+import type { DashboardData, LiquidityHuntState, OIRegime } from '../types/dashboard'
 import type { MarketDirection, RetailPositioning } from '../types/dashboard'
 
 const DIRECTION_CONFIG: Record<MarketDirection, { color: string; icon: string }> = {
@@ -30,17 +30,66 @@ const OI_REGIME_CONFIG: Record<
 const fmtPct = (value: number) =>
   `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
 
+const fmtWhen = (iso: string) => {
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+// The "conclusion" card: who is the resting liquidity of the current move,
+// and how far its capture has progressed. Everything is precomputed by the
+// backend LiquidityHuntEngine; this only maps phase -> presentation.
+function huntCardProps(hunt: LiquidityHuntState | null): Omit<KpiCardProps, 'label'> {
+  if (!hunt || hunt.phase === 'none') {
+    return { value: '◆ —', sub: 'structure aligned with HTF' }
+  }
+  const side = hunt.hunted_side === 'short' ? 'Shorts' : 'Longs'
+  const pools = hunt.targets_total
+    ? `${hunt.targets_captured}/${hunt.targets_total} pools swept`
+    : 'no pools mapped nearby'
+  const oiCtx = hunt.oi_unwinding ? ' · OI unwinding' : ''
+  if (hunt.phase === 'captured') {
+    return {
+      value: `${side} captured`,
+      accent: '#26a69a',
+      badge: { text: '✓ CLEARED', color: '#26a69a' },
+      sub: `${pools}${hunt.captured_at ? ` · ${fmtWhen(hunt.captured_at)}` : ''}`,
+      title: hunt.description,
+    }
+  }
+  if (hunt.phase === 'hunt_in_progress') {
+    return {
+      value: `Hunting ${side.toLowerCase()}`,
+      accent: '#ff9800',
+      badge: { text: '⚡ ACTIVE', color: '#ff9800' },
+      sub: pools + oiCtx,
+      title: hunt.description,
+    }
+  }
+  return {
+    value: `${side} = liquidity`,
+    accent: '#ef5350',
+    badge: { text: '⚠ INTACT', color: '#ef5350' },
+    sub: pools + oiCtx,
+    title: hunt.description,
+  }
+}
+
 interface KpiCardProps {
   label: string
   value: string
   accent?: string
   sub?: string
   badge?: { text: string; color: string }
+  title?: string
 }
 
-function KpiCard({ label, value, accent, sub, badge }: KpiCardProps) {
+function KpiCard({ label, value, accent, sub, badge, title }: KpiCardProps) {
   return (
-    <div className="group relative overflow-hidden rounded-lg border border-[#1a1f2e] bg-[#0f1319] p-4 transition-all duration-200 hover:border-[#252b3d]">
+    <div
+      className="group relative overflow-hidden rounded-lg border border-[#1a1f2e] bg-[#0f1319] p-4 transition-all duration-200 hover:border-[#252b3d]"
+      title={title}
+    >
       <div
         className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
         style={{
@@ -102,11 +151,6 @@ export function KpiRow({ data }: KpiRowProps) {
       ? { text: '✓ ALIGNED', color: '#26a69a' }
       : undefined
 
-  const price = data.current_price.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
-
   const dominantLiquidity = data.ranked_zones.length
     ? (
         (data.ranked_zones[0].zone.price_high + data.ranked_zones[0].zone.price_low) /
@@ -138,9 +182,11 @@ export function KpiRow({ data }: KpiRowProps) {
     ? `OI ${fmtPct(oiRegime.oi_change_pct)} · Px ${fmtPct(oiRegime.price_change_pct)}`
     : 'no futures OI data'
 
+  // Row reads left to right as the story: who retail is, where the resting
+  // liquidity sits, which way the higher timeframe leans, who is behind the
+  // move (OI) — and the hunt card concludes it.
   return (
     <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-      <KpiCard label={`${data.symbol} Price`} value={price} />
       <KpiCard
         label="Retail Bias"
         value={`${bias.dominant_side.toUpperCase()} ${bias.confidence.toFixed(0)}%`}
@@ -166,6 +212,7 @@ export function KpiRow({ data }: KpiRowProps) {
         badge={oiBadge}
         sub={oiSub}
       />
+      <KpiCard label="Liquidity Hunt" {...huntCardProps(data.liquidity_hunt ?? null)} />
     </div>
   )
 }
