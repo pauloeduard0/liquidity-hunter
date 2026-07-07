@@ -765,8 +765,11 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `liquidity_heatmap` (`LiquidityHeatmap | None`),
   `liquidation_map` (`LeverageLiquidationMap | None`),
   `narrative` (`MarketNarrative | None`), `oi_analysis`
-  (`OIAnalysis | None`), and `liquidity_hunt` (`LiquidityHuntState | None`)
-  for one symbol/timeframe.
+  (`OIAnalysis | None`), `liquidity_hunt` (`LiquidityHuntState | None`), and
+  `higher_timeframe` (`TimeFrame | None` — the `_HIGHER_TIMEFRAME_MAP` anchor
+  pair `higher_timeframe_direction` was measured on, `None` for the top
+  timeframe; lets the frontend label readings "vs 4H" instead of a generic
+  "HTF") for one symbol/timeframe.
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=1200, swing_lookback=..., confluence_filter=False, futures_provider=...)`**
   — fetches a single buffered candle series (`buffered_candles`) and derives the
   visible `candles` from its tail (`buffered_candles[-limit:]`; no separate fetch
@@ -920,14 +923,22 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
     opposes `higher_timeframe_direction` (the existing
     `_HIGHER_TIMEFRAME_MAP` pair) → `hunted_side` SHORT under a bullish HTF,
     LONG under a bearish one; aligned/neutral → phase `NONE`.
-  - **Targets** (`proximity_pct=0.02` of current price): equal-highs zones
-    (hunted shorts) / equal-lows (hunted longs) — intact if unmitigated and
-    beyond price, captured if `invalidated_at >= flip` (older sweeps are
-    excluded, they belong to prior legs) — plus `LiquidationBand`s on the
-    hunted side (`BUY_SIDE` above for shorts), live (`end_time=None`, beyond
-    price) = intact, `end_time >= flip` = captured; bands clustered within
-    0.4% are one pool (strongest member represents it, intact while any
-    member is live).
+  - **Targets**: equal-highs zones (hunted shorts) / equal-lows (hunted
+    longs) — intact if unmitigated and beyond price, captured if
+    `invalidated_at >= flip` (older sweeps are excluded, they belong to prior
+    legs) — plus `LiquidationBand`s on the hunted side (`BUY_SIDE` above for
+    shorts), live (`end_time=None`, beyond price) = intact, `end_time >= flip`
+    = captured; bands clustered within 0.4% are one pool (strongest member
+    represents it, intact while any member is live). The "nearby" bound is
+    **volatility-normalized** (as of 2026-07-06): `proximity_atr` (wired
+    **2.0** via `_HUNT_PROXIMITY_ATR`) × the visible series' mean true-range%
+    of price, falling back to `proximity_pct` (default `0.02`) when unset or
+    the series is under 2 candles. The fixed 2% was ~6 ATR on a calm BTC 15m
+    (mapping too many pools for the strict all-captured gate to ever clear)
+    but under 0.5 ATR on a volatile daily (mapping none — AAVE 4h sat at
+    "hunting 0/0" forever; with N=2 it reads an honest captured 3/3, and ETH
+    1d gets a map at all). N=3 measured worse (pulled a ~3-ATR pool into SOL
+    4h and regressed its conclusion).
   - **Evidence**: `last_flush_timestamp` = latest `OIQualifiedEvent` with
     `participation=FLUSH` in the capture direction since the flip;
     capture-side `LIQUIDITY_SWEEP` since the flip; `oi_unwinding` =
@@ -974,8 +985,8 @@ only on `app` and `core` (an alternative presentation layer to
   `RetailBiasEstimate`, `POIZone`, `RTOSweepEvent`, `ManipulationCycle`) are
   already `DomainModel`s and serialize as-is. `poi_zones`,
   `poi_sweep_events`, `manipulation_cycles`, `behavior_divergences`,
-  `liquidity_heatmap`, `liquidation_map`, `narrative`, `oi_analysis`, and
-  `liquidity_hunt` fields are included.
+  `liquidity_heatmap`, `liquidation_map`, `narrative`, `oi_analysis`,
+  `liquidity_hunt`, and `higher_timeframe` fields are included.
 
 Tested with FastAPI's `TestClient` in `liquidity_hunter/tests/api/test_main.py`.
 
@@ -1094,7 +1105,8 @@ selector.
   `LiquidationBand`, `MarketNarrative`, `NarrativeEvent`, `NarrativeAnomaly`,
   `NarrativeEventType`, `AnomalySeverity`, `OIAnalysis`, `OIRegimeReading`,
   `OIQualifiedEvent`, `OIRegime`, `OIParticipation`, `LiquidityHuntState`,
-  `LiquidityHuntTarget`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`.
+  `LiquidityHuntTarget`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`;
+  `DashboardData.higher_timeframe` (`TimeFrame | null`).
 
 - **Liquidity Hunt KPI card** (frontend, as of 2026-07-06): the KPI row reads
   left-to-right as a story ending in the hunt "conclusion" card — the
@@ -1108,7 +1120,13 @@ selector.
   `Shorts captured` (green, badge `✓ CLEARED`, capture time in the
   sub-line). Sub-line shows `captured/total pools swept` plus
   `· OI unwinding` while the regime still burns the hunted side; the full
-  engine `description` is the card's hover title.
+  engine `description` is the card's hover title. **Anchor chips** (as of
+  2026-07-06, from `data.higher_timeframe`): the HTF Trend card label reads
+  `HTF Trend · 4H` with sub `4H internal structure` (`top timeframe — own
+  trend` when null), and every hunt sub-line ends in `· vs 4H` (the `none`
+  phase reads `structure aligned with 4H`) — so an M15 card saying
+  `Hunting longs · vs 1H` reads as the pair's fractal handoff (the bounce's
+  buyers are the H1 correction's fuel), not a contradiction of the 4H story.
 
 - **Hunt window chart shading** (frontend, as of 2026-07-06):
   `frontend/src/charting/HuntWindowPrimitive.ts` shades the liquidity-hunt
@@ -1124,7 +1142,14 @@ selector.
   once concluded; nothing when `phase === 'none'`. Only the *current* hunt is
   drawn (the state is a live snapshot, not a history of past windows).
   Toggled by the `⚡ Hunt` toolbar button in `App.tsx` (`huntWindowVisible` →
-  the `showHuntWindow` prop on `MainChart`), **off by default**.
+  the `showHuntWindow` prop on `MainChart`), **off by default**. Independently
+  of the toggle, the structure label of the **flip event itself** — the
+  non-provisional BOS/CHoCH/`CHOCH_FAILED` whose timestamp equals
+  `counter_structure_timestamp` while the hunt phase is not `none` — gets a
+  `⚠` suffix (`CHoCH ▼ ⚠`): the entrants of that break are the resting
+  liquidity being hunted. Only the *standing* flip is marked; historical
+  events would need the HTF trend as of their own time, which a snapshot
+  does not carry.
 
 - **OI regime surfaces** (frontend): `KpiRow` renders an **"OI Regime"**
   card (grid is `md:grid-cols-5`; the `LoadingSkeleton` in `App.tsx` matches)

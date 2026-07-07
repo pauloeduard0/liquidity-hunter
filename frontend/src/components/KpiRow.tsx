@@ -38,10 +38,17 @@ const fmtWhen = (iso: string) => {
 
 // The "conclusion" card: who is the resting liquidity of the current move,
 // and how far its capture has progressed. Everything is precomputed by the
-// backend LiquidityHuntEngine; this only maps phase -> presentation.
-function huntCardProps(hunt: LiquidityHuntState | null): Omit<KpiCardProps, 'label'> {
+// backend LiquidityHuntEngine; this only maps phase -> presentation. `anchor`
+// is the HTF pair the reading is measured against ("4H"), so an M15 card
+// saying "Hunting longs · vs 1H" reads as the pair's fractal handoff rather
+// than a contradiction of the 4H story.
+function huntCardProps(
+  hunt: LiquidityHuntState | null,
+  anchor: string | null,
+): Omit<KpiCardProps, 'label'> {
+  const vsAnchor = anchor ? ` · vs ${anchor}` : ''
   if (!hunt || hunt.phase === 'none') {
-    return { value: '◆ —', sub: 'structure aligned with HTF' }
+    return { value: '◆ —', sub: `structure aligned with ${anchor ?? 'HTF'}` }
   }
   const side = hunt.hunted_side === 'short' ? 'Shorts' : 'Longs'
   const pools = hunt.targets_total
@@ -53,7 +60,7 @@ function huntCardProps(hunt: LiquidityHuntState | null): Omit<KpiCardProps, 'lab
       value: `${side} captured`,
       accent: '#26a69a',
       badge: { text: '✓ CLEARED', color: '#26a69a' },
-      sub: `${pools}${hunt.captured_at ? ` · ${fmtWhen(hunt.captured_at)}` : ''}`,
+      sub: `${pools}${hunt.captured_at ? ` · ${fmtWhen(hunt.captured_at)}` : ''}${vsAnchor}`,
       title: hunt.description,
     }
   }
@@ -62,7 +69,7 @@ function huntCardProps(hunt: LiquidityHuntState | null): Omit<KpiCardProps, 'lab
       value: `Hunting ${side.toLowerCase()}`,
       accent: '#ff9800',
       badge: { text: '⚡ ACTIVE', color: '#ff9800' },
-      sub: pools + oiCtx,
+      sub: pools + oiCtx + vsAnchor,
       title: hunt.description,
     }
   }
@@ -70,7 +77,7 @@ function huntCardProps(hunt: LiquidityHuntState | null): Omit<KpiCardProps, 'lab
     value: `${side} = liquidity`,
     accent: '#ef5350',
     badge: { text: '⚠ INTACT', color: '#ef5350' },
-    sub: pools + oiCtx,
+    sub: pools + oiCtx + vsAnchor,
     title: hunt.description,
   }
 }
@@ -135,6 +142,9 @@ export function KpiRow({ data }: KpiRowProps) {
   const direction = data.higher_timeframe_direction
   const dirCfg = DIRECTION_CONFIG[direction]
   const biasCfg = BIAS_CONFIG[bias.dominant_side]
+  // The anchor pair the HTF reading refers to ("4H" when viewing 1H), so the
+  // card says *which* higher timeframe it means; null on the top timeframe.
+  const htfAnchor = data.higher_timeframe ? data.higher_timeframe.toUpperCase() : null
 
   const isCounterTrend =
     bias.dominant_side !== 'neutral' &&
@@ -201,9 +211,10 @@ export function KpiRow({ data }: KpiRowProps) {
         sub={topZoneType}
       />
       <KpiCard
-        label="HTF Trend"
+        label={htfAnchor ? `HTF Trend · ${htfAnchor}` : 'HTF Trend'}
         value={`${dirCfg.icon} ${direction.charAt(0).toUpperCase()}${direction.slice(1)}`}
         accent={dirCfg.color}
+        sub={htfAnchor ? `${htfAnchor} internal structure` : 'top timeframe — own trend'}
       />
       <KpiCard
         label="OI Regime"
@@ -212,7 +223,10 @@ export function KpiRow({ data }: KpiRowProps) {
         badge={oiBadge}
         sub={oiSub}
       />
-      <KpiCard label="Liquidity Hunt" {...huntCardProps(data.liquidity_hunt ?? null)} />
+      <KpiCard
+        label="Liquidity Hunt"
+        {...huntCardProps(data.liquidity_hunt ?? null, htfAnchor)}
+      />
     </div>
   )
 }

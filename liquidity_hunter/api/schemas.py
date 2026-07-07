@@ -38,6 +38,7 @@ class DashboardDataResponse(BaseModel):
     candles: list[Candle]
     current_price: float
     higher_timeframe_direction: MarketDirection
+    higher_timeframe: TimeFrame | None = None
     liquidity_zones: list[LiquidityZone]
     ranked_zones: list[ScoredLiquidityZone]
     market_structure_events: list[MarketStructure]

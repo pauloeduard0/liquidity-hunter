@@ -248,6 +248,24 @@ def test_load_dashboard_data_higher_tf_direction_uses_internal_detector_on_htf()
     )
 
     assert data.higher_timeframe_direction is MarketDirection.BEARISH
+    # The anchor pair is exposed so the frontend can label the reading.
+    assert data.higher_timeframe is TimeFrame.H4
+
+
+def test_load_dashboard_data_top_timeframe_has_no_higher_timeframe() -> None:
+    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+
+    data = load_dashboard_data(
+        provider=_FakeProvider(candles),
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.W1,
+        futures_provider=_FAKE_FUTURES,
+    )
+
+    # W1 has no higher timeframe: no anchor pair, and the direction degrades
+    # to the current series' own internal trend (flat here -> NEUTRAL).
+    assert data.higher_timeframe is None
+    assert data.higher_timeframe_direction is MarketDirection.NEUTRAL
 
 
 def test_load_dashboard_data_internal_structure_events_use_internal_scope() -> None:

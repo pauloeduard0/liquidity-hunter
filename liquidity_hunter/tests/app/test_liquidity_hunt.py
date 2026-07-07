@@ -467,3 +467,54 @@ def test_bullish_correction_in_bearish_htf_hunts_longs() -> None:
     assert state.targets_total == 1
     assert state.targets[0].label == "EQL"
     assert state.phase is LiquidityHuntPhase.HUNT_IN_PROGRESS
+
+
+# ── ATR-normalized proximity ────────────────────────────────────────
+
+
+def test_atr_proximity_widens_the_pool_map() -> None:
+    # Two candles with a 2-point true range at price 100 -> mean TR% = 2%.
+    # With proximity_atr=2 the bound is 4%, so an EQH 3% above price maps as
+    # a target; the fixed 2% default excludes it.
+    data = _minimal_data(
+        candles=[_candle(0), _candle(1)],
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=[_bearish_choch()],
+        liquidity_zones=[_eqh_zone(103.0)],
+    )
+
+    fixed = LiquidityHuntEngine().build(data)
+    atr = LiquidityHuntEngine(proximity_atr=2.0).build(data)
+
+    assert fixed.targets_total == 0
+    assert atr.targets_total == 1
+    assert atr.phase is LiquidityHuntPhase.COUNTER_TREND
+
+
+def test_atr_proximity_tightens_on_a_calm_series() -> None:
+    # Same 2% mean TR, but proximity_atr=0.5 bounds the map at 1%: a zone
+    # 1.5% away that the fixed 2% would map is excluded — the M15 declutter.
+    data = _minimal_data(
+        candles=[_candle(0), _candle(1)],
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=[_bearish_choch()],
+        liquidity_zones=[_eqh_zone(101.5)],
+    )
+
+    fixed = LiquidityHuntEngine().build(data)
+    atr = LiquidityHuntEngine(proximity_atr=0.5).build(data)
+
+    assert fixed.targets_total == 1
+    assert atr.targets_total == 0
+
+
+def test_atr_proximity_falls_back_to_fixed_pct_on_short_series() -> None:
+    # A single candle cannot measure a true range: the ATR bound falls back
+    # to proximity_pct (2%), so the 3%-distant zone stays excluded.
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=[_bearish_choch()],
+        liquidity_zones=[_eqh_zone(103.0)],
+    )
+    state = LiquidityHuntEngine(proximity_atr=2.0).build(data)
+    assert state.targets_total == 0

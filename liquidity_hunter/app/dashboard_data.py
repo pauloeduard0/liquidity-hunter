@@ -201,6 +201,21 @@ _CHOCH_WEAK_REF_PERSISTENCE: dict[TimeFrame, int] = {
     TimeFrame.H1: 4,
 }
 
+# Volatility-normalized proximity for the liquidity-hunt pool map
+# (`LiquidityHuntEngine.proximity_atr`): "nearby" opposing pools are the ones
+# within N x the visible series' mean true-range% of price, instead of the
+# fixed 2% (which is ~6 ATR on a calm BTC 15m chart -- mapping far too many
+# pools for the strict all-captured gate to ever clear -- but under 0.5 ATR on
+# a volatile daily, mapping none). Same normalization lesson as the detector's
+# `bos_leg_origin_release_gap_atr`. Measured 2026-07-06 (BTC/ETH/SOL/AAVE x
+# 15m/1h/4h/1d, live snapshots): N=2 preserves the validated SOL H1 map
+# (2% was ~1.9 ATR there), unsticks AAVE 4h (a zero-pool map stuck at
+# "hunting 0/0" forever becomes an honest captured 3/3) and gives ETH 1d a map
+# at all (0/0 -> 0/4); N=3 regressed SOL 4h by pulling in a ~3-ATR-distant
+# pool (captured 3/3 -> hunting 3/4), so the conservative end of the release
+# gap's own [2, 3] plateau is kept.
+_HUNT_PROXIMITY_ATR = 2.0
+
 _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
     TimeFrame.M1: TimeFrame.H1,
     TimeFrame.M5: TimeFrame.H1,
@@ -258,6 +273,12 @@ class DashboardData:
     narrative: MarketNarrative | None = None
     oi_analysis: OIAnalysis | None = None
     liquidity_hunt: LiquidityHuntState | None = None
+    # The anchor timeframe `higher_timeframe_direction` was measured on (the
+    # `_HIGHER_TIMEFRAME_MAP` pair; None for the top timeframe, whose direction
+    # falls back to the current series' own internal trend). Exposed so the
+    # frontend can say *which* pair a reading refers to ("vs 4H") instead of a
+    # generic "HTF".
+    higher_timeframe: TimeFrame | None = None
 
 
 def _structural_anchor_index(candles: list[Candle], visible_start: datetime) -> int:
@@ -758,6 +779,7 @@ def load_dashboard_data(
         candles=candles,
         current_price=current_price,
         higher_timeframe_direction=higher_timeframe_direction,
+        higher_timeframe=htf,
         liquidity_zones=liquidity_zones,
         ranked_zones=ranked_zones,
         market_structure_events=market_structure_events,
@@ -778,7 +800,7 @@ def load_dashboard_data(
     # Both synthesizers read the fully assembled snapshot (they cross-reference
     # outputs from every layer), so they run last, at the composition point.
     narrative = NarrativeEngine().build(data)
-    liquidity_hunt = LiquidityHuntEngine().build(data)
+    liquidity_hunt = LiquidityHuntEngine(proximity_atr=_HUNT_PROXIMITY_ATR).build(data)
     return replace(data, narrative=narrative, liquidity_hunt=liquidity_hunt)
 
 

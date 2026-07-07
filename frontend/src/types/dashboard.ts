@@ -331,6 +331,8 @@ export interface DashboardData {
   candles: Candle[]
   current_price: number
   higher_timeframe_direction: MarketDirection
+  /** The anchor timeframe the HTF direction was measured on (null for the top timeframe). */
+  higher_timeframe: TimeFrame | null
   liquidity_zones: LiquidityZone[]
   ranked_zones: ScoredLiquidityZone[]
   market_structure_events: MarketStructure[]

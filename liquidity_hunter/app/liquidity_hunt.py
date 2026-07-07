@@ -19,6 +19,7 @@ it states who the liquidity is and when it was captured, never what to do.
 
 from __future__ import annotations
 
+from statistics import fmean
 from typing import TYPE_CHECKING
 
 from liquidity_hunter.core.domain.enums import (
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from liquidity_hunter.app.dashboard_data import DashboardData
+    from liquidity_hunter.core.domain.candle import Candle
     from liquidity_hunter.core.domain.liquidation import LiquidationBand
     from liquidity_hunter.core.domain.market_structure import MarketStructure
 
@@ -56,13 +58,41 @@ class LiquidityHuntEngine:
 
     ``proximity_pct`` bounds which opposing pools count as "nearby" targets of
     the current corrective move (default 2%, in line with the other analyzers'
-    proximity windows). ``max_targets`` caps the *reported* target list; the
-    captured/total counters always reflect the full mapped set.
+    proximity windows). ``proximity_atr`` (default ``None`` = off) makes that
+    bound volatility-normalized instead: N x the visible series' mean
+    true-range% of price, so "nearby" means the same number of typical candles
+    on every asset/timeframe — a fixed 2% maps far too many pools on a calm
+    M15 chart and almost none on a volatile daily (the same lesson as the
+    detector's `bos_leg_origin_release_gap_atr`). Falls back to
+    ``proximity_pct`` when the series is too short to measure a range.
+    ``max_targets`` caps the *reported* target list; the captured/total
+    counters always reflect the full mapped set.
     """
 
-    def __init__(self, proximity_pct: float = 0.02, max_targets: int = 8) -> None:
+    def __init__(
+        self,
+        proximity_pct: float = 0.02,
+        proximity_atr: float | None = None,
+        max_targets: int = 8,
+    ) -> None:
         self.proximity_pct = proximity_pct
+        self.proximity_atr = proximity_atr
         self.max_targets = max_targets
+
+    def _effective_proximity(self, candles: list[Candle]) -> float:
+        """The proximity bound for this snapshot (ATR-normalized when enabled)."""
+        if self.proximity_atr is None or len(candles) < 2:
+            return self.proximity_pct
+        mean_tr_pct = fmean(
+            max(
+                curr.high - curr.low,
+                abs(curr.high - prev.close),
+                abs(curr.low - prev.close),
+            )
+            / curr.close
+            for prev, curr in zip(candles, candles[1:], strict=False)
+        )
+        return self.proximity_atr * mean_tr_pct
 
     def build(self, data: DashboardData) -> LiquidityHuntState:
         htf = data.higher_timeframe_direction
@@ -96,9 +126,10 @@ class LiquidityHuntEngine:
             MarketDirection.BULLISH if hunted_short else MarketDirection.BEARISH
         )
 
+        proximity = self._effective_proximity(data.candles)
         targets = [
-            *self._zone_targets(data, hunted_short, flip_timestamp),
-            *self._band_targets(data, hunted_short, flip_timestamp),
+            *self._zone_targets(data, hunted_short, flip_timestamp, proximity),
+            *self._band_targets(data, hunted_short, flip_timestamp, proximity),
         ]
         targets.sort(key=lambda t: abs(t.price_level - data.current_price))
         captured = [t for t in targets if t.captured]
@@ -192,7 +223,11 @@ class LiquidityHuntEngine:
     # ------------------------------------------------------------------
 
     def _zone_targets(
-        self, data: DashboardData, hunted_short: bool, flip_timestamp: datetime
+        self,
+        data: DashboardData,
+        hunted_short: bool,
+        flip_timestamp: datetime,
+        proximity: float,
     ) -> list[LiquidityHuntTarget]:
         """Equal highs/lows within proximity — the classic clustered-stop pools."""
         price = data.current_price
@@ -205,7 +240,7 @@ class LiquidityHuntEngine:
             if zone.zone_type is not zone_type:
                 continue
             mid = (zone.price_low + zone.price_high) / 2
-            if mid <= 0 or abs(mid - price) / price > self.proximity_pct:
+            if mid <= 0 or abs(mid - price) / price > proximity:
                 continue
             if zone.is_mitigated:
                 # Only sweeps that happened during this corrective leg count as
@@ -235,7 +270,11 @@ class LiquidityHuntEngine:
         return targets
 
     def _band_targets(
-        self, data: DashboardData, hunted_short: bool, flip_timestamp: datetime
+        self,
+        data: DashboardData,
+        hunted_short: bool,
+        flip_timestamp: datetime,
+        proximity: float,
     ) -> list[LiquidityHuntTarget]:
         """Nearby leveraged-liquidation bands on the hunted side.
 
@@ -255,7 +294,7 @@ class LiquidityHuntEngine:
             if band.side is not band_side:
                 continue
             mid = (band.price_low + band.price_high) / 2
-            if abs(mid - price) / price > self.proximity_pct:
+            if abs(mid - price) / price > proximity:
                 continue
             if band.end_time is None:
                 ahead = mid > price if hunted_short else mid < price

@@ -948,6 +948,16 @@ export function MainChart({
         (event.event !== 'liquidity_sweep' || (showSweeps && recentSweeps.has(event))),
     )
 
+    // The event that flipped this timeframe counter to its higher timeframe —
+    // the liquidity hunt's window start. Its label gets a ⚠ suffix: the
+    // entrants of that break are the resting liquidity being hunted. Only the
+    // *standing* flip is marked; historical events would need the HTF trend as
+    // of their own time, which a snapshot does not carry.
+    const huntFlipTimestamp =
+      data.liquidity_hunt && data.liquidity_hunt.phase !== 'none'
+        ? data.liquidity_hunt.counter_structure_timestamp
+        : null
+
     // OI qualification per structure event (keyed by timestamp + type), so
     // each BOS/CHoCH/SWEEP label can carry its participation suffix.
     const oiSuffixByEvent = new Map<string, string>()
@@ -1003,6 +1013,13 @@ export function MainChart({
       const dimmed = weakChoch || provisionalBos || provisionalChoch
       const lineColor = dimmed ? `${style.color}99` : style.color
       const labelSuffix = weakChoch ? '*' : provisionalBos || provisionalChoch ? '?' : ''
+      const counterHtfFlip =
+        huntFlipTimestamp != null &&
+        event.timestamp === huntFlipTimestamp &&
+        !event.provisional &&
+        (event.event === 'change_of_character' ||
+          event.event === 'break_of_structure' ||
+          event.event === 'choch_failed')
 
       const structureSeries = chart.addSeries(LineSeries, {
         color: lineColor,
@@ -1019,7 +1036,7 @@ export function MainChart({
         time: startTime,
         price: linePrice,
         color: lineColor,
-        text: `${style.label}${labelSuffix} ${directionIcon}${oiSuffix ? ` ${oiSuffix}` : ''}`,
+        text: `${style.label}${labelSuffix} ${directionIcon}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}`,
       })
     }
 
