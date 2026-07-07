@@ -211,8 +211,6 @@ _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
     TimeFrame.D1: TimeFrame.W1,
 }
 
-_HIGHER_TIMEFRAME_CANDLE_LIMIT = 100
-
 # OI points fed to the leverage-liquidation estimator: its
 # `open_interest_change_pct` is measured first-to-last over the series it
 # receives, so cap it at the pre-existing 500-point horizon even when a longer
@@ -423,84 +421,21 @@ def _drop_pre_break_reference_bos(
     return result
 
 
-def load_dashboard_data(
-    provider: OHLCVProvider | None = None,
-    symbol: str = "BTCUSDT",
-    timeframe: TimeFrame = TimeFrame.H1,
-    limit: int = 1200,
-    swing_lookback: int = DEFAULT_SWING_LOOKBACK,
-    confluence_filter: bool = False,
-    futures_provider: FuturesDataProvider | None = None,
-) -> DashboardData:
-    """Fetch candles and assemble liquidity, ranking, and retail bias data."""
-    # Default to perpetual-futures candles (aligned with the futures-derived
-    # liquidation/OI/funding analysis, and a 1500-candle per-request window vs
-    # spot's 1000), falling back to spot for symbols without a perpetual.
-    if provider is None:
-        provider = FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(), BinanceDataProvider())
+def _build_internal_detector(
+    timeframe: TimeFrame, *, confluence_filter: bool
+) -> InternalStructureDetector:
+    """The production `InternalStructureDetector` wiring for ``timeframe``.
 
-    # Fetch the buffered series once and derive the visible window from its
-    # tail. `buffered_candles` prepends `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER`
-    # candles of history before the visible window (for the internal detector's
-    # warm-up and the structural anchor); the visible `candles` are just its
-    # last `limit`, so a separate fetch would be redundant -- and a second call
-    # could even race a freshly-printed candle, desyncing the two series.
-    buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER, provider.max_fetch_limit)
-    buffered_candles = provider.get_ohlcv(symbol, timeframe, buffered_limit)
-    candles = buffered_candles[-limit:]
-
-    liquidity_zones = mark_swept_zones(
-        [
-            *SwingHighDetector().detect(candles),
-            *SwingLowDetector().detect(candles),
-            *EqualHighDetector().detect(candles),
-            *EqualLowDetector().detect(candles),
-        ],
-        candles,
-    )
-
-    current_price = candles[-1].close
-    active_zones = [z for z in liquidity_zones if not z.is_mitigated]
-    ranked_zones = LiquidityScoringEngine().score(active_zones, current_price)
-
-    visible_start = candles[0].timestamp
-    visible_end = candles[-1].timestamp
-
-    # The major (swing) detector runs on the full buffered series. Its BOS are
-    # re-anchored to the formed level's close-break (same as the internal
-    # detector) to keep the two consistent.
-    major_detector = SwingStructureDetector(
-        swing_lookback=swing_lookback,
-        confluence_filter=confluence_filter,
-        # Mirror the internal detector's online re-anchor: see the internal
-        # detector call below for the threshold=2 rationale.
-        reanchor_mode="chain",
-        reanchor_chain_threshold=2,
-        # Retire a stale cycle: after this many candles with no fresh BOS/CHoCH
-        # the reversal reference is pulled to the recent local swing extreme so a
-        # CHoCH fires locally rather than waiting for price to climb back to the
-        # leg origin (the long-stuck-BOS pathology on coarse timeframes).
-        stale_reanchor_candles=_STALE_REANCHOR_CANDLES.get(
-            timeframe, _DEFAULT_STALE_REANCHOR_CANDLES
-        ),
-    )
-    all_major_events = major_detector.detect(buffered_candles)
-    all_major_events = _reanchor_bos_close_break(all_major_events, buffered_candles)
-    all_major_events = _drop_pre_break_reference_bos(all_major_events)
-    market_structure_events = [
-        e for e in all_major_events if visible_start <= e.timestamp <= visible_end
-    ]
-
-    # The internal detector starts at a structural anchor (the most recent major
-    # extreme before the visible window) rather than a fixed candle offset, so
-    # the trend it bootstraps reflects the move actually entering the window
-    # instead of a stale, far-back regime. See `_structural_anchor_index`.
-    internal_candles = buffered_candles[_structural_anchor_index(buffered_candles, visible_start) :]
-
+    Single construction point: the current-timeframe run (whose events the
+    chart renders) and the higher-timeframe trend run in ``load_dashboard_data``
+    must use identical wiring (per-timeframe params + flags), so the
+    higher-timeframe direction reported for a pair (e.g. M15 anchored to H1)
+    is exactly the trend the user sees when opening that higher timeframe.
+    """
     internal_lookback, internal_persistence = _INTERNAL_STRUCTURE_PARAMS.get(
         timeframe, _DEFAULT_INTERNAL_PARAMS
     )
-    all_internal_events = InternalStructureDetector(
+    return InternalStructureDetector(
         swing_lookback=internal_lookback,
         persistence_candles=internal_persistence,
         confluence_filter=confluence_filter,
@@ -526,13 +461,14 @@ def load_dashboard_data(
         # of current price: a hair-trigger reference produces a mid-range CHoCH
         # that immediately fails (the chop clutter). See _REANCHOR_MIN_PRICE_GAP_PCT.
         reanchor_min_price_gap_pct=_REANCHOR_MIN_PRICE_GAP_PCT,
-        # Retire a stale cycle (same as the major detector above): the internal
-        # detector is what the chart renders for all timeframes, and on coarse
-        # ones its bearish/bullish leg can stay pinned to the origin reversal
-        # reference while price ranges/recovers, so the CHoCH only fires far
-        # overhead. After this many candles with no fresh BOS/CHoCH the reversal
-        # reference is pulled to the recent local swing extreme so a CHoCH lands
-        # locally and a new cycle begins.
+        # Retire a stale cycle (same as the major detector wiring in
+        # `load_dashboard_data`): the internal detector is what the chart
+        # renders for all timeframes, and on coarse ones its bearish/bullish
+        # leg can stay pinned to the origin reversal reference while price
+        # ranges/recovers, so the CHoCH only fires far overhead. After this
+        # many candles with no fresh BOS/CHoCH the reversal reference is
+        # pulled to the recent local swing extreme so a CHoCH lands locally
+        # and a new cycle begins.
         stale_reanchor_candles=_STALE_REANCHOR_CANDLES.get(
             timeframe, _DEFAULT_STALE_REANCHOR_CANDLES
         ),
@@ -620,7 +556,85 @@ def load_dashboard_data(
         # limit=1200): CHOCH_FAILED drops ~33% (63 -> 42), converting whipsaw
         # CHoCH/fail pairs into sweeps or holding CHoCHs.
         choch_origin_leg_extreme=True,
-    ).detect(internal_candles)
+    )
+
+
+def load_dashboard_data(
+    provider: OHLCVProvider | None = None,
+    symbol: str = "BTCUSDT",
+    timeframe: TimeFrame = TimeFrame.H1,
+    limit: int = 1200,
+    swing_lookback: int = DEFAULT_SWING_LOOKBACK,
+    confluence_filter: bool = False,
+    futures_provider: FuturesDataProvider | None = None,
+) -> DashboardData:
+    """Fetch candles and assemble liquidity, ranking, and retail bias data."""
+    # Default to perpetual-futures candles (aligned with the futures-derived
+    # liquidation/OI/funding analysis, and a 1500-candle per-request window vs
+    # spot's 1000), falling back to spot for symbols without a perpetual.
+    if provider is None:
+        provider = FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(), BinanceDataProvider())
+
+    # Fetch the buffered series once and derive the visible window from its
+    # tail. `buffered_candles` prepends `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER`
+    # candles of history before the visible window (for the internal detector's
+    # warm-up and the structural anchor); the visible `candles` are just its
+    # last `limit`, so a separate fetch would be redundant -- and a second call
+    # could even race a freshly-printed candle, desyncing the two series.
+    buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER, provider.max_fetch_limit)
+    buffered_candles = provider.get_ohlcv(symbol, timeframe, buffered_limit)
+    candles = buffered_candles[-limit:]
+
+    liquidity_zones = mark_swept_zones(
+        [
+            *SwingHighDetector().detect(candles),
+            *SwingLowDetector().detect(candles),
+            *EqualHighDetector().detect(candles),
+            *EqualLowDetector().detect(candles),
+        ],
+        candles,
+    )
+
+    current_price = candles[-1].close
+    active_zones = [z for z in liquidity_zones if not z.is_mitigated]
+    ranked_zones = LiquidityScoringEngine().score(active_zones, current_price)
+
+    visible_start = candles[0].timestamp
+    visible_end = candles[-1].timestamp
+
+    # The major (swing) detector runs on the full buffered series. Its BOS are
+    # re-anchored to the formed level's close-break (same as the internal
+    # detector) to keep the two consistent.
+    major_detector = SwingStructureDetector(
+        swing_lookback=swing_lookback,
+        confluence_filter=confluence_filter,
+        # Mirror the internal detector's online re-anchor: see the internal
+        # detector call below for the threshold=2 rationale.
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        # Retire a stale cycle: after this many candles with no fresh BOS/CHoCH
+        # the reversal reference is pulled to the recent local swing extreme so a
+        # CHoCH fires locally rather than waiting for price to climb back to the
+        # leg origin (the long-stuck-BOS pathology on coarse timeframes).
+        stale_reanchor_candles=_STALE_REANCHOR_CANDLES.get(
+            timeframe, _DEFAULT_STALE_REANCHOR_CANDLES
+        ),
+    )
+    all_major_events = major_detector.detect(buffered_candles)
+    all_major_events = _reanchor_bos_close_break(all_major_events, buffered_candles)
+    all_major_events = _drop_pre_break_reference_bos(all_major_events)
+    market_structure_events = [
+        e for e in all_major_events if visible_start <= e.timestamp <= visible_end
+    ]
+
+    # The internal detector starts at a structural anchor (the most recent major
+    # extreme before the visible window) rather than a fixed candle offset, so
+    # the trend it bootstraps reflects the move actually entering the window
+    # instead of a stale, far-back regime. See `_structural_anchor_index`.
+    internal_candles = buffered_candles[_structural_anchor_index(buffered_candles, visible_start) :]
+
+    internal_detector = _build_internal_detector(timeframe, confluence_filter=confluence_filter)
+    all_internal_events = internal_detector.detect(internal_candles)
     # Re-time each BOS to the first close beyond the formed level it broke
     # (dropping wick-only continuations), before the visible filter and POI.
     all_internal_events = _reanchor_bos_close_break(all_internal_events, internal_candles)
@@ -640,19 +654,32 @@ def load_dashboard_data(
 
     htf = _HIGHER_TIMEFRAME_MAP.get(timeframe)
     if htf is not None:
-        htf_candles = provider.get_ohlcv(symbol, htf, _HIGHER_TIMEFRAME_CANDLE_LIMIT)
-        htf_detector = SwingStructureDetector(
-            swing_lookback=swing_lookback, confluence_filter=confluence_filter
+        # The higher-timeframe trend comes from the *internal* detector run on
+        # the HTF series with that timeframe's own production wiring (params +
+        # flags via `_build_internal_detector`, buffered fetch + structural
+        # anchor) -- the same run the HTF view renders -- so the reported HTF
+        # direction always matches the structure the user sees when opening
+        # that timeframe, and the hunt's "counter-trend?" comparison uses the
+        # same trend semantics on both sides of the pair. The previous source
+        # (the major swing detector on a 100-candle window) used a different
+        # methodology on a window too short for its lookback, so it could flip
+        # weeks late, sit NEUTRAL, or outright contradict the HTF chart.
+        # State-machine trend, not the last event's direction: the latter flips
+        # on a descriptive HL/LH pivot or a LIQUIDITY_SWEEP whose `direction`
+        # is the pivot/wick side rather than the standing trend.
+        htf_candles = provider.get_ohlcv(symbol, htf, buffered_limit)
+        htf_visible_start = htf_candles[max(0, len(htf_candles) - limit)].timestamp
+        htf_detector = _build_internal_detector(htf, confluence_filter=confluence_filter)
+        htf_detector.detect(
+            htf_candles[_structural_anchor_index(htf_candles, htf_visible_start) :]
         )
-        htf_detector.detect(htf_candles)
-        # Use the detector's state-machine trend, not the last event's direction:
-        # the latter flips on a descriptive HH/HL/LH/LL pivot or a LIQUIDITY_SWEEP
-        # whose `direction` is the pivot/wick side rather than the standing trend
-        # (e.g. a higher-low retrace in a bearish leg read as "bullish").
         higher_timeframe_direction = htf_detector.final_trend
     else:
-        # Top timeframe (no higher TF): use the major detector's own trend.
-        higher_timeframe_direction = major_detector.final_trend
+        # Top timeframe (no higher TF): degrade to the current series' own
+        # internal trend, so downstream comparisons (the liquidity hunt's
+        # counter-trend check) read "aligned" rather than pitting two
+        # different methodologies against each other.
+        higher_timeframe_direction = internal_detector.final_trend
 
     retail_bias = RetailTrapAnalyzer().analyze(
         symbol=symbol,

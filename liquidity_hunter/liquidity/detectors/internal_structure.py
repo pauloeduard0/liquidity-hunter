@@ -559,6 +559,15 @@ class InternalStructureDetector(MarketStructureDetector):
         self._emit_provisional_bos = emit_provisional_bos
         self._emit_provisional_choch = emit_provisional_choch
         self._choch_origin_leg_extreme = choch_origin_leg_extreme
+        # The state-machine trend after the most recent `detect()` call
+        # (mirrors `SwingStructureDetector.final_trend`). The single source of
+        # truth for "the standing trend": unlike the last emitted event's
+        # `direction`, it is unaffected by descriptive HL/LH labels,
+        # LIQUIDITY_SWEEPs (whose `direction` is the pivot/wick side, not the
+        # trend) or provisional live-edge marks (emitted from final state,
+        # never mutating it), and it resolves CHOCH_FAILED correctly (the
+        # trend reverts on failure). NEUTRAL until `detect()` runs.
+        self.final_trend: MarketDirection = MarketDirection.NEUTRAL
 
     def detect(self, candles: list[Candle]) -> list[MarketStructure]:
         validate_candles(candles)
@@ -2360,6 +2369,8 @@ class InternalStructureDetector(MarketStructureDetector):
                     # two references sit on opposite sides of price, so a rare
                     # same-tail double would draw a contradictory BOS?/CHoCH? pair.
                     prov_event = None
+
+        self.final_trend = trend
 
         if not staged_bos:
             if prov_event is not None:

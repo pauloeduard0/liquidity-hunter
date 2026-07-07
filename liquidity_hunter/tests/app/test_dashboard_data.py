@@ -188,7 +188,7 @@ def test_load_dashboard_data_assembles_research_snapshot() -> None:
     assert isinstance(data.retail_bias.dominant_side, RetailPositioning)
 
 
-def test_load_dashboard_data_derives_trend_from_market_structure() -> None:
+def test_load_dashboard_data_derives_major_structure_events() -> None:
     candles = make_series(STRUCTURE_HIGHS, STRUCTURE_LOWS, symbol="BTCUSDT")
     # Index 12 breaks active_low (140 from index 7): give it a close beyond
     # 140 so the break is confirmed as a BOS rather than a liquidity sweep.
@@ -212,6 +212,41 @@ def test_load_dashboard_data_derives_trend_from_market_structure() -> None:
     event = data.market_structure_events[0]
     assert event.event is StructureEvent.BREAK_OF_STRUCTURE
     assert event.direction is MarketDirection.BEARISH
+
+
+def test_load_dashboard_data_higher_tf_direction_uses_internal_detector_on_htf() -> None:
+    # Current-TF (H1) series: flat, no structure of its own. HTF (H4) series:
+    # a bearish close-break crafted for the *internal* H4 wiring (swing
+    # lookback 5) -- pivot spacing too tight for the major detector at the
+    # default lookback 10, which finds no pivots here and would read NEUTRAL.
+    # A BEARISH read therefore proves the HTF trend comes from the internal
+    # run (the same wiring the H4 view renders), not the old major-detector
+    # source.
+    flat = make_series([150.0] * 40, [145.0] * 40, symbol="BTCUSDT", timeframe=TimeFrame.H1)
+
+    htf_highs = [150.0] * 35
+    htf_lows = [145.0] * 35
+    htf_lows[10] = 140.0  # low pivot (internal H4 lookback 5)
+    htf_lows[20] = 130.0  # new low pivot whose candle closes below 140
+    htf_candles = make_series(htf_highs, htf_lows, symbol="BTCUSDT", timeframe=TimeFrame.H4)
+    htf_candles[20] = make_candle(
+        20,
+        htf_highs[20],
+        htf_lows[20],
+        symbol="BTCUSDT",
+        close=132.0,
+        timeframe=TimeFrame.H4,
+    )
+
+    data = load_dashboard_data(
+        provider=_PerTimeframeFakeProvider(
+            {TimeFrame.H1: flat, TimeFrame.H4: htf_candles}
+        ),
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        futures_provider=_FAKE_FUTURES,
+    )
+
     assert data.higher_timeframe_direction is MarketDirection.BEARISH
 
 
@@ -276,9 +311,10 @@ def test_load_dashboard_data_fetches_buffered_series_for_internal_structure() ->
     )
 
     # The buffered series (limit + 300 bootstrap buffer) is fetched once; the
-    # visible window is its tail. Then the HTF series (100) is fetched.
+    # visible window is its tail. Then the HTF series is fetched with the same
+    # buffered limit (the internal detector needs the same warm-up there).
     assert provider.requested_timeframes == [TimeFrame.H1, TimeFrame.H4]
-    assert provider.requested_limits == [800, 100]
+    assert provider.requested_limits == [800, 800]
 
 
 def test_load_dashboard_data_internal_structure_fetch_limit_capped_at_klines_max() -> None:
@@ -294,7 +330,7 @@ def test_load_dashboard_data_internal_structure_fetch_limit_capped_at_klines_max
         futures_provider=_FAKE_FUTURES,
     )
 
-    assert provider.requested_limits == [1000, 100]
+    assert provider.requested_limits == [1000, 1000]
 
 
 def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> None:
@@ -318,8 +354,9 @@ def test_load_dashboard_data_internal_structure_filters_to_visible_window() -> N
         futures_provider=_FAKE_FUTURES,
     )
 
-    # limit=40 + 300 buffer = 340 (fetched once), plus HTF fetch (100).
-    assert provider.requested_limits == [340, 100]
+    # limit=40 + 300 buffer = 340 (fetched once), plus the HTF fetch at the
+    # same buffered limit.
+    assert provider.requested_limits == [340, 340]
 
     visible_start = data.candles[0].timestamp
     visible_end = data.candles[-1].timestamp

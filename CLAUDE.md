@@ -805,14 +805,31 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `reference_timestamp` are kept. Same-timestamp BOS are judged
   earlier-formed-reference first (the earlier structural break).
   `confluence_filter` is exposed for tests that exercise state-machine logic
-  without needing emission-quality filters. `higher_timeframe_direction` is the
-  **state-machine trend** (`SwingStructureDetector.final_trend`) of a separate
-  detector run on the **higher** timeframe (mapped via `_HIGHER_TIMEFRAME_MAP`,
-  fetched for `_HIGHER_TIMEFRAME_CANDLE_LIMIT` candles); for the top timeframe
-  (no higher TF) it falls back to the current `major_detector.final_trend`.
-  Using the detector's `final_trend` rather than the last event's `direction`
-  avoids spurious flips from descriptive HH/HL/LH/LL pivots or `LIQUIDITY_SWEEP`
-  events (whose `direction` is the pivot/wick side, not the standing trend).
+  without needing emission-quality filters. `higher_timeframe_direction` (as of
+  2026-07-06) is the **state-machine trend** (`final_trend`) of the **internal**
+  detector run on the **higher** timeframe (mapped via `_HIGHER_TIMEFRAME_MAP`)
+  with that timeframe's own production wiring — built by
+  **`_build_internal_detector(timeframe, confluence_filter=...)`**, the single
+  construction point shared with the current-TF internal run (per-TF
+  params + all flags), fed the HTF series fetched at the same `buffered_limit`
+  and sliced from its own `_structural_anchor_index` — i.e. **exactly the run
+  the HTF view renders**, so the reported HTF direction always matches the
+  structure the user sees when opening that timeframe, and the liquidity hunt's
+  "counter-trend?" comparison uses the same trend semantics on both sides of
+  the pair. (The previous source — `SwingStructureDetector` on a 100-candle
+  window, `_HIGHER_TIMEFRAME_CANDLE_LIMIT`, now removed — used a different
+  methodology on a window too short for its lookback: measured 2026-07-06
+  across BTC/ETH/SOL/AAVE × 5m..1d, 11/24 combos changed — AAVE intraday and
+  BTC 1h/4h read a bootstrap `NEUTRAL` (hunt card invisible) and BTC intraday
+  read H1 `bullish` against an H1 chart showing a bearish CHoCH; SOL, the live
+  hunt scenario, was unchanged.) For the top timeframe (no higher TF) it falls
+  back to the current run's `internal_detector.final_trend`, so downstream
+  comparisons read "aligned". Using the detector's `final_trend` rather than
+  the last event's `direction` avoids spurious flips from descriptive
+  HH/HL/LH/LL pivots or `LIQUIDITY_SWEEP` events (whose `direction` is the
+  pivot/wick side, not the standing trend); `InternalStructureDetector` now
+  exposes `final_trend` mirroring the major's (provisional marks never mutate
+  it, `CHOCH_FAILED` reverts it).
 
   `buffered_candles` is fetched with an extra
   `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER = 300` candles of history prepended

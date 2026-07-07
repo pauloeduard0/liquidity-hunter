@@ -2753,3 +2753,24 @@ def test_provisional_choch_marks_forming_live_edge_reversal() -> None:
     assert [(e.timestamp, e.event, e.price_level) for e in non_provisional] == [
         (e.timestamp, e.event, e.price_level) for e in off
     ]
+
+
+def test_final_trend_exposes_state_machine_trend() -> None:
+    detector = InternalStructureDetector(swing_lookback=1, confluence_filter=False)
+    # Read through annotated locals: asserting on the attribute directly would
+    # let mypy's literal narrowing persist across `detect()` (which it cannot
+    # see mutating the attribute) and flag the second assert as non-overlapping.
+    trend_before: MarketDirection = detector.final_trend
+    assert trend_before is MarketDirection.NEUTRAL
+
+    candles = make_series(HIGHS, LOWS)
+    candles[5] = make_candle(5, 220.0, 140.0, close=205.0)
+    candles[13] = make_candle(13, 230.0, 140.0, close=215.0)
+    detector.detect(candles)
+
+    # The bullish state advance at index 5 sets the standing trend; the later
+    # bearish LIQUIDITY_SWEEPs (indexes 11/15/19) are wick events and do not
+    # flip it -- `final_trend` mirrors the state machine, not the last event's
+    # direction.
+    trend_after: MarketDirection = detector.final_trend
+    assert trend_after is MarketDirection.BULLISH
