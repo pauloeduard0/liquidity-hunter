@@ -2755,6 +2755,122 @@ def test_provisional_choch_marks_forming_live_edge_reversal() -> None:
     ]
 
 
+# The SOL M15 stale-CHoCH case: a bearish CHoCH fires 07-06 11:45 at 80.72, is
+# confirmed by a continuation BOS that is *wick-only* (dropped from the chart by
+# the composition re-anchor, so its line looks unbroken), then price reclaims the
+# 80.72 level and ranges above it for over a day -- yet the CHoCH never fails,
+# because the closes never clear the far 82.3 leg origin the normal CHOCH_FAILED
+# checks. The fast-fizzle marker disregards it: price reclaimed 80.72 (a sustained
+# close) 9 candles after the CHoCH, well inside the window.
+_SOL_15M_FIZZLE_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "solusdt_15m_2026_06_24_07_07.json"
+)
+
+
+def _load_sol_15m_fizzle_candles() -> list[Candle]:
+    rows = json.loads(_SOL_15M_FIZZLE_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="SOLUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _sol_15m_fizzle_detector(
+    choch_fizzle_reclaim_candles: int | None,
+) -> InternalStructureDetector:
+    # Production M15 params + the leg-origin machinery that builds the standing
+    # bearish CHoCH at 80.72; only `choch_fizzle_reclaim_candles` is toggled.
+    return InternalStructureDetector(
+        swing_lookback=5,
+        persistence_candles=12,
+        confluence_filter=False,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_require_close_break=True,
+        bos_floor_require_close_break=True,
+        choch_origin_leg_extreme=True,
+        choch_fizzle_reclaim_candles=choch_fizzle_reclaim_candles,
+    )
+
+
+def test_choch_fizzle_off_is_byte_for_byte_identical() -> None:
+    """With the flag off, no fizzle marker is emitted: the standing bearish CHoCH
+    at 80.72 hangs unfailed (its closes never cleared the far 82.3 leg origin),
+    exactly as before."""
+    events = _sol_15m_fizzle_detector(None).detect(_load_sol_15m_fizzle_candles())
+    assert not any(e.event is StructureEvent.CHOCH_FAILED for e in events)
+
+
+def test_choch_fizzle_marks_reclaimed_standing_choch() -> None:
+    """On, a single additive CHOCH_FAILED disregards the standing bearish CHoCH:
+    price reclaimed its own broken level (80.72, a sustained close) within the
+    window, so the reversal fizzled. The marker is same-direction and fires after
+    the CHoCH, so the frontend pairs it and terminates the stale line -- and it is
+    purely additive: dropping it recovers the flag-off stream (the state-machine
+    trend never flipped)."""
+    candles = _load_sol_15m_fizzle_candles()
+    off = _sol_15m_fizzle_detector(None).detect(candles)
+    on = _sol_15m_fizzle_detector(30).detect(candles)
+
+    markers = [e for e in on if e.event is StructureEvent.CHOCH_FAILED]
+    assert len(markers) == 1
+    marker = markers[0]
+    assert marker.direction is MarketDirection.BEARISH
+    assert marker.reference_price_level == 80.72
+    assert marker.timestamp == datetime(2026, 7, 6, 15, 15, tzinfo=UTC)
+    # Flagged provisional so the hunt/narrative replay skips it: the state-machine
+    # trend never flipped, so those readings must not flip either (the marker is
+    # purely a chart-line disregard, not a structural reversal).
+    assert marker.provisional is True
+    # It pairs with the standing bearish CHoCH it disregards (a bearish CHoCH at
+    # 80.72 earlier, with no intervening same-direction CHoCH).
+    standing = [
+        e
+        for e in on
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BEARISH
+        and e.reference_price_level == 80.72
+        and e.timestamp < marker.timestamp
+    ]
+    assert standing
+
+    # Purely additive: dropping the marker recovers the flag-off stream.
+    assert [
+        (e.timestamp, e.event, e.price_level)
+        for e in on
+        if e.event is not StructureEvent.CHOCH_FAILED
+    ] == [(e.timestamp, e.event, e.price_level) for e in off]
+
+
+def test_choch_fizzle_ignores_reclaim_after_window() -> None:
+    """A reclaim *after* the window is genuine follow-through, not a fizzle. The
+    80.72 reclaim lands 9 candles after the CHoCH, so a window of 8 leaves it
+    unmarked while 30 marks it -- the window gate on real data."""
+    candles = _load_sol_15m_fizzle_candles()
+    assert not any(
+        e.event is StructureEvent.CHOCH_FAILED
+        for e in _sol_15m_fizzle_detector(8).detect(candles)
+    )
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        for e in _sol_15m_fizzle_detector(9).detect(candles)
+    )
+
+
+def test_choch_fizzle_reclaim_candles_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="choch_fizzle_reclaim_candles must be at least 1"):
+        InternalStructureDetector(choch_fizzle_reclaim_candles=0)
+
+
 def test_final_trend_exposes_state_machine_trend() -> None:
     detector = InternalStructureDetector(swing_lookback=1, confluence_filter=False)
     # Read through annotated locals: asserting on the attribute directly would

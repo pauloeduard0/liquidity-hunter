@@ -66,12 +66,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_SWING_LOOKBACK = 10
 
 _INTERNAL_STRUCTURE_PARAMS: dict[TimeFrame, tuple[int, int]] = {
-    TimeFrame.M5: (6, 4),
-    TimeFrame.M15: (6, 2),
-    TimeFrame.M30: (5, 2),
-    TimeFrame.H1: (4, 2),
-    TimeFrame.H4: (5, 8),
-    TimeFrame.D1: (5, 8),
+    TimeFrame.M5: (5, 12),
+    TimeFrame.M15: (5, 12),
+    TimeFrame.M30: (5, 12),
+    TimeFrame.H1: (5, 12),
+    TimeFrame.H4: (5, 12),
+    TimeFrame.D1: (5, 12),
     TimeFrame.W1: (5, 12),
 }
 _DEFAULT_INTERNAL_PARAMS = (5, 12)
@@ -200,6 +200,24 @@ _CHOCH_WEAK_REF_PERSISTENCE: dict[TimeFrame, int] = {
     TimeFrame.M30: 4,
     TimeFrame.H1: 4,
 }
+
+# Fast-fizzle CHoCH invalidation marker
+# (`InternalStructureDetector.choch_fizzle_reclaim_candles`, applied additively).
+# A *standing* provisional CHoCH whose reversal never took hold -- price reclaims
+# (sustained close) the very level the CHoCH broke within this many candles of the
+# CHoCH -- gets an additive CHOCH_FAILED marker so the chart disregards the stale
+# line, instead of it hanging until the far leg origin is reclaimed (the day-old
+# SOL M15 bearish CHoCH at 80.72 that price reclaimed in 14 candles yet sat
+# unfailed because the closes never cleared the 82.3 origin). A reclaim *after*
+# the window is genuine follow-through and left alone, so the number that
+# separates a fizzle from a held reversal is a wide plateau: the NEAR M5 genuine
+# reversal held its level 133 candles before reclaiming, the SOL M15 fizzle 14 --
+# any K in [~20, ~100] splits them. (An emission-time "closer origin" was ruled
+# out by an origin-geometry collision, NEAR 2.23 ATR vs SOL 2.20 ATR; a real
+# trend-flip CHOCH_FAILED was ruled out by measurement -- it cascades the whole
+# downstream sequence, +206/-220 across the matrix -- so the marker is additive,
+# never touching the state machine.)
+_CHOCH_FIZZLE_RECLAIM_CANDLES: int | None = 30
 
 # Volatility-normalized proximity for the liquidity-hunt pool map
 # (`LiquidityHuntEngine.proximity_atr`): "nearby" opposing pools are the ones
@@ -564,6 +582,12 @@ def _build_internal_detector(
         # invisible. Superseded by the confirmed CHoCH once the pivot forms, or it
         # vanishes if price reclaims the level (a mere sweep). Purely additive.
         emit_provisional_choch=True,
+        # Fast-fizzle invalidation: a provisional CHoCH that reclaims its own
+        # broken level (sustained close) within this many candles never took hold
+        # -- fail it there rather than hanging until the far leg origin is
+        # reclaimed. A later reclaim is genuine follow-through (leg-origin exit
+        # governs). See _CHOCH_FIZZLE_RECLAIM_CANDLES.
+        choch_fizzle_reclaim_candles=_CHOCH_FIZZLE_RECLAIM_CANDLES,
         # The CHoCH origin (the level a sustained break back through invalidates
         # the unconfirmed reversal, a CHOCH_FAILED) is the *deepest* extreme of
         # the reversed leg, not the trailing `active_<side>`. The trailing

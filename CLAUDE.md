@@ -135,7 +135,13 @@ and `validate_assignment=True`. New entities should follow this pattern.
   CHoCH. A
   `CHOCH_FAILED` event marks a CHoCH
   that was invalidated before a confirming BOS (its `direction` is the failed
-  CHoCH's direction); see the `InternalStructureDetector` notes.
+  CHoCH's direction); see the `InternalStructureDetector` notes. A `CHOCH_FAILED`
+  may also be `provisional=True`: the additive **fast-fizzle marker**
+  (`choch_fizzle_reclaim_candles`) that disregards a *standing* CHoCH whose
+  reversal fizzled without flipping the state-machine trend — `provisional` here
+  keeps it out of the `LiquidityHuntEngine`/`NarrativeEngine` replay while the
+  frontend still terminates the stale line; see the `InternalStructureDetector`
+  notes.
 - **`POIZone`** — an institutional order block zone, defined in
   `core/domain/poi_zone.py`. Anchored to the leg between a validated CHoCH and
   the first BOS in the same direction. Fields: `direction`, `price_low`,
@@ -1754,6 +1760,47 @@ communicates that. Real-data regression fixture:
 `tests/liquidity/detectors/data/solusdt_15m_2026_06_30_07_06.json` (500-candle
 self-contained window; off → no provisional, on → one bearish `CHoCH?` @ 80.72).
 Not mirrored into `SwingStructureDetector` (not drawn).
+
+**Fast-fizzle CHoCH invalidation marker** (`InternalStructureDetector`, as of
+2026-07-07): `choch_fizzle_reclaim_candles` (constructor default `None` = off;
+wired **`30`** in `load_dashboard_data` via `_CHOCH_FIZZLE_RECLAIM_CANDLES`). The
+normal CHOCH_FAILED only invalidates a CHoCH once price *closes* back through the
+far **leg origin** (the swing the reversal launched from). A CHoCH whose reversal
+fizzled — price reclaims the very level the CHoCH *broke* and then ranges above
+it — can therefore hang unfailed for a long time while its line runs to the chart
+edge, because the closes never clear the distant origin (the SOL M15 case: a
+bearish CHoCH at 80.72 whose confirming continuation BOS was wick-only, so
+dropped from the chart, leaving the line looking unbroken; price reclaimed 80.72
+in 14 candles yet the closes never cleared the 82.3 origin, so it stood for over
+a day). When set, at the end of `detect` the **standing** CHoCH (the most recent
+trend-defining CHANGE_OF_CHARACTER whose line is still open, tracked as
+`standing_choch_ref`/`_index`/`_dir`, set at every CHoCH emission and cleared at
+every CHOCH_FAILED) gets an additive CHOCH_FAILED **marker** at the first candle
+that starts a sustained (`persistence_candles`) close-reclaim of its own broken
+level, **if that reclaim starts within `choch_fizzle_reclaim_candles` of the
+CHoCH**. A reclaim *after* the window is genuine follow-through (the reversal
+held) and left alone — so the number separating a fizzle from a held reversal is
+a **wide plateau** (the NEAR M5 genuine reversal held its level 133 candles
+before reclaiming; the SOL M15 fizzle 14 — any K in `[~20, ~100]` splits them).
+The marker is **purely additive** and does **not** flip the state-machine trend:
+the frontend's `failedChochTime` pairs it (same direction, no intervening
+same-direction CHoCH) to terminate the stale line at the reclaim, and it renders
+as a normal solid failure mark. It is flagged `provisional=True` **only** so the
+replay consumers (`LiquidityHuntEngine`, `NarrativeEngine`) skip it — the
+detector trend never flipped, so the hunt/narrative reading must not either (the
+hunt stays inócuo). Two rejected alternatives, both ruled out by measurement: a
+*closer origin decided at emission* (from leg geometry) cannot separate the cases
+— NEAR's leg is 2.23 ATR tall, SOL's cut point 2.20 ATR, they collide — and a
+*real trend-flip CHOCH_FAILED* cascades the whole downstream CHoCH sequence
+(+206/-220 events across BTC/ETH/SOL/AAVE/NEAR × 5m..1d), the additive-over-
+state-machine failure mode. The additive marker is surgical: **+8/-0 across the
+same 30 combos** (one marker per chart whose standing CHoCH fizzled, zero
+removals, zero CHoCH-count changes). Real-data regression fixture:
+`tests/liquidity/detectors/data/solusdt_15m_2026_06_24_07_07.json` (1243-candle
+self-contained window; off → no CHOCH_FAILED, on → one bearish marker @ 80.72,
+07-06 15:15; the reclaim lands 9 candles after the CHoCH, so a window of 8 leaves
+it unmarked). Off = byte-for-byte identical. Not mirrored into
+`SwingStructureDetector` (not drawn).
 
 **CHoCH origin = deepest leg extreme** (`InternalStructureDetector`, as of
 2026-07-05): `choch_origin_leg_extreme` (constructor default `False`; wired

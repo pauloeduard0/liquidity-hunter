@@ -511,6 +511,7 @@ class InternalStructureDetector(MarketStructureDetector):
         emit_provisional_bos: bool = False,
         emit_provisional_choch: bool = False,
         choch_origin_leg_extreme: bool = False,
+        choch_fizzle_reclaim_candles: int | None = None,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -522,6 +523,8 @@ class InternalStructureDetector(MarketStructureDetector):
             raise ValueError("reanchor_min_price_gap_pct must be positive")
         if stale_reanchor_candles is not None and stale_reanchor_candles < 1:
             raise ValueError("stale_reanchor_candles must be at least 1")
+        if choch_fizzle_reclaim_candles is not None and choch_fizzle_reclaim_candles < 1:
+            raise ValueError("choch_fizzle_reclaim_candles must be at least 1")
         if impulse_bos_displacement_pct is not None and impulse_bos_displacement_pct <= 0:
             raise ValueError("impulse_bos_displacement_pct must be positive")
         if bos_pullback_max_wick_pct is not None and not 0 < bos_pullback_max_wick_pct <= 1:
@@ -559,6 +562,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._emit_provisional_bos = emit_provisional_bos
         self._emit_provisional_choch = emit_provisional_choch
         self._choch_origin_leg_extreme = choch_origin_leg_extreme
+        self._choch_fizzle_reclaim_candles = choch_fizzle_reclaim_candles
         # The state-machine trend after the most recent `detect()` call
         # (mirrors `SwingStructureDetector.final_trend`). The single source of
         # truth for "the standing trend": unlike the last emitted event's
@@ -718,6 +722,26 @@ class InternalStructureDetector(MarketStructureDetector):
         # ping-pong.
         bull_choch_origin: Pivot | None = None
         bear_choch_origin: Pivot | None = None
+        # State for the *fast-fizzle* invalidation marker
+        # (`choch_fizzle_reclaim_candles`, applied additively at the end of
+        # `detect`): the *standing* CHoCH -- the most recent trend-defining
+        # CHANGE_OF_CHARACTER whose line is still open -- as its own broken
+        # reference level (the LH a bearish CHoCH broke / HL a bullish one broke,
+        # a `Pivot` so its timestamp anchors the failed-CHoCH line), the candle
+        # index it fired at, and its direction. Unlike the `*_choch_origin`
+        # (retired once a confirming BOS makes the CHoCH no longer provisional),
+        # this tracks the CHoCH while its *line* stands -- even after a
+        # continuation BOS confirmed it (in the SOL M15 case that BOS was
+        # wick-only and dropped from the chart, so the line looks unbroken). Set
+        # at every CHoCH emission; cleared at every CHOCH_FAILED (the line ended).
+        # If the standing CHoCH's reversal fizzles -- price reclaims its own
+        # broken level (sustained close) within `choch_fizzle_reclaim_candles` --
+        # an additive CHOCH_FAILED disregards the stale line *without* flipping
+        # the state-machine trend (a real flip cascades the whole downstream CHoCH
+        # sequence; a reclaim *after* the window is genuine follow-through).
+        standing_choch_ref: Pivot | None = None
+        standing_choch_index = -1
+        standing_choch_dir: MarketDirection | None = None
         # The pre-CHoCH staircase floor of the trend that resumes if the current
         # provisional CHoCH *fails*. A CHoCH nulls the reversing trend's BOS
         # staircase (`last_bear_bos_low`/`last_bull_bos_high`) to seed the new
@@ -1266,6 +1290,10 @@ class InternalStructureDetector(MarketStructureDetector):
                     choch_origin_low = None
                     bear_choch_origin = None
                     bull_choch_origin = None
+                    # The failed CHoCH's line ended here: no standing CHoCH to
+                    # fizzle-mark (the resumed trend is not a fresh CHoCH).
+                    standing_choch_ref = None
+                    standing_choch_dir = None
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bullish_bos_origin = None
@@ -1325,6 +1353,12 @@ class InternalStructureDetector(MarketStructureDetector):
                         if self._choch_origin_leg_extreme
                         else active_low
                     )
+                    # Fast-fizzle bookkeeping: this CHoCH is now the standing one
+                    # (its broken level, index, direction; see
+                    # `choch_fizzle_reclaim_candles`).
+                    standing_choch_ref = choch_high_ref
+                    standing_choch_index = current_index
+                    standing_choch_dir = MarketDirection.BULLISH
                     bear_choch_origin = None
                     active_low = pending_low
                     pending_low = None
@@ -1871,6 +1905,10 @@ class InternalStructureDetector(MarketStructureDetector):
                     choch_origin_high = None
                     bull_choch_origin = None
                     bear_choch_origin = None
+                    # The failed CHoCH's line ended here: no standing CHoCH to
+                    # fizzle-mark (the resumed trend is not a fresh CHoCH).
+                    standing_choch_ref = None
+                    standing_choch_dir = None
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bullish_bos_origin = None
@@ -1921,6 +1959,12 @@ class InternalStructureDetector(MarketStructureDetector):
                         if self._choch_origin_leg_extreme
                         else active_high
                     )
+                    # Fast-fizzle bookkeeping: this CHoCH is now the standing one
+                    # (its broken level, index, direction; see
+                    # `choch_fizzle_reclaim_candles`).
+                    standing_choch_ref = choch_low_ref
+                    standing_choch_index = current_index
+                    standing_choch_dir = MarketDirection.BEARISH
                     bull_choch_origin = None
                     active_high = pending_high
                     pending_high = None
@@ -2370,6 +2414,81 @@ class InternalStructureDetector(MarketStructureDetector):
                     # same-tail double would draw a contradictory BOS?/CHoCH? pair.
                     prov_event = None
 
+        # Fast-fizzle marker for the *standing* provisional CHoCH (additive; only
+        # under `choch_fizzle_reclaim_candles`). If the standing CHoCH never
+        # confirmed or failed -- its origin is still armed, so its trend still
+        # holds -- yet its reversal fizzled (price reclaimed the very level it
+        # broke, a sustained close `persistence_candles` beyond, within
+        # `choch_fizzle_reclaim_candles` of the CHoCH), append a CHOCH_FAILED so
+        # the chart disregards the stale line. It does NOT flip the state-machine
+        # trend: a real flip cascades the whole downstream CHoCH sequence (the
+        # additive-over-state-machine lesson), so this is a mark only, computed
+        # from authoritative final state -- never re-derived outside the detector.
+        # Same-direction and firing after the CHoCH, it pairs with the standing
+        # CHoCH in the frontend's `failedChochTime`, terminating its line at the
+        # reclaim. A reclaim *after* the window is genuine follow-through, left
+        # alone (only the leg-origin exit governs it). At most one CHoCH is
+        # standing (an armed origin fixes the trend), so the two sides are
+        # exclusive.
+        fizzle_event: MarketStructure | None = None
+        if self._choch_fizzle_reclaim_candles is not None:
+            need = self._persistence_candles
+            k = self._choch_fizzle_reclaim_candles
+
+            def first_sustained_reclaim(
+                ref_price: float, at_index: int, *, above: bool
+            ) -> int | None:
+                # First candle in `(CHoCH, CHoCH + k]` that STARTS `need`
+                # consecutive closes back beyond `ref_price` (the sustained
+                # reclaim the confirmed CHoCH also demands). `need` may run past
+                # the window -- only the *start* must fall within it.
+                last_start = min(at_index + k, len(candles) - need)
+                for start in range(at_index + 1, last_start + 1):
+                    if all(
+                        (candles[j].close > ref_price)
+                        if above
+                        else (candles[j].close < ref_price)
+                        for j in range(start, start + need)
+                    ):
+                        return start
+                return None
+
+            if (
+                standing_choch_ref is not None
+                and standing_choch_dir is trend
+            ):
+                bearish = standing_choch_dir is MarketDirection.BEARISH
+                # Bearish CHoCH fizzles on a sustained close back ABOVE the
+                # lower-high it broke; bullish on a close back BELOW its higher-low.
+                reclaim_i = first_sustained_reclaim(
+                    standing_choch_ref.price, standing_choch_index, above=bearish
+                )
+                if reclaim_i is not None:
+                    fizzle_event = MarketStructure(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        timestamp=candles[reclaim_i].timestamp,
+                        event=StructureEvent.CHOCH_FAILED,
+                        direction=standing_choch_dir,
+                        price_level=(
+                            max(c.high for c in candles[reclaim_i:])
+                            if bearish
+                            else min(c.low for c in candles[reclaim_i:])
+                        ),
+                        reference_price_level=standing_choch_ref.price,
+                        reference_timestamp=standing_choch_ref.timestamp,
+                        scope=StructureScope.INTERNAL,
+                        # Flagged provisional so the *replay* consumers
+                        # (`LiquidityHuntEngine`, `NarrativeEngine`) skip it -- the
+                        # state-machine trend never flipped, so the hunt/narrative
+                        # reading must not either (the additive contract). The
+                        # frontend still pairs it to terminate the stale CHoCH line
+                        # (`failedChochTime` keys off event+direction, not the flag)
+                        # and renders it as a normal solid failure mark (the dimmed
+                        # `?` style is keyed to BOS/CHoCH events, not CHOCH_FAILED).
+                        provisional=True,
+                    )
+
         self.final_trend = trend
 
         if not staged_bos:
@@ -2377,6 +2496,8 @@ class InternalStructureDetector(MarketStructureDetector):
                 events.append(prov_event)
             if prov_choch_event is not None:
                 events.append(prov_choch_event)
+            if fizzle_event is not None:
+                events.append(fizzle_event)
             return events
         # Merge staged impulse BOS, dropping any that duplicate a real emitted BOS
         # of the same direction (same advance pivot, hence the same price level
@@ -2415,6 +2536,8 @@ class InternalStructureDetector(MarketStructureDetector):
             merged.append(prov_event)
         if prov_choch_event is not None:
             merged.append(prov_choch_event)
+        if fizzle_event is not None:
+            merged.append(fizzle_event)
         merged.sort(key=lambda e: e.timestamp)
         return merged
 
