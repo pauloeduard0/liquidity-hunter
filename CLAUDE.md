@@ -142,18 +142,23 @@ and `validate_assignment=True`. New entities should follow this pattern.
   keeps it out of the `LiquidityHuntEngine`/`NarrativeEngine` replay while the
   frontend still terminates the stale line; see the `InternalStructureDetector`
   notes.
-- **`POIZone`** — an institutional order block zone, defined in
-  `core/domain/poi_zone.py`. Anchored to a **market structure break (MSB)**:
-  the zone is the *last opposite-direction candle before the impulse* that
-  broke structure (for a bullish MSB, the last bearish candle of the down leg
-  into the swing low the impulse launched from; bearish mirrors it), spanning
-  that candle's **full high-low range**, frozen at creation. Fields:
-  `direction`, `price_low`, `price_high`, `created_at` (the MSB confirmation
-  candle), `ob_candle_timestamp` (the order block candle — the box's left
-  edge), `status` (`POIZoneStatus`: `ACTIVE`/`INVALIDATED`), `invalidated_at`.
-  A single candle *close* beyond the far boundary (below `price_low` for
-  bullish, above `price_high` for bearish) invalidates the zone; price
-  touching back inside does not retire it.
+- **`POIZone`** — an institutional order/breaker/mitigation block zone,
+  defined in `core/domain/poi_zone.py`. Anchored to a **market structure
+  break (MSB)**. An `ORDER_BLOCK` is the *last opposite-direction candle
+  before the impulse* that broke structure (for a bullish MSB, the last
+  bearish candle of the down leg into the swing low the impulse launched
+  from; bearish mirrors it); a `BREAKER_BLOCK`/`MITIGATION_BLOCK` is the last
+  *same*-direction candle of the leg that formed the broken pivot (breaker
+  when the impulse-origin extreme swept the prior one — bullish `l0 < l1`,
+  bearish `h0 > h1` — mitigation otherwise). Both span the anchor candle's
+  **full high-low range**, frozen at creation. Fields: `direction`, `kind`
+  (`POIZoneKind`, default `ORDER_BLOCK`), `price_low`, `price_high`,
+  `created_at` (the MSB confirmation candle), `ob_candle_timestamp` (the
+  anchor candle — the box's left edge), `status` (`POIZoneStatus`:
+  `ACTIVE`/`INVALIDATED`), `invalidated_at`. A single candle *close* beyond
+  the far boundary (below `price_low` for bullish, above `price_high` for
+  bearish) invalidates the zone; price touching back inside does not retire
+  it. Identical lifecycle for all kinds.
 - **`ManipulationCycle`** — an observed institutional manipulation cycle
   (accumulation → sweep → expansion), defined in
   `core/domain/manipulation_cycle.py`. Describes the three-phase Wyckoff/SMC
@@ -233,7 +238,7 @@ and `validate_assignment=True`. New entities should follow this pattern.
 
 Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `LiquidityZoneType`, `StructureEvent`, `BiasSource`, `RetailPositioning`,
-`POIZoneStatus`, `ManipulationPhase`, `ManipulationCycleStatus`,
+`POIZoneStatus`, `POIZoneKind`, `ManipulationPhase`, `ManipulationCycleStatus`,
 `DivergenceType`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`,
 `NarrativeEventType`, `AnomalySeverity`) live in
 `core/domain/enums.py`. Extend behavior by adding enum members rather than
@@ -616,13 +621,21 @@ re-exported from `liquidity_hunter.data`.
   indicator's same-pivot guard). The MSB confirms on the swing-flip candle
   that records the breaking pivot.
 
-  **Zone**: the last opposite-direction candle in the impulse-origin leg
-  (bullish MSB → last `open > close` candle in the `h1 → l0` window; bearish
-  mirror in `l1 → h0`), full high-low range. A leg with no opposite candle
-  creates no zone (the market still flips). Lifecycle: `ACTIVE →
-  INVALIDATED` on a **single close** beyond the far boundary; touches inside
-  the zone never retire it. There is no MITIGATED state and no RTO sweep
-  events (removed with the old CHoCH→BOS detector).
+  **Zones**: each MSB emits up to two same-direction zones. The
+  `ORDER_BLOCK` is the last opposite-direction candle in the impulse-origin
+  leg (bullish MSB → last `open > close` candle in the `h1 → l0` window;
+  bearish mirror in `l1 → h0`). The `BREAKER_BLOCK`/`MITIGATION_BLOCK` is
+  the last *same*-direction candle of the leg that formed the broken pivot
+  (bullish: `l1 − pivot_len → h1`; bearish: `h1 − pivot_len → l1`) — breaker
+  when the impulse-origin extreme swept the prior one (bullish `l0 < l1`,
+  bearish `h0 > h1`), else mitigation. All full high-low range. A leg with
+  no matching candle creates no zone (the market still flips); when the MSB
+  fires on the *renewing* pivot after the same-pivot guard, the BB/MB window
+  can be empty (non-canonical pivot order) — no block is created (the Pine
+  original reuses a stale bar index there; deliberately skipped). Lifecycle
+  (all kinds): `ACTIVE → INVALIDATED` on a **single close** beyond the far
+  boundary; touches inside the zone never retire it. There is no MITIGATED
+  state and no RTO sweep events (removed with the old CHoCH→BOS detector).
 
 All detectors are re-exported from `liquidity_hunter.liquidity`.
 
@@ -1908,8 +1921,13 @@ Lifecycle: ACTIVE → INVALIDATED on a single close beyond the far boundary;
 touches never retire a zone. The MITIGATED state, `RTOSweepEvent`, and
 `poi_sweep_events` were removed everywhere (domain, `DashboardData`, API
 schema, `ManipulationCycleDetector` input, `NarrativeEngine` timeline,
-frontend RTO markers). The React frontend renders active zones via
-`POIBoxesPrimitive`, starting each box at the OB candle.
+frontend RTO markers). Breaker/Mitigation Blocks (Bu-BB/Be-BB/MB) are
+included (added same day): each MSB also marks the last same-direction
+candle of the leg that formed the broken pivot, `kind` distinguishing
+`BREAKER_BLOCK` (prior extreme swept) from `MITIGATION_BLOCK`; empty
+BB windows (MSB firing on the renewing pivot) create no block. The React
+frontend renders active zones via `POIBoxesPrimitive`, starting each box at
+the anchor candle, labeled `OB`/`BB`/`MB` + direction arrow.
 
 **Manipulation cycle detection**: `ManipulationCycleDetector` connects
 existing observations into three-phase Wyckoff/SMC cycles (accumulation →

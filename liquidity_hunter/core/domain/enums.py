@@ -92,6 +92,21 @@ class POIZoneStatus(str, Enum):
     INVALIDATED = "invalidated"
 
 
+class POIZoneKind(str, Enum):
+    """Which MSB-anchored zone a `POIZone` is.
+
+    ORDER_BLOCK: last opposite-direction candle of the impulse-origin leg.
+    BREAKER_BLOCK: last same-direction candle of the leg that formed the
+      broken pivot, when the impulse-origin extreme swept the prior one
+      (bullish: `l0 < l1`; bearish: `h0 > h1`).
+    MITIGATION_BLOCK: the same zone when the prior extreme was not swept.
+    """
+
+    ORDER_BLOCK = "order_block"
+    BREAKER_BLOCK = "breaker_block"
+    MITIGATION_BLOCK = "mitigation_block"
+
+
 class ManipulationPhase(str, Enum):
     """Current phase of an institutional manipulation cycle."""
 

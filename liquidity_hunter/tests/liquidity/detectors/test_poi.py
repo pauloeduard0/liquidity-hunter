@@ -7,6 +7,7 @@ import pytest
 from liquidity_hunter.core.domain import (
     Candle,
     MarketDirection,
+    POIZoneKind,
     POIZoneStatus,
     TimeFrame,
 )
@@ -73,8 +74,9 @@ class TestBearishMSB:
     def test_creates_supply_zone_from_last_bullish_candle(self) -> None:
         zones = POIDetector(pivot_len=3).detect(_bearish_msb_candles())
 
-        assert len(zones) == 1
+        assert len(zones) == 2
         zone = zones[0]
+        assert zone.kind == POIZoneKind.ORDER_BLOCK
         assert zone.direction == MarketDirection.BEARISH
         # Full range of the last bullish candle of the l1 -> h0 leg (bar 12).
         assert zone.price_low == 102.8
@@ -84,16 +86,31 @@ class TestBearishMSB:
         assert zone.status == POIZoneStatus.ACTIVE
         assert zone.invalidated_at is None
 
+    def test_creates_mitigation_block_from_broken_low_leg(self) -> None:
+        zones = POIDetector(pivot_len=3).detect(_bearish_msb_candles())
+
+        # h0 (104) did not exceed h1 (105), so the block is a mitigation
+        # block: the last bearish candle of the h1 -> l1 down leg (bar 8).
+        block = zones[1]
+        assert block.kind == POIZoneKind.MITIGATION_BLOCK
+        assert block.direction == MarketDirection.BEARISH
+        assert block.price_low == 99.5
+        assert block.price_high == 100.8
+        assert block.ob_candle_timestamp == _ts(8)
+        assert block.created_at == _ts(18)
+
     def test_close_inside_zone_does_not_retire_it(self) -> None:
         candles = [
             *_bearish_msb_candles(),
-            # Close back *inside* the zone (102.8-104): still active.
+            # Close back *inside* the OB zone (102.8-104): still active. The
+            # mitigation block below (99.5-100.8) is closed through -> retired.
             _candle(19, 99.2, 103.5, 99.0, 103.5),
         ]
         zones = POIDetector(pivot_len=3).detect(candles)
 
-        assert len(zones) == 1
+        assert len(zones) == 2
         assert zones[0].status == POIZoneStatus.ACTIVE
+        assert zones[1].status == POIZoneStatus.INVALIDATED
 
     def test_single_close_beyond_top_invalidates(self) -> None:
         candles = [
@@ -104,7 +121,7 @@ class TestBearishMSB:
         ]
         zones = POIDetector(pivot_len=3).detect(candles)
 
-        assert len(zones) == 1
+        assert len(zones) == 2
         assert zones[0].status == POIZoneStatus.INVALIDATED
         assert zones[0].invalidated_at == _ts(20)
 
@@ -113,6 +130,46 @@ class TestBearishMSB:
         # (would need < 95.0), so no MSB confirms.
         zones = POIDetector(pivot_len=3, fib_factor=1.0).detect(_bearish_msb_candles())
         assert zones == []
+
+
+# Variant of the bearish scenario where the recovery leg tops at 106 —
+# *above* the prior 105 high (h0 > h1) — before the breakdown, so the
+# broken-low-leg block is a breaker block instead of a mitigation block.
+def _bearish_breaker_candles() -> list[Candle]:
+    return [
+        *_bearish_msb_candles()[:9],
+        # Up leg C sweeping the prior 105 high -> high pivot 106 @ 12
+        _candle(9, 100, 101.5, 99.8, 101.2),
+        _candle(10, 101.2, 103, 101, 102.8),
+        _candle(11, 102.8, 104.5, 102.5, 104.2),
+        _candle(12, 104.2, 106, 104, 105.7),
+        # Down leg breaking 99.5 by more than 0.33 * |106 - 99.5|
+        _candle(13, 105.7, 105.8, 103.9, 104.2),
+        _candle(14, 104.2, 104.4, 102.3, 102.6),
+        _candle(15, 102.6, 102.8, 100.2, 100.5),
+        _candle(16, 100.5, 100.7, 96.8, 97.1),
+        # Turn back up -> low pivot 96.8 recorded @ 19: bearish MSB fires
+        _candle(17, 97.1, 98.3, 96.9, 98.0),
+        _candle(18, 98.0, 99.6, 97.8, 99.3),
+        _candle(19, 99.3, 100.9, 99.1, 100.6),
+    ]
+
+
+class TestBreakerBlock:
+    def test_swept_prior_high_makes_breaker_block(self) -> None:
+        zones = POIDetector(pivot_len=3).detect(_bearish_breaker_candles())
+
+        assert len(zones) == 2
+        assert zones[0].kind == POIZoneKind.ORDER_BLOCK
+        assert zones[0].price_high == 106.0
+
+        block = zones[1]
+        assert block.kind == POIZoneKind.BREAKER_BLOCK
+        assert block.direction == MarketDirection.BEARISH
+        assert block.price_low == 99.5
+        assert block.price_high == 100.8
+        assert block.ob_candle_timestamp == _ts(8)
+        assert block.created_at == _ts(19)
 
 
 # Continuation of the bearish scenario: a strong rally to 107.5, a shallow
@@ -141,13 +198,19 @@ class TestBullishMSB:
     def test_creates_demand_zone_from_last_bearish_candle(self) -> None:
         zones = POIDetector(pivot_len=3).detect(_bullish_msb_candles())
 
-        assert len(zones) == 2
-        # The rally closed above the supply zone's top on bar 19.
+        # Bearish OB + mitigation block from bar 18, bullish OB from bar 25.
+        # The bullish MSB fires on the *renewing low* pivot, so its
+        # breaker-block window (l1 - pivot_len -> h1) is empty and no
+        # bullish BB/MB is created.
+        assert len(zones) == 3
+        # The rally closed above both bearish zones on bar 19.
         assert zones[0].direction == MarketDirection.BEARISH
         assert zones[0].status == POIZoneStatus.INVALIDATED
         assert zones[0].invalidated_at == _ts(19)
+        assert zones[1].status == POIZoneStatus.INVALIDATED
 
-        zone = zones[1]
+        zone = zones[2]
+        assert zone.kind == POIZoneKind.ORDER_BLOCK
         assert zone.direction == MarketDirection.BULLISH
         assert zone.price_low == 102.5
         assert zone.price_high == 103.6
@@ -163,9 +226,9 @@ class TestBullishMSB:
         ]
         zones = POIDetector(pivot_len=3).detect(candles)
 
-        assert len(zones) == 2
-        assert zones[1].status == POIZoneStatus.INVALIDATED
-        assert zones[1].invalidated_at == _ts(26)
+        assert len(zones) == 3
+        assert zones[2].status == POIZoneStatus.INVALIDATED
+        assert zones[2].invalidated_at == _ts(26)
 
 
 class TestEdgeCases:

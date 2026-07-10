@@ -29,12 +29,25 @@ into the swing low the impulse launched from (the ``h1 -> l0`` window); a
 bearish MSB marks the last bullish candle of the ``l1 -> h0`` up leg. The
 zone spans that candle's full high-low range, frozen at creation.
 
+Breaker / mitigation block
+--------------------------
+Each MSB also marks the last *same*-direction candle of the leg that formed
+the broken pivot (bullish MSB: the last bullish candle of the
+``l1 - pivot_len -> h1`` up leg into the broken high; bearish mirrors it in
+``h1 - pivot_len -> l1``). It is a BREAKER_BLOCK when the impulse-origin
+extreme swept the prior one (bullish: ``l0 < l1``; bearish: ``h0 > h1``),
+else a MITIGATION_BLOCK. When the MSB fires on the *renewing* pivot after
+the same-pivot guard, that window can be empty (the pivots are not in the
+canonical ``l1 < h1`` order); no block is created then -- the Pine original
+would reuse a stale bar index there, which we deliberately skip.
+
 Zone lifecycle
 --------------
 ACTIVE -> INVALIDATED
   A single candle *close* beyond the far boundary (below ``price_low`` for
   a bullish zone, above ``price_high`` for a bearish one) retires the zone.
-  Price trading back inside the zone does not retire it.
+  Price trading back inside the zone does not retire it. Identical for all
+  zone kinds.
 """
 
 from dataclasses import dataclass
@@ -42,6 +55,7 @@ from dataclasses import dataclass
 from liquidity_hunter.core.domain import (
     Candle,
     MarketDirection,
+    POIZoneKind,
     POIZoneStatus,
 )
 from liquidity_hunter.core.domain.poi_zone import POIZone
@@ -60,6 +74,7 @@ class _Pivot:
 @dataclass
 class _ZoneState:
     direction: MarketDirection
+    kind: POIZoneKind
     price_low: float
     price_high: float
     created_index: int
@@ -132,11 +147,10 @@ class POIDetector:
             ):
                 flip = self._on_pivot(candles, high_pivots, low_pivots, i, market)
                 if flip is not None:
-                    market, new_zone = flip
+                    market, new_zones = flip
                     flip_h0i = high_pivots[-1].index
                     flip_l0i = low_pivots[-1].index
-                    if new_zone is not None:
-                        zones.append(new_zone)
+                    zones.extend(new_zones)
 
             # --- update zones (skip the candle they were created on) ---
             for zone in zones:
@@ -155,6 +169,7 @@ class POIDetector:
                 symbol=symbol,
                 timeframe=timeframe,
                 direction=z.direction,
+                kind=z.kind,
                 price_low=z.price_low,
                 price_high=z.price_high,
                 created_at=candles[z.created_index].timestamp,
@@ -223,12 +238,13 @@ class POIDetector:
         low_pivots: list[_Pivot],
         i: int,
         market: MarketDirection,
-    ) -> tuple[MarketDirection, _ZoneState | None] | None:
+    ) -> tuple[MarketDirection, list[_ZoneState]] | None:
         """Evaluate the MSB conditions with the freshly recorded pivot.
 
-        Returns the flipped market direction plus the new order block zone
-        (None when the impulse-origin leg holds no opposite candle) when the
-        market flips, or None when no MSB confirmed.
+        Returns the flipped market direction plus the new zones (order block
+        first, then the breaker/mitigation block; either can be missing when
+        its leg holds no matching candle) when the market flips, or None when
+        no MSB confirmed.
         """
         if len(high_pivots) < 2 or len(low_pivots) < 2:
             return None
@@ -240,26 +256,60 @@ class POIDetector:
             # Bearish MSB: the new low pivot breaks the prior low by the
             # fib extension of the preceding up leg (l1 -> h0).
             if l0.price < l1.price - abs(h0.price - l1.price) * self._fib_factor:
-                zone = self._build_zone(
+                ob = self._build_zone(
                     candles,
                     window_start=l1.index,
                     window_end=h0.index,
                     msb_index=i,
-                    bullish=False,
+                    direction=MarketDirection.BEARISH,
+                    pick_bullish_candle=True,
+                    kind=POIZoneKind.ORDER_BLOCK,
                 )
-                return MarketDirection.BEARISH, zone
+                # Breaker/mitigation: last bearish candle of the down leg
+                # that formed the broken low (h1 -> l1).
+                bb = self._build_zone(
+                    candles,
+                    window_start=max(0, h1.index - self._pivot_len),
+                    window_end=l1.index,
+                    msb_index=i,
+                    direction=MarketDirection.BEARISH,
+                    pick_bullish_candle=False,
+                    kind=(
+                        POIZoneKind.BREAKER_BLOCK
+                        if h0.price > h1.price
+                        else POIZoneKind.MITIGATION_BLOCK
+                    ),
+                )
+                return MarketDirection.BEARISH, [z for z in (ob, bb) if z is not None]
         else:
             # Bullish MSB: the new high pivot breaks the prior high by the
             # fib extension of the preceding down leg (h1 -> l0).
             if h0.price > h1.price + abs(h1.price - l0.price) * self._fib_factor:
-                zone = self._build_zone(
+                ob = self._build_zone(
                     candles,
                     window_start=h1.index,
                     window_end=l0.index,
                     msb_index=i,
-                    bullish=True,
+                    direction=MarketDirection.BULLISH,
+                    pick_bullish_candle=False,
+                    kind=POIZoneKind.ORDER_BLOCK,
                 )
-                return MarketDirection.BULLISH, zone
+                # Breaker/mitigation: last bullish candle of the up leg that
+                # formed the broken high (l1 -> h1).
+                bb = self._build_zone(
+                    candles,
+                    window_start=max(0, l1.index - self._pivot_len),
+                    window_end=h1.index,
+                    msb_index=i,
+                    direction=MarketDirection.BULLISH,
+                    pick_bullish_candle=True,
+                    kind=(
+                        POIZoneKind.BREAKER_BLOCK
+                        if l0.price < l1.price
+                        else POIZoneKind.MITIGATION_BLOCK
+                    ),
+                )
+                return MarketDirection.BULLISH, [z for z in (ob, bb) if z is not None]
         return None
 
     # ------------------------------------------------------------------
@@ -273,14 +323,24 @@ class POIDetector:
         window_start: int,
         window_end: int,
         msb_index: int,
-        bullish: bool,
+        direction: MarketDirection,
+        pick_bullish_candle: bool,
+        kind: POIZoneKind,
     ) -> _ZoneState | None:
-        """Order block = last opposite-direction candle in the impulse-origin leg."""
+        """Zone = last candle of the picked color in the given leg window.
+
+        An empty window (``window_start > window_end``, the non-canonical
+        pivot ordering) or a window with no matching candle creates no zone.
+        """
         ob_index: int | None = None
         for j in range(window_start, window_end + 1):
             candle = candles[j]
-            is_opposite = candle.open > candle.close if bullish else candle.open < candle.close
-            if is_opposite:
+            matches = (
+                candle.close > candle.open
+                if pick_bullish_candle
+                else candle.open > candle.close
+            )
+            if matches:
                 ob_index = j
         if ob_index is None:
             return None
@@ -290,7 +350,8 @@ class POIDetector:
             return None  # degenerate candle with no range
 
         return _ZoneState(
-            direction=MarketDirection.BULLISH if bullish else MarketDirection.BEARISH,
+            direction=direction,
+            kind=kind,
             price_low=ob.low,
             price_high=ob.high,
             created_index=msb_index,

@@ -37,6 +37,7 @@ export type StructureScope = 'major' | 'internal'
 export type RetailPositioning = 'long' | 'short' | 'neutral'
 
 export type POIZoneStatus = 'active' | 'invalidated'
+export type POIZoneKind = 'order_block' | 'breaker_block' | 'mitigation_block'
 
 export type ManipulationPhase = 'accumulation' | 'manipulation' | 'expansion'
 
@@ -132,6 +133,7 @@ export interface POIZone {
   symbol: string
   timeframe: TimeFrame
   direction: MarketDirection
+  kind: POIZoneKind
   price_low: number
   price_high: number
   created_at: string

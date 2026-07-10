@@ -299,6 +299,13 @@ function poiBoxEndTime(zone: POIZone, lastCandleTime: UTCTimestamp): UTCTimestam
     : ((lastCandleTime + 9_999_999) as UTCTimestamp)
 }
 
+// Short labels per MSB zone kind: order block / breaker block / mitigation block.
+const POI_KIND_LABELS: Record<string, string> = {
+  order_block: 'OB',
+  breaker_block: 'BB',
+  mitigation_block: 'MB',
+}
+
 const DIVERGENCE_MARKER_SHAPES: Record<string, { shape: 'circle' | 'square' | 'arrowUp' | 'arrowDown'; position: 'aboveBar' | 'belowBar' }> = {
   distribution: { shape: 'arrowDown', position: 'aboveBar' },
   accumulation: { shape: 'arrowUp', position: 'belowBar' },
@@ -368,8 +375,10 @@ function selectVisibleLiquidationBands(
 // accumulate as clutter. Keep only the most recent few per direction, and only
 // those within a price window derived from the *visible candle range* — not a
 // fixed % of price, which would need retuning per asset/timeframe volatility.
-// Invalidated zones are dropped (the script deletes broken boxes).
-const POI_MAX_ACTIVE_PER_DIRECTION = 3
+// Invalidated zones are dropped (the script deletes broken boxes). Each MSB
+// emits up to two same-direction zones (OB + breaker/mitigation block), so
+// the cap covers two full breaks per direction.
+const POI_MAX_ACTIVE_PER_DIRECTION = 4
 const POI_PRICE_WINDOW_RANGE_FRACTION = 0.35
 
 function selectVisiblePoiZones(
@@ -1047,6 +1056,7 @@ export function MainChart({
         const style = POI_BOX_STYLES[zone.direction] ?? POI_BOX_STYLES.bearish
         const endTime = poiBoxEndTime(zone, lastCandleTime)
         const dirIcon = zone.direction === 'bullish' ? '▲' : '▼'
+        const kindLabel = POI_KIND_LABELS[zone.kind] ?? 'OB'
 
         poiBoxes.push({
           x0: toUtcTimestamp(zone.ob_candle_timestamp),
@@ -1055,7 +1065,7 @@ export function MainChart({
           priceHigh: zone.price_high,
           borderColor: style.border,
           fillColor: style.fill,
-          label: `OB ${dirIcon}`,
+          label: `${kindLabel} ${dirIcon}`,
         })
       }
       poiBoxesPrimitiveRef.current?.setBoxes(poiBoxes)
