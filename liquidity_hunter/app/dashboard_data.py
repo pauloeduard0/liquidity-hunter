@@ -26,7 +26,7 @@ from liquidity_hunter.core.domain import (
     TimeFrame,
 )
 from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
-from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
+from liquidity_hunter.core.domain.poi_zone import POIZone
 from liquidity_hunter.data import (
     BinanceDataProvider,
     BinanceFuturesDataProvider,
@@ -283,7 +283,6 @@ class DashboardData:
     internal_structure_events: list[MarketStructure]
     retail_bias: RetailBiasEstimate
     poi_zones: list[POIZone]
-    poi_sweep_events: list[RTOSweepEvent]
     manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
     liquidity_heatmap: LiquidityHeatmap | None = None
@@ -691,11 +690,11 @@ def load_dashboard_data(
         e for e in all_internal_events if visible_start <= e.timestamp <= visible_end
     ]
 
-    poi_result = POIDetector().detect(internal_candles, all_internal_events)
-    poi_zones = [z for z in poi_result.zones if visible_start <= z.created_at <= visible_end]
-    poi_sweep_events = [
-        e for e in poi_result.sweep_events if visible_start <= e.timestamp <= visible_end
-    ]
+    # The MSB order block detector is self-contained (it derives its own swing
+    # pivots); it runs on the same structurally anchored slice as the internal
+    # detector so zones anchored just before the visible window still render.
+    all_poi_zones = POIDetector().detect(internal_candles)
+    poi_zones = [z for z in all_poi_zones if visible_start <= z.created_at <= visible_end]
 
     htf = _HIGHER_TIMEFRAME_MAP.get(timeframe)
     if htf is not None:
@@ -740,7 +739,6 @@ def load_dashboard_data(
         candles=candles,
         structure_events=all_structure,
         liquidity_zones=liquidity_zones,
-        poi_sweep_events=poi_sweep_events,
         volume_deltas=vd,
     )
 
@@ -810,7 +808,6 @@ def load_dashboard_data(
         internal_structure_events=internal_structure_events,
         retail_bias=retail_bias,
         poi_zones=poi_zones,
-        poi_sweep_events=poi_sweep_events,
         manipulation_cycles=manipulation_cycles,
         behavior_divergences=behavior_divergences,
         liquidity_heatmap=liquidity_heatmap,

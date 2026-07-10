@@ -17,7 +17,6 @@ from liquidity_hunter.core.domain import (
     StructureScope,
     TimeFrame,
 )
-from liquidity_hunter.core.domain.poi_zone import RTOSweepEvent
 from liquidity_hunter.psychology import ManipulationCycleDetector
 
 SYMBOL = "BTCUSDT"
@@ -126,7 +125,6 @@ class TestConfirmedCycle:
             candles=candles,
             structure_events=[sweep_event, bos_event],
             liquidity_zones=[zone],
-            poi_sweep_events=[],
             volume_deltas=vd,
         )
 
@@ -173,7 +171,7 @@ class TestConfirmedCycle:
         cycles = ManipulationCycleDetector(
             proximity_pct=0.02,
             min_accumulation_candles=3,
-        ).detect(candles, [sweep, bos], [zone], [], vd)
+        ).detect(candles, [sweep, bos], [zone], vd)
 
         assert len(cycles) == 1
         assert cycles[0].direction == MarketDirection.BEARISH
@@ -206,7 +204,7 @@ class TestInProgressManipulation:
             proximity_pct=0.02,
             min_accumulation_candles=1,
             max_expansion_candles=10,
-        ).detect(candles, [sweep], [zone], [], vd)
+        ).detect(candles, [sweep], [zone], vd)
 
         assert len(cycles) == 1
         assert cycles[0].phase == ManipulationPhase.MANIPULATION
@@ -227,7 +225,7 @@ class TestInProgressManipulation:
             proximity_pct=0.02,
             min_accumulation_candles=1,
             max_expansion_candles=5,
-        ).detect(candles, [sweep], [zone], [], vd)
+        ).detect(candles, [sweep], [zone], vd)
 
         assert len(cycles) == 1
         assert cycles[0].phase == ManipulationPhase.MANIPULATION
@@ -256,7 +254,7 @@ class TestProspectiveAccumulation:
         cycles = ManipulationCycleDetector(
             proximity_pct=0.02,
             min_accumulation_candles=5,
-        ).detect(candles, [], [zone], [], vd)
+        ).detect(candles, [], [zone], vd)
 
         assert len(cycles) == 1
         cycle = cycles[0]
@@ -275,7 +273,7 @@ class TestProspectiveAccumulation:
 
         cycles = ManipulationCycleDetector(
             min_accumulation_candles=3,
-        ).detect(candles, [], [zone], [], vd)
+        ).detect(candles, [], [zone], vd)
 
         assert len(cycles) == 0
 
@@ -297,62 +295,20 @@ class TestProspectiveAccumulation:
 
         cycles = ManipulationCycleDetector(
             min_accumulation_candles=3,
-        ).detect(candles, [], [zone], [], vd)
+        ).detect(candles, [], [zone], vd)
 
         assert len(cycles) == 0
 
 
-class TestRTOSweepIntegration:
-    """Cycles triggered by POI RTO sweep events."""
-
-    def test_poi_rto_sweep_creates_cycle(self) -> None:
-        zone = _zone(95.0, side=LiquiditySide.SELL_SIDE)
-
-        candles = [
-            _candle(0, 96, 97, 95.5, 96),
-            _candle(1, 96, 96.5, 95, 95.5),
-            _candle(2, 95.5, 96, 94.5, 95.2),
-            # RTO sweep candle
-            _candle(3, 95.0, 95.5, 93.5, 95.0),
-            # Expansion BOS
-            _candle(4, 95.0, 98.0, 94.5, 97.5),
-            _candle(5, 97.5, 100.0, 97.0, 99.0),
-        ]
-        vd = [0.0] * len(candles)
-
-        rto = RTOSweepEvent(
-            symbol=SYMBOL,
-            timeframe=TF,
-            direction=MarketDirection.BULLISH,
-            timestamp=_ts(3),
-            zone_price_low=94.0,
-            zone_price_high=96.0,
-            sweep_extreme=93.5,
-        )
-
-        bos = _structure(
-            5, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, 99.0
-        )
-
-        cycles = ManipulationCycleDetector(
-            proximity_pct=0.02,
-            min_accumulation_candles=1,
-        ).detect(candles, [bos], [zone], [rto], vd)
-
-        assert len(cycles) == 1
-        assert cycles[0].phase == ManipulationPhase.EXPANSION
-        assert cycles[0].status == ManipulationCycleStatus.CONFIRMED
-
-
 class TestEdgeCases:
     def test_empty_candles_returns_empty(self) -> None:
-        cycles = ManipulationCycleDetector().detect([], [], [], [], [])
+        cycles = ManipulationCycleDetector().detect([], [], [], [])
         assert cycles == []
 
     def test_no_zones_returns_empty(self) -> None:
         candles = [_candle(i, 100, 101, 99, 100) for i in range(5)]
         vd = [0.0] * len(candles)
-        cycles = ManipulationCycleDetector().detect(candles, [], [], [], vd)
+        cycles = ManipulationCycleDetector().detect(candles, [], [], vd)
         assert cycles == []
 
     def test_volume_delta_captured_on_sweep_and_expansion(self) -> None:
@@ -376,7 +332,7 @@ class TestEdgeCases:
         cycles = ManipulationCycleDetector(
             proximity_pct=0.02,
             min_accumulation_candles=1,
-        ).detect(candles, [sweep, bos], [zone], [], vd)
+        ).detect(candles, [sweep, bos], [zone], vd)
 
         assert len(cycles) == 1
         assert cycles[0].sweep_volume_delta == pytest.approx(-140.0)
@@ -403,7 +359,7 @@ class TestEdgeCases:
         cycles = ManipulationCycleDetector(
             proximity_pct=0.02,
             min_accumulation_candles=1,
-        ).detect(candles, [sweep1, sweep2], [zone], [], vd)
+        ).detect(candles, [sweep1, sweep2], [zone], vd)
 
         assert len(cycles) == 1
 
@@ -445,7 +401,7 @@ class TestEdgeCases:
         cycles = ManipulationCycleDetector(
             proximity_pct=0.02,
             min_accumulation_candles=1,
-        ).detect(candles, [sweep_a, sweep_b, bos_a, bos_b], [zone_a, zone_b], [], vd)
+        ).detect(candles, [sweep_a, sweep_b, bos_a, bos_b], [zone_a, zone_b], vd)
 
         assert len(cycles) == 2
         assert cycles[0].accumulation_start < cycles[1].accumulation_start

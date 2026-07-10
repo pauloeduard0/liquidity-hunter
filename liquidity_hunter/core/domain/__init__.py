@@ -54,7 +54,7 @@ from liquidity_hunter.core.domain.oi_analysis import (
     OIQualifiedEvent,
     OIRegimeReading,
 )
-from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
+from liquidity_hunter.core.domain.poi_zone import POIZone
 from liquidity_hunter.core.domain.retail_bias import RetailBias
 
 __all__ = [
@@ -93,7 +93,6 @@ __all__ = [
     "OpenInterestPoint",
     "POIZone",
     "POIZoneStatus",
-    "RTOSweepEvent",
     "RetailBias",
     "RetailPositioning",
     "StructureEvent",

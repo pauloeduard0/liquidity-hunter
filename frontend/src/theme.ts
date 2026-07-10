@@ -52,13 +52,6 @@ export const TREND_ICONS: Record<string, string> = {
 export const POI_BOX_STYLES: Record<string, { border: string; fill: string }> = {
   bullish: { border: '#2979ff', fill: '#2979ff2e' },   // vivid blue demand zone
   bearish: { border: '#ef5350', fill: '#ef53502e' },   // red supply zone
-  mitigated: { border: '#88888866', fill: '#8888880a' },
-}
-
-/** RTO sweep signal label colors — slightly different shade from the OB box. */
-export const RTO_COLORS: Record<string, string> = {
-  bullish: '#2962ff',  // darker blue — distinct from the lighter OB box
-  bearish: '#ff5252',
 }
 
 /** Manipulation cycle accumulation box colors by status. */

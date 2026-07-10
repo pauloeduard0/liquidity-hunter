@@ -22,7 +22,6 @@ from liquidity_hunter.core.domain import (
     StructureScope,
     TimeFrame,
 )
-from liquidity_hunter.core.domain.poi_zone import RTOSweepEvent
 from liquidity_hunter.psychology import RetailBiasEstimate
 
 T0 = datetime(2024, 1, 1, tzinfo=UTC)
@@ -66,7 +65,6 @@ def _minimal_data(**overrides: object) -> DashboardData:
         "internal_structure_events": [],
         "retail_bias": _bias(),
         "poi_zones": [],
-        "poi_sweep_events": [],
         "manipulation_cycles": [],
         "behavior_divergences": [],
     }
@@ -185,26 +183,6 @@ def test_behavior_divergence_mapped_to_timeline() -> None:
     assert len(narrative.timeline) == 1
     assert narrative.timeline[0].event_type == NarrativeEventType.DISTRIBUTION
     assert narrative.timeline[0].source_layer == "behavior_divergence"
-
-
-# ── Timeline from POI sweep events ──────────────────────────────────
-
-def test_poi_sweep_event_mapped_to_timeline() -> None:
-    se = RTOSweepEvent(
-        symbol="BTCUSDT",
-        timeframe=TimeFrame.H1,
-        direction=MarketDirection.BULLISH,
-        timestamp=T0 + H1 * 8,
-        zone_price_low=99.0,
-        zone_price_high=100.0,
-        sweep_extreme=98.5,
-    )
-    data = _minimal_data(poi_sweep_events=[se])
-    narrative = NarrativeEngine().build(data)
-
-    assert len(narrative.timeline) == 1
-    assert narrative.timeline[0].event_type == NarrativeEventType.ZONE_MITIGATION
-    assert narrative.timeline[0].source_layer == "poi"
 
 
 # ── Timeline ordering ───────────────────────────────────────────────
@@ -937,24 +915,6 @@ def test_expansion_description_includes_vd_and_resolution() -> None:
     desc = exp[0].description
     assert "VD:" in desc
     assert "sweep resolved" in desc.lower()
-
-
-def test_poi_sweep_description_mentions_recovery() -> None:
-    se = RTOSweepEvent(
-        symbol="BTCUSDT",
-        timeframe=TimeFrame.H1,
-        direction=MarketDirection.BULLISH,
-        timestamp=T0 + H1 * 8,
-        zone_price_low=99.0,
-        zone_price_high=100.0,
-        sweep_extreme=98.5,
-    )
-    data = _minimal_data(poi_sweep_events=[se])
-    narrative = NarrativeEngine().build(data)
-
-    desc = narrative.timeline[0].description
-    assert "recovered" in desc.lower()
-    assert "98.50" in desc
 
 
 # ── Concentrated liquidity anomaly ──────────────────────────────────

@@ -26,7 +26,6 @@ from liquidity_hunter.core.domain import Candle, LiquiditySide, TimeFrame
 from liquidity_hunter.liquidity import (
     EqualHighDetector,
     EqualLowDetector,
-    InternalStructureDetector,
     POIDetector,
     SwingHighDetector,
     SwingLowDetector,
@@ -35,7 +34,6 @@ from liquidity_hunter.liquidity import (
 from liquidity_hunter.psychology import LeverageLiquidationEstimator, ProjectedLevel
 
 DEFAULT_SWING_LOOKBACK = 10
-DEFAULT_INTERNAL_SWING_LOOKBACK = 2
 
 # Distance-from-current-price bucket edges (fractions), for the distance-controlled
 # reaction comparison (legacy/secondary view).
@@ -115,8 +113,6 @@ class LiquidationBacktester:
         step: int = 6,
         min_history: int = 250,
         swing_lookback: int = DEFAULT_SWING_LOOKBACK,
-        internal_swing_lookback: int = DEFAULT_INTERNAL_SWING_LOOKBACK,
-        confluence_filter: bool = False,
         seed: int = 0,
     ) -> LiquidationBacktestResult:
         """Evaluate the liquidation map point-in-time over `candles`."""
@@ -150,9 +146,7 @@ class LiquidationBacktester:
             if current_price <= 0:
                 continue
 
-            live = self._live_levels(
-                past, internal_swing_lookback, confluence_filter
-            )
+            live = self._live_levels(past)
             selected = _select_levels(live, current_price, max_levels, price_window)
             if not selected:
                 continue
@@ -188,12 +182,7 @@ class LiquidationBacktester:
             params,
         )
 
-    def _live_levels(
-        self,
-        past: list[Candle],
-        internal_swing_lookback: int,
-        confluence_filter: bool,
-    ) -> list[ProjectedLevel]:
+    def _live_levels(self, past: list[Candle]) -> list[ProjectedLevel]:
         """Project levels from as-of-`past` state, keeping only unreached ones."""
         zones = mark_swept_zones(
             [
@@ -204,10 +193,7 @@ class LiquidationBacktester:
             ],
             past,
         )
-        internal_events = InternalStructureDetector(
-            swing_lookback=internal_swing_lookback, confluence_filter=confluence_filter
-        ).detect(past)
-        poi_zones = POIDetector().detect(past, internal_events).zones
+        poi_zones = POIDetector().detect(past)
 
         levels = self._estimator.project_levels(zones, poi_zones)
         live = []

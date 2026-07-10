@@ -29,7 +29,6 @@ from liquidity_hunter.core.domain import (
     TimeFrame,
 )
 from liquidity_hunter.core.domain.manipulation_cycle import ManipulationCycle
-from liquidity_hunter.core.domain.poi_zone import RTOSweepEvent
 
 _TIMEFRAME_MIN_ACCUMULATION: dict[TimeFrame, int] = {
     TimeFrame.M1: 20,
@@ -70,7 +69,6 @@ class _SweepTrigger:
     timestamp: datetime
     price: float
     sweep_direction: MarketDirection
-    source: str
 
 
 @dataclass(frozen=True)
@@ -118,7 +116,6 @@ class ManipulationCycleDetector:
         candles: list[Candle],
         structure_events: list[MarketStructure],
         liquidity_zones: list[LiquidityZone],
-        poi_sweep_events: list[RTOSweepEvent],
         volume_deltas: Sequence[float],
     ) -> list[ManipulationCycle]:
         if len(candles) < 2 or not liquidity_zones:
@@ -143,7 +140,7 @@ class ManipulationCycleDetector:
 
         ts_to_idx = {c.timestamp: i for i, c in enumerate(candles)}
 
-        sweeps = self._collect_sweeps(structure_events, poi_sweep_events)
+        sweeps = self._collect_sweeps(structure_events)
         bos_events = sorted(
             (e for e in structure_events if e.event == StructureEvent.BREAK_OF_STRUCTURE),
             key=lambda e: e.timestamp,
@@ -256,36 +253,16 @@ class ManipulationCycleDetector:
     @staticmethod
     def _collect_sweeps(
         structure_events: list[MarketStructure],
-        poi_sweep_events: list[RTOSweepEvent],
     ) -> list[_SweepTrigger]:
-        triggers: list[_SweepTrigger] = []
-
-        for e in structure_events:
-            if e.event != StructureEvent.LIQUIDITY_SWEEP:
-                continue
-            triggers.append(
-                _SweepTrigger(
-                    timestamp=e.timestamp,
-                    price=e.price_level,
-                    sweep_direction=e.direction,
-                    source="structure",
-                )
+        triggers = [
+            _SweepTrigger(
+                timestamp=e.timestamp,
+                price=e.price_level,
+                sweep_direction=e.direction,
             )
-
-        for rto in poi_sweep_events:
-            triggers.append(
-                _SweepTrigger(
-                    timestamp=rto.timestamp,
-                    price=rto.sweep_extreme,
-                    sweep_direction=(
-                        MarketDirection.BEARISH
-                        if rto.direction == MarketDirection.BULLISH
-                        else MarketDirection.BULLISH
-                    ),
-                    source="poi_rto",
-                )
-            )
-
+            for e in structure_events
+            if e.event == StructureEvent.LIQUIDITY_SWEEP
+        ]
         return sorted(triggers, key=lambda t: t.timestamp)
 
     # ------------------------------------------------------------------

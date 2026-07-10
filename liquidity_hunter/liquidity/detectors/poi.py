@@ -1,102 +1,70 @@
 """POI (Point of Interest / Order Block) detector.
 
-Identifies institutional order block zones anchored to the leg between a
-validated CHoCH and the *first* BOS in the same direction.  The zone box
-is built from the extreme candle in that window:
+Detects order block zones from market structure breaks (MSB), adapted from
+the "Market Structure Break & Order Block" TradingView indicator (EmreKb,
+MPL 2.0). Self-contained: it derives its own swing pivots from the candle
+series rather than consuming structure events.
 
-  Bullish demand zone:
-    price_low  = extreme_candle.low          (invalidation line)
-    price_high = (low + high) / 2            (50 % midpoint)
+Pivots
+------
+A rolling window of ``pivot_len`` candles tracks the swing state: a candle
+whose high is the window maximum turns the swing up, one whose low is the
+window minimum turns it down. Each swing flip records the completed leg's
+extreme (the highest high of an up leg / lowest low of a down leg) as a
+pivot, yielding the alternating high/low pivot sequence
+``h0/h1`` / ``l0/l1`` (0 = most recent).
 
-  Bearish supply zone (mirror):
-    price_high = extreme_candle.high         (invalidation line)
-    price_low  = (low + high) / 2
+Market structure break (MSB)
+----------------------------
+With the market bearish, a new high pivot ``h0`` above the prior high ``h1``
+by more than ``fib_factor`` of the preceding leg's height (``|h1 - l0|``)
+confirms a *bullish* MSB; the bearish mirror breaks ``l1`` by
+``fib_factor * |h0 - l1|``. After a flip, both the high and the low pivot
+must renew before another flip can fire (same-pivot guard).
+
+Order block
+-----------
+A bullish MSB marks the *last bearish candle* (open > close) of the down leg
+into the swing low the impulse launched from (the ``h1 -> l0`` window); a
+bearish MSB marks the last bullish candle of the ``l1 -> h0`` up leg. The
+zone spans that candle's full high-low range, frozen at creation.
 
 Zone lifecycle
 --------------
-ACTIVE → MITIGATED
-  Price sweeps the invalidation boundary (wick or brief closes) and
-  then a candle closes back inside / beyond the zone.  One RTO
-  (Return-to-Origin) event is emitted and the zone is retired.
-
-ACTIVE → INVALIDATED
-  `invalidation_persistence_candles` consecutive candle closes breach
-  the boundary without recovery.  The zone is retired with no signal.
-
-A pending CHoCH context is cancelled by an opposing BOS (trend resumed
-in the original direction before price formed a new leg), which discards
-any in-progress zone anchor for that side.
+ACTIVE -> INVALIDATED
+  A single candle *close* beyond the far boundary (below ``price_low`` for
+  a bullish zone, above ``price_high`` for a bearish one) retires the zone.
+  Price trading back inside the zone does not retire it.
 """
 
-from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 
 from liquidity_hunter.core.domain import (
     Candle,
     MarketDirection,
-    MarketStructure,
     POIZoneStatus,
-    StructureEvent,
-    StructureScope,
-    TimeFrame,
 )
-from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
+from liquidity_hunter.core.domain.poi_zone import POIZone
 
 # ---------------------------------------------------------------------------
-# Internal mutable zone tracker
+# Internal state
 # ---------------------------------------------------------------------------
 
 
 @dataclass
+class _Pivot:
+    price: float
+    index: int
+
+
+@dataclass
 class _ZoneState:
-    symbol: str
-    timeframe: TimeFrame
     direction: MarketDirection
     price_low: float
     price_high: float
-    created_at: datetime
-    origin_choch_timestamp: datetime
-    origin_bos_timestamp: datetime
-    extreme_candle_timestamp: datetime
-    # Tracking counters
-    consecutive_closes_beyond: int = 0
-    sweep_started: bool = False
-    sweep_extreme: float | None = None  # worst price reached during sweep
-    # Final state
-    status: POIZoneStatus = field(default=POIZoneStatus.ACTIVE)
-    invalidated_at: datetime | None = None
-    mitigated_at: datetime | None = None
-    is_done: bool = False
-
-    def to_poi_zone(self) -> POIZone:
-        return POIZone(
-            symbol=self.symbol,
-            timeframe=self.timeframe,
-            direction=self.direction,
-            price_low=self.price_low,
-            price_high=self.price_high,
-            created_at=self.created_at,
-            origin_choch_timestamp=self.origin_choch_timestamp,
-            origin_bos_timestamp=self.origin_bos_timestamp,
-            extreme_candle_timestamp=self.extreme_candle_timestamp,
-            status=self.status,
-            invalidated_at=self.invalidated_at,
-            mitigated_at=self.mitigated_at,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Public result type
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class POIResult:
-    """Output of `POIDetector.detect()`."""
-
-    zones: list[POIZone]
-    sweep_events: list[RTOSweepEvent]
+    created_index: int
+    ob_candle_index: int
+    invalidated_index: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -105,259 +73,226 @@ class POIResult:
 
 
 class POIDetector:
-    """Detects institutional order block zones from structure events + candles.
+    """Detects MSB-anchored order block zones from a candle series.
 
     Parameters
     ----------
-    invalidation_persistence_candles:
-        Number of consecutive candle closes that must breach the zone
-        boundary to declare it invalidated.  Default 4.
+    pivot_len:
+        Rolling window length for swing detection (the indicator's
+        "ZigZag Length"). Default 9.
+    fib_factor:
+        Fraction of the preceding leg's height a new pivot must exceed the
+        broken pivot by to confirm an MSB. Default 0.33.
     """
 
-    def __init__(self, invalidation_persistence_candles: int = 4) -> None:
-        if invalidation_persistence_candles < 1:
-            raise ValueError("invalidation_persistence_candles must be >= 1")
-        self._invalidation_candles = invalidation_persistence_candles
+    def __init__(self, pivot_len: int = 9, fib_factor: float = 0.33) -> None:
+        if pivot_len < 2:
+            raise ValueError("pivot_len must be >= 2")
+        if not 0.0 <= fib_factor <= 1.0:
+            raise ValueError("fib_factor must be within [0, 1]")
+        self._pivot_len = pivot_len
+        self._fib_factor = fib_factor
 
-    def detect(
-        self,
-        candles: list[Candle],
-        structure_events: list[MarketStructure],
-    ) -> POIResult:
-        """Detect POI zones and RTO sweep events.
+    def detect(self, candles: list[Candle]) -> list[POIZone]:
+        if len(candles) < self._pivot_len:
+            return []
 
-        `candles` must be the *same* series passed to
-        `InternalStructureDetector` (including any bootstrap buffer).
-        `structure_events` must be the *unfiltered* output of that
-        detector so that CHoCH anchors from the buffer can produce zones
-        visible in the display window.
-        """
-        if not candles:
-            return POIResult(zones=[], sweep_events=[])
+        highs = [c.high for c in candles]
+        lows = [c.low for c in candles]
+
+        swing = 1  # 1 = up leg forming, -1 = down leg forming
+        high_pivots: list[_Pivot] = []
+        low_pivots: list[_Pivot] = []
+
+        market = MarketDirection.BULLISH
+        # Pivot indices at the last MSB: both sides must renew before the
+        # next flip (the indicator's same-pivot guard).
+        flip_h0i: int | None = None
+        flip_l0i: int | None = None
+
+        zones: list[_ZoneState] = []
+
+        for i, candle in enumerate(candles):
+            window_start = max(0, i - self._pivot_len + 1)
+            to_up = candle.high >= max(highs[window_start : i + 1])
+            to_down = candle.low <= min(lows[window_start : i + 1])
+
+            pivot_recorded = False
+            if swing == 1 and to_down:
+                swing = -1
+                high_pivots.append(self._leg_extreme(highs, low_pivots, i, is_high=True))
+                pivot_recorded = True
+            elif swing == -1 and to_up:
+                swing = 1
+                low_pivots.append(self._leg_extreme(lows, high_pivots, i, is_high=False))
+                pivot_recorded = True
+
+            if pivot_recorded and not self._guard_blocked(
+                high_pivots, low_pivots, flip_h0i, flip_l0i
+            ):
+                flip = self._on_pivot(candles, high_pivots, low_pivots, i, market)
+                if flip is not None:
+                    market, new_zone = flip
+                    flip_h0i = high_pivots[-1].index
+                    flip_l0i = low_pivots[-1].index
+                    if new_zone is not None:
+                        zones.append(new_zone)
+
+            # --- update zones (skip the candle they were created on) ---
+            for zone in zones:
+                if zone.invalidated_index is not None or zone.created_index >= i:
+                    continue
+                if zone.direction == MarketDirection.BULLISH:
+                    if candle.close < zone.price_low:
+                        zone.invalidated_index = i
+                elif candle.close > zone.price_high:
+                    zone.invalidated_index = i
 
         symbol = candles[0].symbol
         timeframe = candles[0].timeframe
+        return [
+            POIZone(
+                symbol=symbol,
+                timeframe=timeframe,
+                direction=z.direction,
+                price_low=z.price_low,
+                price_high=z.price_high,
+                created_at=candles[z.created_index].timestamp,
+                ob_candle_timestamp=candles[z.ob_candle_index].timestamp,
+                status=(
+                    POIZoneStatus.ACTIVE
+                    if z.invalidated_index is None
+                    else POIZoneStatus.INVALIDATED
+                ),
+                invalidated_at=(
+                    None
+                    if z.invalidated_index is None
+                    else candles[z.invalidated_index].timestamp
+                ),
+            )
+            for z in zones
+        ]
 
-        # Only INTERNAL-scope CHoCH and BOS drive POI creation.
-        internal_events = sorted(
-            (e for e in structure_events if e.scope == StructureScope.INTERNAL),
-            key=lambda e: e.timestamp,
+    # ------------------------------------------------------------------
+    # Pivot recording
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _leg_extreme(
+        prices: list[float],
+        opposite_pivots: list[_Pivot],
+        i: int,
+        *,
+        is_high: bool,
+    ) -> _Pivot:
+        """Extreme of the leg since the last opposite pivot (through bar ``i``).
+
+        Prefers the most recent bar when the extreme repeats, matching the
+        indicator's `barssince`-based index attribution.
+        """
+        start = opposite_pivots[-1].index if opposite_pivots else 0
+        best = start
+        for j in range(start, i + 1):
+            if (is_high and prices[j] >= prices[best]) or (
+                not is_high and prices[j] <= prices[best]
+            ):
+                best = j
+        return _Pivot(price=prices[best], index=best)
+
+    # ------------------------------------------------------------------
+    # MSB evaluation (runs on each swing flip, when a pivot is recorded)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _guard_blocked(
+        high_pivots: list[_Pivot],
+        low_pivots: list[_Pivot],
+        flip_h0i: int | None,
+        flip_l0i: int | None,
+    ) -> bool:
+        if not high_pivots or not low_pivots:
+            return True
+        return (flip_h0i is not None and high_pivots[-1].index == flip_h0i) or (
+            flip_l0i is not None and low_pivots[-1].index == flip_l0i
         )
 
-        timestamp_to_index: dict[datetime, int] = {
-            c.timestamp: i for i, c in enumerate(candles)
-        }
+    def _on_pivot(
+        self,
+        candles: list[Candle],
+        high_pivots: list[_Pivot],
+        low_pivots: list[_Pivot],
+        i: int,
+        market: MarketDirection,
+    ) -> tuple[MarketDirection, _ZoneState | None] | None:
+        """Evaluate the MSB conditions with the freshly recorded pivot.
 
-        events_by_timestamp: dict[datetime, list[MarketStructure]] = defaultdict(list)
-        for event in internal_events:
-            if event.timestamp in timestamp_to_index:
-                events_by_timestamp[event.timestamp].append(event)
+        Returns the flipped market direction plus the new order block zone
+        (None when the impulse-origin leg holds no opposite candle) when the
+        market flips, or None when no MSB confirmed.
+        """
+        if len(high_pivots) < 2 or len(low_pivots) < 2:
+            return None
 
-        pending_bullish_choch: MarketStructure | None = None
-        pending_bearish_choch: MarketStructure | None = None
+        h0, h1 = high_pivots[-1], high_pivots[-2]
+        l0, l1 = low_pivots[-1], low_pivots[-2]
 
-        active_zones: list[_ZoneState] = []
-        all_zones: list[_ZoneState] = []
-        sweep_events: list[RTOSweepEvent] = []
-
-        for candle in candles:
-            # --- process structure events at this candle ---
-            for event in events_by_timestamp.get(candle.timestamp, []):
-                if event.event == StructureEvent.CHANGE_OF_CHARACTER:
-                    if event.direction == MarketDirection.BULLISH:
-                        pending_bullish_choch = event
-                        pending_bearish_choch = None
-                    else:
-                        pending_bearish_choch = event
-                        pending_bullish_choch = None
-
-                elif event.event == StructureEvent.BREAK_OF_STRUCTURE:
-                    if event.direction == MarketDirection.BULLISH:
-                        if pending_bullish_choch is not None:
-                            zone = self._create_zone(
-                                candles,
-                                pending_bullish_choch,
-                                event,
-                                timestamp_to_index,
-                                symbol,
-                                timeframe,
-                                bullish=True,
-                            )
-                            if zone is not None:
-                                active_zones.append(zone)
-                                all_zones.append(zone)
-                            pending_bullish_choch = None
-                        # A bullish BOS means the bearish leg never resumed —
-                        # discard any pending bearish CHoCH anchor.
-                        pending_bearish_choch = None
-
-                    else:  # BEARISH BOS
-                        if pending_bearish_choch is not None:
-                            zone = self._create_zone(
-                                candles,
-                                pending_bearish_choch,
-                                event,
-                                timestamp_to_index,
-                                symbol,
-                                timeframe,
-                                bullish=False,
-                            )
-                            if zone is not None:
-                                active_zones.append(zone)
-                                all_zones.append(zone)
-                            pending_bearish_choch = None
-                        pending_bullish_choch = None
-
-            # --- update all active zones (skip the candle they were created on) ---
-            still_active: list[_ZoneState] = []
-            for zone in active_zones:
-                if zone.created_at >= candle.timestamp:
-                    still_active.append(zone)
-                    continue
-
-                rto = self._update_zone(zone, candle)
-                if rto is not None:
-                    sweep_events.append(rto)
-
-                if not zone.is_done:
-                    still_active.append(zone)
-
-            active_zones = still_active
-
-        return POIResult(
-            zones=[z.to_poi_zone() for z in all_zones],
-            sweep_events=sweep_events,
-        )
+        if market == MarketDirection.BULLISH:
+            # Bearish MSB: the new low pivot breaks the prior low by the
+            # fib extension of the preceding up leg (l1 -> h0).
+            if l0.price < l1.price - abs(h0.price - l1.price) * self._fib_factor:
+                zone = self._build_zone(
+                    candles,
+                    window_start=l1.index,
+                    window_end=h0.index,
+                    msb_index=i,
+                    bullish=False,
+                )
+                return MarketDirection.BEARISH, zone
+        else:
+            # Bullish MSB: the new high pivot breaks the prior high by the
+            # fib extension of the preceding down leg (h1 -> l0).
+            if h0.price > h1.price + abs(h1.price - l0.price) * self._fib_factor:
+                zone = self._build_zone(
+                    candles,
+                    window_start=h1.index,
+                    window_end=l0.index,
+                    msb_index=i,
+                    bullish=True,
+                )
+                return MarketDirection.BULLISH, zone
+        return None
 
     # ------------------------------------------------------------------
     # Zone creation
     # ------------------------------------------------------------------
 
-    def _create_zone(
-        self,
+    @staticmethod
+    def _build_zone(
         candles: list[Candle],
-        choch_event: MarketStructure,
-        bos_event: MarketStructure,
-        timestamp_to_index: dict[datetime, int],
-        symbol: str,
-        timeframe: TimeFrame,
         *,
+        window_start: int,
+        window_end: int,
+        msb_index: int,
         bullish: bool,
     ) -> _ZoneState | None:
-        choch_idx = timestamp_to_index.get(choch_event.timestamp)
-        bos_ts = (
-            bos_event.reference_timestamp
-            if bos_event.reference_timestamp is not None
-            else bos_event.timestamp
-        )
-        bos_idx = timestamp_to_index.get(bos_ts)
-        if choch_idx is None or bos_idx is None or choch_idx >= bos_idx:
+        """Order block = last opposite-direction candle in the impulse-origin leg."""
+        ob_index: int | None = None
+        for j in range(window_start, window_end + 1):
+            candle = candles[j]
+            is_opposite = candle.open > candle.close if bullish else candle.open < candle.close
+            if is_opposite:
+                ob_index = j
+        if ob_index is None:
             return None
 
-        window = candles[choch_idx : bos_idx + 1]
-
-        if bullish:
-            extreme = min(window, key=lambda c: c.low)
-            price_low = extreme.low
-            price_high = (extreme.low + extreme.high) / 2
-        else:
-            extreme = max(window, key=lambda c: c.high)
-            price_high = extreme.high
-            price_low = (extreme.low + extreme.high) / 2
-
-        if price_high <= price_low:
-            # Degenerate candle with no range — skip.
-            return None
+        ob = candles[ob_index]
+        if ob.high <= ob.low:
+            return None  # degenerate candle with no range
 
         return _ZoneState(
-            symbol=symbol,
-            timeframe=timeframe,
             direction=MarketDirection.BULLISH if bullish else MarketDirection.BEARISH,
-            price_low=price_low,
-            price_high=price_high,
-            created_at=bos_event.timestamp,
-            origin_choch_timestamp=choch_event.timestamp,
-            origin_bos_timestamp=bos_event.timestamp,
-            extreme_candle_timestamp=extreme.timestamp,
+            price_low=ob.low,
+            price_high=ob.high,
+            created_index=msb_index,
+            ob_candle_index=ob_index,
         )
-
-    # ------------------------------------------------------------------
-    # Zone state update (one candle at a time)
-    # ------------------------------------------------------------------
-
-    def _update_zone(self, zone: _ZoneState, candle: Candle) -> RTOSweepEvent | None:
-        if zone.is_done:
-            return None
-        if zone.direction == MarketDirection.BULLISH:
-            return self._update_bullish(zone, candle)
-        return self._update_bearish(zone, candle)
-
-    def _update_bullish(self, zone: _ZoneState, candle: Candle) -> RTOSweepEvent | None:
-        """Demand zone: invalidation line is `price_low` (bottom of box)."""
-        # Track wick violation below the box floor.
-        if candle.low < zone.price_low:
-            zone.sweep_started = True
-            if zone.sweep_extreme is None or candle.low < zone.sweep_extreme:
-                zone.sweep_extreme = candle.low
-
-        if candle.close < zone.price_low:
-            zone.consecutive_closes_beyond += 1
-            if zone.consecutive_closes_beyond >= self._invalidation_candles:
-                zone.status = POIZoneStatus.INVALIDATED
-                zone.invalidated_at = candle.timestamp
-                zone.is_done = True
-        else:
-            # Close back inside or above the zone.
-            if zone.sweep_started:
-                rto = RTOSweepEvent(
-                    symbol=zone.symbol,
-                    timeframe=zone.timeframe,
-                    direction=MarketDirection.BULLISH,
-                    timestamp=candle.timestamp,
-                    zone_price_low=zone.price_low,
-                    zone_price_high=zone.price_high,
-                    sweep_extreme=zone.sweep_extreme
-                    if zone.sweep_extreme is not None
-                    else candle.low,
-                )
-                zone.status = POIZoneStatus.MITIGATED
-                zone.mitigated_at = candle.timestamp
-                zone.is_done = True
-                return rto
-            zone.consecutive_closes_beyond = 0
-
-        return None
-
-    def _update_bearish(self, zone: _ZoneState, candle: Candle) -> RTOSweepEvent | None:
-        """Supply zone: invalidation line is `price_high` (top of box)."""
-        if candle.high > zone.price_high:
-            zone.sweep_started = True
-            if zone.sweep_extreme is None or candle.high > zone.sweep_extreme:
-                zone.sweep_extreme = candle.high
-
-        if candle.close > zone.price_high:
-            zone.consecutive_closes_beyond += 1
-            if zone.consecutive_closes_beyond >= self._invalidation_candles:
-                zone.status = POIZoneStatus.INVALIDATED
-                zone.invalidated_at = candle.timestamp
-                zone.is_done = True
-        else:
-            if zone.sweep_started:
-                rto = RTOSweepEvent(
-                    symbol=zone.symbol,
-                    timeframe=zone.timeframe,
-                    direction=MarketDirection.BEARISH,
-                    timestamp=candle.timestamp,
-                    zone_price_low=zone.price_low,
-                    zone_price_high=zone.price_high,
-                    sweep_extreme=zone.sweep_extreme
-                    if zone.sweep_extreme is not None
-                    else candle.high,
-                )
-                zone.status = POIZoneStatus.MITIGATED
-                zone.mitigated_at = candle.timestamp
-                zone.is_done = True
-                return rto
-            zone.consecutive_closes_beyond = 0
-
-        return None

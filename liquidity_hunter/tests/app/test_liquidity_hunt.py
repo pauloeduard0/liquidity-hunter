@@ -70,7 +70,6 @@ def _minimal_data(**overrides: object) -> DashboardData:
         "internal_structure_events": [],
         "retail_bias": _bias(),
         "poi_zones": [],
-        "poi_sweep_events": [],
         "manipulation_cycles": [],
         "behavior_divergences": [],
     }

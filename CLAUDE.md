@@ -143,19 +143,17 @@ and `validate_assignment=True`. New entities should follow this pattern.
   frontend still terminates the stale line; see the `InternalStructureDetector`
   notes.
 - **`POIZone`** — an institutional order block zone, defined in
-  `core/domain/poi_zone.py`. Anchored to the leg between a validated CHoCH and
-  the first BOS in the same direction. Fields: `direction`, `price_low`,
-  `price_high` (frozen at creation), `origin_choch_timestamp`,
-  `origin_bos_timestamp`, `extreme_candle_timestamp`, `status`
-  (`POIZoneStatus`: `ACTIVE`/`MITIGATED`/`INVALIDATED`), `invalidated_at`,
-  `mitigated_at`. For a bullish (demand) zone: `price_low = extreme_candle.low`
-  (invalidation boundary) and `price_high = (low + high) / 2` (50% midpoint).
-  Bearish (supply) mirrors this.
-- **`RTOSweepEvent`** — a Return-to-Origin liquidity capture event, defined in
-  `core/domain/poi_zone.py`. Fires when price sweeps beyond a POI zone's
-  invalidation boundary and a subsequent candle closes back inside. Fields:
-  `timestamp`, `direction`, `zone_price_low`, `zone_price_high`, `sweep_extreme`
-  (the most adverse price reached during the sweep).
+  `core/domain/poi_zone.py`. Anchored to a **market structure break (MSB)**:
+  the zone is the *last opposite-direction candle before the impulse* that
+  broke structure (for a bullish MSB, the last bearish candle of the down leg
+  into the swing low the impulse launched from; bearish mirrors it), spanning
+  that candle's **full high-low range**, frozen at creation. Fields:
+  `direction`, `price_low`, `price_high`, `created_at` (the MSB confirmation
+  candle), `ob_candle_timestamp` (the order block candle — the box's left
+  edge), `status` (`POIZoneStatus`: `ACTIVE`/`INVALIDATED`), `invalidated_at`.
+  A single candle *close* beyond the far boundary (below `price_low` for
+  bullish, above `price_high` for bearish) invalidates the zone; price
+  touching back inside does not retire it.
 - **`ManipulationCycle`** — an observed institutional manipulation cycle
   (accumulation → sweep → expansion), defined in
   `core/domain/manipulation_cycle.py`. Describes the three-phase Wyckoff/SMC
@@ -597,30 +595,34 @@ re-exported from `liquidity_hunter.data`.
     `upper_shadow = high - max(close, open)`, `lower_shadow = min(close, open) - low`;
     bullish requires `upper_shadow > lower_shadow`, bearish the reverse. Mirrors
     LuxAlgo's "Confluence Filter" (`bullishBar`/`bearishBar` in Pine source).
-- **`liquidity/detectors/poi.py`** — `POIDetector`: detects institutional order
-  block (Point of Interest) zones from `InternalStructureDetector` output.
-  `detect(candles, structure_events) -> POIResult` (`POIResult` is a frozen
-  dataclass with `zones: list[POIZone]` and `sweep_events: list[RTOSweepEvent]`).
+- **`liquidity/detectors/poi.py`** — `POIDetector`: detects MSB-anchored order
+  block zones, adapted from the "Market Structure Break & Order Block"
+  TradingView indicator (EmreKb, MPL 2.0). **Self-contained**:
+  `detect(candles) -> list[POIZone]` — it derives its own swing pivots rather
+  than consuming structure events (deliberately a separate, simpler structure
+  read than `InternalStructureDetector`). Constructor: `pivot_len` (default
+  `9`, the indicator's "ZigZag Length") and `fib_factor` (default `0.33`).
 
-  A zone is created for each CHoCH → first-BOS-in-same-direction window: the
-  extreme candle in that window (highest close for bullish, lowest close for
-  bearish) defines the zone boundaries — demand zone: `price_low = candle.low`,
-  `price_high = (low + high) / 2`; supply zone: `price_high = candle.high`,
-  `price_low = (low + high) / 2`. Bounds are **frozen at creation**.
+  **Pivots**: a rolling `pivot_len` window tracks the swing state — a candle
+  whose high is the window max turns the swing up, one whose low is the window
+  min turns it down; each swing flip records the completed leg's extreme
+  (preferring the most recent bar on ties), yielding alternating `h0/h1` /
+  `l0/l1` pivots.
 
-  Zone lifecycle:
-  - `ACTIVE → MITIGATED`: price sweeps beyond the invalidation boundary (wick
-    touch) and a subsequent candle closes back inside/beyond the zone. One
-    `RTOSweepEvent` is emitted and the zone is retired.
-  - `ACTIVE → INVALIDATED`: `invalidation_persistence_candles` (default `4`)
-    consecutive closes beyond the boundary without recovery. Zone is retired
-    silently with no signal.
+  **MSB**: with the market bullish, a new low pivot `l0 < l1 − fib_factor ×
+  |h0 − l1|` confirms a bearish MSB (the bullish mirror breaks `h1` by
+  `fib_factor × |h1 − l0|`). The market starts bullish. After a flip, **both**
+  the high and low pivot must renew before another flip can fire (the
+  indicator's same-pivot guard). The MSB confirms on the swing-flip candle
+  that records the breaking pivot.
 
-  A pending CHoCH context is cancelled by an opposing BOS (trend resumed in the
-  original direction before a new leg formed); any in-progress zone anchor for
-  that side is discarded. The internal `_ZoneState` mutable tracker is an
-  internal implementation detail and is converted to the immutable `POIZone`
-  domain entity on output.
+  **Zone**: the last opposite-direction candle in the impulse-origin leg
+  (bullish MSB → last `open > close` candle in the `h1 → l0` window; bearish
+  mirror in `l1 → h0`), full high-low range. A leg with no opposite candle
+  creates no zone (the market still flips). Lifecycle: `ACTIVE →
+  INVALIDATED` on a **single close** beyond the far boundary; touches inside
+  the zone never retire it. There is no MITIGATED state and no RTO sweep
+  events (removed with the old CHoCH→BOS detector).
 
 All detectors are re-exported from `liquidity_hunter.liquidity`.
 
@@ -647,8 +649,8 @@ The full estimation logic (confidence formula and worked example) is
 documented in `liquidity_hunter/docs/psychology.md`.
 - **`psychology/analyzers/manipulation_cycle.py`** —
   `ManipulationCycleDetector`: connects existing observations (liquidity
-  zones, `LIQUIDITY_SWEEP` events, `RTOSweepEvent`s, BOS events, volume
-  delta) into three-phase Wyckoff/SMC manipulation cycles. Works in two
+  zones, `LIQUIDITY_SWEEP` events, BOS events, volume delta) into
+  three-phase Wyckoff/SMC manipulation cycles. Works in two
   modes: **retrospective** (for each sweep event, looks backward for
   accumulation near a liquidity zone and forward for an expansion BOS) and
   **prospective** (scans active zones where price is currently consolidating,
@@ -700,7 +702,7 @@ documented in `liquidity_hunter/docs/psychology.md`.
   Entry anchors come from `_entry_anchors`: liquidity zones with `strength > 0`
   **including mitigated ones** (real past entry areas, downweighted by
   `_MITIGATED_ENTRY_FACTOR`=0.7) **and order blocks** (`poi_zones`, weight
-  `_POI_ENTRY_WEIGHT`=1.0, mitigated downweighted, invalidated dropped — order
+  `_POI_ENTRY_WEIGHT`=1.0, invalidated dropped — order
   blocks concentrate real institutional volume), merged within
   `_ENTRY_CLUSTER_PCT` (0.4%,
   keep strongest), then at most `_MAX_ENTRY_CLUSTERS` (16) kept **spread evenly
@@ -765,7 +767,7 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
 - **`DashboardData`** — a frozen dataclass snapshot combining `candles`,
   `higher_timeframe_direction`, `liquidity_zones`, `ranked_zones`,
   `market_structure_events`, `internal_structure_events`, `retail_bias`,
-  `poi_zones` (`list[POIZone]`), `poi_sweep_events` (`list[RTOSweepEvent]`),
+  `poi_zones` (`list[POIZone]`),
   `manipulation_cycles` (`list[ManipulationCycle]`),
   `behavior_divergences` (`list[BehaviorDivergence]`),
   `liquidity_heatmap` (`LiquidityHeatmap | None`),
@@ -792,7 +794,7 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   = (5, 12)`) — so the constructor defaults (`2`/`5`) apply only to a
   directly-built detector, not the production wiring. The internal detector's
   output is passed through **`_reanchor_bos_close_break`** before the visible
-  filter (and before `POIDetector` consumes it): each `BREAK_OF_STRUCTURE` is
+  filter: each `BREAK_OF_STRUCTURE` is
   re-timed to the first candle that *closes* beyond the formed level it broke
   (`reference_price_level`), within the window the BOS stays active (up to the
   next same-direction BOS or opposite-direction CHoCH); any BOS whose leg only
@@ -845,8 +847,8 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   beyond `limit` (`buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER,
   provider.max_fetch_limit)` — the cap comes from the provider: 1000 for spot,
   1500 for the futures default). The **major** detector runs on the full
-  `buffered_candles`; the **internal** detector (and `POIDetector`, which
-  consumes its events) instead start at a **structural anchor** —
+  `buffered_candles`; the **internal** detector (and `POIDetector`, which runs
+  on the same slice) instead start at a **structural anchor** —
   `_structural_anchor_index(buffered_candles, visible_start)`, the index of the
   most recent *major extreme* (lowest low / highest high, whichever is more
   recent) within `_STRUCTURAL_ANCHOR_REGION = 300` candles before the visible
@@ -858,13 +860,13 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   window, while staying stable across refreshes (a major extreme is a fixed price
   point, not a sliding offset). The anchor falls back to `0` when the provider
   returns no pre-visible buffer. Both `market_structure_events`,
-  `internal_structure_events`, and `poi_zones`/`poi_sweep_events` are filtered
+  `internal_structure_events`, and `poi_zones` are filtered
   to the calendar range `[candles[0].timestamp, candles[-1].timestamp]` after
-  detection. `candles` (the visible window, the trailing `limit` of
-  `buffered_candles`) is unaffected.
+  detection (`poi_zones` by `created_at`). `candles` (the visible window, the
+  trailing `limit` of `buffered_candles`) is unaffected.
 
   After all detectors run, `ManipulationCycleDetector().detect(candles,
-  all_structure, liquidity_zones, poi_sweep_events, volume_delta_series(candles))`
+  all_structure, liquidity_zones, volume_delta_series(candles))`
   populates `manipulation_cycles`.
 
   `BehaviorDivergenceAnalyzer().analyze(candles, vd, liquidity_zones,
@@ -900,10 +902,9 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `build(data) -> MarketNarrative` produces:
   - **Timeline**: chronological `list[NarrativeEvent]` mapped from structure
     events (major + internal BOS/CHoCH/SWEEP), manipulation cycle phases
-    (consolidation/sweep/expansion), behavior divergences, and POI sweep
-    events. Deduplicated by `(timestamp, event_type)`, keeping the
-    higher-priority source (`manipulation_cycle` > `poi` >
-    `behavior_divergence` > `market_structure`).
+    (consolidation/sweep/expansion), and behavior divergences. Deduplicated
+    by `(timestamp, event_type)`, keeping the higher-priority source
+    (`manipulation_cycle` > `behavior_divergence` > `market_structure`).
   - **Anomalies**: `list[NarrativeAnomaly]` detecting pattern contradictions:
     expansion + exhaustion (HIGH), accumulation + distribution (MEDIUM),
     concentrated liquidity on one side (MEDIUM/HIGH), unconfirmed CHoCH
@@ -988,9 +989,9 @@ only on `app` and `core` (an alternative presentation layer to
   (`from_attributes=True`) mirroring the `DashboardData` dataclass fields,
   used to serialize it to JSON; nested domain types (`Candle`,
   `LiquidityZone`, `MarketStructure`, `ScoredLiquidityZone`,
-  `RetailBiasEstimate`, `POIZone`, `RTOSweepEvent`, `ManipulationCycle`) are
+  `RetailBiasEstimate`, `POIZone`, `ManipulationCycle`) are
   already `DomainModel`s and serialize as-is. `poi_zones`,
-  `poi_sweep_events`, `manipulation_cycles`, `behavior_divergences`,
+  `manipulation_cycles`, `behavior_divergences`,
   `liquidity_heatmap`, `liquidation_map`, `narrative`, `oi_analysis`,
   `liquidity_hunt`, and `higher_timeframe` fields are included.
 
@@ -1068,12 +1069,13 @@ selector.
   implements `ISeriesPrimitive` and draws filled canvas rectangles for each
   POI zone. Colors: light blue (`#64b5f6` / `#2979ff`) for bullish demand
   zones, red (`#ef5350`) for supply zones. Box border: 1.5px. Active fill
-  opacity: ~18% (`#2979ff2e`). The right edge of each box extends to the
-  timestamp of the first internal BOS in the same direction after zone
-  creation; if no BOS has fired yet, a far-future sentinel timestamp is used
-  so `timeToCoordinate` returns `null` and the right edge is clamped to
-  `mediaSize.width` (full pane width). Mitigated zones keep their directional
-  color at lower opacity (border: 67%, fill: 9%) so direction remains readable.
+  opacity: ~18% (`#2979ff2e`). Each box starts at the order block candle
+  (`ob_candle_timestamp`) and its right edge extends to `invalidated_at` (the
+  candle whose close broke the zone); while the zone is ACTIVE, a far-future
+  sentinel timestamp is used so `timeToCoordinate` returns `null` and the
+  right edge is clamped to `mediaSize.width` (full pane width). Only ACTIVE
+  zones are drawn (`selectVisiblePoiZones` drops invalidated ones and keeps
+  the most recent few per direction near price).
   Also reused for manipulation cycle accumulation boxes (second instance).
 
 - **`frontend/src/charting/LiquidationBandsPrimitive.ts`** —
@@ -1103,7 +1105,7 @@ selector.
   mode (`liquidationLiveOnly`, shown as `⊟ Liq •`).
 
 - **`frontend/src/types/dashboard.ts`** — TypeScript types mirroring the API
-  schema; includes `POIZone`, `RTOSweepEvent`, `MarketStructure` (with
+  schema; includes `POIZone`, `MarketStructure` (with
   `reference_timestamp`, `reference_structural`, `provisional`),
   `ManipulationCycle`, `ManipulationPhase`,
   `ManipulationCycleStatus`, `BehaviorDivergence`, `DivergenceType`,
@@ -1895,12 +1897,19 @@ window long enough that one-shot would re-introduce the stuck-trend bug.
 the `validated_choch_<side>` pivot (the promoted LH/HL), allowing the frontend
 to anchor CHoCH lines at their true origin rather than at the break candle.
 
-**POI (Order Block) module**: `POIDetector` is implemented and wired into
-`load_dashboard_data`. Zones are anchored to the CHoCH → first-same-direction-BOS
-window, built from the extreme candle in that window, with frozen boundaries.
-The lifecycle (ACTIVE → MITIGATED via RTO, ACTIVE → INVALIDATED via persistence
-closes) is fully implemented. The React frontend renders POI zones via
-`POIBoxesPrimitive` canvas primitives.
+**POI (Order Block) module** (rewritten 2026-07-10): `POIDetector` now
+implements the MSB-OB logic (adapted from EmreKb's "Market Structure Break &
+Order Block" TradingView indicator, minus the zigzag drawing). Self-contained
+swing pivots (`pivot_len=9` rolling window) feed a market state machine whose
+flips require a fib-extension break (`fib_factor=0.33`) plus a same-pivot
+guard; each MSB marks the last opposite-direction candle of the
+impulse-origin leg as the order block (full candle range, frozen).
+Lifecycle: ACTIVE → INVALIDATED on a single close beyond the far boundary;
+touches never retire a zone. The MITIGATED state, `RTOSweepEvent`, and
+`poi_sweep_events` were removed everywhere (domain, `DashboardData`, API
+schema, `ManipulationCycleDetector` input, `NarrativeEngine` timeline,
+frontend RTO markers). The React frontend renders active zones via
+`POIBoxesPrimitive`, starting each box at the OB candle.
 
 **Manipulation cycle detection**: `ManipulationCycleDetector` connects
 existing observations into three-phase Wyckoff/SMC cycles (accumulation →

@@ -268,12 +268,12 @@ def _entry_anchors(
     """Entry-cluster anchors for projecting liquidation bands.
 
     Sources entries from liquidity zones (equal highs/lows, swings) **and**
-    order blocks (POI zones — real institutional volume areas). Mitigated zones
-    and mitigated order blocks are kept as historical entry areas, downweighted
-    by `_MITIGATED_ENTRY_FACTOR` (invalidated order blocks are dropped). Entries
-    within `_ENTRY_CLUSTER_PCT` are merged (keep strongest), then at most
-    `_MAX_ENTRY_CLUSTERS` are kept spread evenly across price so coverage isn't
-    monopolized by the densest cluster.
+    order blocks (POI zones — real institutional volume areas). Mitigated
+    liquidity zones are kept as historical entry areas, downweighted by
+    `_MITIGATED_ENTRY_FACTOR`; invalidated order blocks (a close broke the
+    zone) are dropped. Entries within `_ENTRY_CLUSTER_PCT` are merged (keep
+    strongest), then at most `_MAX_ENTRY_CLUSTERS` are kept spread evenly
+    across price so coverage isn't monopolized by the densest cluster.
     """
     candidates = [
         _Entry(
@@ -287,13 +287,10 @@ def _entry_anchors(
     for poi in poi_zones:
         if poi.status is POIZoneStatus.INVALIDATED:
             continue
-        weight = _POI_ENTRY_WEIGHT * (
-            _MITIGATED_ENTRY_FACTOR if poi.status is POIZoneStatus.MITIGATED else 1.0
-        )
         candidates.append(
             _Entry(
                 price=(poi.price_low + poi.price_high) / 2,
-                weight=weight,
+                weight=_POI_ENTRY_WEIGHT,
                 start_time=poi.created_at,
             )
         )

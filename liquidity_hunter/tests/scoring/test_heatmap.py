@@ -61,9 +61,7 @@ def _make_poi(
         price_low=price_low,
         price_high=price_high,
         created_at=_TS,
-        origin_choch_timestamp=_TS,
-        origin_bos_timestamp=_TS,
-        extreme_candle_timestamp=_TS,
+        ob_candle_timestamp=_TS,
         status=status,
     )
 

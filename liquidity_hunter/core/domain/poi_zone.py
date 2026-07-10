@@ -10,18 +10,21 @@ from liquidity_hunter.core.domain.enums import MarketDirection, POIZoneStatus, T
 
 
 class POIZone(DomainModel):
-    """An order block zone anchored between a validated CHoCH and the first BOS.
+    """An order block zone anchored to a market structure break (MSB).
 
-    `price_low` / `price_high` are frozen at creation and never updated.
-    For a bullish (demand) zone the box spans from the extreme candle's low
-    to its midpoint (50% of high-low range); bearish (supply) mirrors it.
+    The zone is the *last opposite-direction candle before the impulse* that
+    broke market structure: for a bullish MSB (a swing high confirmed beyond
+    the prior swing high by the fib-factor extension), the last bearish candle
+    of the down leg into the swing low the impulse launched from; a bearish
+    MSB mirrors it. The box spans the OB candle's full range (high to low),
+    frozen at creation.
 
     status lifecycle:
-    - ACTIVE: zone is live and unmitigated.
-    - MITIGATED: price swept the invalidation boundary and closed back
-      inside/beyond (RTO fired).
-    - INVALIDATED: `invalidation_persistence_candles` consecutive closes
-      beyond the boundary confirmed a structural break.
+    - ACTIVE: zone is live. Price trading back inside the zone does not
+      retire it -- the box keeps extending right.
+    - INVALIDATED: a single candle *close* beyond the zone's far boundary
+      (below `price_low` for a bullish zone, above `price_high` for a
+      bearish one) retires it.
     """
 
     symbol: str
@@ -30,35 +33,12 @@ class POIZone(DomainModel):
     price_low: float = Field(gt=0)
     price_high: float = Field(gt=0)
     created_at: datetime
-    origin_choch_timestamp: datetime
-    origin_bos_timestamp: datetime
-    extreme_candle_timestamp: datetime
+    ob_candle_timestamp: datetime
     status: POIZoneStatus = POIZoneStatus.ACTIVE
     invalidated_at: datetime | None = None
-    mitigated_at: datetime | None = None
 
     @model_validator(mode="after")
     def _check_price_range(self) -> Self:
         if self.price_high <= self.price_low:
             raise ValueError("price_high must be > price_low")
         return self
-
-
-class RTOSweepEvent(DomainModel):
-    """Institutional liquidity capture + return-to-origin on a POI zone.
-
-    Fires when price sweeps beyond the zone's invalidation boundary and a
-    subsequent candle closes back inside or beyond the zone in the zone's
-    direction -- a liquidity grab followed by recovery.
-
-    `sweep_extreme`: the most adverse price reached during the sweep period
-    (lowest low for a bullish zone, highest high for a bearish zone).
-    """
-
-    symbol: str
-    timeframe: TimeFrame
-    direction: MarketDirection
-    timestamp: datetime
-    zone_price_low: float = Field(gt=0)
-    zone_price_high: float = Field(gt=0)
-    sweep_extreme: float = Field(gt=0)

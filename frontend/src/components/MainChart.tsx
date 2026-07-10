@@ -39,7 +39,6 @@ import {
   RSI_LINE_COLOR,
   RSI_OVERBOUGHT_COLOR,
   RSI_OVERSOLD_COLOR,
-  RTO_COLORS,
   STRUCTURE_EVENT_STYLES,
   TREND_ICONS,
   ZONE_COLORS,
@@ -292,14 +291,11 @@ function structureLineEndTime(
 
 // A POI box spans the zone's real lifecycle: it stays open (full width) while
 // the zone is ACTIVE — an armed order block price may still return to — and
-// closes at the candle that retired it (`mitigated_at`, the RTO close-back
-// candle, so the box's right edge meets the RTO marker; `invalidated_at` for
-// zones rendered while invalidated). Structure events after zone creation do
-// not cut the box short: a CHoCH can fire before the RTO touch.
+// closes at the candle whose close broke through it (`invalidated_at`).
+// Price touching inside the zone does not retire it.
 function poiBoxEndTime(zone: POIZone, lastCandleTime: UTCTimestamp): UTCTimestamp {
-  const lifecycleEnd = zone.mitigated_at ?? zone.invalidated_at
-  return lifecycleEnd
-    ? toUtcTimestamp(lifecycleEnd)
+  return zone.invalidated_at
+    ? toUtcTimestamp(zone.invalidated_at)
     : ((lastCandleTime + 9_999_999) as UTCTimestamp)
 }
 
@@ -372,7 +368,7 @@ function selectVisibleLiquidationBands(
 // accumulate as clutter. Keep only the most recent few per direction, and only
 // those within a price window derived from the *visible candle range* — not a
 // fixed % of price, which would need retuning per asset/timeframe volatility.
-// Mitigated zones are time-bounded history and pass through untouched.
+// Invalidated zones are dropped (the script deletes broken boxes).
 const POI_MAX_ACTIVE_PER_DIRECTION = 3
 const POI_PRICE_WINDOW_RANGE_FRACTION = 0.35
 
@@ -393,8 +389,7 @@ function selectVisiblePoiZones(
       .filter((z) => z.direction === direction)
       .sort(byRecency)
       .slice(0, POI_MAX_ACTIVE_PER_DIRECTION)
-  const mitigated = zones.filter((z) => z.status === 'mitigated')
-  return [...mitigated, ...takeRecent('bullish'), ...takeRecent('bearish')]
+  return [...takeRecent('bullish'), ...takeRecent('bearish')]
 }
 
 function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker<Time>[] {
@@ -1040,7 +1035,7 @@ export function MainChart({
       })
     }
 
-    // POI order block zones and RTO sweeps
+    // POI order block zones (MSB-anchored; box starts at the OB candle)
     {
       const visiblePriceRange =
         Math.max(...data.candles.map((c) => c.high)) -
@@ -1049,36 +1044,21 @@ export function MainChart({
       for (const zone of showOrderBlocks
         ? selectVisiblePoiZones(data.poi_zones ?? [], data.current_price, visiblePriceRange)
         : []) {
-        const isMitigated = zone.status === 'mitigated'
-        const dirStyle = POI_BOX_STYLES[zone.direction] ?? POI_BOX_STYLES.mitigated
-        const style = isMitigated
-          ? { border: dirStyle.border + 'aa', fill: dirStyle.border + '18' }
-          : dirStyle
+        const style = POI_BOX_STYLES[zone.direction] ?? POI_BOX_STYLES.bearish
         const endTime = poiBoxEndTime(zone, lastCandleTime)
         const dirIcon = zone.direction === 'bullish' ? '▲' : '▼'
 
         poiBoxes.push({
-          x0: toUtcTimestamp(zone.created_at),
+          x0: toUtcTimestamp(zone.ob_candle_timestamp),
           x1: endTime,
           priceLow: zone.price_low,
           priceHigh: zone.price_high,
           borderColor: style.border,
           fillColor: style.fill,
-          label: `OB ${dirIcon}${isMitigated ? ' ✓' : ''}`,
+          label: `OB ${dirIcon}`,
         })
       }
       poiBoxesPrimitiveRef.current?.setBoxes(poiBoxes)
-
-      for (const rto of showSweeps ? data.poi_sweep_events ?? [] : []) {
-        const color = RTO_COLORS[rto.direction] ?? '#888888'
-        const midPrice = (rto.zone_price_low + rto.zone_price_high) / 2
-        labels.push({
-          time: toUtcTimestamp(rto.timestamp),
-          price: midPrice,
-          color,
-          text: `RTO ${rto.direction === 'bullish' ? '▲' : '▼'}`,
-        })
-      }
     }
 
     // Manipulation cycle accumulation boxes

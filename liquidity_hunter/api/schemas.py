@@ -23,7 +23,7 @@ from liquidity_hunter.core.domain import (
     TimeFrame,
 )
 from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
-from liquidity_hunter.core.domain.poi_zone import POIZone, RTOSweepEvent
+from liquidity_hunter.core.domain.poi_zone import POIZone
 from liquidity_hunter.psychology import RetailBiasEstimate
 from liquidity_hunter.scoring import ScoredLiquidityZone
 
@@ -45,7 +45,6 @@ class DashboardDataResponse(BaseModel):
     internal_structure_events: list[MarketStructure]
     retail_bias: RetailBiasEstimate
     poi_zones: list[POIZone]
-    poi_sweep_events: list[RTOSweepEvent]
     manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
     liquidity_heatmap: LiquidityHeatmap | None = None

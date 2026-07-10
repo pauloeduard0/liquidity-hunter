@@ -33,7 +33,6 @@ if TYPE_CHECKING:
     from liquidity_hunter.core.domain.candle import Candle
     from liquidity_hunter.core.domain.manipulation_cycle import ManipulationCycle
     from liquidity_hunter.core.domain.market_structure import MarketStructure
-    from liquidity_hunter.core.domain.poi_zone import RTOSweepEvent
 
 
 _DIVERGENCE_TO_NARRATIVE: dict[DivergenceType, NarrativeEventType] = {
@@ -55,7 +54,6 @@ _ZONE_TYPE_LABELS: dict[LiquidityZoneType, str] = {
 
 _SOURCE_PRIORITY: dict[str, int] = {
     "manipulation_cycle": 3,
-    "poi": 2,
     "behavior_divergence": 1,
     "market_structure": 0,
     "internal_structure": 0,
@@ -96,7 +94,6 @@ class NarrativeEngine:
         )
         events.extend(self._events_from_manipulation_cycles(data.manipulation_cycles))
         events.extend(self._events_from_behavior_divergences(data))
-        events.extend(self._events_from_poi_sweeps(data.poi_sweep_events))
         events = self._deduplicate(events)
         events.sort(key=lambda e: e.timestamp)
         return events
@@ -257,24 +254,6 @@ class NarrativeEngine:
                 source_layer="behavior_divergence",
             )
             for bd in data.behavior_divergences
-        ]
-
-    def _events_from_poi_sweeps(
-        self, sweep_events: list[RTOSweepEvent]
-    ) -> list[NarrativeEvent]:
-        return [
-            NarrativeEvent(
-                timestamp=se.timestamp,
-                event_type=NarrativeEventType.ZONE_MITIGATION,
-                direction=se.direction,
-                description=(
-                    f"Return-to-origin: price swept beyond zone "
-                    f"[{se.zone_price_low:,.2f}–{se.zone_price_high:,.2f}] "
-                    f"to {se.sweep_extreme:,.2f}, then recovered"
-                ),
-                source_layer="poi",
-            )
-            for se in sweep_events
         ]
 
     # ------------------------------------------------------------------

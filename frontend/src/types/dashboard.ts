@@ -36,7 +36,7 @@ export type StructureScope = 'major' | 'internal'
 
 export type RetailPositioning = 'long' | 'short' | 'neutral'
 
-export type POIZoneStatus = 'active' | 'mitigated' | 'invalidated'
+export type POIZoneStatus = 'active' | 'invalidated'
 
 export type ManipulationPhase = 'accumulation' | 'manipulation' | 'expansion'
 
@@ -135,22 +135,9 @@ export interface POIZone {
   price_low: number
   price_high: number
   created_at: string
-  origin_choch_timestamp: string
-  origin_bos_timestamp: string
-  extreme_candle_timestamp: string
+  ob_candle_timestamp: string
   status: POIZoneStatus
   invalidated_at: string | null
-  mitigated_at: string | null
-}
-
-export interface RTOSweepEvent {
-  symbol: string
-  timeframe: TimeFrame
-  direction: MarketDirection
-  timestamp: string
-  zone_price_low: number
-  zone_price_high: number
-  sweep_extreme: number
 }
 
 export interface ManipulationCycle {
@@ -339,7 +326,6 @@ export interface DashboardData {
   internal_structure_events: MarketStructure[]
   retail_bias: RetailBiasEstimate
   poi_zones: POIZone[]
-  poi_sweep_events: RTOSweepEvent[]
   manipulation_cycles: ManipulationCycle[]
   behavior_divergences: BehaviorDivergence[]
   liquidity_heatmap: LiquidityHeatmap | null

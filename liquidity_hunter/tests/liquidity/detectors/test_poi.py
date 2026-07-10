@@ -1,0 +1,184 @@
+"""Tests for the MSB order block `POIDetector`."""
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from liquidity_hunter.core.domain import (
+    Candle,
+    MarketDirection,
+    POIZoneStatus,
+    TimeFrame,
+)
+from liquidity_hunter.liquidity import POIDetector
+
+SYMBOL = "BTCUSDT"
+TF = TimeFrame.H1
+T0 = datetime(2024, 6, 1, tzinfo=UTC)
+
+
+def _ts(i: int) -> datetime:
+    return T0 + timedelta(hours=i)
+
+
+def _candle(i: int, open_: float, high: float, low: float, close: float) -> Candle:
+    return Candle(
+        symbol=SYMBOL,
+        timeframe=TF,
+        timestamp=_ts(i),
+        open=open_,
+        high=high,
+        low=low,
+        close=close,
+        volume=100.0,
+        taker_buy_volume=50.0,
+    )
+
+
+# A bearish-MSB scenario (pivot_len=3): an up leg to 105, a down leg to 99.5,
+# a lower recovery to 104, then a drop through the prior low far enough to
+# clear the fib extension. The MSB confirms at bar 18 (the swing flip that
+# records the 97.0 low pivot); the order block is the last bullish candle of
+# the 99.5 -> 104 up leg (bar 12, range 102.8-104).
+def _bearish_msb_candles() -> list[Candle]:
+    return [
+        # Up leg A -> high pivot 105 @ 4
+        _candle(0, 100, 101, 99, 100.5),
+        _candle(1, 100.5, 102, 100, 101.5),
+        _candle(2, 101.5, 103, 101, 102.5),
+        _candle(3, 102.5, 104, 102, 103.5),
+        _candle(4, 103.5, 105, 103, 104.5),
+        # Down leg B -> low pivot 99.5 @ 8
+        _candle(5, 104.5, 104.8, 102.5, 103),
+        _candle(6, 103, 103.2, 101, 101.5),
+        _candle(7, 101.5, 101.8, 100, 100.5),
+        _candle(8, 100.5, 100.8, 99.5, 100),
+        # Up leg C (lower high) -> high pivot 104 @ 12
+        _candle(9, 100, 101.5, 99.8, 101.2),
+        _candle(10, 101.2, 102.5, 101, 102.2),
+        _candle(11, 102.2, 103.5, 102, 103.2),
+        _candle(12, 103.2, 104, 102.8, 103.8),
+        # Down leg D breaking 99.5 by more than 0.33 * |104 - 99.5|
+        _candle(13, 103.8, 103.9, 102, 102.3),
+        _candle(14, 102.3, 102.5, 100.5, 100.8),
+        _candle(15, 100.8, 101, 98.5, 98.7),
+        _candle(16, 98.7, 98.9, 97.0, 97.3),
+        # Turn back up -> low pivot 97.0 recorded @ 18: bearish MSB fires
+        _candle(17, 97.3, 98.5, 97.1, 98.2),
+        _candle(18, 98.2, 99.5, 98.0, 99.2),
+    ]
+
+
+class TestBearishMSB:
+    def test_creates_supply_zone_from_last_bullish_candle(self) -> None:
+        zones = POIDetector(pivot_len=3).detect(_bearish_msb_candles())
+
+        assert len(zones) == 1
+        zone = zones[0]
+        assert zone.direction == MarketDirection.BEARISH
+        # Full range of the last bullish candle of the l1 -> h0 leg (bar 12).
+        assert zone.price_low == 102.8
+        assert zone.price_high == 104.0
+        assert zone.ob_candle_timestamp == _ts(12)
+        assert zone.created_at == _ts(18)
+        assert zone.status == POIZoneStatus.ACTIVE
+        assert zone.invalidated_at is None
+
+    def test_close_inside_zone_does_not_retire_it(self) -> None:
+        candles = [
+            *_bearish_msb_candles(),
+            # Close back *inside* the zone (102.8-104): still active.
+            _candle(19, 99.2, 103.5, 99.0, 103.5),
+        ]
+        zones = POIDetector(pivot_len=3).detect(candles)
+
+        assert len(zones) == 1
+        assert zones[0].status == POIZoneStatus.ACTIVE
+
+    def test_single_close_beyond_top_invalidates(self) -> None:
+        candles = [
+            *_bearish_msb_candles(),
+            _candle(19, 99.2, 99.5, 97.5, 98),
+            # One close above the zone top (104) retires the supply zone.
+            _candle(20, 98, 105.5, 97.8, 105.2),
+        ]
+        zones = POIDetector(pivot_len=3).detect(candles)
+
+        assert len(zones) == 1
+        assert zones[0].status == POIZoneStatus.INVALIDATED
+        assert zones[0].invalidated_at == _ts(20)
+
+    def test_fib_factor_gates_the_break(self) -> None:
+        # With fib_factor=1.0 the 97.0 low is not deep enough below 99.5
+        # (would need < 95.0), so no MSB confirms.
+        zones = POIDetector(pivot_len=3, fib_factor=1.0).detect(_bearish_msb_candles())
+        assert zones == []
+
+
+# Continuation of the bearish scenario: a strong rally to 107.5, a shallow
+# pullback to 102.5, confirming a bullish MSB at bar 25 (107.5 breaks the 104
+# prior high by more than the fib extension). The same-pivot guard blocks the
+# earlier flip at bar 22 (the low pivot is still the one that fired the
+# bearish MSB). The order block is the last bearish candle of the decline into
+# the 102.5 low (bar 24, range 102.5-103.6).
+def _bullish_msb_candles() -> list[Candle]:
+    return [
+        *_bearish_msb_candles(),
+        # Impulsive rally through the old supply (invalidates the bearish zone)
+        _candle(19, 99.2, 106.0, 99.0, 105.5),
+        _candle(20, 105.5, 107.5, 105.0, 107.0),
+        _candle(21, 107.0, 107.2, 104.5, 105.0),
+        # Swing flip down @ 22 records the 107.5 high pivot (guard blocks MSB)
+        _candle(22, 105.0, 105.2, 104.0, 104.3),
+        _candle(23, 104.3, 104.5, 103.0, 103.4),
+        _candle(24, 103.4, 103.6, 102.5, 102.8),
+        # Swing flip up @ 25 records the 102.5 low pivot: bullish MSB fires
+        _candle(25, 102.8, 104.8, 102.6, 104.5),
+    ]
+
+
+class TestBullishMSB:
+    def test_creates_demand_zone_from_last_bearish_candle(self) -> None:
+        zones = POIDetector(pivot_len=3).detect(_bullish_msb_candles())
+
+        assert len(zones) == 2
+        # The rally closed above the supply zone's top on bar 19.
+        assert zones[0].direction == MarketDirection.BEARISH
+        assert zones[0].status == POIZoneStatus.INVALIDATED
+        assert zones[0].invalidated_at == _ts(19)
+
+        zone = zones[1]
+        assert zone.direction == MarketDirection.BULLISH
+        assert zone.price_low == 102.5
+        assert zone.price_high == 103.6
+        assert zone.ob_candle_timestamp == _ts(24)
+        assert zone.created_at == _ts(25)
+        assert zone.status == POIZoneStatus.ACTIVE
+
+    def test_single_close_below_bottom_invalidates(self) -> None:
+        candles = [
+            *_bullish_msb_candles(),
+            # One close below the zone bottom (102.5) retires the demand zone.
+            _candle(26, 104.5, 104.7, 101.8, 102.0),
+        ]
+        zones = POIDetector(pivot_len=3).detect(candles)
+
+        assert len(zones) == 2
+        assert zones[1].status == POIZoneStatus.INVALIDATED
+        assert zones[1].invalidated_at == _ts(26)
+
+
+class TestEdgeCases:
+    def test_series_shorter_than_pivot_len_returns_empty(self) -> None:
+        candles = [_candle(i, 100, 101, 99, 100.5) for i in range(2)]
+        assert POIDetector(pivot_len=3).detect(candles) == []
+
+    def test_flat_series_produces_no_zones(self) -> None:
+        candles = [_candle(i, 100, 101, 99, 100.5) for i in range(30)]
+        assert POIDetector(pivot_len=3).detect(candles) == []
+
+    def test_invalid_params_raise(self) -> None:
+        with pytest.raises(ValueError):
+            POIDetector(pivot_len=1)
+        with pytest.raises(ValueError):
+            POIDetector(fib_factor=1.5)
