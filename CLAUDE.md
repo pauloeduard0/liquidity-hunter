@@ -1827,6 +1827,44 @@ self-contained window; off → no CHOCH_FAILED, on → one bearish marker @ 80.7
 it unmarked). Off = byte-for-byte identical. Not mirrored into
 `SwingStructureDetector` (not drawn).
 
+**Failed-CHoCH whipsaw fixes** (`InternalStructureDetector`, as of 2026-07-11,
+two companion flags): the BTC H1 18–25/06 crash printed a single bearish BOS
+(62232) and then only sweeps because two weak bullish CHoCHs flipped the trend
+mid-crash — with the trend flipped, every new low was counter-trend (sweep,
+never BOS), the `CHOCH_FAILED` prints late (at the next confirmed pivot) and
+never retro-reclassifies, and the second flip (06-25 04:00, a cold-start
+fallback CHoCH at the 61256 trailing LH firing on a 4-candle bounce one day
+after the previous failure) happened because a failed-CHoCH flip arms no origin
+(one-shot), so the unconfirmed-window fallback suppression lapses at the
+failure. (1) `choch_failed_fallback_suppress_candles` (constructor default
+`None` = off; wired **`20`** flat via
+`_CHOCH_FAILED_FALLBACK_SUPPRESS_CANDLES`): the cold-start `active_<side>`
+fallback stays suppressed for this many candles after a *same-direction*
+`CHOCH_FAILED`; structural/validated references are untouched, so a genuine
+reversal (which promotes a leg origin via BOS) still fires — the motivating
+whipsaw fired 15 candles after the failure. (2) `stage_choch_failed_window_bos`
+(constructor default `False`; wired **`True`** via
+`_STAGE_CHOCH_FAILED_WINDOW_BOS`): while a CHoCH is provisional, counter-trend
+staircase breaks (new extremes beyond the previous recorded one, seeded from
+the pre-CHoCH reported-floor stash) are recorded (`_EatenBreak`); at the
+`CHOCH_FAILED` each is staged as an additive BOS of the resumed trend (merged/
+deduped like the impulse staging, close-break re-anchored at composition, so
+wick-only ones drop) and the eaten extremes fold into the restored staircase
+floors (gate: most extreme pivot; reported floor: close-confirmed only) so the
+next real continuation references the true prior formed extreme. Recorded
+breaks are discarded if the CHoCH confirms; a fresh CHoCH clears the window.
+Measured (BTC/ETH/SOL/AAVE/NEAR × 5m..1d, `limit=1200`): 17/30 combos
+identical; the rest are staircase splits (one gap-jumping BOS becomes two
+steps, e.g. NEAR 1h `3.08 ref=2.58` → `2.76 ref=2.58` + `3.08 ref=2.76`); zero
+new `CHOCH_FAILED` anywhere. BTC 1h (motivating): the crash gains the
+62232 → 61870 → 59060 → 58030 staircase, the 06-25 whipsaw CHoCH becomes a
+sweep, the phantom 06-30 `CHOCH_FAILED` disappears; cost: the recovery CHoCH
+fires 07-02 09:00 (ref 60758) instead of 07-01 13:00 (ref 59444 fallback),
+~20h later against a better reference. Real-data regression fixture:
+`tests/liquidity/detectors/data/btcusdt_1h_2026_05_18_07_04.json` (1136-candle
+production H1 slice). Off = byte-for-byte identical. Not mirrored into
+`SwingStructureDetector` (not drawn).
+
 **CHoCH origin = deepest leg extreme** (`InternalStructureDetector`, as of
 2026-07-05): `choch_origin_leg_extreme` (constructor default `False`; wired
 **`True`** in `load_dashboard_data`). A CHoCH's *origin* — the level whose

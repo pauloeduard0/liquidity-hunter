@@ -219,6 +219,31 @@ _CHOCH_WEAK_REF_PERSISTENCE: dict[TimeFrame, int] = {
 # never touching the state machine.)
 _CHOCH_FIZZLE_RECLAIM_CANDLES: int | None = 30
 
+# Post-failure fallback suppression
+# (`InternalStructureDetector.choch_failed_fallback_suppress_candles`). A
+# failed-CHoCH flip arms no blind-spot origin (one-shot, anti-ping-pong), so
+# the cold-start `active_<side>` fallback -- suppressed while the origin was
+# armed -- becomes live again the moment a failure confirms, and a brief bounce
+# can flip the trend right back off a hair-trigger trailing level (the BTC H1
+# 2026-06-25 case: a fallback bullish CHoCH at 61256 one day after the previous
+# bullish CHoCH failed, mid-crash, which turned the final flush to 58030 into a
+# sweep instead of a bearish BOS). Keep the fallback suppressed for this many
+# candles after a same-direction failure; structural/validated references are
+# untouched, so a genuine reversal (which promotes a leg origin via BOS) still
+# fires. The motivating whipsaw fired 15 candles after the failure.
+_CHOCH_FAILED_FALLBACK_SUPPRESS_CANDLES: int | None = 20
+
+# Retro-staging of the continuation BOS a failed CHoCH ate
+# (`InternalStructureDetector.stage_choch_failed_window_bos`). While a CHoCH
+# awaits its confirming BOS the trend is flipped, so new extremes in the
+# *resumed* direction print as sweeps; when the CHoCH then *fails*, that trend
+# never ended and those staircase breaks were genuine continuations -- stage
+# them additively at the failure (deduped and close-break re-anchored like the
+# other staged marks) and fold the eaten extremes into the restored staircase
+# floors, so the resumed leg shows its BOS staircase instead of an event-free
+# stretch (the BTC H1 18-25/06 crash: one bearish BOS then only sweeps).
+_STAGE_CHOCH_FAILED_WINDOW_BOS = True
+
 # Volatility-normalized proximity for the liquidity-hunt pool map
 # (`LiquidityHuntEngine.proximity_atr`): "nearby" opposing pools are the ones
 # within N x the visible series' mean true-range% of price, instead of the
@@ -587,6 +612,15 @@ def _build_internal_detector(
         # reclaimed. A later reclaim is genuine follow-through (leg-origin exit
         # governs). See _CHOCH_FIZZLE_RECLAIM_CANDLES.
         choch_fizzle_reclaim_candles=_CHOCH_FIZZLE_RECLAIM_CANDLES,
+        # A failed-CHoCH flip arms no origin, so the fallback suppression above
+        # lapses at the failure -- keep the cold-start fallback off for a
+        # window so a bounce can't immediately re-flip the trend (the BTC H1
+        # 06-25 whipsaw). See _CHOCH_FAILED_FALLBACK_SUPPRESS_CANDLES.
+        choch_failed_fallback_suppress_candles=_CHOCH_FAILED_FALLBACK_SUPPRESS_CANDLES,
+        # Retro-stage the continuation BOS a failed CHoCH's window ate (they
+        # printed as sweeps while the trend was wrongly flipped), so the
+        # resumed leg shows its staircase. See _STAGE_CHOCH_FAILED_WINDOW_BOS.
+        stage_choch_failed_window_bos=_STAGE_CHOCH_FAILED_WINDOW_BOS,
         # The CHoCH origin (the level a sustained break back through invalidates
         # the unconfirmed reversal, a CHOCH_FAILED) is the *deepest* extreme of
         # the reversed leg, not the trailing `active_<side>`. The trailing

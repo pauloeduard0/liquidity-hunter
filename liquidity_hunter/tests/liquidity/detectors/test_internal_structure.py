@@ -2890,3 +2890,160 @@ def test_final_trend_exposes_state_machine_trend() -> None:
     # direction.
     trend_after: MarketDirection = detector.final_trend
     assert trend_after is MarketDirection.BULLISH
+
+
+# --- Real-data regression: failed-CHoCH whipsaw eating a crash's BOS staircase
+_BTC_1H_CRASH_WINDOW_DATA = Path(__file__).parent / "data" / "btcusdt_1h_2026_05_18_07_04.json"
+
+
+def _load_btc_1h_crash_window_candles() -> list[Candle]:
+    rows = json.loads(_BTC_1H_CRASH_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="BTCUSDT",
+            timeframe=TimeFrame.H1,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _btc_1h_crash_detector(new_flags: bool) -> InternalStructureDetector:
+    """Full production H1 wiring; the two failed-CHoCH flags injectable."""
+    return InternalStructureDetector(
+        swing_lookback=4,
+        persistence_candles=2,
+        confluence_filter=True,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=80,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_pct=0.04,
+        bos_leg_origin_release_gap_atr=3.0,
+        choch_weak_ref_persistence_candles=4,
+        bos_leg_origin_min_pullback_atr=1.5,
+        bos_leg_origin_require_close_break=True,
+        bos_floor_require_close_break=True,
+        choch_origin_leg_extreme=True,
+        choch_failed_fallback_suppress_candles=20 if new_flags else None,
+        stage_choch_failed_window_bos=new_flags,
+    )
+
+
+def test_failed_choch_whipsaw_eats_crash_bos_staircase_when_off() -> None:
+    """Real BTCUSDT H1 regression (2026-06-18..25 crash): two weak bullish
+    CHoCHs flip the trend mid-crash, so the whole 62232 -> 58030 decline
+    prints a single bearish BOS and then only sweeps.
+
+    The second flip (06-25 04:00) is the pathological one: it fires via the
+    cold-start `active_high` fallback one day after the previous bullish CHoCH
+    failed -- a failed-CHoCH flip arms no origin (one-shot), so the fallback
+    suppression that governs unconfirmed-CHoCH windows lapses at the failure
+    and a 4-candle bounce re-flips the trend, eating the final flush's BOS.
+    """
+    events = _btc_1h_crash_detector(new_flags=False).detect(
+        _load_btc_1h_crash_window_candles()
+    )
+
+    window_start = datetime(2026, 6, 19, tzinfo=UTC)
+    window_end = datetime(2026, 7, 1, tzinfo=UTC)
+    bear_bos = [
+        e
+        for e in events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and window_start <= e.timestamp <= window_end
+    ]
+    assert bear_bos == []
+
+    # The post-failure fallback CHoCH that ate the flush.
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 6, 25, 4, tzinfo=UTC)
+        for e in events
+    )
+    # Both whipsaw flips end in failure.
+    failed = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHOCH_FAILED
+        and e.timestamp >= datetime(2026, 6, 17, tzinfo=UTC)
+    ]
+    assert [e.timestamp for e in failed] == [
+        datetime(2026, 6, 24, 13, tzinfo=UTC),
+        datetime(2026, 6, 30, 12, tzinfo=UTC),
+    ]
+
+
+def test_failed_choch_window_bos_staged_and_fallback_suppressed_when_on() -> None:
+    """On: the retro-staging resurrects the continuation BOS the failed CHoCH's
+    window ate (61870 breaking 62232, the failure pivot 59060 breaking 61870),
+    and the post-failure fallback suppression turns the 06-25 04:00 whipsaw
+    CHoCH into a sweep -- so the final flush to 58030 prints as a bearish BOS
+    and the second CHOCH_FAILED never happens. The genuine recovery CHoCH
+    still fires (07-02, via the staleness re-anchor once the reversal is real).
+    """
+    events = _btc_1h_crash_detector(new_flags=True).detect(
+        _load_btc_1h_crash_window_candles()
+    )
+
+    bear_bos = [
+        (e.timestamp, e.price_level, e.reference_price_level)
+        for e in events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and datetime(2026, 6, 19, tzinfo=UTC) <= e.timestamp <= datetime(2026, 7, 1, tzinfo=UTC)
+    ]
+    assert bear_bos == [
+        (datetime(2026, 6, 23, 8, tzinfo=UTC), 61870.0, 62232.1),
+        (datetime(2026, 6, 24, 13, tzinfo=UTC), 59060.0, 61870.0),
+        (datetime(2026, 6, 25, 13, tzinfo=UTC), 58030.0, 59060.0),
+    ]
+
+    # The fallback whipsaw is suppressed: its bounce is a mere sweep now.
+    assert not any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and datetime(2026, 6, 23, tzinfo=UTC) <= e.timestamp < datetime(2026, 7, 1, tzinfo=UTC)
+        for e in events
+    )
+    assert any(
+        e.event is StructureEvent.LIQUIDITY_SWEEP
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 6, 25, 4, tzinfo=UTC)
+        for e in events
+    )
+    # One honest failure remains; the phantom second one is gone.
+    failed = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHOCH_FAILED
+        and e.timestamp >= datetime(2026, 6, 17, tzinfo=UTC)
+    ]
+    assert [e.timestamp for e in failed] == [datetime(2026, 6, 24, 13, tzinfo=UTC)]
+    # The genuine recovery reversal still prints.
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 7, 2, 9, tzinfo=UTC)
+        for e in events
+    )
+
+
+def test_choch_failed_fallback_suppress_candles_must_be_positive() -> None:
+    with pytest.raises(
+        ValueError, match="choch_failed_fallback_suppress_candles must be at least 1"
+    ):
+        InternalStructureDetector(choch_failed_fallback_suppress_candles=0)
