@@ -2373,20 +2373,26 @@ class InternalStructureDetector(MarketStructureDetector):
                 else validated_choch_high_structural
             )
             need = self._persistence_candles
-            if ref is not None and ref.price > 0 and ref_structural and len(tail) >= need:
-                # First candle in the tail that STARTS a run of `need` consecutive
-                # closes beyond the reference (the sustained break the confirmed
-                # CHoCH also demands; the pivot lag is all it has not yet cleared).
+            if ref is not None and ref.price > 0 and ref_structural:
+                # Only candles after the reference pivot *formed* can break it: a
+                # freshly-promoted leg origin whose pivot sits inside the tail
+                # would otherwise be "broken" by older closes that predate the
+                # level entirely (a break candle earlier than the reference --
+                # the floating mid-chart `CHoCH?` label).
+                eligible = [c for c in tail if c.timestamp > ref.timestamp]
+                # First candle that STARTS a run of `need` consecutive closes
+                # beyond the reference (the sustained break the confirmed CHoCH
+                # also demands; the pivot lag is all it has not yet cleared).
                 break_i: int | None = None
-                for i in range(len(tail) - need + 1):
+                for i in range(len(eligible) - need + 1):
                     if all(
                         (c.close < ref.price if bearish_choch else c.close > ref.price)
-                        for c in tail[i : i + need]
+                        for c in eligible[i : i + need]
                     ):
                         break_i = i
                         break
                 if break_i is not None:
-                    beyond = tail[break_i:]
+                    beyond = eligible[break_i:]
                     extreme = (
                         min(c.low for c in beyond)
                         if bearish_choch
@@ -2395,7 +2401,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     prov_choch_event = MarketStructure(
                         symbol=symbol,
                         timeframe=timeframe,
-                        timestamp=tail[break_i].timestamp,
+                        timestamp=eligible[break_i].timestamp,
                         event=StructureEvent.CHANGE_OF_CHARACTER,
                         direction=(
                             MarketDirection.BEARISH
