@@ -97,10 +97,22 @@ class LineLabelsPaneView implements IPrimitivePaneView {
   }
 
   renderer(): IPrimitivePaneRenderer | null {
-    const { chart, series, labels } = this._source
+    const { chart, series, labels, fallbackChart } = this._source
     if (!chart || !series) return null
 
-    const timeScale = chart.timeScale()
+    // When the attached chart's own time axis is hidden (e.g. an upper pane in
+    // a multi-pane stack that delegates the visible axis to the bottom pane),
+    // its time scale reports `width() === 0`, which collapses every segment
+    // label's right edge to 0 and drops them all. Fall back to a sibling chart
+    // that shares this one's synced, equal-width time scale (its axis is live,
+    // so `width()` and `timeToCoordinate` resolve). Price -> y always uses this
+    // chart's own series (its price scale stays functional).
+    const ownTimeScale = chart.timeScale()
+    const fallbackTimeScale = fallbackChart?.timeScale()
+    const timeScale =
+      ownTimeScale.width() > 0 || !fallbackTimeScale || fallbackTimeScale.width() <= 0
+        ? ownTimeScale
+        : fallbackTimeScale
     const visibleRange = timeScale.getVisibleRange()
     const paneWidth = timeScale.width()
 
@@ -174,6 +186,12 @@ export class LineLabelsPrimitive implements ISeriesPrimitive<Time> {
   chart: IChartApi | null = null
   series: ISeriesApi<SeriesType> | null = null
   labels: LineLabel[] = []
+  /**
+   * Sibling chart used to resolve time -> x when this primitive's own chart has
+   * its time axis hidden (which nulls its public time-scale coordinate API).
+   * Must share this chart's synced, equal-width time scale.
+   */
+  fallbackChart: IChartApi | null = null
 
   private readonly _paneViews: readonly IPrimitivePaneView[] = [new LineLabelsPaneView(this)]
   private _requestUpdate: (() => void) | null = null

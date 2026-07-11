@@ -655,6 +655,11 @@ export function MainChart({
     rsiOverlaySeriesRef.current.push(rsiOversold)
 
     const labelsPrimitive = new LineLabelsPrimitive()
+    // When the indicator panes are open the main pane hides its time axis
+    // (the RSI pane carries it), which nulls the main chart's time-scale
+    // coordinate API. The RSI chart shares the synced, equal-width time scale,
+    // so the labels primitive falls back to it for time -> x in that state.
+    labelsPrimitive.fallbackChart = rsiChart
     series.attachPrimitive(labelsPrimitive)
     labelsPrimitiveRef.current = labelsPrimitive
 
@@ -784,6 +789,15 @@ export function MainChart({
 
     const h = Math.max(wrapper.clientHeight, MIN_TOTAL_HEIGHT)
     const { mainHeight, deltaHeight, rsiHeight } = paneHeights(h, showIndicators)
+
+    // While the panes are closed their containers are display:none (zero
+    // width), so the delta/RSI charts never track the main chart's time scale
+    // (and their one-shot fitContent ran at zero width). Reopening them would
+    // otherwise reveal a stale, desynced range -- and resizing them from zero
+    // width can echo that bad range back onto the main chart. Suppress the sync
+    // feedback across the resize, then drive both panes from the main chart's
+    // current range.
+    isSyncingRef.current = true
     chart.applyOptions({
       width: mainContainer.clientWidth,
       height: mainHeight,
@@ -791,6 +805,19 @@ export function MainChart({
     })
     deltaChart.applyOptions({ width: deltaContainer.clientWidth, height: deltaHeight })
     rsiChart.applyOptions({ width: rsiContainer.clientWidth, height: rsiHeight })
+
+    if (showIndicators) {
+      const range = chart.timeScale().getVisibleLogicalRange()
+      if (range) {
+        deltaChart.timeScale().setVisibleLogicalRange(range)
+        rsiChart.timeScale().setVisibleLogicalRange(range)
+      }
+    }
+    // Release the guard after this frame's layout (and any resize-triggered
+    // range echo) settles.
+    requestAnimationFrame(() => {
+      isSyncingRef.current = false
+    })
   }, [showIndicators])
 
   useEffect(() => {
