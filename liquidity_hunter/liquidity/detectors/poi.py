@@ -1,53 +1,58 @@
 """POI (Point of Interest / Order Block) detector.
 
-Detects order block zones from market structure breaks (MSB), adapted from
-the "Market Structure Break & Order Block" TradingView indicator (EmreKb,
-MPL 2.0). Self-contained: it derives its own swing pivots from the candle
-series rather than consuming structure events.
+Detects order block zones from market structure breaks (MSB), a faithful
+batch port of the "Market Structure Break & Order Block" TradingView
+indicator (EmreKb, MPL 2.0). Self-contained: it derives its own swing
+pivots from the candle series rather than consuming structure events.
 
-Pivots
-------
+Pivots (Pine ``barssince`` semantics)
+-------------------------------------
 A rolling window of ``pivot_len`` candles tracks the swing state: a candle
-whose high is the window maximum turns the swing up, one whose low is the
-window minimum turns it down. Each swing flip records the completed leg's
-extreme (the highest high of an up leg / lowest low of a down leg) as a
-pivot, yielding the alternating high/low pivot sequence
-``h0/h1`` / ``l0/l1`` (0 = most recent).
+whose high is the window maximum turns the swing up (``to_up``), one whose
+low is the window minimum turns it down (``to_down``). Each swing flip
+records the completed leg's extreme as a pivot, measured over a *local*
+window -- the bars since the previous opposite signal (Pine's
+``ta.barssince(to_up[1])`` / ``ta.barssince(to_down[1])``, minimum 1 bar) --
+NOT since the last opposite pivot. In choppy stretches these local windows
+are shorter than the full leg, which renews pivots faster and makes the
+market state machine flip more often; this matches the indicator's on-chart
+behavior exactly (verified against TradingView on BTCUSDT 15m). The pivot's
+index is the most recent bar whose own low/high equaled its running window
+extreme (Pine's ``barssince(low_val == low)``). The recorded pivots yield
+the alternating ``h0/h1`` / ``l0/l1`` sequence (0 = most recent).
 
 Market structure break (MSB)
 ----------------------------
-With the market bearish, a new high pivot ``h0`` above the prior high ``h1``
-by more than ``fib_factor`` of the preceding leg's height (``|h1 - l0|``)
-confirms a *bullish* MSB; the bearish mirror breaks ``l1`` by
-``fib_factor * |h0 - l1|``. After a flip, both the high and the low pivot
-must renew before another flip can fire (same-pivot guard).
+With the market bullish, a new low pivot ``l0 < l1 - fib_factor*|h0 - l1|``
+confirms a *bearish* MSB; the bullish mirror breaks ``h1`` by
+``fib_factor * |h1 - l0|``. The market starts bullish. After a flip, both
+the high and the low pivot *values* must change before another flip can
+fire (Pine's ``ta.valuewhen`` same-pivot guard, compared by value).
 
-Order block
------------
-A bullish MSB marks the *last bearish candle* (open > close) of the down leg
-into the swing low the impulse launched from (the ``h1 -> l0`` window); a
-bearish MSB marks the last bullish candle of the ``l1 -> h0`` up leg. The
-zone spans that candle's full high-low range, frozen at creation.
+Order block / breaker / mitigation block
+----------------------------------------
+Anchor candles are tracked by *running scans* re-evaluated every bar,
+exactly like the indicator (including its ``[pivot_len]``-lagged window
+bound, so the scan uses the pivot index as known ``pivot_len`` bars ago):
 
-Breaker / mitigation block
---------------------------
-Each MSB also marks the last *same*-direction candle of the leg that formed
-the broken pivot (bullish MSB: the last bullish candle of the
-``l1 - pivot_len -> h1`` up leg into the broken high; bearish mirrors it in
-``h1 - pivot_len -> l1``). It is a BREAKER_BLOCK when the impulse-origin
-extreme swept the prior one (bullish: ``l0 < l1``; bearish: ``h0 > h1``),
-else a MITIGATION_BLOCK. When the MSB fires on the *renewing* pivot after
-the same-pivot guard, that window can be empty (the pivots are not in the
-canonical ``l1 < h1`` order); no block is created then -- the Pine original
-would reuse a stale bar index there, which we deliberately skip.
+- Bu-OB: last bearish candle (open > close) in ``h1i .. l0i[pivot_len]``.
+- Be-OB: last bullish candle in ``l1i .. h0i[pivot_len]``.
+- Bu-BB/MB: last bullish candle in ``l1i - pivot_len .. h1i``.
+- Be-BB/MB: last bearish candle in ``h1i - pivot_len .. l1i``.
+
+Because the scans are running state, an anchor persists from earlier
+windows when the current window holds no matching candle -- faithful to the
+indicator. A BB/MB is a BREAKER_BLOCK when the impulse-origin extreme swept
+the prior one (bullish ``l0 < l1``, bearish ``h0 > h1``), else a
+MITIGATION_BLOCK. All zones span the anchor candle's full high-low range.
 
 Zone lifecycle
 --------------
 ACTIVE -> INVALIDATED
   A single candle *close* beyond the far boundary (below ``price_low`` for
-  a bullish zone, above ``price_high`` for a bearish one) retires the zone.
-  Price trading back inside the zone does not retire it. Identical for all
-  zone kinds.
+  a bullish zone, above ``price_high`` for a bearish one) retires the zone,
+  checked from the creation candle onward. Price trading back inside the
+  zone does not retire it. Identical for all zone kinds.
 """
 
 from dataclasses import dataclass
@@ -109,58 +114,154 @@ class POIDetector:
         self._fib_factor = fib_factor
 
     def detect(self, candles: list[Candle]) -> list[POIZone]:
-        if len(candles) < self._pivot_len:
+        plen = self._pivot_len
+        n = len(candles)
+        if n < plen:
             return []
 
         highs = [c.high for c in candles]
         lows = [c.low for c in candles]
+        opens = [c.open for c in candles]
+        closes = [c.close for c in candles]
+
+        # Pine's ta.highest/lowest are na for the first pivot_len-1 bars, so
+        # no swing signal can fire there.
+        to_up = [False] * n
+        to_down = [False] * n
+        for i in range(plen - 1, n):
+            to_up[i] = highs[i] >= max(highs[i - plen + 1 : i + 1])
+            to_down[i] = lows[i] <= min(lows[i - plen + 1 : i + 1])
 
         swing = 1  # 1 = up leg forming, -1 = down leg forming
+        market = MarketDirection.BULLISH
         high_pivots: list[_Pivot] = []
         low_pivots: list[_Pivot] = []
+        # Pivot *values* at the last MSB: both must change before the next
+        # flip (the indicator's ta.valuewhen same-pivot guard).
+        flip_l0: float | None = None
+        flip_h0: float | None = None
 
-        market = MarketDirection.BULLISH
-        # Pivot indices at the last MSB: both sides must renew before the
-        # next flip (the indicator's same-pivot guard).
-        flip_h0i: int | None = None
-        flip_l0i: int | None = None
+        last_to_up: int | None = None  # last bar (strictly before i) with to_up
+        last_to_down: int | None = None
+        last_low_eq: int | None = None  # last bar whose low == its window low
+        last_high_eq: int | None = None
+
+        # Running anchor-candle scans + the lagged pivot-index history the
+        # OB windows use (l0i / h0i as known `pivot_len` bars ago).
+        l0i_hist = [0] * n
+        h0i_hist = [0] * n
+        bu_ob_idx = be_ob_idx = bu_bb_idx = be_bb_idx = 0
 
         zones: list[_ZoneState] = []
 
-        for i, candle in enumerate(candles):
-            window_start = max(0, i - self._pivot_len + 1)
-            to_up = candle.high >= max(highs[window_start : i + 1])
-            to_down = candle.low <= min(lows[window_start : i + 1])
+        for i in range(n):
+            # --- pivot value windows (barssince the previous signal, min 1) ---
+            cnt = i - last_to_up - 1 if last_to_up is not None else 1
+            cnt = cnt if cnt > 0 else 1
+            low_val = min(lows[max(0, i - cnt + 1) : i + 1])
+            cnt = i - last_to_down - 1 if last_to_down is not None else 1
+            cnt = cnt if cnt > 0 else 1
+            high_val = max(highs[max(0, i - cnt + 1) : i + 1])
+            if low_val == lows[i]:
+                last_low_eq = i
+            if high_val == highs[i]:
+                last_high_eq = i
 
-            pivot_recorded = False
-            if swing == 1 and to_down:
+            # --- swing flip records the leg's pivot ---
+            if swing == 1 and to_down[i]:
                 swing = -1
-                high_pivots.append(self._leg_extreme(highs, low_pivots, i, is_high=True))
-                pivot_recorded = True
-            elif swing == -1 and to_up:
+                high_pivots.append(
+                    _Pivot(high_val, last_high_eq if last_high_eq is not None else i)
+                )
+            elif swing == -1 and to_up[i]:
                 swing = 1
-                low_pivots.append(self._leg_extreme(lows, high_pivots, i, is_high=False))
-                pivot_recorded = True
+                low_pivots.append(
+                    _Pivot(low_val, last_low_eq if last_low_eq is not None else i)
+                )
 
-            if pivot_recorded and not self._guard_blocked(
-                high_pivots, low_pivots, flip_h0i, flip_l0i
-            ):
-                flip = self._on_pivot(candles, high_pivots, low_pivots, i, market)
-                if flip is not None:
-                    market, new_zones = flip
-                    flip_h0i = high_pivots[-1].index
-                    flip_l0i = low_pivots[-1].index
-                    zones.extend(new_zones)
+            h0i = high_pivots[-1].index if high_pivots else 0
+            h1i = high_pivots[-2].index if len(high_pivots) >= 2 else 0
+            l0i = low_pivots[-1].index if low_pivots else 0
+            l1i = low_pivots[-2].index if len(low_pivots) >= 2 else 0
+            l0i_hist[i] = l0i
+            h0i_hist[i] = h0i
 
-            # --- update zones (skip the candle they were created on) ---
+            # --- market state machine ---
+            flipped: MarketDirection | None = None
+            h0 = h1 = l0 = l1 = 0.0
+            if len(high_pivots) >= 2 and len(low_pivots) >= 2:
+                h0, h1 = high_pivots[-1].price, high_pivots[-2].price
+                l0, l1 = low_pivots[-1].price, low_pivots[-2].price
+                guarded = (flip_l0 is not None and l0 == flip_l0) or (
+                    flip_h0 is not None and h0 == flip_h0
+                )
+                if not guarded:
+                    if (
+                        market == MarketDirection.BULLISH
+                        and l0 < l1
+                        and l0 < l1 - abs(h0 - l1) * self._fib_factor
+                    ):
+                        market = flipped = MarketDirection.BEARISH
+                    elif (
+                        market == MarketDirection.BEARISH
+                        and h0 > h1
+                        and h0 > h1 + abs(h1 - l0) * self._fib_factor
+                    ):
+                        market = flipped = MarketDirection.BULLISH
+                    if flipped is not None:
+                        flip_l0, flip_h0 = l0, h0
+
+            # --- running anchor scans (after the market update, before zone
+            # creation -- the indicator's in-bar order) ---
+            if i >= plen:
+                l0i_lag = l0i_hist[i - plen]
+                h0i_lag = h0i_hist[i - plen]
+                for j in range(h1i, l0i_lag + 1):
+                    if opens[j] > closes[j]:
+                        bu_ob_idx = j
+                for j in range(l1i, h0i_lag + 1):
+                    if opens[j] < closes[j]:
+                        be_ob_idx = j
+                for j in range(max(0, h1i - plen), l1i + 1):
+                    if opens[j] > closes[j]:
+                        be_bb_idx = j
+                for j in range(max(0, l1i - plen), h1i + 1):
+                    if opens[j] < closes[j]:
+                        bu_bb_idx = j
+
+            # --- zone creation on the MSB flip ---
+            if flipped == MarketDirection.BULLISH:
+                self._append_zone(zones, candles, flipped, POIZoneKind.ORDER_BLOCK, bu_ob_idx, i)
+                bb_kind = (
+                    POIZoneKind.BREAKER_BLOCK
+                    if l0 < l1
+                    else POIZoneKind.MITIGATION_BLOCK
+                )
+                self._append_zone(zones, candles, flipped, bb_kind, bu_bb_idx, i)
+            elif flipped == MarketDirection.BEARISH:
+                self._append_zone(zones, candles, flipped, POIZoneKind.ORDER_BLOCK, be_ob_idx, i)
+                bb_kind = (
+                    POIZoneKind.BREAKER_BLOCK
+                    if h0 > h1
+                    else POIZoneKind.MITIGATION_BLOCK
+                )
+                self._append_zone(zones, candles, flipped, bb_kind, be_bb_idx, i)
+
+            # --- lifecycle (checked from the creation candle onward) ---
             for zone in zones:
-                if zone.invalidated_index is not None or zone.created_index >= i:
+                if zone.invalidated_index is not None:
                     continue
                 if zone.direction == MarketDirection.BULLISH:
-                    if candle.close < zone.price_low:
+                    if closes[i] < zone.price_low:
                         zone.invalidated_index = i
-                elif candle.close > zone.price_high:
+                elif closes[i] > zone.price_high:
                     zone.invalidated_index = i
+
+            # --- signal trackers feed the *next* bar's windows (to_up[1]) ---
+            if to_up[i]:
+                last_to_up = i
+            if to_down[i]:
+                last_to_down = i
 
         symbol = candles[0].symbol
         timeframe = candles[0].timeframe
@@ -189,171 +290,28 @@ class POIDetector:
         ]
 
     # ------------------------------------------------------------------
-    # Pivot recording
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _leg_extreme(
-        prices: list[float],
-        opposite_pivots: list[_Pivot],
-        i: int,
-        *,
-        is_high: bool,
-    ) -> _Pivot:
-        """Extreme of the leg since the last opposite pivot (through bar ``i``).
-
-        Prefers the most recent bar when the extreme repeats, matching the
-        indicator's `barssince`-based index attribution.
-        """
-        start = opposite_pivots[-1].index if opposite_pivots else 0
-        best = start
-        for j in range(start, i + 1):
-            if (is_high and prices[j] >= prices[best]) or (
-                not is_high and prices[j] <= prices[best]
-            ):
-                best = j
-        return _Pivot(price=prices[best], index=best)
-
-    # ------------------------------------------------------------------
-    # MSB evaluation (runs on each swing flip, when a pivot is recorded)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _guard_blocked(
-        high_pivots: list[_Pivot],
-        low_pivots: list[_Pivot],
-        flip_h0i: int | None,
-        flip_l0i: int | None,
-    ) -> bool:
-        if not high_pivots or not low_pivots:
-            return True
-        return (flip_h0i is not None and high_pivots[-1].index == flip_h0i) or (
-            flip_l0i is not None and low_pivots[-1].index == flip_l0i
-        )
-
-    def _on_pivot(
-        self,
-        candles: list[Candle],
-        high_pivots: list[_Pivot],
-        low_pivots: list[_Pivot],
-        i: int,
-        market: MarketDirection,
-    ) -> tuple[MarketDirection, list[_ZoneState]] | None:
-        """Evaluate the MSB conditions with the freshly recorded pivot.
-
-        Returns the flipped market direction plus the new zones (order block
-        first, then the breaker/mitigation block; either can be missing when
-        its leg holds no matching candle) when the market flips, or None when
-        no MSB confirmed.
-        """
-        if len(high_pivots) < 2 or len(low_pivots) < 2:
-            return None
-
-        h0, h1 = high_pivots[-1], high_pivots[-2]
-        l0, l1 = low_pivots[-1], low_pivots[-2]
-
-        if market == MarketDirection.BULLISH:
-            # Bearish MSB: the new low pivot breaks the prior low by the
-            # fib extension of the preceding up leg (l1 -> h0).
-            if l0.price < l1.price - abs(h0.price - l1.price) * self._fib_factor:
-                ob = self._build_zone(
-                    candles,
-                    window_start=l1.index,
-                    window_end=h0.index,
-                    msb_index=i,
-                    direction=MarketDirection.BEARISH,
-                    pick_bullish_candle=True,
-                    kind=POIZoneKind.ORDER_BLOCK,
-                )
-                # Breaker/mitigation: last bearish candle of the down leg
-                # that formed the broken low (h1 -> l1).
-                bb = self._build_zone(
-                    candles,
-                    window_start=max(0, h1.index - self._pivot_len),
-                    window_end=l1.index,
-                    msb_index=i,
-                    direction=MarketDirection.BEARISH,
-                    pick_bullish_candle=False,
-                    kind=(
-                        POIZoneKind.BREAKER_BLOCK
-                        if h0.price > h1.price
-                        else POIZoneKind.MITIGATION_BLOCK
-                    ),
-                )
-                return MarketDirection.BEARISH, [z for z in (ob, bb) if z is not None]
-        else:
-            # Bullish MSB: the new high pivot breaks the prior high by the
-            # fib extension of the preceding down leg (h1 -> l0).
-            if h0.price > h1.price + abs(h1.price - l0.price) * self._fib_factor:
-                ob = self._build_zone(
-                    candles,
-                    window_start=h1.index,
-                    window_end=l0.index,
-                    msb_index=i,
-                    direction=MarketDirection.BULLISH,
-                    pick_bullish_candle=False,
-                    kind=POIZoneKind.ORDER_BLOCK,
-                )
-                # Breaker/mitigation: last bullish candle of the up leg that
-                # formed the broken high (l1 -> h1).
-                bb = self._build_zone(
-                    candles,
-                    window_start=max(0, l1.index - self._pivot_len),
-                    window_end=h1.index,
-                    msb_index=i,
-                    direction=MarketDirection.BULLISH,
-                    pick_bullish_candle=True,
-                    kind=(
-                        POIZoneKind.BREAKER_BLOCK
-                        if l0.price < l1.price
-                        else POIZoneKind.MITIGATION_BLOCK
-                    ),
-                )
-                return MarketDirection.BULLISH, [z for z in (ob, bb) if z is not None]
-        return None
-
-    # ------------------------------------------------------------------
     # Zone creation
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_zone(
+    def _append_zone(
+        zones: list[_ZoneState],
         candles: list[Candle],
-        *,
-        window_start: int,
-        window_end: int,
-        msb_index: int,
         direction: MarketDirection,
-        pick_bullish_candle: bool,
         kind: POIZoneKind,
-    ) -> _ZoneState | None:
-        """Zone = last candle of the picked color in the given leg window.
-
-        An empty window (``window_start > window_end``, the non-canonical
-        pivot ordering) or a window with no matching candle creates no zone.
-        """
-        ob_index: int | None = None
-        for j in range(window_start, window_end + 1):
-            candle = candles[j]
-            matches = (
-                candle.close > candle.open
-                if pick_bullish_candle
-                else candle.open > candle.close
+        anchor_index: int,
+        msb_index: int,
+    ) -> None:
+        anchor = candles[anchor_index]
+        if anchor.high <= anchor.low:
+            return  # degenerate candle with no range
+        zones.append(
+            _ZoneState(
+                direction=direction,
+                kind=kind,
+                price_low=anchor.low,
+                price_high=anchor.high,
+                created_index=msb_index,
+                ob_candle_index=anchor_index,
             )
-            if matches:
-                ob_index = j
-        if ob_index is None:
-            return None
-
-        ob = candles[ob_index]
-        if ob.high <= ob.low:
-            return None  # degenerate candle with no range
-
-        return _ZoneState(
-            direction=direction,
-            kind=kind,
-            price_low=ob.low,
-            price_high=ob.high,
-            created_index=msb_index,
-            ob_candle_index=ob_index,
         )

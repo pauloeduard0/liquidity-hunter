@@ -1,6 +1,8 @@
 """Tests for the MSB order block `POIDetector`."""
 
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -86,13 +88,16 @@ class TestBearishMSB:
         assert zone.status == POIZoneStatus.ACTIVE
         assert zone.invalidated_at is None
 
-    def test_creates_mitigation_block_from_broken_low_leg(self) -> None:
+    def test_creates_breaker_block_from_broken_low_leg(self) -> None:
         zones = POIDetector(pivot_len=3).detect(_bearish_msb_candles())
 
-        # h0 (104) did not exceed h1 (105), so the block is a mitigation
-        # block: the last bearish candle of the h1 -> l1 down leg (bar 8).
+        # The block anchors at the last bearish candle of the broken-low leg
+        # (bar 8). Kind is BREAKER here: with no to_down signal before the
+        # first swing flip, the bootstrap h1 pivot collapses to the flip
+        # bar's own high (103.2, Pine's nz(...,1) window) rather than the
+        # 105 leg top, so h0 (104) > h1.
         block = zones[1]
-        assert block.kind == POIZoneKind.MITIGATION_BLOCK
+        assert block.kind == POIZoneKind.BREAKER_BLOCK
         assert block.direction == MarketDirection.BEARISH
         assert block.price_low == 99.5
         assert block.price_high == 100.8
@@ -195,14 +200,11 @@ def _bullish_msb_candles() -> list[Candle]:
 
 
 class TestBullishMSB:
-    def test_creates_demand_zone_from_last_bearish_candle(self) -> None:
+    def test_creates_demand_zone(self) -> None:
         zones = POIDetector(pivot_len=3).detect(_bullish_msb_candles())
 
-        # Bearish OB + mitigation block from bar 18, bullish OB from bar 25.
-        # The bullish MSB fires on the *renewing low* pivot, so its
-        # breaker-block window (l1 - pivot_len -> h1) is empty and no
-        # bullish BB/MB is created.
-        assert len(zones) == 3
+        # Bearish OB + breaker from bar 18, bullish OB + MB from bar 25.
+        assert len(zones) == 4
         # The rally closed above both bearish zones on bar 19.
         assert zones[0].direction == MarketDirection.BEARISH
         assert zones[0].status == POIZoneStatus.INVALIDATED
@@ -212,23 +214,92 @@ class TestBullishMSB:
         zone = zones[2]
         assert zone.kind == POIZoneKind.ORDER_BLOCK
         assert zone.direction == MarketDirection.BULLISH
-        assert zone.price_low == 102.5
-        assert zone.price_high == 103.6
-        assert zone.ob_candle_timestamp == _ts(24)
+        # The Bu-OB scan window ends at the pivot_len-lagged low-pivot index
+        # (Pine's l0i[zigzag_len]), which predates the 102.5 pivot at bar 24,
+        # so the anchor is the last bearish candle up to bar 16 (97.0-98.9).
+        assert zone.price_low == 97.0
+        assert zone.price_high == 98.9
+        assert zone.ob_candle_timestamp == _ts(16)
         assert zone.created_at == _ts(25)
         assert zone.status == POIZoneStatus.ACTIVE
+
+        block = zones[3]
+        assert block.kind == POIZoneKind.MITIGATION_BLOCK  # l0 (102.5) >= l1
+        assert block.direction == MarketDirection.BULLISH
+        assert block.ob_candle_timestamp == _ts(12)
+        assert block.status == POIZoneStatus.ACTIVE
 
     def test_single_close_below_bottom_invalidates(self) -> None:
         candles = [
             *_bullish_msb_candles(),
-            # One close below the zone bottom (102.5) retires the demand zone.
-            _candle(26, 104.5, 104.7, 101.8, 102.0),
+            # One close below the demand zone bottom (97.0) retires it.
+            _candle(26, 104.5, 104.7, 96.5, 96.8),
         ]
         zones = POIDetector(pivot_len=3).detect(candles)
 
-        assert len(zones) == 3
+        assert len(zones) == 4
         assert zones[2].status == POIZoneStatus.INVALIDATED
         assert zones[2].invalidated_at == _ts(26)
+
+
+# --- Real-data regression -------------------------------------------------
+# BTCUSDT perp 15m, 2026-06-25 13:15 -> 2026-07-11 04:00 UTC (1500 candles).
+# Expectations verified visually against the original MSB-OB TradingView
+# indicator (EmreKb) on the same series: the 07-09 17:45 bullish MSB's
+# Bu-OB/Bu-MB pair (the ~62.6-62.85k green boxes) and the 07-10 16:45
+# bearish MSB's Be-OB + Be-BB pair. The previous leg-extreme pivot
+# semantics missed the 07-09 17:45 flip entirely (wider pivot windows ->
+# fewer flips), which is the divergence that motivated the faithful port.
+_BTC15M_DATA = Path(__file__).parent / "data" / "btcusdt_15m_2026_06_25_07_11.json"
+
+
+def _load_btc15m_candles() -> list[Candle]:
+    rows = json.loads(_BTC15M_DATA.read_text())
+    return [
+        Candle(
+            symbol="BTCUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def test_real_btcusdt_15m_matches_tradingview_boxes() -> None:
+    zones = POIDetector().detect(_load_btc15m_candles())
+    by_creation = {
+        (z.created_at.strftime("%m-%d %H:%M"), z.kind): z for z in zones
+    }
+
+    bull_ob = by_creation[("07-09 17:45", POIZoneKind.ORDER_BLOCK)]
+    assert bull_ob.direction == MarketDirection.BULLISH
+    assert bull_ob.price_low == pytest.approx(62661.0)
+    assert bull_ob.price_high == pytest.approx(62848.9)
+    assert bull_ob.ob_candle_timestamp == datetime(2026, 7, 9, 13, 15, tzinfo=UTC)
+    assert bull_ob.status == POIZoneStatus.ACTIVE
+
+    bull_mb = by_creation[("07-09 17:45", POIZoneKind.MITIGATION_BLOCK)]
+    assert bull_mb.price_low == pytest.approx(62569.4)
+    assert bull_mb.price_high == pytest.approx(62824.7)
+    assert bull_mb.status == POIZoneStatus.ACTIVE
+
+    bear_ob = by_creation[("07-10 16:45", POIZoneKind.ORDER_BLOCK)]
+    assert bear_ob.direction == MarketDirection.BEARISH
+    assert bear_ob.price_low == pytest.approx(64348.1)
+    assert bear_ob.price_high == pytest.approx(64680.0)
+
+    bear_bb = by_creation[("07-10 16:45", POIZoneKind.BREAKER_BLOCK)]
+    assert bear_bb.price_low == pytest.approx(64127.0)
+    assert bear_bb.price_high == pytest.approx(64255.7)
+
+    # Full-series regression: the flip sequence is deterministic.
+    assert len(zones) == 44
 
 
 class TestEdgeCases:

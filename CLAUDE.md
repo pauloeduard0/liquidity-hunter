@@ -601,41 +601,51 @@ re-exported from `liquidity_hunter.data`.
     bullish requires `upper_shadow > lower_shadow`, bearish the reverse. Mirrors
     LuxAlgo's "Confluence Filter" (`bullishBar`/`bearishBar` in Pine source).
 - **`liquidity/detectors/poi.py`** — `POIDetector`: detects MSB-anchored order
-  block zones, adapted from the "Market Structure Break & Order Block"
-  TradingView indicator (EmreKb, MPL 2.0). **Self-contained**:
-  `detect(candles) -> list[POIZone]` — it derives its own swing pivots rather
-  than consuming structure events (deliberately a separate, simpler structure
-  read than `InternalStructureDetector`). Constructor: `pivot_len` (default
-  `9`, the indicator's "ZigZag Length") and `fib_factor` (default `0.33`).
+  block zones, a **faithful batch port** of the "Market Structure Break &
+  Order Block" TradingView indicator (EmreKb, MPL 2.0) — verified to
+  reproduce the indicator's on-chart boxes exactly on real BTCUSDT 15m data
+  (2026-07-11). **Self-contained**: `detect(candles) -> list[POIZone]` — it
+  derives its own swing pivots rather than consuming structure events
+  (deliberately a separate, simpler structure read than
+  `InternalStructureDetector`). Constructor: `pivot_len` (default `9`, the
+  indicator's "ZigZag Length") and `fib_factor` (default `0.33`).
 
-  **Pivots**: a rolling `pivot_len` window tracks the swing state — a candle
-  whose high is the window max turns the swing up, one whose low is the window
-  min turns it down; each swing flip records the completed leg's extreme
-  (preferring the most recent bar on ties), yielding alternating `h0/h1` /
-  `l0/l1` pivots.
+  **Pivots (Pine `barssince` semantics)**: a rolling `pivot_len` window
+  tracks the swing state — a candle whose high is the window max turns the
+  swing up (`to_up`), one whose low is the window min turns it down. Each
+  swing flip records the completed leg's extreme measured over a **local**
+  window — the bars since the previous opposite *signal*
+  (`ta.barssince(to_up[1])`, min 1 bar), **not** since the last opposite
+  pivot. In choppy stretches these local windows are shorter than the full
+  leg, renewing pivots faster and flipping the market state machine more
+  often — porting this exactly is what makes the output match TradingView (a
+  prior "leg extreme since the opposite pivot" variant produced fewer, later
+  MSBs and missed real flips). The pivot index is the most recent bar whose
+  own low/high equaled its running window extreme.
 
   **MSB**: with the market bullish, a new low pivot `l0 < l1 − fib_factor ×
   |h0 − l1|` confirms a bearish MSB (the bullish mirror breaks `h1` by
-  `fib_factor × |h1 − l0|`). The market starts bullish. After a flip, **both**
-  the high and low pivot must renew before another flip can fire (the
-  indicator's same-pivot guard). The MSB confirms on the swing-flip candle
-  that records the breaking pivot.
+  `fib_factor × |h1 − l0|`). The market starts bullish. After a flip, both
+  the high and low pivot **values** must change before another flip can fire
+  (the indicator's `ta.valuewhen` guard, compared by value). The MSB
+  confirms on the swing-flip candle that records the breaking pivot.
 
-  **Zones**: each MSB emits up to two same-direction zones. The
-  `ORDER_BLOCK` is the last opposite-direction candle in the impulse-origin
-  leg (bullish MSB → last `open > close` candle in the `h1 → l0` window;
-  bearish mirror in `l1 → h0`). The `BREAKER_BLOCK`/`MITIGATION_BLOCK` is
-  the last *same*-direction candle of the leg that formed the broken pivot
-  (bullish: `l1 − pivot_len → h1`; bearish: `h1 − pivot_len → l1`) — breaker
-  when the impulse-origin extreme swept the prior one (bullish `l0 < l1`,
-  bearish `h0 > h1`), else mitigation. All full high-low range. A leg with
-  no matching candle creates no zone (the market still flips); when the MSB
-  fires on the *renewing* pivot after the same-pivot guard, the BB/MB window
-  can be empty (non-canonical pivot order) — no block is created (the Pine
-  original reuses a stale bar index there; deliberately skipped). Lifecycle
-  (all kinds): `ACTIVE → INVALIDATED` on a **single close** beyond the far
-  boundary; touches inside the zone never retire it. There is no MITIGATED
-  state and no RTO sweep events (removed with the old CHoCH→BOS detector).
+  **Zones**: each MSB emits up to two same-direction zones, anchored by
+  **running scans** re-evaluated every bar exactly like the indicator,
+  including its `[pivot_len]`-lagged window bound (the scan uses `l0i`/`h0i`
+  as known `pivot_len` bars ago): `ORDER_BLOCK` = last opposite-direction
+  candle in `h1i → l0i[pivot_len]` (bullish; bearish mirror in
+  `l1i → h0i[pivot_len]`); `BREAKER_BLOCK`/`MITIGATION_BLOCK` = last
+  *same*-direction candle in `l1i − pivot_len → h1i` (bullish; bearish
+  mirror) — breaker when the impulse-origin extreme swept the prior one
+  (bullish `l0 < l1`, bearish `h0 > h1`), else mitigation. Because the scans
+  are running state, an anchor persists from earlier windows when the
+  current window has no matching candle (faithful to the indicator). All
+  zones span the anchor candle's full high-low range. Lifecycle (all
+  kinds): `ACTIVE → INVALIDATED` on a **single close** beyond the far
+  boundary, checked from the creation candle onward; touches inside the
+  zone never retire it. There is no MITIGATED state and no RTO sweep events
+  (removed with the old CHoCH→BOS detector).
 
 All detectors are re-exported from `liquidity_hunter.liquidity`.
 
@@ -1910,24 +1920,29 @@ window long enough that one-shot would re-introduce the stuck-trend bug.
 the `validated_choch_<side>` pivot (the promoted LH/HL), allowing the frontend
 to anchor CHoCH lines at their true origin rather than at the break candle.
 
-**POI (Order Block) module** (rewritten 2026-07-10): `POIDetector` now
-implements the MSB-OB logic (adapted from EmreKb's "Market Structure Break &
-Order Block" TradingView indicator, minus the zigzag drawing). Self-contained
-swing pivots (`pivot_len=9` rolling window) feed a market state machine whose
-flips require a fib-extension break (`fib_factor=0.33`) plus a same-pivot
-guard; each MSB marks the last opposite-direction candle of the
-impulse-origin leg as the order block (full candle range, frozen).
-Lifecycle: ACTIVE → INVALIDATED on a single close beyond the far boundary;
-touches never retire a zone. The MITIGATED state, `RTOSweepEvent`, and
-`poi_sweep_events` were removed everywhere (domain, `DashboardData`, API
-schema, `ManipulationCycleDetector` input, `NarrativeEngine` timeline,
-frontend RTO markers). Breaker/Mitigation Blocks (Bu-BB/Be-BB/MB) are
-included (added same day): each MSB also marks the last same-direction
-candle of the leg that formed the broken pivot, `kind` distinguishing
-`BREAKER_BLOCK` (prior extreme swept) from `MITIGATION_BLOCK`; empty
-BB windows (MSB firing on the renewing pivot) create no block. The React
-frontend renders active zones via `POIBoxesPrimitive`, starting each box at
-the anchor candle, labeled `OB`/`BB`/`MB` + direction arrow.
+**POI (Order Block) module** (rewritten 2026-07-10, made Pine-faithful
+2026-07-11): `POIDetector` implements the MSB-OB logic (EmreKb's "Market
+Structure Break & Order Block" TradingView indicator, minus the zigzag
+drawing) as a **faithful batch port**: `barssince`-window pivots (local
+extremes since the previous opposite *signal*, not leg extremes),
+value-compared same-pivot guard, and running anchor scans with the
+indicator's `[pivot_len]`-lagged window bound. Fidelity was verified against
+the indicator on TradingView with real BTCUSDT 15m data — a user-reported
+divergence (a missing 07-09 Bu-OB) traced to an earlier leg-extreme pivot
+variant that flipped less often; the port reproduces the on-chart boxes
+exactly (regression fixture
+`tests/liquidity/detectors/data/btcusdt_15m_2026_06_25_07_11.json`, 44
+zones). Flips require a fib-extension break (`fib_factor=0.33`); each MSB
+marks the last opposite-direction candle of the impulse-origin leg as the
+order block and the last same-direction candle of the broken-pivot leg as
+the `BREAKER_BLOCK` (prior extreme swept) / `MITIGATION_BLOCK` (`kind`
+field), full candle range, frozen. Lifecycle: ACTIVE → INVALIDATED on a
+single close beyond the far boundary; touches never retire a zone. The
+MITIGATED state, `RTOSweepEvent`, and `poi_sweep_events` were removed
+everywhere (domain, `DashboardData`, API schema, `ManipulationCycleDetector`
+input, `NarrativeEngine` timeline, frontend RTO markers). The React frontend
+renders active zones via `POIBoxesPrimitive`, starting each box at the
+anchor candle, labeled `OB`/`BB`/`MB` + direction arrow.
 
 **Manipulation cycle detection**: `ManipulationCycleDetector` connects
 existing observations into three-phase Wyckoff/SMC cycles (accumulation →
