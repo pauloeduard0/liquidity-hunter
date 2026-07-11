@@ -1036,8 +1036,12 @@ export function MainChart({
       structureSeries.setData(lineFrom(lineStartTime, endTime, linePrice, firstCandleTime))
       overlaySeriesRef.current.push(structureSeries)
 
+      // Centered on the line segment (TradingView-style): the break candle
+      // sits at one end of the line, where the label would be buried in the
+      // candles -- the middle of the drawn segment is the open gap.
       labels.push({
-        time: startTime,
+        time: lineStartTime,
+        timeEnd: endTime,
         price: linePrice,
         color: lineColor,
         text: `${style.label}${labelSuffix} ${directionIcon}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}`,

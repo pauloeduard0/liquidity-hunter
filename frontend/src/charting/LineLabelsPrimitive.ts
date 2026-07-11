@@ -13,6 +13,13 @@ import type { CanvasRenderingTarget2D } from 'fancy-canvas'
 export interface LineLabel {
   /** Anchor point in time -- the label is drawn just above the line at this point. */
   time: Time
+  /**
+   * Optional end of the line segment the label belongs to. When set, the label
+   * is centered horizontally on the *visible* portion of `[time, timeEnd]`
+   * (TradingView-style mid-line placement) instead of anchored at `time`,
+   * keeping it out of the candles at either end of the line.
+   */
+  timeEnd?: Time
   /** Anchor price -- the label is drawn just above the line at this price level. */
   price: number
   text: string
@@ -27,12 +34,12 @@ const LINE_HEIGHT = 12
 const MAX_STACK = 30
 
 interface PositionedLabel {
-  /** x coordinate when `align` is `'left'`, or `null` to anchor to the right edge of the pane (`align: 'right'`). */
+  /** x coordinate when `align` is `'left'`/`'center'`, or `null` to anchor to the right edge of the pane (`align: 'right'`). */
   x: number | null
   y: number
   text: string
   color: string
-  align: 'left' | 'right'
+  align: 'left' | 'right' | 'center'
 }
 
 class LineLabelsRenderer implements IPrimitivePaneRenderer {
@@ -56,7 +63,8 @@ class LineLabelsRenderer implements IPrimitivePaneRenderer {
         context.textAlign = label.align
         const x = label.x ?? mediaSize.width - EDGE_PADDING
         const width = context.measureText(label.text).width + 4
-        const left = (label.align === 'left' ? x : x - width) - 2
+        const left =
+          (label.align === 'left' ? x : label.align === 'center' ? x - width / 2 : x - width) - 2
         const right = left + width
 
         let bottom = label.y - GAP_ABOVE_LINE
@@ -94,11 +102,43 @@ class LineLabelsPaneView implements IPrimitivePaneView {
 
     const timeScale = chart.timeScale()
     const visibleRange = timeScale.getVisibleRange()
+    const paneWidth = timeScale.width()
+
+    // x coordinate of a time, clamped to the pane edge it scrolled off of
+    // (`null` only when nothing about its position can be determined).
+    const coordOrEdge = (time: Time): number | null => {
+      const x = timeScale.timeToCoordinate(time)
+      if (x !== null) return x
+      if (!visibleRange) return null
+      if ((time as number) <= (visibleRange.from as number)) return 0
+      if ((time as number) >= (visibleRange.to as number)) return paneWidth
+      return null
+    }
 
     const positioned: PositionedLabel[] = []
     for (const label of labels) {
       const y = series.priceToCoordinate(label.price)
       if (y === null) continue
+
+      // Segment labels: centered on the visible portion of the line
+      // (TradingView-style), so the text sits in the open gap the line spans
+      // instead of on the candles at the break point.
+      if (label.timeEnd !== undefined) {
+        const x0 = coordOrEdge(label.time)
+        const x1 = coordOrEdge(label.timeEnd)
+        if (x0 === null || x1 === null) continue
+        const left = Math.max(0, Math.min(x0, x1))
+        const right = Math.min(paneWidth, Math.max(x0, x1))
+        if (right < left) continue // the whole segment is off-screen
+        positioned.push({
+          x: (left + right) / 2,
+          y,
+          text: label.text,
+          color: label.color,
+          align: 'center',
+        })
+        continue
+      }
 
       const x = timeScale.timeToCoordinate(label.time)
       if (x !== null) {
