@@ -235,6 +235,19 @@ and `validate_assignment=True`. New entities should follow this pattern.
   `source_layer`.
 - **`NarrativeAnomaly`** — a pattern contradiction. Fields: `timestamp`,
   `expected`, `observed`, `description`, `severity` (`AnomalySeverity`).
+- **`TimeframeOverview`** / **`MarketOverview`** — the multi-timeframe
+  structural ladder, defined in `core/domain/overview.py` (built by
+  `app.overview`, see below). `TimeframeOverview` is one timeframe's standing
+  state: `timeframe`, `trend` (the internal detector's state-machine trend —
+  exactly what the chart renders for that timeframe), `current_price`,
+  `candle_timestamp`, the `_HIGHER_TIMEFRAME_MAP` anchor pair
+  (`higher_timeframe`/`higher_timeframe_direction`, `None` at the top), the
+  last non-provisional trend-relevant event (`last_event`,
+  `last_event_direction`, `last_event_timestamp`, `last_event_candles_ago`),
+  any provisional live-edge mark (`forming_event`/`forming_direction` — the
+  dimmed `BOS?`/`CHoCH?`), and a hunt summary (`hunt_phase`, `hunted_side`,
+  `hunt_targets_captured`/`_total`). `MarketOverview` is `symbol` + `entries`
+  ordered fine → coarse. Descriptive state per timeframe, not signals.
 
 Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `LiquidityZoneType`, `StructureEvent`, `BiasSource`, `RetailPositioning`,
@@ -979,9 +992,47 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
     sweep / unwinding → `HUNT_IN_PROGRESS`; else `COUNTER_TREND`. With zero
     mapped pools the state never reaches `CAPTURED` (conservative).
 
-`DashboardData`, `LiquidityHuntEngine`, `NarrativeEngine`, and
-`ScoredLiquidityZone` are re-exported from `liquidity_hunter.app` for use by
-`dashboard`.
+- **`app/overview.py`** — multi-timeframe structural overview (the sidebar
+  "Structure Ladder", as of 2026-07-11). Split in two stages so the API can
+  cache each timeframe independently:
+  - **`load_timeframe_structure(provider, symbol, timeframe, limit,
+    confluence_filter)`** — the cacheable I/O unit for one timeframe. Runs the
+    exact production internal-structure pipeline `load_dashboard_data` uses
+    (the shared **`dashboard_data._run_internal_structure`** helper: buffered
+    fetch, structural anchor, per-TF detector wiring via
+    `_build_internal_detector`, both composition passes) plus equal-level zone
+    detection + `mark_swept_zones`, returning a `TimeframeStructureSnapshot`
+    (candles, visible events, `final_trend`, EQL zones).
+  - **`build_overview(symbol, snapshots)`** — pure assembly into a
+    `core.domain.MarketOverview` of `TimeframeOverview` entries: per timeframe
+    the detector's `final_trend` (**exactly the trend the chart renders** —
+    same pipeline), the last non-provisional BOS/CHoCH/`CHOCH_FAILED` (+
+    direction, timestamp, candles-ago), any provisional live-edge
+    `BOS?`/`CHoCH?` as `forming_event` (the fizzle `CHOCH_FAILED` marker is
+    excluded — provisional but not "forming"), and a `LiquidityHuntEngine`
+    summary (phase, hunted side, captured/total) computed against the
+    `_HIGHER_TIMEFRAME_MAP` anchor's trend **from the same snapshot batch**
+    (no duplicate HTF fetches; W1 or a missing anchor degrades to the entry's
+    own trend = "aligned", the `load_dashboard_data` fallback). The hunt runs
+    on a slim `DashboardData` (EQL zones + events only; `liquidation_map` and
+    `oi_analysis` deliberately `None` — the documented graceful degradation,
+    so ladder hunt phases are structure+EQL-based; the full OI-qualified hunt
+    stays on `/api/dashboard`).
+  - **`load_overview(provider, symbol, timeframes, limit, confluence_filter)`**
+    composes both over the default ladder `OVERVIEW_TIMEFRAMES` (M5→W1).
+  Purely descriptive throughout: a state reading per timeframe, not a signal.
+
+`load_dashboard_data` also accepts **`compute_narrative`** (default `True`;
+`False` skips the `NarrativeEngine` synthesis entirely, `narrative=None`) and
+its buffered-fetch + internal-detection front half now lives in
+`_run_internal_structure` (returning an `InternalStructureRun`), shared with
+the overview and the HTF-trend run so all three stay byte-identical;
+`default_ohlcv_provider()` builds the production fallback provider chain.
+
+`DashboardData`, `LiquidityHuntEngine`, `NarrativeEngine`,
+`ScoredLiquidityZone`, `TimeframeStructureSnapshot`, `OVERVIEW_TIMEFRAMES`,
+`build_overview`, `load_overview`, and `load_timeframe_structure` are
+re-exported from `liquidity_hunter.app`.
 
 ### API layer (`liquidity_hunter/api`)
 
@@ -1005,9 +1056,25 @@ only on `app` and `core` (an alternative presentation layer to
   cached per parameter combination via `api/cache.TTLCache`, with a 10s TTL
   (shorter than `cache.DEFAULT_TTL_SECONDS = 300`, since the frontend polls
   this endpoint to keep the dashboard near-live) to avoid redundant Binance
-  requests.
+  requests. The `narrative` query param (default **`false`**, as of
+  2026-07-11) gates the narrative/anomaly synthesis: off by default while the
+  multi-TF overview occupies the sidebar slot (`narrative=null` in the
+  response, so the frontend `NarrativePanel` auto-hides); `narrative=true`
+  re-enables it. The library-level `compute_narrative` default stays `True`.
+- **`api/routes/overview.py`** — `GET /api/overview` (query param `symbol`)
+  returns a `core.domain.MarketOverview` (the domain model is the response
+  model directly — no mirror schema needed). Each timeframe's
+  `TimeframeStructureSnapshot` is cached per `(symbol, timeframe)` with a
+  **timeframe-proportional TTL** (`_SNAPSHOT_TTL_SECONDS`: M5=30s, M15=60s,
+  M30=90s, H1=120s, H4=300s, D1=600s, W1=1200s — a reading changes at most
+  once per candle), while the cross-timeframe assembly (`build_overview`)
+  is recomputed per request. A cold overview costs one buffered-klines fetch
+  per ladder timeframe (~2.5s); warm requests only refresh expired intraday
+  snapshots.
 - **`api/cache.py`** — `TTLCache`, a minimal generic in-memory
-  time-based cache (`get_or_set(key, factory)`).
+  time-based cache (`get_or_set(key, factory, ttl_seconds=None)`; the
+  optional per-call `ttl_seconds` overrides the cache-wide TTL for entries
+  that age at different rates, e.g. the per-timeframe overview snapshots).
 - **`api/schemas.py`** — `DashboardDataResponse`, a Pydantic `BaseModel`
   (`from_attributes=True`) mirroring the `DashboardData` dataclass fields,
   used to serialize it to JSON; nested domain types (`Candle`,
@@ -1087,6 +1154,23 @@ selector.
   `CONFIRMED`, `FAILED`), target zone, consolidation candle count, sweep
   info, expansion BOS info, and volume delta. Includes a `CHART ON`/`OFF`
   toggle button that controls the `showManipulationBoxes` prop on `MainChart`.
+
+- **`frontend/src/components/MultiTimeframePanel.tsx`** — the **Structure
+  Ladder** sidebar panel (as of 2026-07-11, first panel in the sidebar): one
+  compact row per `TimeframeOverview` entry (M5 → W1) showing the timeframe
+  chip, trend (`▲ BULL` / `▼ BEAR` / `◆ FLAT`, directional colors), the last
+  structural event with candles-ago (`BOS ▲ ·12c`), a dimmed forming chip for
+  provisional marks (`BOS? ▼`), and a hunt-phase chip (`⚠` counter-trend /
+  `⚡ x/y` hunting / `✓` captured). The `CollapsibleSection` header shows an
+  alignment summary (`6▲ 1▼`); the full reading is each row's hover title.
+  **Clicking a row switches the chart timeframe** (`switchChartTimeframe`,
+  the chart-only divergence — global panels stay on the selected timeframe).
+  `App.tsx` polls `GET /api/overview` every `OVERVIEW_REFRESH_INTERVAL_MS =
+  30s` per symbol (transient failures keep the last ladder rather than
+  tearing the dashboard down). The `NarrativePanel` (which exists and renders
+  whenever `data.narrative` is non-null) auto-hides now that `/api/dashboard`
+  defaults `narrative=false` — re-enabling the query param brings it back
+  with zero frontend changes.
 
 - **`frontend/src/charting/POIBoxesPrimitive.ts`** — `POIBoxesPrimitive`
   implements `ISeriesPrimitive` and draws filled canvas rectangles for each
@@ -2063,10 +2147,27 @@ card was replaced by the **Liquidity Hunt** conclusion card (rightmost).
 Purely observational language throughout (who is the liquidity / when it was
 captured), per the research-platform constraint.
 
+**Multi-timeframe overview / Structure Ladder** (as of 2026-07-11):
+`app/overview.py` + `GET /api/overview` + the `MultiTimeframePanel` sidebar
+panel — a per-timeframe state ladder (M5→W1: internal trend, last structural
+event, forming provisional marks, hunt phase), sharing the exact production
+detection pipeline via `dashboard_data._run_internal_structure` so the ladder
+always matches what the chart renders per timeframe. Per-timeframe API
+caching with proportional TTLs. This is **phase 1** of the user's multi-TF
+score plan (see memory: the composite confluence score over OB/Sweep/EQL/
+VOL/RSI-div/Hunt comes next; decision/execution logic stays out of this
+repo). Alongside it, **narrative/anomaly synthesis was turned off by
+default** at the API (`narrative=false` query param; `compute_narrative`
+flag in `load_dashboard_data`) — the `NarrativePanel` exists and returns
+untouched whenever the param is re-enabled.
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.
-- React frontend narrative sidebar panel (`NarrativePanel`).
+- Composite multi-timeframe confluence score (phase 2 of the score plan):
+  per-TF signed sub-scores from OB/Sweep/EQL/VOL/RSI-div/Hunt with exposed
+  components; requires porting RSI(14) + divergence detection (today
+  frontend-only, `MainChart.tsx`) into `indicators/`.
 - React frontend behavior divergence sidebar panel and chart overlay.
 - React frontend liquidity targets, retail trap, and market structure
   sidebar panels.

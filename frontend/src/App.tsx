@@ -1,15 +1,20 @@
 import { useEffect, useState } from 'react'
 
-import { fetchDashboardData } from './api/dashboard'
+import { fetchDashboardData, fetchOverview } from './api/dashboard'
 import { BehaviorDivergencePanel } from './components/BehaviorDivergencePanel'
 import { KpiRow } from './components/KpiRow'
 import { Logo } from './components/Logo'
 import { MainChart } from './components/MainChart'
 import { ManipulationCyclesPanel } from './components/ManipulationCyclesPanel'
+import { MultiTimeframePanel } from './components/MultiTimeframePanel'
 import { NarrativePanel } from './components/NarrativePanel'
-import type { DashboardData, TimeFrame } from './types/dashboard'
+import type { DashboardData, MarketOverview, TimeFrame } from './types/dashboard'
 
 const REFRESH_INTERVAL_MS = 5_000
+// The ladder's readings change at most once per candle (per timeframe), and
+// the backend caches each timeframe with a proportional TTL — polling faster
+// than this only re-reads caches.
+const OVERVIEW_REFRESH_INTERVAL_MS = 30_000
 
 const SYMBOL_OPTIONS: { value: string; label: string }[] = [
   { value: 'BTCUSDT', label: 'BTC' },
@@ -92,6 +97,7 @@ function App() {
   const [chartTimeframe, setChartTimeframe] = useState<TimeFrame>('1h')
   const [data, setData] = useState<DashboardData | null>(null)
   const [chartData, setChartData] = useState<DashboardData | null>(null)
+  const [overview, setOverview] = useState<MarketOverview | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [manipChartVisible, setManipChartVisible] = useState(false)
   const [divChartVisible, setDivChartVisible] = useState(false)
@@ -122,6 +128,7 @@ function App() {
     if (sym === symbol) return
     setData(null)
     setChartData(null)
+    setOverview(null)
     setError(null)
     setSymbol(sym)
   }
@@ -179,6 +186,30 @@ function App() {
       clearInterval(interval)
     }
   }, [symbol, chartTimeframe, timeframe])
+
+  // Fetch the multi-timeframe structure ladder (sidebar)
+  useEffect(() => {
+    let cancelled = false
+
+    const load = () => {
+      fetchOverview(symbol)
+        .then((result) => {
+          if (!cancelled) setOverview(result)
+        })
+        .catch(() => {
+          // Secondary panel: keep the last ladder on transient errors rather
+          // than tearing down the whole dashboard.
+        })
+    }
+
+    load()
+    const interval = setInterval(load, OVERVIEW_REFRESH_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [symbol])
 
   // Tick the clock in the status bar
   useEffect(() => {
@@ -449,6 +480,13 @@ function App() {
                 </div>
                 <div className="flex-1 overflow-y-auto p-3">
                   <div className="flex flex-col gap-4 divide-y divide-[#1a1f2e] [&>*:not(:first-child)]:pt-4">
+                    {overview && (
+                      <MultiTimeframePanel
+                        overview={overview}
+                        activeTimeframe={chartTimeframe}
+                        onSelectTimeframe={switchChartTimeframe}
+                      />
+                    )}
                     {data.narrative && (
                       <NarrativePanel narrative={data.narrative} />
                     )}

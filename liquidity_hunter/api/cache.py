@@ -16,8 +16,15 @@ class TTLCache(Generic[T]):
         self._ttl_seconds = ttl_seconds
         self._store: dict[Hashable, tuple[float, T]] = {}
 
-    def get_or_set(self, key: Hashable, factory: Callable[[], T]) -> T:
-        """Return the cached value for `key`, computing it via `factory` if missing/expired."""
+    def get_or_set(
+        self, key: Hashable, factory: Callable[[], T], ttl_seconds: float | None = None
+    ) -> T:
+        """Return the cached value for `key`, computing it via `factory` if missing/expired.
+
+        `ttl_seconds` overrides the cache-wide TTL for this entry — used where
+        different keys age at different rates (e.g. per-timeframe overview
+        snapshots: a weekly reading stays fresh far longer than a 5-minute one).
+        """
         now = time.monotonic()
         cached = self._store.get(key)
         if cached is not None:
@@ -25,5 +32,6 @@ class TTLCache(Generic[T]):
             if now < expires_at:
                 return value
         value = factory()
-        self._store[key] = (now + self._ttl_seconds, value)
+        ttl = ttl_seconds if ttl_seconds is not None else self._ttl_seconds
+        self._store[key] = (now + ttl, value)
         return value

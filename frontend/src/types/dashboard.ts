@@ -314,6 +314,35 @@ export interface OIAnalysis {
   coverage_end: string | null
 }
 
+/** One timeframe's standing structural state (mirror of `core.domain.TimeframeOverview`).
+ *  `trend` is the internal detector's state-machine trend for the production run of
+ *  this timeframe — exactly the trend the chart shows when it is opened. */
+export interface TimeframeOverview {
+  timeframe: TimeFrame
+  trend: MarketDirection
+  current_price: number
+  candle_timestamp: string
+  higher_timeframe: TimeFrame | null
+  higher_timeframe_direction: MarketDirection | null
+  last_event: StructureEvent | null
+  last_event_direction: MarketDirection | null
+  last_event_timestamp: string | null
+  last_event_candles_ago: number | null
+  forming_event: StructureEvent | null
+  forming_direction: MarketDirection | null
+  hunt_phase: LiquidityHuntPhase
+  hunted_side: RetailPositioning
+  hunt_targets_captured: number
+  hunt_targets_total: number
+}
+
+/** Per-timeframe structural readings for one symbol, ordered fine → coarse
+ *  (mirror of `core.domain.MarketOverview`, from `GET /api/overview`). */
+export interface MarketOverview {
+  symbol: string
+  entries: TimeframeOverview[]
+}
+
 export interface DashboardData {
   symbol: string
   timeframe: TimeFrame

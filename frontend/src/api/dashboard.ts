@@ -1,4 +1,4 @@
-import type { DashboardData, TimeFrame } from '../types/dashboard'
+import type { DashboardData, MarketOverview, TimeFrame } from '../types/dashboard'
 
 export interface DashboardQuery {
   symbol?: string
@@ -20,4 +20,14 @@ export async function fetchDashboardData(query: DashboardQuery = {}): Promise<Da
     throw new Error(`GET /api/dashboard failed: ${response.status} ${response.statusText}`)
   }
   return (await response.json()) as DashboardData
+}
+
+/** Fetch the multi-timeframe structural ladder from `GET /api/overview`. */
+export async function fetchOverview(symbol: string): Promise<MarketOverview> {
+  const params = new URLSearchParams({ symbol })
+  const response = await fetch(`/api/overview?${params.toString()}`)
+  if (!response.ok) {
+    throw new Error(`GET /api/overview failed: ${response.status} ${response.statusText}`)
+  }
+  return (await response.json()) as MarketOverview
 }

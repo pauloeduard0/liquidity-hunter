@@ -421,6 +421,21 @@ def test_load_dashboard_data_degrades_when_futures_unavailable() -> None:
     assert data.narrative is not None
 
 
+def test_load_dashboard_data_skips_narrative_when_disabled() -> None:
+    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+
+    data = load_dashboard_data(
+        provider=_FakeProvider(candles),
+        symbol="BTCUSDT",
+        futures_provider=_FAKE_FUTURES,
+        compute_narrative=False,
+    )
+
+    # Only the narrative synthesis is skipped; the hunt still runs.
+    assert data.narrative is None
+    assert data.liquidity_hunt is not None
+
+
 def test_load_dashboard_data_populates_oi_analysis() -> None:
     candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
     # An OI sample per candle, steadily rising, while the series tail drifts

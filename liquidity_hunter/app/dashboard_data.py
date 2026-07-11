@@ -637,6 +637,87 @@ def _build_internal_detector(
     )
 
 
+@dataclass(frozen=True)
+class InternalStructureRun:
+    """One timeframe's production internal-structure run.
+
+    The buffered fetch, structural-anchor slice, detector wiring
+    (`_build_internal_detector`), and composition passes for a single
+    symbol/timeframe -- the shared unit behind `load_dashboard_data` (current
+    timeframe and higher-timeframe trend) and `app.overview.load_timeframe_
+    structure`, so every consumer reads exactly the structure the chart
+    renders for that timeframe.
+    """
+
+    buffered_candles: list[Candle]
+    # The visible window (the trailing `limit` of `buffered_candles`).
+    candles: list[Candle]
+    # The structurally anchored detection slice (see `_structural_anchor_index`).
+    internal_candles: list[Candle]
+    # Visible-window events, after the composition passes
+    # (`_reanchor_bos_close_break` + `_drop_pre_break_reference_bos`).
+    events: list[MarketStructure]
+    # The detector's state-machine trend (`final_trend`) at the series end.
+    trend: MarketDirection
+
+
+def _run_internal_structure(
+    provider: OHLCVProvider,
+    symbol: str,
+    timeframe: TimeFrame,
+    limit: int,
+    confluence_filter: bool,
+) -> InternalStructureRun:
+    """Fetch and run the production internal-structure pipeline for one timeframe.
+
+    Fetches the buffered series once and derives the visible window from its
+    tail. `buffered_candles` prepends `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER`
+    candles of history before the visible window (for the internal detector's
+    warm-up and the structural anchor); the visible `candles` are just its
+    last `limit`, so a separate fetch would be redundant -- and a second call
+    could even race a freshly-printed candle, desyncing the two series.
+    """
+    buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER, provider.max_fetch_limit)
+    buffered_candles = provider.get_ohlcv(symbol, timeframe, buffered_limit)
+    candles = buffered_candles[-limit:]
+    visible_start = candles[0].timestamp
+    visible_end = candles[-1].timestamp
+
+    # The internal detector starts at a structural anchor (the most recent major
+    # extreme before the visible window) rather than a fixed candle offset, so
+    # the trend it bootstraps reflects the move actually entering the window
+    # instead of a stale, far-back regime. See `_structural_anchor_index`.
+    internal_candles = buffered_candles[_structural_anchor_index(buffered_candles, visible_start) :]
+
+    detector = _build_internal_detector(timeframe, confluence_filter=confluence_filter)
+    all_events = detector.detect(internal_candles)
+    # Re-time each BOS to the first close beyond the formed level it broke
+    # (dropping wick-only continuations), before the visible filter.
+    all_events = _reanchor_bos_close_break(all_events, internal_candles)
+    # A reference may only form *after* the prior same-direction BOS broke: a
+    # continuation referencing a pre-break wick attempt at the prior level is
+    # dropped (pre-break liquidity, not structure of the new leg).
+    all_events = _drop_pre_break_reference_bos(all_events)
+    events = [e for e in all_events if visible_start <= e.timestamp <= visible_end]
+    return InternalStructureRun(
+        buffered_candles=buffered_candles,
+        candles=candles,
+        internal_candles=internal_candles,
+        events=events,
+        trend=detector.final_trend,
+    )
+
+
+def default_ohlcv_provider() -> OHLCVProvider:
+    """The production candle source.
+
+    Perpetual-futures candles (aligned with the futures-derived
+    liquidation/OI/funding analysis, and a 1500-candle per-request window vs
+    spot's 1000), falling back to spot for symbols without a perpetual.
+    """
+    return FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(), BinanceDataProvider())
+
+
 def load_dashboard_data(
     provider: OHLCVProvider | None = None,
     symbol: str = "BTCUSDT",
@@ -645,23 +726,22 @@ def load_dashboard_data(
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
     confluence_filter: bool = False,
     futures_provider: FuturesDataProvider | None = None,
+    compute_narrative: bool = True,
 ) -> DashboardData:
-    """Fetch candles and assemble liquidity, ranking, and retail bias data."""
-    # Default to perpetual-futures candles (aligned with the futures-derived
-    # liquidation/OI/funding analysis, and a 1500-candle per-request window vs
-    # spot's 1000), falling back to spot for symbols without a perpetual.
-    if provider is None:
-        provider = FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(), BinanceDataProvider())
+    """Fetch candles and assemble liquidity, ranking, and retail bias data.
 
-    # Fetch the buffered series once and derive the visible window from its
-    # tail. `buffered_candles` prepends `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER`
-    # candles of history before the visible window (for the internal detector's
-    # warm-up and the structural anchor); the visible `candles` are just its
-    # last `limit`, so a separate fetch would be redundant -- and a second call
-    # could even race a freshly-printed candle, desyncing the two series.
-    buffered_limit = min(limit + _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER, provider.max_fetch_limit)
-    buffered_candles = provider.get_ohlcv(symbol, timeframe, buffered_limit)
-    candles = buffered_candles[-limit:]
+    ``compute_narrative=False`` skips the `NarrativeEngine` synthesis entirely
+    (``narrative=None`` in the snapshot) -- a lighter profile for consumers
+    that do not render the narrative/anomaly panel.
+    """
+    if provider is None:
+        provider = default_ohlcv_provider()
+
+    internal_run = _run_internal_structure(
+        provider, symbol, timeframe, limit, confluence_filter
+    )
+    buffered_candles = internal_run.buffered_candles
+    candles = internal_run.candles
 
     liquidity_zones = mark_swept_zones(
         [
@@ -705,29 +785,14 @@ def load_dashboard_data(
         e for e in all_major_events if visible_start <= e.timestamp <= visible_end
     ]
 
-    # The internal detector starts at a structural anchor (the most recent major
-    # extreme before the visible window) rather than a fixed candle offset, so
-    # the trend it bootstraps reflects the move actually entering the window
-    # instead of a stale, far-back regime. See `_structural_anchor_index`.
-    internal_candles = buffered_candles[_structural_anchor_index(buffered_candles, visible_start) :]
-
-    internal_detector = _build_internal_detector(timeframe, confluence_filter=confluence_filter)
-    all_internal_events = internal_detector.detect(internal_candles)
-    # Re-time each BOS to the first close beyond the formed level it broke
-    # (dropping wick-only continuations), before the visible filter and POI.
-    all_internal_events = _reanchor_bos_close_break(all_internal_events, internal_candles)
-    # A reference may only form *after* the prior same-direction BOS broke: a
-    # continuation referencing a pre-break wick attempt at the prior level is
-    # dropped (pre-break liquidity, not structure of the new leg).
-    all_internal_events = _drop_pre_break_reference_bos(all_internal_events)
-    internal_structure_events = [
-        e for e in all_internal_events if visible_start <= e.timestamp <= visible_end
-    ]
+    # The internal run (fetch, structural anchor, detection, composition
+    # passes) happened up front in `_run_internal_structure`.
+    internal_structure_events = internal_run.events
 
     # The MSB order block detector is self-contained (it derives its own swing
     # pivots); it runs on the same structurally anchored slice as the internal
     # detector so zones anchored just before the visible window still render.
-    all_poi_zones = POIDetector().detect(internal_candles)
+    all_poi_zones = POIDetector().detect(internal_run.internal_candles)
     poi_zones = [z for z in all_poi_zones if visible_start <= z.created_at <= visible_end]
 
     htf = _HIGHER_TIMEFRAME_MAP.get(timeframe)
@@ -745,19 +810,15 @@ def load_dashboard_data(
         # State-machine trend, not the last event's direction: the latter flips
         # on a descriptive HL/LH pivot or a LIQUIDITY_SWEEP whose `direction`
         # is the pivot/wick side rather than the standing trend.
-        htf_candles = provider.get_ohlcv(symbol, htf, buffered_limit)
-        htf_visible_start = htf_candles[max(0, len(htf_candles) - limit)].timestamp
-        htf_detector = _build_internal_detector(htf, confluence_filter=confluence_filter)
-        htf_detector.detect(
-            htf_candles[_structural_anchor_index(htf_candles, htf_visible_start) :]
-        )
-        higher_timeframe_direction = htf_detector.final_trend
+        higher_timeframe_direction = _run_internal_structure(
+            provider, symbol, htf, limit, confluence_filter
+        ).trend
     else:
         # Top timeframe (no higher TF): degrade to the current series' own
         # internal trend, so downstream comparisons (the liquidity hunt's
         # counter-trend check) read "aligned" rather than pitting two
         # different methodologies against each other.
-        higher_timeframe_direction = internal_detector.final_trend
+        higher_timeframe_direction = internal_run.trend
 
     retail_bias = RetailTrapAnalyzer().analyze(
         symbol=symbol,
@@ -854,7 +915,7 @@ def load_dashboard_data(
 
     # Both synthesizers read the fully assembled snapshot (they cross-reference
     # outputs from every layer), so they run last, at the composition point.
-    narrative = NarrativeEngine().build(data)
+    narrative = NarrativeEngine().build(data) if compute_narrative else None
     liquidity_hunt = LiquidityHuntEngine(proximity_atr=_HUNT_PROXIMITY_ATR).build(data)
     return replace(data, narrative=narrative, liquidity_hunt=liquidity_hunt)
 

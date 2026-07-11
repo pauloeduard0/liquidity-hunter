@@ -8,7 +8,13 @@ from fastapi.testclient import TestClient
 from liquidity_hunter.api.cache import TTLCache
 from liquidity_hunter.api.main import app
 from liquidity_hunter.api.routes import dashboard
+from liquidity_hunter.api.routes import overview as overview_route
 from liquidity_hunter.app.dashboard_data import DashboardData, load_dashboard_data
+from liquidity_hunter.app.overview import (
+    OVERVIEW_TIMEFRAMES,
+    TimeframeStructureSnapshot,
+    load_timeframe_structure,
+)
 from liquidity_hunter.core.domain import (
     Candle,
     FundingRate,
@@ -64,6 +70,14 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         ),
     )
     monkeypatch.setattr(dashboard, "_cache", TTLCache[DashboardData]())
+    monkeypatch.setattr(
+        overview_route,
+        "load_timeframe_structure",
+        lambda **kwargs: load_timeframe_structure(provider=_FakeProvider(candles), **kwargs),
+    )
+    monkeypatch.setattr(
+        overview_route, "_snapshot_cache", TTLCache[TimeframeStructureSnapshot]()
+    )
     with TestClient(app) as test_client:
         yield test_client
 
@@ -92,8 +106,20 @@ def test_dashboard_returns_snapshot(client: TestClient) -> None:
     assert liquidation_map is not None
     assert liquidation_map["dominant_leveraged_side"] == "neutral"
     assert isinstance(liquidation_map["bands"], list)
+    # Narrative/anomaly synthesis is off by default (the multi-timeframe
+    # overview panel took over its sidebar slot); see the opt-in test below.
     assert "narrative" in body
-    narrative = body["narrative"]
+    assert body["narrative"] is None
+
+
+def test_dashboard_narrative_is_opt_in(client: TestClient) -> None:
+    response = client.get(
+        "/api/dashboard",
+        params={"symbol": "BTCUSDT", "timeframe": "1h", "narrative": "true"},
+    )
+
+    assert response.status_code == 200
+    narrative = response.json()["narrative"]
     assert narrative is not None
     assert narrative["symbol"] == "BTCUSDT"
     assert narrative["timeframe"] == "1h"
@@ -102,6 +128,26 @@ def test_dashboard_returns_snapshot(client: TestClient) -> None:
     assert isinstance(narrative["anomalies"], list)
     assert narrative["confluence_count"] >= 0
     assert narrative["confluence_total"] >= 0
+
+
+def test_overview_returns_ladder(client: TestClient) -> None:
+    response = client.get("/api/overview", params={"symbol": "BTCUSDT"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["symbol"] == "BTCUSDT"
+    assert [entry["timeframe"] for entry in body["entries"]] == [
+        tf.value for tf in OVERVIEW_TIMEFRAMES
+    ]
+    for entry in body["entries"]:
+        assert entry["trend"] in ("bullish", "bearish", "neutral")
+        assert entry["hunt_phase"] in (
+            "none",
+            "counter_trend",
+            "hunt_in_progress",
+            "captured",
+        )
+        assert entry["current_price"] > 0
 
 
 def test_dashboard_uses_default_query_params(client: TestClient) -> None:
