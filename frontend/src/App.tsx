@@ -17,6 +17,9 @@ const SYMBOL_OPTIONS: { value: string; label: string }[] = [
   { value: 'SOLUSDT', label: 'SOL' },
   { value: 'NEARUSDT', label: 'NEAR' },
   { value: 'AAVEUSDT', label: 'AAVE' },
+  { value: 'DASHUSDT', label: 'DASH' },
+  { value: 'XAUUSDT', label: 'XAU' },
+  { value: 'AEROUSDT', label: 'AERO' },
 ]
 
 const TIMEFRAME_OPTIONS: { value: TimeFrame; label: string }[] = [
@@ -101,6 +104,7 @@ function App() {
   const [sweepVisible, setSweepVisible] = useState(false)
   const [eqlVisible, setEqlVisible] = useState(false)
   const [volumeVisible, setVolumeVisible] = useState(true)
+  const [rsiDivVisible, setRsiDivVisible] = useState(false)
   const [indicatorsVisible, setIndicatorsVisible] = useState(false)
   const [, setTick] = useState(0)
 
@@ -393,6 +397,18 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setRsiDivVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        rsiDivVisible
+                          ? 'bg-[#ab47bc22] text-[#ab47bc]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle RSI divergence trendlines mirrored onto the price structure"
+                    >
+                      ∿ RSI Div
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setIndicatorsVisible((v) => !v)}
                       className={`ml-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         indicatorsVisible
@@ -420,7 +436,7 @@ function App() {
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col p-1">
-                  <MainChart key={`${symbol}-${chartTimeframe}`} data={chartData ?? data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showVolume={volumeVisible} />
+                  <MainChart key={`${symbol}-${chartTimeframe}`} data={chartData ?? data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} />
                 </div>
               </div>
 

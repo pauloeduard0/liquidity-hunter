@@ -495,6 +495,7 @@ interface MainChartProps {
   showIndicators?: boolean
   showHuntWindow?: boolean
   showVolume?: boolean
+  showRsiDivergence?: boolean
 }
 
 export function MainChart({
@@ -511,6 +512,7 @@ export function MainChart({
   showIndicators = true,
   showHuntWindow = false,
   showVolume = true,
+  showRsiDivergence = false,
 }: MainChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const mainContainerRef = useRef<HTMLDivElement>(null)
@@ -905,6 +907,42 @@ export function MainChart({
 
     const labels: LineLabel[] = []
 
+    // RSI divergence lines mirrored onto the price structure: a bearish
+    // divergence (price HH + RSI LH) connects the two swing highs, a bullish
+    // one (price LL + RSI HL) the two swing lows -- the price-side counterpart
+    // of the same trendline drawn on the RSI pane above.
+    for (const div of showRsiDivergence ? divergences : []) {
+      const bearish = div.type === 'bearish'
+      const color = bearish ? RSI_DIV_BEARISH_COLOR : RSI_DIV_BULLISH_COLOR
+      const startCandle = data.candles[div.startIndex]
+      const endCandle = data.candles[div.endIndex]
+      const startPrice = bearish ? startCandle.high : startCandle.low
+      const endPrice = bearish ? endCandle.high : endCandle.low
+      const startTime = toUtcTimestamp(startCandle.timestamp)
+      const endTime = toUtcTimestamp(endCandle.timestamp)
+
+      const divSeries = chart.addSeries(LineSeries, {
+        color,
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      })
+      divSeries.setData([
+        { time: startTime, value: startPrice },
+        { time: endTime, value: endPrice },
+      ])
+      overlaySeriesRef.current.push(divSeries)
+      labels.push({
+        time: startTime,
+        timeEnd: endTime,
+        price: endPrice,
+        color,
+        text: `RSI Div ${bearish ? '▼' : '▲'}`,
+      })
+    }
+
     for (const scored of showEqlZones ? data.ranked_zones.slice(0, TOP_N_ZONES) : []) {
       const { zone, score } = scored
       const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
@@ -1189,7 +1227,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showVolume])
+  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showVolume, showRsiDivergence])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">
