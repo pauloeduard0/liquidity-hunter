@@ -41,6 +41,8 @@ import {
   RSI_OVERSOLD_COLOR,
   STRUCTURE_EVENT_STYLES,
   TREND_ICONS,
+  VOLUME_DOWN_COLOR,
+  VOLUME_UP_COLOR,
   ZONE_COLORS,
   ZONE_TYPE_LABELS,
 } from '../theme'
@@ -492,6 +494,7 @@ interface MainChartProps {
   showEqlZones?: boolean
   showIndicators?: boolean
   showHuntWindow?: boolean
+  showVolume?: boolean
 }
 
 export function MainChart({
@@ -507,6 +510,7 @@ export function MainChart({
   showEqlZones = true,
   showIndicators = true,
   showHuntWindow = false,
+  showVolume = true,
 }: MainChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const mainContainerRef = useRef<HTMLDivElement>(null)
@@ -516,6 +520,7 @@ export function MainChart({
   const deltaChartRef = useRef<IChartApi | null>(null)
   const rsiChartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   const deltaSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   const rsiSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const overlaySeriesRef = useRef<ISeriesApi<'Line'>[]>([])
@@ -595,6 +600,21 @@ export function MainChart({
       wickDownColor: CANDLE_DOWN_COLOR,
     })
     seriesRef.current = series
+
+    // Raw volume histogram, overlaid on the base of the main pane. Its own
+    // overlay price scale (`priceScaleId: ''`) with a large top scale margin
+    // pins the bars to the bottom ~18% so they sit behind the candles without
+    // rescaling the price axis.
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: 'volume' },
+      priceScaleId: '',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    })
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: { top: 0.82, bottom: 0 },
+    })
+    volumeSeriesRef.current = volumeSeries
 
     const deltaSeries = deltaChart.addSeries(HistogramSeries, {
       priceLineVisible: false,
@@ -731,6 +751,7 @@ export function MainChart({
       deltaChartRef.current = null
       rsiChartRef.current = null
       seriesRef.current = null
+      volumeSeriesRef.current = null
       deltaSeriesRef.current = null
       rsiSeriesRef.current = null
       overlaySeriesRef.current = []
@@ -797,6 +818,21 @@ export function MainChart({
         close: candle.close,
       })),
     )
+
+    // Raw volume overlay (bottom of the main pane), colored by candle direction.
+    const volumeSeries = volumeSeriesRef.current
+    if (volumeSeries) {
+      volumeSeries.applyOptions({ visible: showVolume })
+      volumeSeries.setData(
+        showVolume
+          ? data.candles.map((candle) => ({
+              time: toUtcTimestamp(candle.timestamp),
+              value: candle.volume,
+              color: candle.close >= candle.open ? VOLUME_UP_COLOR : VOLUME_DOWN_COLOR,
+            }))
+          : [],
+      )
+    }
 
     // Volume delta histogram
     deltaSeries.setData(
@@ -1153,7 +1189,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow])
+  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showVolume])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

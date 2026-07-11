@@ -118,6 +118,15 @@ export const LIQUIDATION_MIN_ALPHA = 0.12
 export const VOLUME_DELTA_UP_COLOR = '#26a69a'
 export const VOLUME_DELTA_DOWN_COLOR = '#ef5350'
 
+/**
+ * Volume overlay bar colors — the raw (futures) candle volume drawn as
+ * translucent bars anchored to the base of the main candlestick pane, colored
+ * by candle direction. Half-alpha keeps the bars readable without fully
+ * obscuring the candles/structure lines behind them.
+ */
+export const VOLUME_UP_COLOR = CANDLE_UP_COLOR + '80'
+export const VOLUME_DOWN_COLOR = CANDLE_DOWN_COLOR + '80'
+
 /** RSI indicator colors. */
 export const RSI_LINE_COLOR = '#ab63fa'
 export const RSI_OVERBOUGHT_COLOR = '#26c6da66'

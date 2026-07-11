@@ -100,6 +100,7 @@ function App() {
   const [obVisible, setObVisible] = useState(false)
   const [sweepVisible, setSweepVisible] = useState(false)
   const [eqlVisible, setEqlVisible] = useState(false)
+  const [volumeVisible, setVolumeVisible] = useState(true)
   const [indicatorsVisible, setIndicatorsVisible] = useState(false)
   const [, setTick] = useState(0)
 
@@ -328,6 +329,18 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setVolumeVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        volumeVisible
+                          ? 'bg-[#26c6da22] text-[#26c6da]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle raw volume bars (base of the main pane)"
+                    >
+                      ▬ Vol
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setHeatmapVisible((v) => !v)}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         heatmapVisible
@@ -407,7 +420,7 @@ function App() {
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col p-1">
-                  <MainChart key={`${symbol}-${chartTimeframe}`} data={chartData ?? data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} />
+                  <MainChart key={`${symbol}-${chartTimeframe}`} data={chartData ?? data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showVolume={volumeVisible} />
                 </div>
               </div>
 
