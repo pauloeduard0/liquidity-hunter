@@ -97,6 +97,55 @@ _STALE_REANCHOR_CANDLES: dict[TimeFrame, int] = {
 }
 _DEFAULT_STALE_REANCHOR_CANDLES = 60
 
+# Displacement release for the staleness re-anchor
+# (`InternalStructureDetector.stale_reanchor_displacement_atr` /
+# `stale_reanchor_displacement_candles`, internal detector only). The staleness
+# timer above is blind to how far a leg stretched: after a violent move the
+# reversal reference stays pinned at the pre-move leg origin for the full
+# window, so the strongest bounce of the cycle is consumed as a sweep against a
+# level many ATRs overhead (the ETHUSDT H4 2026-06-05 crash: -26% in days, the
+# +23% bounce to 1848 nine days later printed as a `LIQUIDITY_SWEEP` against
+# the 2046 leg origin, and the chart sat on the mid-crash BOS for a month).
+# When the gap between the reversal reference and the leg's running extreme
+# reaches N x mean true-range% (volatility-normalized, so the same N means the
+# same number of typical candles on every asset/timeframe -- the per-timeframe
+# adaptivity the fixed timer lacks), the staleness threshold shrinks to the
+# displacement candle count and the re-anchor window starts at the last
+# advance, landing the reference on the post-move range's first pullback
+# extreme. (A companion sweep ratchet for weak references -- tracking the range
+# extreme when a bounce swept beyond the released reference -- was prototyped
+# alongside and rejected by measurement: on a grinding decline it chased the
+# reference away from the confirming closes, erasing the genuine ETH H4 March
+# 2026 bearish cycle; see the detector docstring.)
+#
+# N=16 measured 2026-07-11 (BTC/ETH/SOL/AAVE/NEAR x 15m/30m/1h/4h/1d,
+# limit=1200): 6/25 combos change, all the motivating pattern (a large bounce
+# inside/after a displaced leg that printed only sweeps) -- ETH 4h resolves the
+# month-long stuck cycle into CHoCH 06-15 (ref 1722, the first pullback) ->
+# CHoCH 06-23 -> BOS 06-24 -> CHoCH 07-02 (structural); BTC 4h gains the
+# honest 06-14 CHoCH + 06-27 CHOCH_FAILED pair around the June crash; AAVE 4h
+# gains the missing Feb-Mar -30% bearish cycle (CHoCH 03-07 + BOS staircase
+# 104->92); NEAR 1h / SOL 4h flip the June bottom ~6-17 days earlier with a
+# confirming BOS staircase. N=8 fires on routine legs (25/25 combos -- a leg's
+# ref-to-extreme gap IS its height, and 8 ATR legs are normal); N=14 starts
+# reshaping BTC 30m/1d (trend flip); N=18 loses AAVE 4h / NEAR 1h; N=20 loses
+# the ETH 4h target itself (~19 ATR). The candle count M is a wide plateau --
+# 10/15/20/25 are byte-identical on the whole matrix (by the time a displaced
+# leg's next pivot registers, the candles-since-advance already exceed it);
+# 15 keeps a real quiet-period requirement without delaying the release.
+_STALE_REANCHOR_DISPLACEMENT_ATR: float | None = 16.0
+_STALE_REANCHOR_DISPLACEMENT_CANDLES: int | None = 15
+
+# Provisional (live-edge) CHoCH against *weak* references
+# (`InternalStructureDetector.emit_provisional_choch_weak`). After any
+# re-anchor the standing reference is weak, so exactly in the released/reset
+# cycles the displacement release creates, the forming reversal was invisible
+# (the ETH H4 case: price closed above the weak 1779 reference with nothing on
+# screen). Weak references sustain the weak-ref barrier persistence where
+# wired; the mark carries `reference_structural=False` (dimmed + `*` styling
+# on top of the provisional `?`).
+_EMIT_PROVISIONAL_CHOCH_WEAK = True
+
 # Impulse-BOS staging threshold for the internal detector
 # (`InternalStructureDetector.impulse_bos_displacement_pct`). A clean impulsive
 # leg advances the state machine at each lower low / higher high but, with no
@@ -484,6 +533,42 @@ def _drop_pre_break_reference_bos(
     return result
 
 
+def _drop_resumed_fizzle_markers(
+    events: list[MarketStructure],
+) -> list[MarketStructure]:
+    """Drop fizzle ``CHOCH_FAILED`` markers whose reversal later resumed on-chart.
+
+    The fast-fizzle marker (a *provisional* ``CHOCH_FAILED``) flags a standing
+    CHoCH whose broken level was reclaimed shortly after the flip, so the chart
+    can terminate a stale line. But a reclaim the reversal *recovers* from is a
+    deep pullback, not a fizzle: a same-direction BOS printing after the
+    reclaim proves the CHoCH's cycle resumed, and the marker would falsely
+    invalidate a standing reversal (the ETHUSDT H1 2026-06-30 case: price
+    reclaimed the 1583 reference for a day, then printed a bullish BOS
+    staircase to 1833 -- the CHoCH never fizzled). Only *chart-surviving* BOS
+    count: this pass runs after ``_reanchor_bos_close_break``, so a wick-only
+    continuation dropped there (the SOL M15 motivating fizzle, whose only
+    follow-up BOS never closed beyond its level) does not cancel the marker.
+    The detector cannot make this call itself -- it does not know which of its
+    BOS survive composition. No confirmed CHoCH can sit between the marker and
+    a later BOS (the fizzle only ever marks the *last* CHoCH of the stream),
+    so any later same-direction BOS belongs to the marked CHoCH's own cycle.
+    """
+    bos_times: dict[MarketDirection, list[datetime]] = {}
+    for event in events:
+        if event.event is StructureEvent.BREAK_OF_STRUCTURE and not event.provisional:
+            bos_times.setdefault(event.direction, []).append(event.timestamp)
+    return [
+        event
+        for event in events
+        if not (
+            event.event is StructureEvent.CHOCH_FAILED
+            and event.provisional
+            and any(t > event.timestamp for t in bos_times.get(event.direction, []))
+        )
+    ]
+
+
 def _build_internal_detector(
     timeframe: TimeFrame, *, confluence_filter: bool
 ) -> InternalStructureDetector:
@@ -535,6 +620,13 @@ def _build_internal_detector(
         stale_reanchor_candles=_STALE_REANCHOR_CANDLES.get(
             timeframe, _DEFAULT_STALE_REANCHOR_CANDLES
         ),
+        # Displacement release: when the leg has stretched N x ATR away from
+        # its reversal reference, the cycle is spent -- shrink the staleness
+        # timer so the reference re-anchors to the post-move range's first
+        # pullback instead of pinning the old cycle for the full window (the
+        # ETH H4 month-long stuck BOS). See _STALE_REANCHOR_DISPLACEMENT_ATR.
+        stale_reanchor_displacement_atr=_STALE_REANCHOR_DISPLACEMENT_ATR,
+        stale_reanchor_displacement_candles=_STALE_REANCHOR_DISPLACEMENT_CANDLES,
         # Stage a continuation BOS at each impulsive advance that displaces the
         # prior BOS level by this fraction, so a sharp multi-leg move shows a
         # staircase instead of one long event-free stretch (the impulsive leg
@@ -606,6 +698,11 @@ def _build_internal_detector(
         # invisible. Superseded by the confirmed CHoCH once the pivot forms, or it
         # vanishes if price reclaims the level (a mere sweep). Purely additive.
         emit_provisional_choch=True,
+        # ... including against weak (re-anchored) references, which are the
+        # standing reference in every released/reset cycle -- without this the
+        # forming reversal after a displacement release is invisible. See
+        # _EMIT_PROVISIONAL_CHOCH_WEAK.
+        emit_provisional_choch_weak=_EMIT_PROVISIONAL_CHOCH_WEAK,
         # Fast-fizzle invalidation: a provisional CHoCH that reclaims its own
         # broken level (sustained close) within this many candles never took hold
         # -- fail it there rather than hanging until the far leg origin is
@@ -698,6 +795,10 @@ def _run_internal_structure(
     # continuation referencing a pre-break wick attempt at the prior level is
     # dropped (pre-break liquidity, not structure of the new leg).
     all_events = _drop_pre_break_reference_bos(all_events)
+    # A fizzle marker followed by a surviving same-direction BOS was a deep
+    # pullback the reversal recovered from, not a fizzle -- runs after the BOS
+    # passes so only chart-surviving BOS count.
+    all_events = _drop_resumed_fizzle_markers(all_events)
     events = [e for e in all_events if visible_start <= e.timestamp <= visible_end]
     return InternalStructureRun(
         buffered_candles=buffered_candles,

@@ -211,10 +211,15 @@ function lineFrom(
 // before any other same-direction CHoCH intervenes); otherwise `null`. A failed
 // CHoCH never actually reversed structure — the prior trend resumed — so it must
 // stay transparent to *other* lines' termination (it doesn't cut them), while
-// its *own* line stops at this failure point.
+// its *own* line stops at this failure point. A *fizzle marker* (a provisional
+// `choch_failed`) is different: the state-machine trend never flipped back, so
+// the CHoCH still genuinely reversed structure and must keep cutting other
+// lines — only its own line stops at the reclaim. Callers pass
+// `includeFizzle: false` when deciding transparency.
 function failedChochTime(
   choch: MarketStructure,
   allEvents: MarketStructure[],
+  { includeFizzle = true }: { includeFizzle?: boolean } = {},
 ): UTCTimestamp | null {
   if (choch.event !== 'change_of_character') return null
   const chochTime = toUtcTimestamp(choch.timestamp)
@@ -223,6 +228,7 @@ function failedChochTime(
       (e) =>
         e.scope === choch.scope &&
         e.event === 'choch_failed' &&
+        (includeFizzle || !e.provisional) &&
         e.direction === choch.direction &&
         toUtcTimestamp(e.timestamp) > chochTime,
     )
@@ -243,7 +249,7 @@ function failedChochTime(
 }
 
 function isFailedChoch(choch: MarketStructure, allEvents: MarketStructure[]): boolean {
-  return failedChochTime(choch, allEvents) !== null
+  return failedChochTime(choch, allEvents, { includeFizzle: false }) !== null
 }
 
 function structureLineEndTime(
@@ -1117,7 +1123,17 @@ export function MainChart({
         event.event === 'change_of_character' && event.provisional === true
       const dimmed = weakChoch || provisionalBos || provisionalChoch
       const lineColor = dimmed ? `${style.color}99` : style.color
-      const labelSuffix = weakChoch ? '*' : provisionalBos || provisionalChoch ? '?' : ''
+      // A provisional mark against a weak reference (emit_provisional_choch_weak)
+      // is both forming and weak: `?` (the stronger caveat -- it may repaint
+      // entirely) leads, with `*` appended (`CHoCH?* ▲`).
+      const labelSuffix =
+        provisionalBos || provisionalChoch
+          ? weakChoch
+            ? '?*'
+            : '?'
+          : weakChoch
+            ? '*'
+            : ''
       const counterHtfFlip =
         huntFlipTimestamp != null &&
         event.timestamp === huntFlipTimestamp &&

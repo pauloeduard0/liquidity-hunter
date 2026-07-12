@@ -510,6 +510,51 @@ class InternalStructureDetector(MarketStructureDetector):
     Targets the long-stuck-cycle pathology on coarse timeframes (a leg whose
     reversal reference stays pinned at the origin while price ranges/recovers).
 
+    `stale_reanchor_displacement_atr` / `stale_reanchor_displacement_candles`
+    (defaults `None` = off; both must be set together) are the **displacement
+    release**: the staleness timer above is blind to how far the leg stretched,
+    so after a violent move (e.g. the ETHUSDT H4 2026-06-05 crash, -26% in
+    days) the reversal reference stays pinned at the pre-move leg origin for
+    the full `stale_reanchor_candles` window -- and the strongest bounce of the
+    whole cycle (ETH: +23% to 1848, nine days after the last advance) is
+    consumed as a mere `LIQUIDITY_SWEEP` against a reference ~20% overhead.
+    When the gap between the effective reversal reference and the current
+    leg's extreme (`bear_leg_low`/`bull_leg_high`) reaches
+    `stale_reanchor_displacement_atr` x the series' mean true-range% (the same
+    volatility normalization as the release gap, so the same N means the same
+    number of typical candles on every asset/timeframe), the cycle is
+    considered *spent* and the staleness threshold shrinks to
+    `stale_reanchor_displacement_candles`. The re-anchor window then starts at
+    the last advance itself (the post-move range) rather than a fixed trailing
+    window, so the reference lands on the new leg's first pullback extreme --
+    the structural origin of the post-move range -- instead of a slice of the
+    old move. Everything else is the existing staleness machinery
+    (`reanchor_opposite` with all its guards: tighten-only, min-gap,
+    structural release gap). With `None` the output is byte-for-byte
+    identical.
+
+    (A companion "weak-ref sweep ratchet" -- extending the candidate sweep
+    re-anchor to *weak* validated references, so a failed poke beyond one moved
+    it to the swept extreme -- was prototyped alongside the displacement
+    release and **rejected by measurement**: on a grinding decline each lower
+    sweep ratcheted the reference down just ahead of the confirming closes, so
+    the reversal CHoCH could never fire (ETH H4 March 2026: the genuine
+    2385->1936 bearish cycle vanished -- ref chased 2098->2022->1966->1937 --
+    while its only benefit was a marginally better 03-16 reference). The
+    candidate pipeline's sweep re-anchor requires trend *resumption* before
+    the swept level goes live; skipping that gate is what broke.)
+
+    `emit_provisional_choch_weak` (default `False`; requires
+    `emit_provisional_choch`) extends the provisional live-edge CHoCH to
+    *weak* references. After any re-anchor the standing reference is weak, so
+    exactly in the released/reset cycles this feature exists for, the forming
+    reversal was invisible (the ETH H4 case: price closed above the weak 1779
+    reference with nothing on screen). A weak reference must sustain the
+    weak-ref barrier persistence (`choch_weak_ref_persistence_candles`, when
+    set) -- the same bar the confirmed CHoCH would demand -- and the emitted
+    mark carries `reference_structural=False` so the frontend can style it as
+    weak+forming. With `False` the output is byte-for-byte identical.
+
     `choch_failed_fallback_suppress_candles` (default `None` = off) is the
     **post-failure fallback suppression**. A failed-CHoCH flip arms no
     blind-spot origin (one-shot, anti-ping-pong), so the cold-start
@@ -555,6 +600,8 @@ class InternalStructureDetector(MarketStructureDetector):
         reanchor_chain_establish_only: bool = False,
         reanchor_min_price_gap_pct: float | None = None,
         stale_reanchor_candles: int | None = None,
+        stale_reanchor_displacement_atr: float | None = None,
+        stale_reanchor_displacement_candles: int | None = None,
         impulse_bos_displacement_pct: float | None = None,
         bos_pullback_max_wick_pct: float | None = None,
         stage_wick_rejected_bos: bool = False,
@@ -567,6 +614,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_weak_ref_persistence_candles: int | None = None,
         emit_provisional_bos: bool = False,
         emit_provisional_choch: bool = False,
+        emit_provisional_choch_weak: bool = False,
         choch_origin_leg_extreme: bool = False,
         choch_fizzle_reclaim_candles: int | None = None,
         choch_failed_fallback_suppress_candles: int | None = None,
@@ -582,6 +630,22 @@ class InternalStructureDetector(MarketStructureDetector):
             raise ValueError("reanchor_min_price_gap_pct must be positive")
         if stale_reanchor_candles is not None and stale_reanchor_candles < 1:
             raise ValueError("stale_reanchor_candles must be at least 1")
+        if stale_reanchor_displacement_atr is not None and stale_reanchor_displacement_atr <= 0:
+            raise ValueError("stale_reanchor_displacement_atr must be positive")
+        if (
+            stale_reanchor_displacement_candles is not None
+            and stale_reanchor_displacement_candles < 1
+        ):
+            raise ValueError("stale_reanchor_displacement_candles must be at least 1")
+        if (stale_reanchor_displacement_atr is None) != (
+            stale_reanchor_displacement_candles is None
+        ):
+            raise ValueError(
+                "stale_reanchor_displacement_atr and stale_reanchor_displacement_candles "
+                "must be set together"
+            )
+        if emit_provisional_choch_weak and not emit_provisional_choch:
+            raise ValueError("emit_provisional_choch_weak requires emit_provisional_choch")
         if choch_fizzle_reclaim_candles is not None and choch_fizzle_reclaim_candles < 1:
             raise ValueError("choch_fizzle_reclaim_candles must be at least 1")
         if (
@@ -602,6 +666,8 @@ class InternalStructureDetector(MarketStructureDetector):
         self._reanchor_chain_establish_only = reanchor_chain_establish_only
         self._reanchor_min_price_gap_pct = reanchor_min_price_gap_pct
         self._stale_reanchor_candles = stale_reanchor_candles
+        self._stale_reanchor_displacement_atr = stale_reanchor_displacement_atr
+        self._stale_reanchor_displacement_candles = stale_reanchor_displacement_candles
         self._impulse_bos_displacement_pct = impulse_bos_displacement_pct
         self._bos_pullback_max_wick_pct = bos_pullback_max_wick_pct
         self._stage_wick_rejected_bos = stage_wick_rejected_bos
@@ -625,6 +691,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._choch_weak_ref_persistence_candles = choch_weak_ref_persistence_candles
         self._emit_provisional_bos = emit_provisional_bos
         self._emit_provisional_choch = emit_provisional_choch
+        self._emit_provisional_choch_weak = emit_provisional_choch_weak
         self._choch_origin_leg_extreme = choch_origin_leg_extreme
         self._choch_fizzle_reclaim_candles = choch_fizzle_reclaim_candles
         self._choch_failed_fallback_suppress_candles = choch_failed_fallback_suppress_candles
@@ -661,6 +728,7 @@ class InternalStructureDetector(MarketStructureDetector):
         if (
             self._bos_leg_origin_release_gap_atr is not None
             or self._bos_leg_origin_min_pullback_atr is not None
+            or self._stale_reanchor_displacement_atr is not None
         ) and len(candles) > 1:
             mean_tr_pct = fmean(
                 max(
@@ -1090,24 +1158,77 @@ class InternalStructureDetector(MarketStructureDetector):
             # side of price), so this tracks the recent extreme as the range
             # unfolds; a confirming CHoCH/BOS resets the counter. Independent of
             # `reanchor_mode`.
-            if (
-                self._stale_reanchor_candles is not None
-                and trend is not MarketDirection.NEUTRAL
-                and last_advance_index >= 0
-                and current_index - last_advance_index >= self._stale_reanchor_candles
-            ):
-                window_start = max(0, current_index - self._stale_reanchor_candles + 1)
-                window = candles[window_start : current_index + 1]
-                if trend is MarketDirection.BEARISH:
-                    local = max(window, key=lambda c: c.high)
-                    reanchor_opposite(
-                        local.high, local.timestamp, current_price=candles[current_index].close
+            if trend is not MarketDirection.NEUTRAL and last_advance_index >= 0:
+                # Displacement release (`stale_reanchor_displacement_atr`): the
+                # candle timer above is blind to how far the leg stretched, so a
+                # violent move keeps its reversal reference pinned at the
+                # pre-move origin for the full staleness window -- and the
+                # strongest bounce of the cycle is consumed as a sweep against a
+                # level many ATRs overhead. When the gap between the effective
+                # reversal reference and the leg's running extreme reaches
+                # N x mean true-range%, the cycle is spent: the threshold
+                # shrinks to `stale_reanchor_displacement_candles` and the
+                # re-anchor window starts at the last advance (the post-move
+                # range), so the reference lands on the new range's first
+                # pullback extreme instead of a slice of the old move.
+                stale_after = self._stale_reanchor_candles
+                displaced = False
+                if (
+                    self._stale_reanchor_displacement_atr is not None
+                    and self._stale_reanchor_displacement_candles is not None
+                    and mean_tr_pct is not None
+                    and mean_tr_pct > 0
+                ):
+                    if trend is MarketDirection.BEARISH:
+                        disp_ref = validated_choch_high or choch_origin_high or active_high
+                        gap_pct = (
+                            (disp_ref.price - bear_leg_low) / bear_leg_low
+                            if disp_ref is not None
+                            and bear_leg_low is not None
+                            and bear_leg_low > 0
+                            else None
+                        )
+                    else:
+                        disp_ref = validated_choch_low or choch_origin_low or active_low
+                        gap_pct = (
+                            (bull_leg_high - disp_ref.price) / bull_leg_high
+                            if disp_ref is not None
+                            and bull_leg_high is not None
+                            and bull_leg_high > 0
+                            else None
+                        )
+                    if (
+                        gap_pct is not None
+                        and gap_pct >= self._stale_reanchor_displacement_atr * mean_tr_pct
+                    ):
+                        displaced = True
+                        stale_after = (
+                            self._stale_reanchor_displacement_candles
+                            if stale_after is None
+                            else min(stale_after, self._stale_reanchor_displacement_candles)
+                        )
+                if stale_after is not None and current_index - last_advance_index >= stale_after:
+                    window_start = (
+                        last_advance_index + 1
+                        if displaced
+                        else max(0, current_index - stale_after + 1)
                     )
-                else:
-                    local = min(window, key=lambda c: c.low)
-                    reanchor_opposite(
-                        local.low, local.timestamp, current_price=candles[current_index].close
-                    )
+                    window = candles[window_start : current_index + 1]
+                    if window:
+                        if trend is MarketDirection.BEARISH:
+                            local = max(window, key=lambda c: c.high)
+                            reanchor_opposite(
+                                local.high,
+                                local.timestamp,
+                                current_price=candles[current_index].close,
+                            )
+                        else:
+                            local = min(window, key=lambda c: c.low)
+                            reanchor_opposite(
+                                local.low,
+                                local.timestamp,
+                                current_price=candles[current_index].close,
+                            )
 
             if kind == "high":
                 # Record a counter-trend staircase break while a bearish CHoCH
@@ -2686,8 +2807,20 @@ class InternalStructureDetector(MarketStructureDetector):
                 if bearish_choch
                 else validated_choch_high_structural
             )
+            # A weak (re-anchored) reference qualifies only under
+            # `emit_provisional_choch_weak` -- after any re-anchor the standing
+            # reference is weak, so without this the released/reset cycles this
+            # feature targets never show their forming reversal. A weak
+            # reference must sustain the weak-ref barrier persistence (when
+            # set), the same bar the confirmed CHoCH would demand.
             need = self._persistence_candles
-            if ref is not None and ref.price > 0 and ref_structural:
+            if not ref_structural and self._choch_weak_ref_persistence_candles is not None:
+                need = self._choch_weak_ref_persistence_candles
+            if (
+                ref is not None
+                and ref.price > 0
+                and (ref_structural or self._emit_provisional_choch_weak)
+            ):
                 # Only candles after the reference pivot *formed* can break it: a
                 # freshly-promoted leg origin whose pivot sits inside the tail
                 # would otherwise be "broken" by older closes that predate the
@@ -2725,7 +2858,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         price_level=extreme,
                         reference_price_level=ref.price,
                         reference_timestamp=ref.timestamp,
-                        reference_structural=True,
+                        reference_structural=ref_structural,
                         scope=StructureScope.INTERNAL,
                         provisional=True,
                     )
@@ -2747,9 +2880,12 @@ class InternalStructureDetector(MarketStructureDetector):
         # Same-direction and firing after the CHoCH, it pairs with the standing
         # CHoCH in the frontend's `failedChochTime`, terminating its line at the
         # reclaim. A reclaim *after* the window is genuine follow-through, left
-        # alone (only the leg-origin exit governs it). At most one CHoCH is
-        # standing (an armed origin fixes the trend), so the two sides are
-        # exclusive.
+        # alone (only the leg-origin exit governs it). A reclaim later recovered
+        # from -- a chart-surviving same-direction BOS printing after it -- is a
+        # deep pullback, not a fizzle; that cancel lives at composition level
+        # (`_drop_resumed_fizzle_markers`), since only composition knows which
+        # BOS survive the close-break re-anchor. At most one CHoCH is standing
+        # (an armed origin fixes the trend), so the two sides are exclusive.
         fizzle_event: MarketStructure | None = None
         if self._choch_fizzle_reclaim_candles is not None:
             need = self._persistence_candles

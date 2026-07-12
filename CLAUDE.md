@@ -128,7 +128,9 @@ and `validate_assignment=True`. New entities should follow this pattern.
   `emit_provisional_bos`) is a continuation whose staircase floor already
   *closed*-broke; a provisional **CHoCH** (`CHANGE_OF_CHARACTER`, under
   `emit_provisional_choch`) is a reversal whose *structural* CHoCH reference has
-  been sustained-*closed*-broken. Either appears only in the last few candles of a
+  been sustained-*closed*-broken (under `emit_provisional_choch_weak`, a *weak*
+  reference also qualifies, at the weak-ref barrier persistence — rendered
+  `CHoCH?* ▲`). Either appears only in the last few candles of a
   leg — superseded by the confirmed event once the pivots form, or it vanishes if
   the move fails first (an intentional live-edge repaint) — and the frontend
   renders it dimmed/dotted with a `?` suffix (`BOS? ▼` / `CHoCH? ▼`), like a weak
@@ -851,6 +853,10 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   CHoCH-seeded level, formed before the flip); BOS without a resolved
   `reference_timestamp` are kept. Same-timestamp BOS are judged
   earlier-formed-reference first (the earlier structural break).
+  A third pass, **`_drop_resumed_fizzle_markers`** (internal stream only, after
+  the BOS passes), drops a fast-fizzle `CHOCH_FAILED` marker followed by a
+  chart-surviving same-direction BOS — the reclaim was a deep pullback the
+  reversal recovered from, not a fizzle (see the fizzle-marker status block).
   `confluence_filter` is exposed for tests that exercise state-machine logic
   without needing emission-quality filters. `higher_timeframe_direction` (as of
   2026-07-06) is the **state-machine trend** (`final_trend`) of the **internal**
@@ -1848,7 +1854,9 @@ candle that started the sustained close-break (`reference_price_level` = the
 structural reference, `reference_timestamp` = its pivot, `price_level` = the live
 leg extreme), computed from authoritative final state — never re-derived outside
 the detector. Gates: **only a structural reference** qualifies (mirror of the BOS
-`floor_from_bos` gate — a weak re-anchor/fallback level would repaint as chop),
+`floor_from_bos` gate — a weak re-anchor/fallback level would repaint as chop;
+since 2026-07-11 `emit_provisional_choch_weak` relaxes this, at the weak-ref
+barrier persistence — see "Provisional CHoCH against weak references" below),
 and a poke that closes beyond for *fewer* than `persistence_candles` and reclaims
 is (correctly) just a sweep and emits nothing. A live-edge reversal **supersedes**
 a same-tail provisional BOS (`prov_event = None` — the two references are on
@@ -1911,6 +1919,30 @@ self-contained window; off → no CHOCH_FAILED, on → one bearish marker @ 80.7
 it unmarked). Off = byte-for-byte identical. Not mirrored into
 `SwingStructureDetector` (not drawn).
 
+*Resumed-fizzle cancel (composition level, as of 2026-07-11)*:
+`_drop_resumed_fizzle_markers` in `dashboard_data` (after the two BOS passes)
+drops a fizzle marker followed by a **chart-surviving** same-direction BOS: the
+reclaim was a deep pullback the reversal recovered from, not a fizzle, and the
+marker would falsely invalidate a standing CHoCH (the ETHUSDT H1 case: the
+06-29 bullish CHoCH's 1583 reference was reclaimed for a day — the marker fired
+— then the reversal printed a bullish BOS staircase to 1833, and on the chart
+the false ✕ let the 06-19 bearish CHoCH line run to the edge via the
+failed-CHoCH transparency rule). The cancel lives at composition, not in the
+detector, because only composition knows which BOS survive
+`_reanchor_bos_close_break` — the SOL M15 motivating fizzle also has a
+same-direction BOS after its reclaim at detector level, but it is wick-only and
+dropped from the chart, so the line there is genuinely stale and its marker
+stands. Measured (BTC/ETH/SOL/AAVE/NEAR × 15m..1d): drops exactly 3 markers,
+all the false pattern (ETH 15m/30m/1h — the same June-bottom reversal); the
+genuine ones (BTC 1d, SOL 15m) are untouched. Real-data regression fixture:
+`tests/liquidity/detectors/data/ethusdt_1h_2026_05_10_07_11.json` (1500-candle
+production H1 slice; the raw detector emits the fizzle, `_run_internal_structure`
+drops it). The frontend companion: a fizzle (provisional `choch_failed`) is
+excluded from `isFailedChoch` (the line-termination *transparency* rule) — the
+state-machine trend never flipped back, so a fizzle-marked CHoCH still cuts the
+prior opposite CHoCH/BOS lines; only its *own* line stops at the reclaim
+(`failedChochTime` keeps counting fizzles for that, via `includeFizzle`).
+
 **Failed-CHoCH whipsaw fixes** (`InternalStructureDetector`, as of 2026-07-11,
 two companion flags): the BTC H1 18–25/06 crash printed a single bearish BOS
 (62232) and then only sweeps because two weak bullish CHoCHs flipped the trend
@@ -1948,6 +1980,74 @@ fires 07-02 09:00 (ref 60758) instead of 07-01 13:00 (ref 59444 fallback),
 `tests/liquidity/detectors/data/btcusdt_1h_2026_05_18_07_04.json` (1136-candle
 production H1 slice). Off = byte-for-byte identical. Not mirrored into
 `SwingStructureDetector` (not drawn).
+
+**Displacement release for spent cycles** (`InternalStructureDetector`, as of
+2026-07-11): `stale_reanchor_displacement_atr` /
+`stale_reanchor_displacement_candles` (constructor defaults `None` = off, must
+be set together; wired **16.0 / 15** in `load_dashboard_data` via
+`_STALE_REANCHOR_DISPLACEMENT_ATR`/`_CANDLES`). The staleness re-anchor's
+candle timer is blind to how far a leg *stretched*: after a violent move the
+reversal reference stays pinned at the pre-move leg origin for the full
+`stale_reanchor_candles` window (H4 = 60 candles = 10 days), so the strongest
+bounce of the whole cycle is consumed as a `LIQUIDITY_SWEEP` against a level
+many ATRs overhead — the ETHUSDT H4 case: the 06-05 crash BOS (1503, breaking
+1712) promoted its pre-crash leg origin **2046** (structural) as the bullish
+CHoCH reference; the +23% bounce to 1848 nine days later printed as a sweep,
+and the chart sat on the mid-crash BOS for **35+ days**. When the gap between
+the effective reversal reference (`validated or origin or active`) and the
+leg's running extreme (`bear_leg_low`/`bull_leg_high`) reaches N × the series'
+mean true-range% (same volatility normalization as the release gap — per-TF
+adaptivity for free), the cycle is *spent*: the staleness threshold shrinks to
+the displacement candle count and the re-anchor **window starts at the last
+advance** (the post-move range) instead of a fixed trailing window, so the
+reference lands on the new range's first pullback extreme (ETH: 1722, the
+06-07 top). Everything else is the existing staleness machinery
+(`reanchor_opposite` with all its guards). Measured (BTC/ETH/SOL/AAVE/NEAR ×
+15m/30m/1h/4h/1d, `limit=1200`): **N=16 changes exactly 6/25 combos, all the
+motivating pattern** — ETH 4h resolves into CHoCH↑ 06-15 (ref 1722, weak) →
+CHoCH↓ 06-23 → BOS↓ 06-24 (1510) → CHoCH↑ 07-02 (ref 1692, structural), trend
+ends bullish; BTC 4h gains the honest 06-14 CHoCH↑ + 06-27 `CHOCH_FAILED` pair
+around the June crash; AAVE 4h gains the entirely-missing Feb→Mar −30% bearish
+cycle (CHoCH↓ 03-07 + BOS staircase 104→92); NEAR 1h / SOL 4h flip the June
+bottom ~6–17 days earlier with a confirming BOS staircase. N=8 fires on
+routine legs (25/25 combos — a leg's ref-to-extreme gap *is* its height); N=14
+starts reshaping BTC 30m/1d; N=18 loses AAVE 4h / NEAR 1h; N=20 loses the ETH
+4h target itself (~19 ATR). M is a wide plateau (10/15/20/25 byte-identical on
+the whole matrix). A companion **weak-ref sweep ratchet** (a sweep beyond a
+weak validated ref moves it to the swept extreme) was prototyped alongside and
+**rejected by measurement**: on a grinding decline each lower sweep ratcheted
+the reference down just ahead of the confirming closes, so the reversal CHoCH
+could never fire (it erased the genuine ETH H4 March 2385→1936 bearish cycle);
+the candidate pipeline's sweep re-anchor requires trend *resumption* before a
+swept level goes live, and skipping that gate is what broke. Real-data
+regression fixture:
+`tests/liquidity/detectors/data/ethusdt_4h_2025_11_21_2026_07_11.json`
+(1395-candle production H4 slice). Off = byte-for-byte identical. Not mirrored
+into `SwingStructureDetector` (not drawn).
+
+**Provisional CHoCH against weak references** (`InternalStructureDetector`, as
+of 2026-07-11): `emit_provisional_choch_weak` (constructor default `False`,
+requires `emit_provisional_choch`; wired **`True`** in `load_dashboard_data`).
+The provisional live-edge CHoCH originally required a *structural* reference —
+but after any re-anchor the standing reference is weak, so exactly in the
+released/reset cycles the displacement release creates, the forming reversal
+was invisible (the ETH H4 case: price closed above the weak reference with
+nothing on screen). When set, a weak reference also qualifies, sustaining the
+weak-ref barrier persistence (`choch_weak_ref_persistence_candles`) where
+wired instead of the base; the emitted mark carries
+`reference_structural=False`, so the frontend renders it dimmed with a `?*`
+suffix (forming *and* weak — `?` leads, since a full repaint is the stronger
+caveat). On coarse timeframes it is near-inert (the pivot lag ~5 is shorter
+than the base persistence 12, so the confirmed CHoCH arrives with the
+provisional); the lead materializes intraday where the weak barrier (4) is
+shorter than the pivot lag. Measured (walk-forward over the last 400 candles,
+BTC/ETH/SOL/AAVE/NEAR × 15m/30m/1h): 10 weak provisional marks, **10/10
+followed by a confirmed same-direction CHoCH** (among them the BTC 1h 07-02
+recovery CHoCH from the whipsaw-fix cost, now visible at the live edge).
+Real-data regression fixture:
+`tests/liquidity/detectors/data/solusdt_15m_2026_06_26_07_11.json`
+(1474-candle window ending at the live edge; off → no provisional CHoCH, on →
+one bullish `CHoCH?*` @ 78.34). Off = byte-for-byte identical.
 
 **CHoCH origin = deepest leg extreme** (`InternalStructureDetector`, as of
 2026-07-05): `choch_origin_leg_extreme` (constructor default `False`; wired
@@ -2028,7 +2128,14 @@ origin); a confirming BOS discards the stash.
 intervenes — paired via `isFailedChoch`) is transparent to line termination:
 the prior BOS/CHoCH line it appeared to cut keeps running through it until a
 *genuine* opposite-direction CHoCH (or the chart edge), matching the resumed
-structure.
+structure. A **fizzle marker** (a *provisional* `choch_failed`) does **not**
+grant this transparency (as of 2026-07-11, `isFailedChoch` passes
+`includeFizzle: false` to `failedChochTime`): the state-machine trend never
+flipped back, so the fizzle-marked CHoCH still genuinely reversed structure and
+keeps cutting the prior opposite lines — only its *own* line stops at the
+reclaim (own-line termination keeps counting fizzles). Before this, a fizzle
+let the prior opposite CHoCH line run to the chart edge (the ETH H1 stretched
+bearish CHoCH).
 
 **CHoCH confirmation** (`SwingStructureDetector`): uses the older
 candidate/baseline model. A candidate LH/HL is promoted to validated when a

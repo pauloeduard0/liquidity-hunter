@@ -4,7 +4,10 @@ from datetime import UTC, datetime
 
 from liquidity_hunter.app.dashboard_data import (
     _STRUCTURAL_ANCHOR_REGION,
+    _build_internal_detector,
     _drop_pre_break_reference_bos,
+    _drop_resumed_fizzle_markers,
+    _run_internal_structure,
     _structural_anchor_index,
     load_dashboard_data,
 )
@@ -503,6 +506,7 @@ def _structure_event(
     direction: MarketDirection,
     *,
     reference_minute: int | None = None,
+    provisional: bool = False,
 ) -> MarketStructure:
     return MarketStructure(
         symbol="BTCUSDT",
@@ -518,6 +522,7 @@ def _structure_event(
             else None
         ),
         scope=StructureScope.INTERNAL,
+        provisional=provisional,
     )
 
 
@@ -604,3 +609,133 @@ def test_drop_pre_break_reference_bos_same_timestamp_judges_earlier_reference_fi
     )
 
     assert _drop_pre_break_reference_bos([staged, first_of_leg]) == [first_of_leg]
+
+
+def test_drop_resumed_fizzle_markers_drops_marker_before_same_direction_bos() -> None:
+    # A fizzle marker (provisional CHOCH_FAILED) followed by a surviving
+    # same-direction BOS: the reclaim was a deep pullback the reversal
+    # recovered from, so the marker is a false invalidation and is dropped.
+    choch = _structure_event(10, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH)
+    fizzle = _structure_event(
+        20, StructureEvent.CHOCH_FAILED, MarketDirection.BULLISH, provisional=True
+    )
+    bos = _structure_event(30, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH)
+
+    assert _drop_resumed_fizzle_markers([choch, fizzle, bos]) == [choch, bos]
+
+
+def test_drop_resumed_fizzle_markers_keeps_marker_with_no_later_bos() -> None:
+    # No same-direction BOS after the reclaim: the reversal genuinely fizzled
+    # (price ranges beyond the reclaimed level), the marker stands.
+    choch = _structure_event(10, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH)
+    fizzle = _structure_event(
+        20, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH, provisional=True
+    )
+
+    assert _drop_resumed_fizzle_markers([choch, fizzle]) == [choch, fizzle]
+
+
+def test_drop_resumed_fizzle_markers_ignores_opposite_direction_bos() -> None:
+    # An opposite-direction BOS is not the marked reversal resuming.
+    fizzle = _structure_event(
+        20, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH, provisional=True
+    )
+    bos = _structure_event(30, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH)
+
+    assert _drop_resumed_fizzle_markers([fizzle, bos]) == [fizzle, bos]
+
+
+def test_drop_resumed_fizzle_markers_ignores_earlier_and_provisional_bos() -> None:
+    # A BOS before the reclaim does not prove recovery, and a provisional
+    # (live-edge) BOS may still vanish -- neither cancels the marker.
+    early_bos = _structure_event(10, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH)
+    fizzle = _structure_event(
+        20, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH, provisional=True
+    )
+    prov_bos = _structure_event(
+        30, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, provisional=True
+    )
+
+    events = [early_bos, fizzle, prov_bos]
+    assert _drop_resumed_fizzle_markers(events) == events
+
+
+def test_drop_resumed_fizzle_markers_keeps_genuine_choch_failed() -> None:
+    # A non-provisional CHOCH_FAILED is a real state-machine failure (the trend
+    # flipped back); the resumed trend's BOS after it is expected, not a cancel.
+    failed = _structure_event(20, StructureEvent.CHOCH_FAILED, MarketDirection.BULLISH)
+    bos = _structure_event(30, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH)
+
+    assert _drop_resumed_fizzle_markers([failed, bos]) == [failed, bos]
+
+
+def _load_eth_1h_fizzle_candles() -> list[Candle]:
+    """ETHUSDT 1h 2026-05-10..07-11, the full 1500-candle production slice.
+
+    Real-data regression for the resumed-fizzle drop: the 2026-06-29 16:00
+    bullish CHoCH (ref 1583) was reclaim-marked by the detector's fizzle on
+    06-30 11:00, but the reversal then resumed with a bullish BOS staircase
+    (07-01 onward, 1630 -> 1833) -- the marker is a false invalidation, and
+    on the chart it also let the 06-19 bearish CHoCH line run to the edge
+    (the failed-CHoCH transparency rule). 5-column rows: ts/open/high/low/
+    close (volume is irrelevant to structure detection).
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "ethusdt_1h_2026_05_10_07_11.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="ETHUSDT",
+            timeframe=TimeFrame.H1,
+            timestamp=datetime.fromisoformat(row[0]),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+class _FuturesLimitFakeProvider(_PerTimeframeFakeProvider):
+    """The production candle source's 1500-candle per-request window."""
+
+    max_fetch_limit = 1500
+
+
+def test_run_internal_structure_drops_eth_1h_resumed_fizzle() -> None:
+    candles = _load_eth_1h_fizzle_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.H1: candles})
+
+    run = _run_internal_structure(provider, "ETHUSDT", TimeFrame.H1, 1200, False)
+
+    # The raw detector run emits the fizzle marker (the reclaim of 1583 is
+    # real) -- the composition pass is what must cancel it, because the
+    # cancelling BOS staircase survives the close-break re-anchor.
+    raw = _build_internal_detector(TimeFrame.H1, confluence_filter=False).detect(
+        run.internal_candles
+    )
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED and e.provisional for e in raw
+    )
+    assert not any(
+        e.event is StructureEvent.CHOCH_FAILED and e.provisional for e in run.events
+    )
+    # The standing bullish CHoCH itself is untouched.
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 6, 29, 16, tzinfo=UTC)
+        for e in run.events
+    )

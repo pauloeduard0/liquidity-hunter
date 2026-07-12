@@ -3047,3 +3047,253 @@ def test_choch_failed_fallback_suppress_candles_must_be_positive() -> None:
         ValueError, match="choch_failed_fallback_suppress_candles must be at least 1"
     ):
         InternalStructureDetector(choch_failed_fallback_suppress_candles=0)
+
+
+# The ETH H4 stuck-cycle case: the 2026-06-05 crash BOS (px 1503.60, breaking
+# 1712.52) promoted its pre-crash leg origin 2046 as the structural bullish-CHoCH
+# reference, and the candle-count staleness re-anchor (60 candles = 10 days on
+# H4) is blind to how far the leg stretched -- so the +23% bounce to 1848.78 nine
+# days later (the strongest reversal evidence of the whole cycle) printed as a
+# mere LIQUIDITY_SWEEP against a reference ~20% overhead, and the chart sat on
+# the mid-crash BOS for over a month. The displacement release shrinks the
+# staleness threshold once the reference-to-leg-extreme gap reaches N x mean
+# true-range%, re-anchoring from the post-advance window so the reference lands
+# on the post-move range's first pullback (1721.57, the 06-07 top).
+_ETH_4H_RELEASE_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "ethusdt_4h_2025_11_21_2026_07_11.json"
+)
+
+
+def _load_eth_4h_release_candles() -> list[Candle]:
+    rows = json.loads(_ETH_4H_RELEASE_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="ETHUSDT",
+            timeframe=TimeFrame.H4,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _eth_4h_release_detector(
+    *,
+    displacement: bool,
+    emit_provisional_choch_weak: bool = False,
+) -> InternalStructureDetector:
+    # The full production H4 wiring (the release-gap/min-pullback ATR guards and
+    # the displacement release itself use the series-wide mean true range, so
+    # only the production flag set reproduces production state); the
+    # displacement release is the toggle under test.
+    return InternalStructureDetector(
+        swing_lookback=5,
+        persistence_candles=12,
+        confluence_filter=False,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=60,
+        stale_reanchor_displacement_atr=16.0 if displacement else None,
+        stale_reanchor_displacement_candles=15 if displacement else None,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_pct=0.04,
+        bos_leg_origin_release_gap_atr=3.0,
+        bos_leg_origin_require_close_break=True,
+        bos_floor_require_close_break=True,
+        emit_provisional_bos=True,
+        emit_provisional_choch=True,
+        emit_provisional_choch_weak=emit_provisional_choch_weak,
+        choch_origin_leg_extreme=True,
+        choch_fizzle_reclaim_candles=30,
+        choch_failed_fallback_suppress_candles=20,
+        stage_choch_failed_window_bos=True,
+    )
+
+
+def test_displacement_release_off_keeps_the_stuck_cycle() -> None:
+    """Off, the post-crash month prints no CHoCH at all: the bounce to 1848.78 is
+    a sweep against the pre-crash 2046 reference, and the trend stays bearish to
+    the end of the window (the stuck-cycle pathology, unchanged)."""
+    detector = _eth_4h_release_detector(displacement=False)
+    events = detector.detect(_load_eth_4h_release_candles())
+
+    post_crash_chochs = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and not e.provisional
+        and e.timestamp > datetime(2026, 6, 5, 4, tzinfo=UTC)
+    ]
+    assert post_crash_chochs == []
+    assert detector.final_trend is MarketDirection.BEARISH
+    # The bounce prints as a sweep, not a reversal.
+    assert any(
+        e.event is StructureEvent.LIQUIDITY_SWEEP
+        and e.direction is MarketDirection.BULLISH
+        and e.price_level == 1848.78
+        for e in events
+    )
+
+
+def test_displacement_release_resets_the_spent_cycle() -> None:
+    """On, the post-crash range prints its full cycle: a bullish CHoCH at the
+    06-07 first-pullback reference 1721.57 (weak -- a released re-anchor level),
+    a bearish CHoCH back down on 06-23, and the July recovery's bullish CHoCH
+    against the structural 1692 leg origin; the trend ends bullish."""
+    detector = _eth_4h_release_detector(displacement=True)
+    events = detector.detect(_load_eth_4h_release_candles())
+
+    chochs = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and not e.provisional
+        and e.timestamp > datetime(2026, 6, 5, 4, tzinfo=UTC)
+    ]
+    assert [
+        (e.timestamp, e.direction, e.reference_price_level, e.reference_structural)
+        for e in chochs
+    ] == [
+        (datetime(2026, 6, 15, 8, tzinfo=UTC), MarketDirection.BULLISH, 1721.57, False),
+        (datetime(2026, 6, 23, 4, tzinfo=UTC), MarketDirection.BEARISH, 1700.37, True),
+        (datetime(2026, 7, 2, 12, tzinfo=UTC), MarketDirection.BULLISH, 1692.0, True),
+    ]
+    assert detector.final_trend is MarketDirection.BULLISH
+
+
+def test_displacement_release_params_must_be_set_together() -> None:
+    with pytest.raises(ValueError, match="must be set together"):
+        InternalStructureDetector(stale_reanchor_displacement_atr=16.0)
+    with pytest.raises(ValueError, match="must be set together"):
+        InternalStructureDetector(stale_reanchor_displacement_candles=15)
+
+
+def test_displacement_release_params_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="stale_reanchor_displacement_atr must be positive"):
+        InternalStructureDetector(
+            stale_reanchor_displacement_atr=0.0, stale_reanchor_displacement_candles=15
+        )
+    with pytest.raises(
+        ValueError, match="stale_reanchor_displacement_candles must be at least 1"
+    ):
+        InternalStructureDetector(
+            stale_reanchor_displacement_atr=16.0, stale_reanchor_displacement_candles=0
+        )
+
+
+def test_provisional_choch_weak_requires_provisional_choch() -> None:
+    with pytest.raises(
+        ValueError, match="emit_provisional_choch_weak requires emit_provisional_choch"
+    ):
+        InternalStructureDetector(emit_provisional_choch_weak=True)
+
+
+# The SOL M15 live-edge weak-reference reversal: at 2026-07-11 ~15:30 the
+# standing bullish-CHoCH reference is a *weak* (re-anchored) 78.34, price has
+# sustained the weak-barrier persistence (4 closes) above it, but the confirming
+# swing-high pivot has not formed yet (the swing-lookback lag). The structural-only
+# provisional CHoCH stays silent here; `emit_provisional_choch_weak` surfaces the
+# forming reversal, styled weak (`reference_structural=False`).
+_SOL_15M_PROV_WEAK_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "solusdt_15m_2026_06_26_07_11.json"
+)
+
+
+def _load_sol_15m_prov_weak_candles() -> list[Candle]:
+    rows = json.loads(_SOL_15M_PROV_WEAK_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="SOLUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _sol_15m_prov_weak_detector(
+    *, emit_provisional_choch_weak: bool
+) -> InternalStructureDetector:
+    # The production M15 wiring (persistence 12, weak-ref barrier 4, shallow
+    # pullback promotion) plus the displacement release; the weak-provisional
+    # emission is the toggle under test.
+    return InternalStructureDetector(
+        swing_lookback=5,
+        persistence_candles=12,
+        confluence_filter=False,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=90,
+        stale_reanchor_displacement_atr=16.0,
+        stale_reanchor_displacement_candles=15,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_pct=0.04,
+        bos_leg_origin_release_gap_atr=3.0,
+        bos_leg_origin_min_pullback_atr=1.5,
+        bos_leg_origin_require_close_break=True,
+        bos_floor_require_close_break=True,
+        choch_weak_ref_persistence_candles=4,
+        emit_provisional_bos=True,
+        emit_provisional_choch=True,
+        emit_provisional_choch_weak=emit_provisional_choch_weak,
+        choch_origin_leg_extreme=True,
+        choch_fizzle_reclaim_candles=30,
+        choch_failed_fallback_suppress_candles=20,
+        stage_choch_failed_window_bos=True,
+    )
+
+
+def test_provisional_choch_weak_off_stays_silent_on_weak_references() -> None:
+    """Off, the structural-only gate holds: no provisional CHoCH at the live
+    edge, because the standing reference is a weak re-anchor level."""
+    events = _sol_15m_prov_weak_detector(emit_provisional_choch_weak=False).detect(
+        _load_sol_15m_prov_weak_candles()
+    )
+    assert not any(
+        e.provisional and e.event is StructureEvent.CHANGE_OF_CHARACTER for e in events
+    )
+
+
+def test_provisional_choch_weak_marks_forming_reversal_on_weak_reference() -> None:
+    """On, a single weak provisional CHoCH is appended at the live edge (the
+    sustained weak-barrier close-break above 78.34 whose pivot has not formed),
+    carrying `reference_structural=False`; every non-provisional event is
+    byte-for-byte identical to the flag-off run."""
+    candles = _load_sol_15m_prov_weak_candles()
+    off = _sol_15m_prov_weak_detector(emit_provisional_choch_weak=False).detect(candles)
+    on = _sol_15m_prov_weak_detector(emit_provisional_choch_weak=True).detect(candles)
+
+    prov = [
+        e for e in on if e.provisional and e.event is StructureEvent.CHANGE_OF_CHARACTER
+    ]
+    assert len(prov) == 1
+    assert prov[0].direction is MarketDirection.BULLISH
+    assert prov[0].reference_price_level == 78.34
+    assert prov[0].reference_structural is False
+    assert prov[0].timestamp == datetime(2026, 7, 11, 14, 15, tzinfo=UTC)
+
+    non_provisional = [e for e in on if not e.provisional]
+    assert [(e.timestamp, e.event, e.price_level) for e in non_provisional] == [
+        (e.timestamp, e.event, e.price_level) for e in off if not e.provisional
+    ]
