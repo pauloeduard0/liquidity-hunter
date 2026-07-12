@@ -616,6 +616,7 @@ class InternalStructureDetector(MarketStructureDetector):
         emit_provisional_choch: bool = False,
         emit_provisional_choch_weak: bool = False,
         choch_origin_leg_extreme: bool = False,
+        choch_weak_ref_fail_at_broken_level: bool = False,
         choch_fizzle_reclaim_candles: int | None = None,
         choch_failed_fallback_suppress_candles: int | None = None,
         stage_choch_failed_window_bos: bool = False,
@@ -693,6 +694,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._emit_provisional_choch = emit_provisional_choch
         self._emit_provisional_choch_weak = emit_provisional_choch_weak
         self._choch_origin_leg_extreme = choch_origin_leg_extreme
+        self._choch_weak_ref_fail_at_broken_level = choch_weak_ref_fail_at_broken_level
         self._choch_fizzle_reclaim_candles = choch_fizzle_reclaim_candles
         self._choch_failed_fallback_suppress_candles = choch_failed_fallback_suppress_candles
         self._stage_choch_failed_window_bos = stage_choch_failed_window_bos
@@ -856,6 +858,20 @@ class InternalStructureDetector(MarketStructureDetector):
         # ping-pong.
         bull_choch_origin: Pivot | None = None
         bear_choch_origin: Pivot | None = None
+        # Under `choch_weak_ref_fail_at_broken_level`: the *broken reference*
+        # of an unconfirmed CHoCH that fired against a weak level (re-anchor /
+        # cold-start fallback). A weak reference is synthetic -- the reversal's
+        # only evidence is the break of that level, so a sustained close back
+        # through it kills the thesis without waiting for the far leg origin
+        # (the BTC D1 case: a weak bullish CHoCH at 75998 collapsed within
+        # days, but the 59800 origin was never sustained-broken, so the trend
+        # sat bullish through a -30% crash and every new low printed as a
+        # sweep). Armed only when the CHoCH's reference was weak; lifecycle is
+        # 1:1 with the matching `*_choch_origin` (retired on the confirming
+        # BOS or any trend flip). The failure check triggers on the *tighter*
+        # of origin and this level; structural CHoCHs are untouched.
+        bull_choch_fail_ref: Pivot | None = None
+        bear_choch_fail_ref: Pivot | None = None
         # Post-failure fallback suppression
         # (`choch_failed_fallback_suppress_candles`): the pivot-loop index at
         # which the most recent *real* CHOCH_FAILED of each direction was
@@ -1336,6 +1352,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             # that may never emit, so the CHoCH could still fail):
                             # retire its origin and drop the stashed bullish ceiling.
                             bear_choch_origin = None
+                            bear_choch_fail_ref = None
                             pre_choch_bull_bos_high = None
                             pre_choch_bull_bos_extreme = None
                             pending_bos = None
@@ -1482,26 +1499,39 @@ class InternalStructureDetector(MarketStructureDetector):
                     and self._choch_weak_ref_persistence_candles is not None
                     else self._persistence_candles
                 )
+                # A weak-referenced CHoCH's own broken level (below the far
+                # origin, so reclaimed first) is the tighter -- and thus
+                # governing -- invalidation reference; structural CHoCHs keep
+                # the origin. See `choch_weak_ref_fail_at_broken_level`.
+                bear_fail_pivot = (
+                    bear_choch_fail_ref
+                    if bear_choch_origin is not None
+                    and bear_choch_fail_ref is not None
+                    and bear_choch_fail_ref.price < bear_choch_origin.price
+                    else bear_choch_origin
+                )
                 if (
                     trend is MarketDirection.BEARISH
-                    and bear_choch_origin is not None
-                    and price > bear_choch_origin.price
+                    and bear_fail_pivot is not None
+                    and price > bear_fail_pivot.price
                     and confirms_break(
                         prev_high_pivot_index + 1,
                         current_index,
-                        bear_choch_origin.price,
+                        bear_fail_pivot.price,
                         bullish=True,
                     )
                 ):
                     # Failed bearish CHoCH: price broke back above the origin the
-                    # CHoCH drop launched from, before any confirming BOS. The
-                    # reversal is invalidated; structure flips back to bullish.
+                    # CHoCH drop launched from (or, for a weak-referenced CHoCH,
+                    # reclaimed the broken level itself), before any confirming
+                    # BOS. The reversal is invalidated; structure flips back to
+                    # bullish.
                     break_candle = candles[
                         find_sustained_break_index(
                             candles,
                             prev_high_pivot_index + 1,
                             current_index,
-                            bear_choch_origin.price,
+                            bear_fail_pivot.price,
                             bullish=True,
                             persistence_candles=self._persistence_candles,
                         )
@@ -1511,8 +1541,8 @@ class InternalStructureDetector(MarketStructureDetector):
                         StructureEvent.CHOCH_FAILED,
                         MarketDirection.BEARISH,
                         price,
-                        bear_choch_origin.price,
-                        reference_timestamp=bear_choch_origin.timestamp,
+                        bear_fail_pivot.price,
+                        reference_timestamp=bear_fail_pivot.timestamp,
                     )
                     trend = MarketDirection.BULLISH
                     # Post-failure fallback suppression window starts here (a
@@ -1529,13 +1559,26 @@ class InternalStructureDetector(MarketStructureDetector):
                     # Bullish trend resumes: cap the staircase at its genuine
                     # last BOS high (preserved across the provisional CHoCH), not
                     # the lower CHoCH origin -- a non-extending BOS must not
-                    # print below the previous bullish BOS.
+                    # print below the previous bullish BOS. Exception: a failure
+                    # triggered at a *weak* CHoCH's own broken level (not the
+                    # origin) re-seeds the staircase at that level instead, like
+                    # a CHoCH seeds its new cycle -- the weak reference existed
+                    # precisely because the old cycle was spent (re-anchored), so
+                    # restoring its ancient ceiling would leave the resumed
+                    # trend's whole next leg unable to print a BOS until it
+                    # beats a level from a long-dead cycle (measured: AAVE 4h
+                    # lost its entire Feb-Mar -30% staircase, NEAR 1h its June
+                    # one, under the plain restore). The failure itself
+                    # close-confirmed breaking this level, so it is a genuine
+                    # close-confirmed floor.
                     bull_leg_high = price
-                    last_bull_bos_high = (
-                        bear_choch_origin.price
-                        if pre_choch_bull_bos_high is None
-                        else max(pre_choch_bull_bos_high, bear_choch_origin.price)
-                    )
+                    weak_level_failure = bear_fail_pivot is not bear_choch_origin
+                    if weak_level_failure or pre_choch_bull_bos_high is None:
+                        last_bull_bos_high = bear_fail_pivot.price
+                    else:
+                        last_bull_bos_high = max(
+                            pre_choch_bull_bos_high, bear_fail_pivot.price
+                        )
                     # The failed flip ate the highs made during its window: the
                     # bullish trend never ended, so each recorded staircase
                     # break was a genuine continuation. Stage an additive BOS
@@ -1580,8 +1623,10 @@ class InternalStructureDetector(MarketStructureDetector):
                     last_bear_bos_low = None
                     # Restored from the resumed trend's real BOS floor (or the
                     # close-confirmed CHoCH origin), so a provisional continuation
-                    # may reference it.
-                    bull_floor_from_bos = True
+                    # may reference it. A weak-level re-seed is like a CHoCH seed
+                    # -- already closed-beyond by the failure itself, so a
+                    # provisional BOS there would just double the failure line.
+                    bull_floor_from_bos = not weak_level_failure
                     # The bullish trend resumed -> its previous BOS extreme is the
                     # restored staircase floor (a genuine level, not a CHoCH seed).
                     # Under the close-break floor rule the reported tracker is
@@ -1590,12 +1635,25 @@ class InternalStructureDetector(MarketStructureDetector):
                     # restoring from it would launder that wick into the next
                     # continuation's reported reference. The CHoCH origin joins
                     # via max(): the failure itself close-confirmed a break of it.
-                    if (
+                    if weak_level_failure:
+                        # Weak-level failure: reported floor seeds at the
+                        # reclaimed level (close-confirmed by the failure) --
+                        # or at the highest eaten extreme when the provisional
+                        # window recorded breaks (mirror of the bullish-failure
+                        # case: the staged mark already documents that formed
+                        # high, and re-reporting the failure level would double
+                        # its line).
+                        prev_bull_bos_extreme = (
+                            bear_fail_pivot.price
+                            if eaten_gate_high is None
+                            else max(bear_fail_pivot.price, eaten_gate_high)
+                        )
+                    elif (
                         self._bos_floor_require_close_break
                         and pre_choch_bull_bos_extreme is not None
                     ):
                         prev_bull_bos_extreme = max(
-                            pre_choch_bull_bos_extreme, bear_choch_origin.price
+                            pre_choch_bull_bos_extreme, bear_fail_pivot.price
                         )
                     else:
                         prev_bull_bos_extreme = last_bull_bos_high
@@ -1616,6 +1674,8 @@ class InternalStructureDetector(MarketStructureDetector):
                     choch_origin_low = None
                     bear_choch_origin = None
                     bull_choch_origin = None
+                    bear_choch_fail_ref = None
+                    bull_choch_fail_ref = None
                     # The failed CHoCH's line ended here: no standing CHoCH to
                     # fizzle-mark (the resumed trend is not a fresh CHoCH).
                     standing_choch_ref = None
@@ -1679,6 +1739,17 @@ class InternalStructureDetector(MarketStructureDetector):
                         if self._choch_origin_leg_extreme
                         else active_low
                     )
+                    # A weak-referenced CHoCH also arms its own broken level as
+                    # an invalidation reference: the synthetic level's break was
+                    # the reversal's only evidence, so a sustained close back
+                    # below it fails the CHoCH without waiting for the far
+                    # origin. See `choch_weak_ref_fail_at_broken_level`.
+                    bull_choch_fail_ref = (
+                        choch_high_ref
+                        if self._choch_weak_ref_fail_at_broken_level
+                        and choch_high_weak_ref
+                        else None
+                    )
                     # A fresh provisional window arms: discard any stale
                     # recorded breaks (see `stage_choch_failed_window_bos`).
                     bull_window_lows = []
@@ -1690,6 +1761,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     standing_choch_index = current_index
                     standing_choch_dir = MarketDirection.BULLISH
                     bear_choch_origin = None
+                    bear_choch_fail_ref = None
                     active_low = pending_low
                     pending_low = None
                     # CHoCH consumes the references; the next confirmed BOS
@@ -2104,6 +2176,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             # that may never emit, so the CHoCH could still fail):
                             # retire its origin and drop the stashed bearish floor.
                             bull_choch_origin = None
+                            bull_choch_fail_ref = None
                             pre_choch_bear_bos_low = None
                             pre_choch_bear_bos_extreme = None
                             pending_bos = None
@@ -2211,26 +2284,39 @@ class InternalStructureDetector(MarketStructureDetector):
                     and self._choch_weak_ref_persistence_candles is not None
                     else self._persistence_candles
                 )
+                # Mirror of the bearish case: a weak-referenced CHoCH's own
+                # broken level (above the far origin, so lost first) governs
+                # the invalidation; structural CHoCHs keep the origin. See
+                # `choch_weak_ref_fail_at_broken_level`.
+                bull_fail_pivot = (
+                    bull_choch_fail_ref
+                    if bull_choch_origin is not None
+                    and bull_choch_fail_ref is not None
+                    and bull_choch_fail_ref.price > bull_choch_origin.price
+                    else bull_choch_origin
+                )
                 if (
                     trend is MarketDirection.BULLISH
-                    and bull_choch_origin is not None
-                    and price < bull_choch_origin.price
+                    and bull_fail_pivot is not None
+                    and price < bull_fail_pivot.price
                     and confirms_break(
                         prev_low_pivot_index + 1,
                         current_index,
-                        bull_choch_origin.price,
+                        bull_fail_pivot.price,
                         bullish=False,
                     )
                 ):
                     # Failed bullish CHoCH: price broke back below the origin the
-                    # CHoCH rally launched from, before any confirming BOS. The
-                    # reversal is invalidated; structure flips back to bearish.
+                    # CHoCH rally launched from (or, for a weak-referenced CHoCH,
+                    # lost the broken level itself), before any confirming BOS.
+                    # The reversal is invalidated; structure flips back to
+                    # bearish.
                     break_candle = candles[
                         find_sustained_break_index(
                             candles,
                             prev_low_pivot_index + 1,
                             current_index,
-                            bull_choch_origin.price,
+                            bull_fail_pivot.price,
                             bullish=False,
                             persistence_candles=self._persistence_candles,
                         )
@@ -2240,8 +2326,8 @@ class InternalStructureDetector(MarketStructureDetector):
                         StructureEvent.CHOCH_FAILED,
                         MarketDirection.BULLISH,
                         price,
-                        bull_choch_origin.price,
-                        reference_timestamp=bull_choch_origin.timestamp,
+                        bull_fail_pivot.price,
+                        reference_timestamp=bull_fail_pivot.timestamp,
                     )
                     trend = MarketDirection.BEARISH
                     # Post-failure fallback suppression window starts here (a
@@ -2258,13 +2344,21 @@ class InternalStructureDetector(MarketStructureDetector):
                     # Bearish trend resumes: floor the staircase at its genuine
                     # last BOS low (preserved across the provisional CHoCH), not
                     # the higher CHoCH origin -- a non-extending BOS must not
-                    # print above the previous bearish BOS.
+                    # print above the previous bearish BOS. Exception (mirror of
+                    # the bearish-failure case): a failure triggered at a *weak*
+                    # CHoCH's own broken level re-seeds the staircase at that
+                    # level, like a CHoCH seeds its new cycle -- restoring the
+                    # spent cycle's ancient floor would leave the resumed
+                    # trend's next leg unable to print a BOS until it beats a
+                    # long-dead level.
                     bear_leg_low = price
-                    last_bear_bos_low = (
-                        bull_choch_origin.price
-                        if pre_choch_bear_bos_low is None
-                        else min(pre_choch_bear_bos_low, bull_choch_origin.price)
-                    )
+                    weak_level_failure = bull_fail_pivot is not bull_choch_origin
+                    if weak_level_failure or pre_choch_bear_bos_low is None:
+                        last_bear_bos_low = bull_fail_pivot.price
+                    else:
+                        last_bear_bos_low = min(
+                            pre_choch_bear_bos_low, bull_fail_pivot.price
+                        )
                     # Mirror of the bearish-CHoCH failure: the failed flip ate
                     # the lows made during its window -- stage an additive
                     # bearish BOS per recorded staircase break and fold the
@@ -2304,20 +2398,36 @@ class InternalStructureDetector(MarketStructureDetector):
                         bear_leg_low = min(bear_leg_low, eaten_gate_low)
                     last_bull_bos_high = None
                     # Restored genuine floor (mirror of the bullish resume), so a
-                    # provisional continuation may reference it.
-                    bear_floor_from_bos = True
+                    # provisional continuation may reference it. A weak-level
+                    # re-seed is like a CHoCH seed (already closed-beyond by the
+                    # failure), so a provisional BOS there would double the line.
+                    bear_floor_from_bos = not weak_level_failure
                     # The bearish trend resumed -> its previous BOS extreme is the
                     # restored staircase floor (a genuine level, not a CHoCH seed).
                     # Mirror of the bullish restore: under the close-break floor
                     # rule the reported tracker restores from its own stash (the
                     # gate may hold a wick-only ratchet), min()'d with the origin
                     # whose break the failure itself close-confirmed.
-                    if (
+                    if weak_level_failure:
+                        # Weak-level failure: reported floor seeds at the lost
+                        # level (close-confirmed by the failure) -- or at the
+                        # deepest eaten extreme when the provisional window
+                        # recorded breaks (that extreme is a genuine formed low
+                        # the staged mark already documents; re-reporting the
+                        # failure level would draw a second line on top of the
+                        # failure's own, and with no matching low pivot its
+                        # line origin never resolves).
+                        prev_bear_bos_extreme = (
+                            bull_fail_pivot.price
+                            if eaten_gate_low is None
+                            else min(bull_fail_pivot.price, eaten_gate_low)
+                        )
+                    elif (
                         self._bos_floor_require_close_break
                         and pre_choch_bear_bos_extreme is not None
                     ):
                         prev_bear_bos_extreme = min(
-                            pre_choch_bear_bos_extreme, bull_choch_origin.price
+                            pre_choch_bear_bos_extreme, bull_fail_pivot.price
                         )
                     else:
                         prev_bear_bos_extreme = last_bear_bos_low
@@ -2336,6 +2446,8 @@ class InternalStructureDetector(MarketStructureDetector):
                     choch_origin_high = None
                     bull_choch_origin = None
                     bear_choch_origin = None
+                    bull_choch_fail_ref = None
+                    bear_choch_fail_ref = None
                     # The failed CHoCH's line ended here: no standing CHoCH to
                     # fizzle-mark (the resumed trend is not a fresh CHoCH).
                     standing_choch_ref = None
@@ -2390,6 +2502,16 @@ class InternalStructureDetector(MarketStructureDetector):
                         if self._choch_origin_leg_extreme
                         else active_high
                     )
+                    # Mirror of the bullish case: a weak-referenced CHoCH arms
+                    # its own broken level as an invalidation reference (a
+                    # sustained close back above it fails the CHoCH). See
+                    # `choch_weak_ref_fail_at_broken_level`.
+                    bear_choch_fail_ref = (
+                        choch_low_ref
+                        if self._choch_weak_ref_fail_at_broken_level
+                        and choch_low_weak_ref
+                        else None
+                    )
                     # A fresh provisional window arms: discard any stale
                     # recorded breaks (see `stage_choch_failed_window_bos`).
                     bull_window_lows = []
@@ -2401,6 +2523,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     standing_choch_index = current_index
                     standing_choch_dir = MarketDirection.BEARISH
                     bull_choch_origin = None
+                    bull_choch_fail_ref = None
                     active_high = pending_high
                     pending_high = None
                     # CHoCH consumes the references; the next confirmed BOS

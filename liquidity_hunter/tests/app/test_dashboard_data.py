@@ -2,6 +2,9 @@
 
 from datetime import UTC, datetime
 
+import pytest
+
+from liquidity_hunter.app import dashboard_data
 from liquidity_hunter.app.dashboard_data import (
     _STRUCTURAL_ANCHOR_REGION,
     _build_internal_detector,
@@ -739,3 +742,99 @@ def test_run_internal_structure_drops_eth_1h_resumed_fizzle() -> None:
         and e.timestamp == datetime(2026, 6, 29, 16, tzinfo=UTC)
         for e in run.events
     )
+
+
+def _load_btc_1d_weak_fail_candles() -> list[Candle]:
+    """BTCUSDT 1d 2022-06-03..2026-07-11, the full 1500-candle production slice.
+
+    Real-data regression for ``choch_weak_ref_fail_at_broken_level``: the
+    2026-04-30 bullish CHoCH fired against a *weak* re-anchor reference
+    (75998.9) and collapsed within days, but its 59800 leg origin was never
+    sustained-broken -- with the flag off the trend sits bullish through the
+    entire 82.8k -> 57.7k crash, every new low prints as a counter-trend
+    sweep, and the chart shows no bearish BOS at the bottom (unlike ETH D1,
+    whose rally never fired a CHoCH and whose June break of 1736 printed the
+    continuation BOS). With the flag on the CHoCH fails for real at its
+    broken level (2026-05-26), the trend resumes bearish, and the June close
+    below the restored 59800 floor prints the BOS at the bottom. 5-column
+    rows: ts/open/high/low/close.
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "btcusdt_1d_2022_06_03_2026_07_11.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="BTCUSDT",
+            timeframe=TimeFrame.D1,
+            timestamp=datetime.fromisoformat(row[0]),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def test_btc_1d_weak_choch_fails_at_broken_level_and_prints_bottom_bos() -> None:
+    candles = _load_btc_1d_weak_fail_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.D1: candles})
+
+    run = _run_internal_structure(provider, "BTCUSDT", TimeFrame.D1, 1200, False)
+
+    # The weak 2026-04-30 bullish CHoCH fails for real (not a fizzle marker)
+    # at the level it broke, once price sustains closes back below it.
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and not e.provisional
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 5, 26, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(75998.9)
+        for e in run.events
+    )
+    # The resumed bearish trend prints the continuation BOS at the bottom,
+    # referencing the restored 59800 floor (the January BOS low).
+    assert any(
+        e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 6, 25, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(59800.0)
+        for e in run.events
+    )
+    assert run.trend is MarketDirection.BEARISH
+
+
+def test_btc_1d_weak_fail_off_trend_stays_bullish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dashboard_data, "_CHOCH_WEAK_REF_FAIL_AT_BROKEN_LEVEL", False)
+    candles = _load_btc_1d_weak_fail_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.D1: candles})
+
+    run = _run_internal_structure(provider, "BTCUSDT", TimeFrame.D1, 1200, False)
+
+    # Off: only the additive fizzle marker fires (trend never flips), so the
+    # crash prints no bearish BOS after the January one.
+    assert not any(
+        e.event is StructureEvent.CHOCH_FAILED and not e.provisional
+        for e in run.events
+        if e.timestamp >= datetime(2026, 1, 1, tzinfo=UTC)
+    )
+    assert not any(
+        e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp > datetime(2026, 2, 1, tzinfo=UTC)
+        for e in run.events
+    )
+    assert run.trend is MarketDirection.BULLISH

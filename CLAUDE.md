@@ -2049,6 +2049,46 @@ Real-data regression fixture:
 (1474-candle window ending at the live edge; off → no provisional CHoCH, on →
 one bullish `CHoCH?*` @ 78.34). Off = byte-for-byte identical.
 
+**Weak-ref CHoCH failure at the broken level** (`InternalStructureDetector`, as
+of 2026-07-12): `choch_weak_ref_fail_at_broken_level` (constructor default
+`False`; wired **`True`** in `load_dashboard_data` via
+`_CHOCH_WEAK_REF_FAIL_AT_BROKEN_LEVEL`). A CHoCH fired against a **weak**
+reference (a synthetic re-anchor level or the cold-start fallback) arms its own
+*broken level* as an additional invalidation reference alongside the far leg
+origin: the synthetic level's break was the reversal's only evidence, so a
+sustained close (base persistence) back through it emits a real `CHOCH_FAILED`
+(trend flips back) at the *tighter* of the two levels — structural CHoCHs keep
+the origin-only failure. Motivating case (BTCUSDT D1): the 2026-04-30 bullish
+CHoCH against the weak 75998.9 re-anchor collapsed within days, but the 59800
+origin was never sustained-broken — the trend sat bullish through the entire
+82.8k→57.7k crash (−30%), every new low printed as a counter-trend sweep, and
+the chart showed no bearish BOS at the bottom, unlike ETH D1 (whose rally never
+fired a CHoCH and whose June break of 1736 printed the continuation BOS at the
+fundão). On: `CHOCH_FAILED` 05-26 at 75998.9 + BOS↓ 06-25 ref 59800 + trend
+bearish — the ETH analogue. **Weak-level failures re-seed the resumed
+staircase at the failure level** (gate + reported floor, like a CHoCH seeds its
+cycle; `*_floor_from_bos = False` so a provisional BOS never doubles the
+failure line) instead of restoring the pre-CHoCH stash: the weak reference
+existed precisely because the old cycle was spent, and the plain restore was
+measured to pin the resumed trend's whole next leg on an ancient floor (AAVE 4h
+lost its entire Feb→Mar −30% staircase, NEAR 1h its June one). The reported
+floor folds the deepest eaten-window extreme when `stage_choch_failed_window_bos`
+recorded breaks (else the next continuation re-reports the failure level and,
+with no matching opposite pivot, its line origin never resolves — a stretched
+duplicate of the ✕ line). Origin-triggered failures restore exactly as before.
+Measured (BTC/ETH/SOL/AAVE/NEAR × 15m..1d, `limit=1200`): 12/25 identical;
+every change is the weak-CHoCH lifecycle — whipsaw CHoCH pairs become honest
+`CHoCH + CHOCH_FAILED` sequences with the resumed trend's staircase intact
+(BTC 4h gains the June-crash BOS staircase and a richer March; NEAR 1h keeps
+its June staircase with an honest 06-14/06-19 failure pair; SOL M15's live-edge
+fizzle becomes a real failure; ETH 4h June reads `✕ @ 1721.57` + BOS↓ 1510 with
+the 07-02 recovery CHoCH untouched). Real-data regression fixture:
+`tests/liquidity/detectors/data/btcusdt_1d_2022_06_03_2026_07_11.json`
+(1500-candle production D1 slice; off → fizzle marker only + trend bullish +
+no bearish BOS after January, on → real failure + fundão BOS + trend bearish).
+Off = byte-for-byte identical. Not mirrored into `SwingStructureDetector` (not
+drawn).
+
 **CHoCH origin = deepest leg extreme** (`InternalStructureDetector`, as of
 2026-07-05): `choch_origin_leg_extreme` (constructor default `False`; wired
 **`True`** in `load_dashboard_data`). A CHoCH's *origin* — the level whose

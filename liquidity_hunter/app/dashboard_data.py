@@ -268,6 +268,22 @@ _CHOCH_WEAK_REF_PERSISTENCE: dict[TimeFrame, int] = {
 # never touching the state machine.)
 _CHOCH_FIZZLE_RECLAIM_CANDLES: int | None = 30
 
+# Weak-referenced CHoCH invalidation at the broken level itself
+# (`InternalStructureDetector.choch_weak_ref_fail_at_broken_level`). A CHoCH
+# fired against a *weak* reference (a synthetic re-anchor level or the
+# cold-start fallback) has the break of that level as its only reversal
+# evidence, so a sustained close back through it fails the CHoCH
+# (CHOCH_FAILED, real trend flip) without waiting for the far leg origin.
+# Motivating case (BTCUSDT D1): the 2026-04-30 bullish CHoCH against the weak
+# 75998.9 re-anchor collapsed within days, but the 59800 leg origin was never
+# sustained-broken -- the trend sat bullish through the entire 82.8k -> 57.7k
+# crash (-30%), every new low printed as a counter-trend sweep, and the chart
+# showed no bearish BOS at the bottom (unlike ETH D1, whose rally never fired
+# a CHoCH and whose June break below 1736 printed the continuation BOS).
+# Structural CHoCHs keep the origin-only invalidation (base persistence, both
+# levels).
+_CHOCH_WEAK_REF_FAIL_AT_BROKEN_LEVEL = True
+
 # Post-failure fallback suppression
 # (`InternalStructureDetector.choch_failed_fallback_suppress_candles`). A
 # failed-CHoCH flip arms no blind-spot origin (one-shot, anti-ping-pong), so
@@ -731,6 +747,11 @@ def _build_internal_detector(
         # limit=1200): CHOCH_FAILED drops ~33% (63 -> 42), converting whipsaw
         # CHoCH/fail pairs into sweeps or holding CHoCHs.
         choch_origin_leg_extreme=True,
+        # A weak-referenced CHoCH also fails on a sustained close back through
+        # the level it broke (its only reversal evidence), not just the far
+        # leg origin -- the BTC D1 -30% crash with the trend stuck bullish.
+        # See _CHOCH_WEAK_REF_FAIL_AT_BROKEN_LEVEL.
+        choch_weak_ref_fail_at_broken_level=_CHOCH_WEAK_REF_FAIL_AT_BROKEN_LEVEL,
     )
 
 
