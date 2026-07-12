@@ -25,6 +25,9 @@ const SYMBOL_OPTIONS: { value: string; label: string }[] = [
   { value: 'DASHUSDT', label: 'DASH' },
   { value: 'XAUUSDT', label: 'XAU' },
   { value: 'AEROUSDT', label: 'AERO' },
+  { value: 'ENAUSDT', label: 'ENA' },
+  { value: 'HYPEUSDT', label: 'HYPE' },
+  { value: 'ETHBTC', label: 'ETH/BTC' },
 ]
 
 const TIMEFRAME_OPTIONS: { value: TimeFrame; label: string }[] = [
