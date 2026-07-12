@@ -35,3 +35,7 @@ data/processed/
 
 # OS
 .DS_Store
+
+# Personal tooling artifacts (knowledge graph, browser pid)
+graphify-out/
+chrome.pid
