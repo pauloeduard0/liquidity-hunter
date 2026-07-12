@@ -1,27 +1,95 @@
 # liquidity-hunter
 
 A research platform for market liquidity detection and market psychology
-analysis. This project is **not** a trading system — it produces no
-buy/sell signals and contains no order execution or strategy logic.
+analysis on crypto markets. It answers questions like *where is the resting
+liquidity, who is trapped, and which side is the fuel for the next move* —
+purely as **descriptive observations**.
+
+This project is **not** a trading system: it produces no buy/sell signals
+and contains no order execution, position management, or strategy logic.
+
+![Liquidity Hunter dashboard — SOLUSDT 1H with structure events, liquidity hunt state, and the multi-timeframe structure ladder](image.png)
+
+## What it detects
+
+- **Market structure (SMC)** — BOS / CHoCH / failed CHoCH / liquidity
+  sweeps via a close-confirmed, persistence-gated state machine
+  (`InternalStructureDetector`), with provisional live-edge marks
+  (`BOS?` / `CHoCH?`) and a conservative composition pass that re-times
+  every BOS to its confirming close. See
+  [`liquidity_hunter/docs/estrutura_bos_choch.md`](liquidity_hunter/docs/estrutura_bos_choch.md)
+  (Portuguese) for the full walkthrough.
+- **Liquidity zones** — swing points and equal highs/lows, ranked as
+  liquidity targets by a composite score
+  ([`docs/scoring.md`](liquidity_hunter/docs/scoring.md)).
+- **POI zones** — MSB-anchored order blocks / breaker blocks / mitigation
+  blocks (a faithful batch port of EmreKb's "Market Structure Break &
+  Order Block" TradingView indicator, verified against its on-chart boxes).
+- **Manipulation cycles** — three-phase Wyckoff/SMC patterns
+  (accumulation → sweep → expansion), retrospective and prospective.
+- **Behavior divergences** — volume-delta vs. price divergences
+  (distribution, accumulation, exhaustion, absorption).
+- **Leverage liquidation map** — a "gravitational map" of where leveraged
+  retail positions would be force-liquidated, inferred from open interest,
+  funding, and long/short positioning (Binance perpetual futures).
+- **OI regime** — the price × open-interest matrix (long/short buildup,
+  short covering, long liquidation) plus per-event OI qualification of
+  structure breaks (new money / covering / liquidation flush).
+- **Liquidity hunt state** — when the current timeframe's structure runs
+  counter to the higher timeframe, the counter-trend entrants become the
+  resting liquidity: which pools are mapped, which were captured, and
+  whether the hunt has concluded.
+- **Retail crowd psychology** — a rule-based estimate of what retail is
+  likely doing ([`docs/psychology.md`](liquidity_hunter/docs/psychology.md)).
+- **Multi-timeframe structure ladder** — one standing state per timeframe
+  (M5 → W1): trend, last structural event, forming marks, hunt phase.
+
+## Methodology
+
+Detector changes are validated by **measurement, not intuition**: every
+behavioral flag was measured across a matrix of assets × timeframes
+(BTC/ETH/SOL/AAVE/NEAR × 5m..1d) before being wired into production, ships
+with a real-data regression fixture reproducing its motivating case
+(`liquidity_hunter/tests/liquidity/detectors/data/`), and is byte-for-byte
+inert when disabled. Live-edge (provisional) marks are evaluated by
+walk-forward replay — e.g. 85% of provisional BOS marks confirm, with a
+~11-candle median lead. Several plausible alternatives were rejected
+because measurement showed they cascaded (see the design notes in
+`CLAUDE.md`).
 
 ## Architecture
 
-The codebase follows a clean architecture, with dependencies flowing inward
-toward a framework-agnostic domain core:
+Clean architecture: dependencies flow inward only, toward a
+framework-agnostic domain core.
+
+```
+        app ◄── api
+         │
+ ┌───────┼────────────┐
+ │       │            │
+liquidity  psychology │
+ │       │            │
+ indicators           │
+ │       │            │
+ └───►  data ◄────────┘
+         │
+        core (domain)
+```
 
 | Layer        | Responsibility                                                              |
 |--------------|------------------------------------------------------------------------------|
-| `core`       | Domain entities (`Candle`, `LiquidityZone`, `MarketStructure`, `RetailBias`) and shared enums |
-| `data`       | Market data acquisition, repositories, persistence adapters                 |
-| `indicators` | Stateless derived series computed from `Candle` data                        |
-| `liquidity`  | Detection/modeling of `LiquidityZone` and `MarketStructure`                  |
-| `psychology` | Modeling of `RetailBias` from sentiment/positioning data                     |
-| `scoring`    | Composite, descriptive scoring combining `liquidity` and `psychology` output |
-| `app`        | Composition root, orchestration, and runnable examples                       |
-| `dashboard`  | Presentation/visualization of `app` output                                   |
+| `core`       | Framework-agnostic, immutable domain entities (`Candle`, `LiquidityZone`, `MarketStructure`, `POIZone`, `ManipulationCycle`, `LeverageLiquidationMap`, `LiquidityHuntState`, ...) and shared enums |
+| `data`       | Market data acquisition (Binance spot + USDT-M perpetual futures via CCXT, with fallback chaining, retries, and OI pagination) |
+| `indicators` | Stateless derived series computed from `Candle` data (volume delta)         |
+| `liquidity`  | Detection/modeling of `LiquidityZone`, `MarketStructure`, and `POIZone`     |
+| `psychology` | Retail bias, manipulation cycles, behavior divergences, liquidation map, OI regime |
+| `scoring`    | Composite, descriptive scoring of liquidity zones                            |
+| `app`        | Composition root (`load_dashboard_data`), narrative & liquidity-hunt synthesis, multi-timeframe overview |
+| `api`        | FastAPI presentation of `app` output as JSON                                 |
 | `config`     | Application settings (environment-driven, via `pydantic-settings`)          |
 
-See `liquidity_hunter/docs/architecture.md` for the full rationale.
+See [`liquidity_hunter/docs/architecture.md`](liquidity_hunter/docs/architecture.md)
+for the full rationale.
 
 ## Setup
 
@@ -31,142 +99,9 @@ Requires Python 3.12 and [Poetry](https://python-poetry.org/).
 poetry install
 ```
 
-## Usage
+## Running
 
-### Fetching market data
-
-`BinanceDataProvider` fetches OHLCV candles from Binance via
-[CCXT](https://github.com/ccxt/ccxt) and returns them as `Candle` domain
-objects, with retries and logging built in:
-
-```python
-from liquidity_hunter.core.domain import TimeFrame
-from liquidity_hunter.data import BinanceDataProvider
-
-provider = BinanceDataProvider()
-candles = provider.get_ohlcv("BTCUSDT", TimeFrame.H1, limit=500)
-```
-
-Run the example script, which fetches 500 BTCUSDT 1h candles and prints the
-first five:
-
-```bash
-poetry run python -m liquidity_hunter.app.examples.fetch_btcusdt_1h
-```
-
-### Computing volume delta
-
-`volume_delta` derives net taker buy/sell aggression for a candle from
-`Candle.taker_buy_volume` (`2 * taker_buy_volume - volume`); `volume_delta_series`
-applies it across a series, 1:1 aligned with `candles`:
-
-```python
-from liquidity_hunter.indicators import volume_delta_series
-
-deltas = volume_delta_series(candles)
-```
-
-### Detecting liquidity zones
-
-Swing-point and equal-level detectors take a list of `Candle` objects and
-return `LiquidityZone` objects (type, price range, strength, timeframe):
-
-```python
-from liquidity_hunter.liquidity import (
-    EqualHighDetector,
-    EqualLowDetector,
-    SwingHighDetector,
-    SwingLowDetector,
-)
-
-swing_highs = SwingHighDetector(lookback=2).detect(candles)
-equal_highs = EqualHighDetector(tolerance_pct=0.0005, min_touches=2).detect(candles)
-```
-
-Run the example script, which fetches 500 BTCUSDT 1h candles and prints the
-detected swing highs/lows and equal highs/lows:
-
-```bash
-poetry run python -m liquidity_hunter.app.examples.detect_btcusdt_liquidity
-```
-
-### Detecting market structure
-
-`SwingStructureDetector` walks swing highs/lows and reports break of
-structure (BOS) and change of character (CHoCH) events. A pivot that
-breaks the active level is confirmed as BOS/CHoCH only if its candle's
-close is also beyond that level and its volume delta ratio is at least
-`min_volume_delta_ratio` in the breakout direction; otherwise it's
-reported as a `LIQUIDITY_SWEEP`. Every event is stamped with a `scope`
-(`StructureScope.MAJOR` by default), so the same detector can be run again
-with a smaller `swing_lookback` and `scope=StructureScope.INTERNAL` to
-surface finer-grained ("internal") structure on the same candles:
-
-```python
-from liquidity_hunter.core.domain import StructureScope
-from liquidity_hunter.liquidity import SwingStructureDetector
-
-events = SwingStructureDetector(swing_lookback=50, min_volume_delta_ratio=0.2).detect(candles)
-internal_events = SwingStructureDetector(
-    swing_lookback=10, scope=StructureScope.INTERNAL
-).detect(candles)
-for event in events:
-    print(event.timestamp, event.event, event.direction, event.price_level, event.scope)
-```
-
-### Scoring liquidity zones
-
-`LiquidityScoringEngine` ranks detected zones as liquidity targets, scoring
-each on distance from the current price, number of touches, and timeframe
-weight (see `liquidity_hunter/docs/scoring.md` for the full methodology):
-
-```python
-from liquidity_hunter.scoring import LiquidityScoringEngine
-
-ranked = LiquidityScoringEngine().score(zones, current_price=candles[-1].close)
-for scored in ranked[:5]:
-    print(scored.zone.zone_type, scored.score)
-```
-
-Run the example script, which fetches 500 BTCUSDT 1h candles, detects
-liquidity zones, and prints them ranked by score:
-
-```bash
-poetry run python -m liquidity_hunter.app.examples.score_btcusdt_liquidity
-```
-
-### Estimating retail crowd psychology
-
-`RetailTrapAnalyzer` estimates what retail traders are likely thinking and
-doing — not a price prediction or a trading signal — from the higher
-timeframe trend, recent market structure, and nearby liquidity zones (see
-`liquidity_hunter/docs/psychology.md` for the full methodology):
-
-```python
-from liquidity_hunter.psychology import RetailTrapAnalyzer
-
-estimate = RetailTrapAnalyzer().analyze(
-    symbol="BTCUSDT",
-    higher_timeframe_direction=higher_timeframe_direction,
-    market_structure_events=market_structure_events,
-    liquidity_zones=liquidity_zones,
-    current_price=current_price,
-)
-print(estimate.dominant_side, estimate.confidence, estimate.explanation)
-```
-
-Run the example script, which estimates retail bias for an illustrative
-"higher timeframe bearish, lower timeframe bullish change of character"
-scenario:
-
-```bash
-poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
-```
-
-### Running the API
-
-A FastAPI application (`liquidity_hunter.api`) exposes the same research
-data as JSON, reusing `app.load_dashboard_data` directly:
+### API
 
 ```bash
 poetry run uvicorn liquidity_hunter.api.main:app --reload
@@ -174,73 +109,103 @@ poetry run uvicorn liquidity_hunter.api.main:app --reload
 
 #### Endpoints
 
-- `GET /api/health` — liveness check, returns `{"status": "ok"}`.
-- `GET /api/dashboard` — a `DashboardData` snapshot (candles, liquidity
-  zones, ranked zones, major and internal market structure events, retail
-  bias estimate) as JSON. Query parameters:
+- `GET /api/health` — liveness check.
+- `GET /api/dashboard` — a full `DashboardData` snapshot (candles, zones,
+  structure events, POI zones, manipulation cycles, divergences,
+  liquidation map, OI analysis, liquidity hunt state) as JSON.
 
-  | Parameter                 | Type     | Default   | Notes                                  |
-  |---------------------------|----------|-----------|-----------------------------------------|
-  | `symbol`                  | string   | `BTCUSDT` |                                          |
-  | `timeframe`               | string   | `1h`      | One of the `TimeFrame` values (e.g. `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, `1w`) |
-  | `limit`                   | integer  | `500`     | Number of candles, `1`-`1000`           |
-  | `swing_lookback`          | integer  | `50`      | Passed to `SwingStructureDetector` for `market_structure_events`, must be `> 0` |
-  | `internal_swing_lookback` | integer  | `10`      | Passed to `SwingStructureDetector` for `internal_structure_events`, must be `> 0` |
+  | Parameter        | Type    | Default   | Notes                                        |
+  |------------------|---------|-----------|-----------------------------------------------|
+  | `symbol`         | string  | `BTCUSDT` |                                               |
+  | `timeframe`      | string  | `1h`      | `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, `1w` |
+  | `limit`          | integer | `1200`    | Visible candles, `1`–`1200`                   |
+  | `swing_lookback` | integer | `10`      | Major (swing) structure detector lookback     |
+  | `narrative`      | boolean | `false`   | Enables the narrative/anomaly synthesis       |
 
-  Responses are cached in-memory per parameter combination for 10 seconds
-  to avoid redundant Binance requests while still keeping the dashboard
-  near-live.
+  Responses are cached in-memory per parameter combination for 10 seconds.
 
   ```bash
-  curl "http://127.0.0.1:8000/api/dashboard?symbol=BTCUSDT&timeframe=1h&limit=500&swing_lookback=50"
+  curl "http://127.0.0.1:8000/api/dashboard?symbol=SOLUSDT&timeframe=1h"
   ```
 
-### Running the React frontend
+- `GET /api/overview?symbol=BTCUSDT` — the multi-timeframe structure
+  ladder (M5 → W1): per-timeframe trend, last structural event, forming
+  provisional marks, and liquidity-hunt phase. Snapshots are cached per
+  timeframe with proportional TTLs (M5=30s ... W1=20min).
 
-A React + TypeScript frontend (`frontend/`), built with Vite and styled
-with Tailwind CSS, consumes `GET /api/dashboard` and renders a dark,
-TradingView-style research terminal. Includes KPI row, main candlestick
-chart with volume delta and RSI sub-panes, liquidity zone overlays,
-BOS/CHoCH/SWEEP markers, POI order block boxes, and a manipulation cycles
-sidebar panel, using
-[Lightweight Charts](https://tradingview.github.io/lightweight-charts/).
+Candles come from Binance USDT-M perpetual futures by default (aligned
+with the OI/funding/liquidation overlays), falling back to spot for
+symbols without a perpetual contract. Futures-state fetch failures degrade
+gracefully (`liquidation_map`/`oi_analysis` become `null`) instead of
+failing the snapshot.
 
-With the FastAPI app running (see above), in a separate terminal:
+### React frontend
+
+A React + TypeScript + Vite frontend (`frontend/`, Tailwind CSS +
+[Lightweight Charts](https://tradingview.github.io/lightweight-charts/))
+renders a dark, TradingView-style research terminal: KPI row (retail bias,
+dominant liquidity, HTF trend, OI regime, liquidity hunt), main chart with
+volume-delta and RSI panes, BOS/CHoCH/sweep lines, POI boxes, liquidation
+bands, hunt-window shading, and the structure ladder sidebar.
+
+With the API running, in a separate terminal:
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev    # proxies /api -> http://127.0.0.1:8000
 ```
 
-The dev server proxies `/api/*` requests to `http://127.0.0.1:8000` (see
-`frontend/vite.config.ts`), so the FastAPI app must be running for the
-dashboard to load data.
+## Library usage
+
+Everything the API serves is available as a library:
+
+```python
+from liquidity_hunter.app import load_dashboard_data
+from liquidity_hunter.core.domain import TimeFrame
+
+data = load_dashboard_data(symbol="BTCUSDT", timeframe=TimeFrame.H1)
+for event in data.internal_structure_events:
+    print(event.timestamp, event.event, event.direction, event.price_level)
+```
+
+Lower-level building blocks (providers, detectors, analyzers, scoring) are
+importable from their layer packages — runnable examples live in
+`liquidity_hunter/app/examples/`:
+
+```bash
+poetry run python -m liquidity_hunter.app.examples.fetch_btcusdt_1h
+poetry run python -m liquidity_hunter.app.examples.detect_btcusdt_liquidity
+poetry run python -m liquidity_hunter.app.examples.score_btcusdt_liquidity
+poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
+```
 
 ## Development
 
 ```bash
-# Run all tests
-poetry run pytest
-
-# Lint
-poetry run ruff check .
-
-# Type-check (strict mode)
-poetry run mypy liquidity_hunter
+poetry run pytest              # all tests
+poetry run ruff check .        # lint
+poetry run mypy liquidity_hunter  # type-check (strict mode)
 ```
+
+Tests mirror the package layout 1:1 under `liquidity_hunter/tests`, and
+detector behavior is pinned by regression fixtures built from real market
+data (`liquidity_hunter/tests/liquidity/detectors/data/`).
 
 ### Frontend
 
 ```bash
 cd frontend
-
-# Type-check
-npx tsc -b
-
-# Lint
-npm run lint
-
-# Build for production
-npm run build
+npx tsc -b      # type-check
+npm run lint    # eslint
+npm run build   # production build
 ```
+
+## Documentation
+
+- [`docs/architecture.md`](liquidity_hunter/docs/architecture.md) — layering and SOLID rationale.
+- [`docs/estrutura_bos_choch.md`](liquidity_hunter/docs/estrutura_bos_choch.md) — the BOS/CHoCH detection pipeline, end to end (Portuguese).
+- [`docs/scoring.md`](liquidity_hunter/docs/scoring.md) — liquidity zone scoring methodology.
+- [`docs/psychology.md`](liquidity_hunter/docs/psychology.md) — retail crowd psychology estimation.
+- `CLAUDE.md` — the living design log: every detector flag, its motivating
+  case, the measurement that validated it, and the alternatives rejected.

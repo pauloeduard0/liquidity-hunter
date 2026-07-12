@@ -1,22 +1,32 @@
 # Como o BOS e o CHoCH funcionam (guia em português)
 
+*Atualizado em 2026-07-12.*
+
 Este documento explica, de forma direta, como o **`InternalStructureDetector`**
 (`liquidity_hunter/liquidity/detectors/internal_structure.py`) — o detector que
 **o gráfico React usa em todos os timeframes** — identifica e marca:
 
 - **BOS** (Break of Structure / Rompimento de Estrutura)
 - **CHoCH** (Change of Character / Mudança de Caráter)
-- **CHOCH_FAILED** (CHoCH que falhou)
+- **CHOCH_FAILED** (CHoCH que falhou) — incluindo o **marcador de fizzle**
 - **LIQUIDITY_SWEEP** (varredura de liquidez)
 - **HH/HL/LH/LL** (rótulos descritivos de pivôs)
+- **Marcas provisórias de live edge** (`BOS?`, `CHoCH?`, `CHoCH?*`)
 
 A ideia é você ler isto e conseguir bater o olho no gráfico e saber **por que**
 cada marca apareceu — e decidir se algo precisa de ajuste.
 
 > Observação: existe também o `SwingStructureDetector` (estrutura "maior"). Ele
-> compartilha a mesma arquitetura, mas **não é desenhado no gráfico** hoje
+> compartilha a mesma arquitetura base, mas **não é desenhado no gráfico** hoje
 > (alimenta o `market_structure_events` da API). Tudo que você vê no chart vem
 > do **internal**. Este guia foca no internal.
+
+> Filosofia que atravessa tudo: **marca faltando se conserta de forma aditiva**
+> (staging mesclado no final), nunca afrouxando confirmação dentro da máquina de
+> estados — afrouxar cascateia no `trend` e corrompe a sequência de CHoCH
+> (lição medida mais de uma vez). Toda flag comportamental é `off` por padrão,
+> byte a byte inerte quando desligada, e tem fixture de regressão com dados
+> reais do caso que a motivou (`tests/liquidity/detectors/data/`).
 
 ---
 
@@ -31,11 +41,14 @@ Tudo começa com **pivôs**: topos e fundos locais.
 - Um **swing low** (pivô de fundo) é o espelho disso.
 
 O parâmetro que controla isso é o **`swing_lookback`**. Quanto menor, mais
-sensível (mais pivôs, estrutura mais "fina"); quanto maior, mais grosso.
+sensível (mais pivôs, estrutura mais "fina"); quanto maior, mais grosso. Em
+produção hoje é **5 em todos os timeframes**, com `persistence_candles = 12`
+(ver seção 12). Os pivôs são coletados e percorridos em **ordem cronológica** —
+o detector é uma máquina de estados que processa um pivô de cada vez.
 
-No M5 o `swing_lookback = 2` (bem sensível). Os pivôs são coletados e percorridos
-em **ordem cronológica** — o detector é uma máquina de estados que processa um
-pivô de cada vez.
+Um efeito colateral importante do lookback: um pivô só "existe" `lookback`
+velas depois do seu extremo. Esse **atraso do live edge** é o que as marcas
+provisórias (seção 7) compensam.
 
 ### 1.2 Referências "trailing" (active_high / active_low)
 
@@ -58,6 +71,23 @@ O detector mantém uma `trend` que é `NEUTRAL`, `BULLISH` ou `BEARISH`. Ela
 começa em `NEUTRAL` (bootstrap) e muda só num **CHoCH** ou **CHOCH_FAILED**. O
 `trend` decide se um rompimento é BOS (a favor) ou candidato a CHoCH/sweep
 (contra).
+
+### 1.4 Referência *estrutural* vs. *fraca* — o conceito que organiza tudo
+
+Desde julho, quase todas as regras novas giram em torno desta distinção:
+
+- **Referência estrutural**: um nível de onde uma perna *de verdade* partiu —
+  o fundinho/topo da pernada de um BOS confirmado por fechamento, um pullback
+  promovido por continuação, a origem de uma pending BOS viva, ou a origem
+  blind-spot de um CHoCH. É o CHoCH "conservador".
+- **Referência fraca**: um nível *sintético* — escrito por um re-anchor
+  (staleness/chain/displacement), uma promoção cujo rompimento do degrau foi
+  só por pavio, ou o fallback trailing do cold-start.
+
+A distinção é exposta no evento (`MarketStructure.reference_structural`) e
+governa: a persistência exigida (seção 3), como o CHoCH pode falhar (seção 4),
+e como a marca é desenhada — um CHoCH de referência fraca aparece **pontilhado
+e apagado com sufixo `*`** (`CHoCH* ▼`); o estrutural é a marca sólida normal.
 
 ---
 
@@ -102,6 +132,17 @@ A escada é **semeada no CHoCH com o próprio nível do CHoCH**. Ou seja: o
 Isso impede um BOS de aparecer "do lado errado" do CHoCH. (Só o primeiríssimo
 BOS saindo do bootstrap `NEUTRAL` é livre.)
 
+Há **dois** rastreadores de escada, e a diferença importa:
+
+- o **gate** (`last_bear_bos_low`/`last_bull_bos_high`) — decide se um avanço
+  é estrutural; ratcheta inclusive em extremos varridos só por pavio;
+- o **piso reportado** (`prev_bear_bos_extreme`/`prev_bull_bos_extreme`) — o
+  nível que o próximo BOS *desenha e referencia*. Com
+  `bos_floor_require_close_break=True` (produção), ele **só ratcheta em
+  extremos confirmados por fechamento**: um avanço que apenas *varreu por
+  pavio* o piso não vira o novo degrau reportado (caso AAVE H1: o BOS de
+  breakout reportava o pavio 77.94 em vez do topo fechado 77.70).
+
 ### Filtro 3 — Confirmação por *pullback*
 
 Mesmo com o estado avançado, o BOS só é **emitido** (vira marca no gráfico)
@@ -114,11 +155,11 @@ Ou seja, o preço cai, faz o fundo (avança o estado), **repica** formando um to
 menor — e *aí* o BOS é confirmado e desenhado. Esse pullback é importante porque
 ele também vira a **semente da referência do CHoCH** (ver seção 3).
 
-#### 3b. Filtro de pavio no pullback (`bos_pullback_max_wick_pct = 0.4`)
+#### Filtro de pavio no pullback (`bos_pullback_max_wick_pct = 0.4`)
 
-Como o `swing_lookback` do M5 é pequeno, o pullback pode ser um **pavio de uma
-vela só** — a vela espeta o extremo intrabar mas o corpo fecha longe. Isso é um
-"pullback" que nunca repicou de verdade.
+O pullback que confirma pode ser um **pavio de uma vela só** — a vela espeta o
+extremo intrabar mas o corpo fecha longe. Isso é um "pullback" que nunca
+repicou de verdade.
 
 O filtro exige que o **pavio do lado do pivô** seja no máximo **40% do range da
 vela** (corpo + lado oposto ≥ 60%). Se for só pavio, **o BOS não confirma ali** —
@@ -133,17 +174,15 @@ o pending BOS fica vivo esperando um pullback de verdade.
         ╵                            └─┘
 ```
 
-> **Este foi um dos ajustes recentes** (commit `6b94925`). Antes, um BOS no M5
-> confirmava em cima de um pavio e ficava "pequeno demais".
-
 ### O que o BOS reporta (níveis e linha no gráfico)
 
 - **`price_level`** = o extremo do pivô que disparou (o novo fundo/topo da perna)
 - **`reference_price_level`** = o **nível formado que ele rompeu** (o degrau
-  anterior da escada). É por isso que a linha do BOS é desenhada no **extremo do
-  swing anterior**, formando a escada limpa — e não no extremo novo.
+  anterior da escada — o *piso reportado*). É por isso que a linha do BOS é
+  desenhada no **extremo do swing anterior**, formando a escada limpa — e não
+  no extremo novo.
 - **`reference_timestamp`** = a vela que *formou* aquele nível rompido (origem da
-  linha), preenchido depois pelo passo de re-anchor de close-break.
+  linha), preenchido depois pelo passo de composição (seção 10).
 
 ---
 
@@ -157,23 +196,44 @@ reversão. É o evento que **vira a `trend`**.
 
 ### A pergunta-chave: qual nível o CHoCH precisa romper?
 
-Esse é o coração do detector. A referência de reversão é, em ordem de prioridade:
+Esse é o coração do detector. A cadeia de referência de reversão, em ordem de
+prioridade:
 
 ```
-validated_choch_<lado>  OU  choch_origin_<lado>  OU  active_<lado>
+validated_choch_<lado>  OU  pending_bos.pullback_ref  OU  choch_origin_<lado>  OU  active_<lado>
 ```
 
-#### `validated_choch_high` / `validated_choch_low` — a referência "boa"
+#### `validated_choch_<lado>` — a referência principal (fundinho/topo da pernada)
 
-Desde 2026-07-02 (`bos_leg_origin_choch_ref`, ligado em produção), a regra
-principal é direta: **o fundinho/topo da pernada do último BOS emitido é a
-referência de CHoCH**. Quando um BOS de alta confirma (fechamento além do nível
-+ pullback), o **fundo de onde a perna do rompimento saiu** (o
-`pullback_ref` da pending BOS) vira `validated_choch_low` **na hora da emissão**
-— marcado como *estrutural*. Cada novo BOS emitido **renova** a referência para
-o fundinho da sua própria pernada (substitui sempre, mesmo que o novo fundo seja
-mais distante: estrutura manda). Espelhado no lado de baixa (o topo da pernada
-vira `validated_choch_high`).
+Com `bos_leg_origin_choch_ref` (ligado em produção), a regra principal é
+direta: **o fundinho/topo da pernada do último BOS emitido é a referência de
+CHoCH**. Quando um BOS de alta confirma, o **fundo de onde a perna do
+rompimento saiu** (o `pullback_ref` da pending BOS) vira `validated_choch_low`
+**na hora da emissão** — marcado como *estrutural*. Cada novo BOS emitido
+**renova** a referência para o fundinho da sua própria pernada (substitui
+sempre, mesmo que o novo nível seja mais distante: estrutura manda). Espelhado
+no lado de baixa (o topo da pernada vira `validated_choch_high`).
+
+Três refinamentos importantes na promoção:
+
+- **Estrutural só com fechamento no degrau**
+  (`bos_leg_origin_require_close_break=True`): a origem promovida só é marcada
+  *estrutural* se alguma vela de fato **fechou** além do piso da escada que o
+  BOS reportou. Se a continuação só *pavou* o degrau anterior (exatamente o
+  BOS que o passo de composição esconde do gráfico), a origem ainda é
+  promovida, mas como referência **fraca** — a barreira de persistência (abaixo)
+  governa o CHoCH resultante. O mesmo teste vale para a promoção por
+  continuação do candidato.
+- **Pullback raso sobe para o extremo da correção**
+  (`bos_leg_origin_min_pullback_atr = 1.5`, M15/M30/H1): quando o pullback
+  imediato é raso (altura < 1.5 × ATR médio da série), a origem promovida é o
+  **extremo acumulado da correção** (`pending_high`/`pending_low`) em vez do
+  pivô trailing — a linha do CHoCH cai no topo/fundo visível da correção, e um
+  furo prematuro no nível raso vira sweep (caso AAVE H1: ref 86.59 → 87.82).
+- **Reclaim-kill promove a origem**: uma pending BOS descartada porque o pivô
+  oposto seguinte já está **além da origem da pernada** promove essa origem
+  (estrutural) antes de morrer — o próprio reclaim é a reversão conservadora, e
+  o CHoCH naquele pivô já avalia contra ela.
 
 Por cima disso ainda roda o pipeline clássico de candidato/continuação (que pode
 *apertar* a referência para o pullback pós-BOS quando a perna faz novo extremo):
@@ -183,9 +243,8 @@ Por cima disso ainda roda o pipeline clássico de candidato/continuação (que p
 
 2. **Promoção com trava de continuação**: o candidato vira
    `validated_choch_high` **se um próximo fundo fizer um novo extremo da perna**
-   (abaixo de `bear_leg_low`). Isso prova que a perna realmente continuou. (Com
-   a regra do fundinho, essa promoção só prevalece até o próximo BOS emitido
-   renovar a referência para a sua pernada.)
+   (abaixo de `bear_leg_low`). Isso prova que a perna realmente continuou. Se o
+   rompimento do degrau nesse avanço foi só por pavio, a promoção sai **fraca**.
 
    - **2b. Re-anchor por sweep**: se, enquanto a perna se desenrola, uma
      varredura (sweep) fura acima do candidato atual, o candidato é re-ancorado
@@ -193,14 +252,21 @@ Por cima disso ainda roda o pipeline clássico de candidato/continuação (que p
      pega a liquidez acima e volta a cair, é desse topo varrido que a reversão
      vai partir. Isso só mexe no *candidato*, nunca na referência validada.
 
-3. **Estrutural é protegida**: uma referência estrutural (vinda de fundinho de
-   BOS ou de promoção por continuação) não pode ser deslizada por re-anchor
-   enquanto estiver **alcançável** — a menos de 4% do preço
-   (`bos_leg_origin_release_gap_pct`). Foi o que consertou o CHoCH do H4 de
-   maio/2026: disparou contra a mínima 78128 do BOS de 04/05 em vez do mínimo
-   local deslizante 78713 que o staleness escrevia. Além de 4%, a perna "fugiu"
-   da origem e o staleness volta a poder agir (caso H4 fev–mar, onde a queda
-   impulsiva não emite BOS e a referência ficaria presa a 10%+ do preço).
+3. **Estrutural é protegida enquanto alcançável**: uma referência estrutural
+   não pode ser deslizada por re-anchor enquanto estiver a menos de
+   **3 × ATR médio** do preço (`bos_leg_origin_release_gap_atr = 3.0` — o gap
+   é normalizado por volatilidade; o antigo 4% fixo fica de fallback para
+   séries curtas demais). Além do gap, a perna "fugiu" da origem e o staleness
+   volta a poder agir. *Por que ATR e não %:* 4% fixos valiam 8.5 ATR no BTC
+   30m (guarda quase absoluta → três pares de whipsaw na queda de junho) mas
+   0.6 ATR no SOL D1 (guarda nenhuma).
+
+#### `pending_bos.pullback_ref` — a origem de uma pending BOS viva
+
+Enquanto uma pending BOS está viva (avançou por fechamento mas todos os
+pullbacks foram rejeitados por pavio), a origem da pernada dela participa da
+cadeia — senão o CHoCH caía no trailing e disparava no meio do range enquanto a
+origem genuína estava guardada na pending (caso ETH H1 de 25/06).
 
 #### `choch_origin_<lado>` — o fallback "one-shot"
 
@@ -211,63 +277,168 @@ continuação). Nessa janela, se a reversão falhasse, a tendência ficaria
 serve de **fallback** até uma referência validada nova ser construída. É
 **one-shot** (não arma o lado oposto), para não criar ping-pong.
 
-#### `active_<lado>` — o fallback de bootstrap
+#### `active_<lado>` — o fallback de bootstrap (com duas supressões)
 
 No comecinho (`trend = NEUTRAL`, nada construído ainda), a referência trailing
 serve de fallback para o detector conseguir "virar" a primeira tendência se o
-chute inicial estiver errado.
+chute inicial estiver errado. Duas supressões evitam que ele atropele os
+mecanismos desenhados:
+
+- **Dentro da janela de CHoCH não confirmado** (origem armada): a saída de
+  reversão ali é o `CHOCH_FAILED` na origem, e o fallback a minava num nível
+  bem mais fraco (caso SOL H1 de 23/06: CHoCH prematuro no LH trailing 69.63
+  enquanto a origem estava em 74.97).
+- **Por N velas depois de um `CHOCH_FAILED` na mesma direção**
+  (`choch_failed_fallback_suppress_candles = 20`): uma falha não arma origem
+  (one-shot), então o fallback voltava a valer na hora e re-disparava o mesmo
+  whipsaw um dia depois (caso BTC H1 de 25/06). Referências estruturais não são
+  afetadas — uma reversão genuína (que promove origem via BOS) dispara normal.
 
 ### A confirmação do CHoCH: *persistência* (não pavio)
 
 Um furo de uma vela que volta na hora **não** é CHoCH — é sweep. Para ser CHoCH,
-o rompimento precisa **sustentar**: a vela do rompimento **mais** as
-`persistence_candles` velas seguintes têm que **fechar** todas além da referência
-(`is_sustained_break`). No M5, `persistence_candles = 5`.
+o rompimento precisa **sustentar**: a vela do rompimento **mais** as velas
+seguintes têm que **fechar** todas além da referência (`is_sustained_break`),
+por `persistence_candles` velas (produção: **12**, todos os TFs).
 
 ```
    referência de reversão ──────────────────────
                     ╷ volta na hora → SWEEP
    ┌──┐  ┌──┐      ╷╵
-   │  │  │  │   ┌──┐                  ┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐  → 6 fechamentos
-   └──┘  └──┘   └──┘  (sweep)         └──┘└──┘└──┘└──┘└──┘└──┘    acima → CHoCH
+   │  │  │  │   ┌──┐                  ┌──┐┌──┐┌──┐ ... ┌──┐  → persistência de
+   └──┘  └──┘   └──┘  (sweep)         └──┘└──┘└──┘     └──┘    fechamentos → CHoCH
 ```
 
 Se rompe mas **não** sustenta → vira `LIQUIDITY_SWEEP` (tendência inalterada).
 
+**Persistência de referência fraca** (`choch_weak_ref_persistence_candles = 4`,
+M5–H1): um CHoCH contra uma referência **fraca** usa essa contagem **no lugar**
+da base; referências **estruturais** usam a base. O check de `CHOCH_FAILED`
+também usa a base (a válvula de escape que desfaz um ciclo errado não pode ser
+atrasada).
+
+> Nota histórica: essa flag nasceu como *barreira* (endurecimento) quando a
+> persistência base intraday era 2 — um furo breve num nível fraco bastava para
+> virar o trend e começar um ciclo sujo. Desde que a base virou 12 uniforme
+> (2026-07-11), o valor 4 na prática **encurta** a persistência de ref fraca
+> intraday em relação à estrutural — é o que dá lead às marcas `CHoCH?*`
+> (seção 7). O papel se inverteu; pendente de revisão visual junto com a
+> escolha 8 vs 12 da base.
+
 ### O que o CHoCH reporta
 
 - **`price_level`** = o extremo do pivô que disparou
-- **`reference_price_level`** = a referência que foi rompida (o nível validado)
-- **`reference_timestamp`** = o timestamp do pivô validado (origem da linha) —
-  por isso a linha do CHoCH começa na origem real, não na vela do rompimento.
+- **`reference_price_level`** = a referência que foi rompida
+- **`reference_timestamp`** = o timestamp do pivô da referência (origem da
+  linha) — por isso a linha do CHoCH começa na origem real, não na vela do
+  rompimento.
+- **`reference_structural`** = se a referência rompida era estrutural ou fraca
+  (fraca → renderiza `CHoCH*`, pontilhado/apagado).
 
 ---
 
 ## 4. CHOCH_FAILED — quando a reversão não vinga
 
 Um CHoCH é **provisório** até um **BOS na nova direção** confirmá-lo. Enquanto
-não confirma, ele carrega uma **origem** (`bull_choch_origin` / `bear_choch_origin`)
-— o swing de onde o movimento do CHoCH partiu.
+não confirma, ele carrega uma **origem** — o nível cujo rompimento de volta
+invalida a reversão.
 
-Se o preço **rompe de volta** essa origem (sustentado) **antes** de um BOS
-confirmar, a reversão falhou:
+### A origem é o extremo mais fundo da perna (`choch_origin_leg_extreme`)
+
+A origem é o **extremo mais fundo da perna revertida** —
+`_extreme(active_<lado>, pending_<lado>)` — e não o pivô trailing sozinho. O
+trailing ratcheta em direção ao novo extremo pelos pivôs intermediários da
+perna de reversão; na hora do CHoCH ele podia estar colado no topo, armando uma
+falha *instantânea* no primeiro pullback raso (caso NEAR M5: o fundo real era
+1.967, o `active_low` tinha subido para 2.004 — a reversão genuína "falhava" na
+hora e a linha corria até a borda). Com a regra, `CHOCH_FAILED` caiu **~33%**
+na matriz de medição, convertendo pares de whipsaw em sweeps ou CHoCHs que
+seguram.
+
+### A falha clássica (origem rompida)
+
+Se o preço **rompe de volta** a origem (sustentado, persistência base) **antes**
+de um BOS confirmar, a reversão falhou:
 
 - dispara um **`CHOCH_FAILED`** (direção = a do CHoCH que falhou,
   `reference_price_level` = a origem rompida)
 - a `trend` **volta** para a anterior
 
 Como a tendência original nunca terminou de verdade, a escada de BOS dela
-**retoma do último BOS genuíno** (guardado em `pre_choch_*_bos_high/low` quando o
-CHoCH disparou), não da origem do CHoCH. Também é **one-shot** — uma falha não
-arma a origem oposta, então não há ping-pong.
+**retoma do último BOS genuíno** (guardado em stash quando o CHoCH disparou),
+não da origem do CHoCH. Também é **one-shot** — uma falha não arma a origem
+oposta, então não há ping-pong.
 
-No gráfico, uma linha de BOS/CHoCH que *parecia* ter sido cortada por esse CHoCH
-provisório **continua atravessando** até um CHoCH genuíno de verdade
+### CHoCH de referência fraca falha no próprio nível rompido
+(`choch_weak_ref_fail_at_broken_level = True`)
+
+Um CHoCH que disparou contra referência **fraca** arma, além da origem
+distante, **o próprio nível que rompeu** como referência de invalidação: aquele
+rompimento era a única evidência da reversão, então um fechamento sustentado de
+volta por ele emite um `CHOCH_FAILED` real (trend volta) no nível *mais
+apertado* dos dois. CHoCHs estruturais mantêm só a origem. (Caso BTC D1: o
+CHoCH bullish de 30/04 contra o re-anchor fraco 75998 colapsou em dias, mas a
+origem 59800 nunca foi rompida — o trend ficou bullish através de um crash de
+−30%, com cada fundo novo virando sweep e nenhum BOS de baixa no fundão.)
+
+Detalhe importante: uma falha no nível fraco **re-seeda a escada retomada no
+nível da falha** (como um CHoCH seeda seu ciclo) em vez de restaurar o stash
+antigo — a referência fraca existia justamente porque o ciclo velho estava
+gasto, e o restore puro foi medido apagando escadas inteiras (AAVE 4h, NEAR 1h).
+Falhas por origem restauram exatamente como antes.
+
+### Staging dos BOS "comidos" pela janela provisória
+(`stage_choch_failed_window_bos = True`)
+
+Enquanto um CHoCH está provisório, o trend está virado — então rompimentos de
+escada na direção *original* viram sweeps e são "comidos". Se o CHoCH falha,
+esses rompimentos eram BOS legítimos da tendência retomada. A flag grava cada
+rompimento de escada contra-CHoCH durante a janela e, no `CHOCH_FAILED`,
+estagia cada um como BOS aditivo (mesclado/dedupado como o impulse staging, e
+re-cronometrado por fechamento na composição — os só-pavio caem). Os extremos
+comidos também entram nos pisos restaurados. (Caso BTC H1 do crash de 18–25/06:
+a escada 62232 → 61870 → 59060 → 58030 apareceu inteira.) Se o CHoCH confirma,
+os registros são descartados.
+
+No gráfico, uma linha de BOS/CHoCH que *parecia* ter sido cortada por um CHoCH
+que depois falhou **continua atravessando** até um CHoCH genuíno
 (`MainChart.structureLineEndTime`).
 
 ---
 
-## 5. LIQUIDITY_SWEEP e os rótulos HL/LH
+## 5. O marcador de fizzle (`choch_fizzle_reclaim_candles = 30`)
+
+Existe um caso intermediário: um CHoCH cuja reversão **fizzlou** — o preço
+reclama (fechamento sustentado) **o próprio nível que o CHoCH rompeu** logo
+depois, e passa a ranger acima dele — mas a origem distante nunca é rompida,
+então o `CHOCH_FAILED` clássico não vem e a linha fica pendurada até a borda
+(caso SOL M15: CHoCH bearish em 80.72, reclamado em 14 velas, pendurado um dia).
+
+Quando o reclaim começa **dentro de K=30 velas** do CHoCH, o detector emite um
+`CHOCH_FAILED` **aditivo** (um *marcador*): ele **não vira o trend** — é
+flagado `provisional=True` só para os consumidores de replay
+(`LiquidityHuntEngine`/`NarrativeEngine`) o ignorarem — e serve para o frontend
+terminar a linha estagnada no reclaim. Um reclaim *depois* da janela é
+follow-through genuíno (a reversão segurou) e não é marcado; o K que separa os
+dois casos é um platô largo (fizzle real: 14 velas; reversão genuína medida:
+133).
+
+Na composição existe o **cancelamento de fizzle retomado**
+(`_drop_resumed_fizzle_markers`): um marcador seguido de um BOS da mesma
+direção **que sobrevive no gráfico** é descartado — o reclaim era um pullback
+fundo do qual a reversão se recuperou, não um fizzle (caso ETH H1: o ✕ falso
+deixava a linha do CHoCH bearish de 19/06 correr até a borda). O cancelamento
+vive na composição porque só ela sabe quais BOS sobrevivem ao re-anchor de
+fechamento — no caso SOL genuíno também existe um BOS depois do reclaim, mas é
+só-pavio e cai do gráfico, então o marcador lá fica de pé (correto).
+
+No frontend, um fizzle **não** dá a transparência de linha do `CHOCH_FAILED`
+real: o trend nunca voltou, então o CHoCH fizzlado ainda corta as linhas
+opostas anteriores — só a **própria** linha dele para no reclaim.
+
+---
+
+## 6. LIQUIDITY_SWEEP e os rótulos HL/LH
 
 - **`LIQUIDITY_SWEEP`**: pivô contra a tendência que **rompe** a referência mas
   **não sustenta**. É a "pegada de liquidez". Marca em `price_level` (o extremo
@@ -277,7 +448,41 @@ provisório **continua atravessando** até um CHoCH genuíno de verdade
 
 ---
 
-## 6. Timestamp das marcas (por que a marca cai "na vela certa")
+## 7. Marcas provisórias de live edge (`BOS?`, `CHoCH?`, `CHoCH?*`)
+
+Um pivô só existe `swing_lookback` velas depois do extremo — então, na borda
+direita do gráfico, estrutura pode já ter quebrado *por fechamento* sem que a
+máquina de estados possa emitir nada. As marcas provisórias preenchem essa
+janela, **computadas do estado final autoritativo do detector** (nunca
+re-derivadas fora dele), sempre **aditivas** e renderizadas **apagadas e
+pontilhadas** com sufixo `?`:
+
+- **`BOS?`** (`emit_provisional_bos = True`): uma continuação cujo piso da
+  escada já foi **fechado**-rompido, mas os pivôs de confirmação ainda não se
+  formaram. Só emite quando o piso atual é um extremo de BOS genuíno (não a
+  seed de um CHoCH fresco — ali a marca só duplicaria a linha do CHoCH).
+  Walk-forward: **85% confirmam**, lead mediano ~11 velas.
+- **`CHoCH?`** (`emit_provisional_choch = True`): uma reversão cuja referência
+  **estrutural** já foi rompida com a **persistência completa** de fechamentos,
+  faltando só o pivô. Walk-forward: ~50% confirmam (reversões no live edge são
+  inerentemente mais sujeitas a sweep — o estilo apagado comunica isso), lead
+  ~8 velas. Um `CHoCH?` supersede um `BOS?` do mesmo rabo (nunca desenham o par
+  contraditório).
+- **`CHoCH?*`** (`emit_provisional_choch_weak = True`): o mesmo, contra
+  referência **fraca**, sustentando a persistência da barreira (4). Existe
+  porque depois de um re-anchor a referência de pé é fraca — exatamente nos
+  ciclos liberados pelo displacement release, a reversão em formação ficava
+  invisível. Walk-forward intraday: 10/10 seguidas do CHoCH confirmado.
+
+Uma marca provisória é **superseded** pela confirmada quando os pivôs se formam,
+ou **desaparece** se o movimento falhar antes — um repaint de live edge
+intencional, sinalizado honestamente pelo estilo apagado. Provisórias nunca
+terminam linha de evento confirmado, ficam fora do replay do hunt/narrative, e
+são puladas pelos passes de composição.
+
+---
+
+## 8. Timestamp das marcas (por que a marca cai "na vela certa")
 
 O pivô que *decide* o evento se forma no extremo da **nova** perna. Mas marcar o
 evento ali atrasaria visualmente o rompimento. Então, depois de decidir o
@@ -292,129 +497,177 @@ do pivô.
 
 ---
 
-## 7. Os "re-anchors" (por que existem e o que fazem)
+## 9. Os "re-anchors" (por que existem e o que fazem)
 
 Em timeframes maiores (ou impulsos limpos), a tendência pode **travar**: uma
 perna de baixa deixa a referência de reversão de alta lá no **topo da perna**, e
 o CHoCH de alta só dispara quando o preço sobe tudo de volta. Os re-anchors
 **puxam a referência de reversão para um nível local**, **sem virar a `trend`**
 (o CHoCH ainda tem que confirmar sozinho). Eles só **apertam** (nunca afrouxam,
-nunca caem do lado errado do preço).
+nunca caem do lado errado do preço), e o nível que escrevem é sempre uma
+referência **fraca** (seção 1.4).
 
-Com `bos_leg_origin_choch_ref` (produção), duas regras extras valem para todos:
+Regras que valem para todos:
 
-- **Referência estrutural alcançável é intocável**: se `validated_choch_<lado>`
-  veio de um fundinho de BOS (ou promoção por continuação) e está a menos de 4%
-  do preço, o re-anchor recusa (ver seção 3). Só além desse gap ele age.
+- **Referência estrutural alcançável é intocável**: a menos de 3 × ATR do
+  preço, o re-anchor recusa (seção 3). Só além do gap ele age.
 - **Re-anchor só escreve em `validated_choch_<lado>`**: o nível sintético não
-  toca mais `active_<lado>`/`candidate_choch_<lado>`, que continuam sendo pivôs
+  toca `active_<lado>`/`candidate_choch_<lado>`, que continuam sendo pivôs
   reais. Sem isso, o nível do re-anchor entrava no snapshot da pernada do
-  próximo BOS e virava um "fundinho" estrutural falso (medido no M30: 63650 —
+  próximo BOS e virava um "fundinho estrutural" falso (medido no M30: 63650 —
   artefato de janela — no lugar do fundo genuíno 65469).
+- **Guarda de distância mínima** (`reanchor_min_price_gap_pct = 0.003`): recusa
+  ancorar num extremo local **colado no preço** (< 0,3%). Uma referência colada
+  é gatilho-fácil: um repique trivial confirma um CHoCH no meio do range que
+  falha logo.
 
-### 7.1 Chain re-anchor (`reanchor_mode="chain"`)
+### 9.1 Chain re-anchor (`reanchor_mode="chain"`)
 
-Conta os avanços de BOS na perna; ao atingir `reanchor_chain_threshold`,
-re-ancora para o extremo local da perna.
+Conta os avanços de BOS na perna; ao atingir o limiar, re-ancora para o extremo
+local da perna. Com **`reanchor_chain_establish_only = True`** (produção), o
+chain **só estabelece** uma referência que ficou cega (`validated_choch_<lado>`
+é `None`, típico de impulso limpo que nulou tudo). Ele **não aperta** uma
+referência fresca recém-promovida de um pullback bom.
 
-- **`reanchor_chain_establish_only = True`** (produção): o chain **só
-  estabelece** uma referência que ficou cega (`validated_choch_<lado>` é `None`,
-  típico de impulso limpo). Ele **não aperta** uma referência fresca que acabou
-  de ser promovida de um pullback bom. *(Ajuste recente — commit `e078ecd` —
-  resolveu o CHoCH ~58861 no M5, onde o chain rebaixava uma referência boa de
-  59316 para uma fraca de 58861.)*
+### 9.2 Staleness re-anchor (`stale_reanchor_candles`)
 
-### 7.2 Staleness re-anchor (`stale_reanchor_candles`)
+Se a tendência roda X velas além do último BOS/flip sem um novo, puxa a
+referência de reversão para o extremo local de uma janela recente. Por
+timeframe: M5=120, M15=90, M30=80, H1=80, H4=60, D1=40, W1=26.
 
-Independente do modo. Se a tendência roda X velas além do último BOS/flip sem um
-novo, puxa a referência de reversão para o extremo local de uma janela recente.
-Por timeframe: M5=120, M15=90, M30=80, H1=80, H4=60, D1=40, W1=26.
+### 9.3 Displacement release — ciclos "gastos"
+(`stale_reanchor_displacement_atr = 16.0`, `_candles = 15`)
 
-### 7.3 Guarda de distância mínima (`reanchor_min_price_gap_pct = 0.003`)
+O timer do staleness é cego para o quanto a perna **esticou**: depois de um
+movimento violento, a referência fica presa na origem pré-movimento pela janela
+inteira (H4 = 60 velas = 10 dias), e o repique mais forte do ciclo é consumido
+como sweep contra um nível a muitos ATRs de distância (caso ETH H4: o crash de
+05/06 deixou a referência em 2046; o repique de +23% até 1848 imprimiu como
+sweep e o gráfico ficou 35+ dias parado no BOS do meio do crash). Quando o gap
+entre a referência efetiva e o extremo corrente da perna atinge **16 × ATR
+médio**, o ciclo está *gasto*: o limiar de staleness encolhe para 15 velas e a
+janela de re-anchor passa a começar **no último avanço** (o range pós-movimento),
+então a referência cai no primeiro pullback do range novo. N=16 foi medido num
+platô estreito: 8 dispara em pernas rotineiras (o gap ref→extremo *é* a altura
+da perna), 20 perde o próprio caso ETH H4.
 
-Vale para **todos** os re-anchors. Recusa ancorar a referência num extremo local
-**colado no preço** (< 0,3%). Uma referência colada é "gatilho-fácil": um repique
-trivial confirma um CHoCH no meio do range que falha logo. Exigir a distância faz
-o rompimento ser uma reversão de verdade. *(Ajuste recente — commit `f799987` —
-resolveu o CHoCH ~59307 no M5.)*
-
-### 7.4 Displacement (`reanchor_mode="displacement"`)
+### 9.4 Displacement por FVG (`reanchor_mode="displacement"`)
 
 Alternativa baseada em FVG (gap de 3 velas). **Não está em produção** — produção
 usa `"chain"`.
 
 ---
 
-## 8. Impulse BOS staging (`impulse_bos_displacement_pct = 0.015`)
+## 10. Staging aditivo de BOS (marcas extras, máquina intocada)
 
-Num **impulso limpo** (fundos/topos consecutivos **sem** pivô oposto no meio), a
-máquina de estados avança a cada passo mas, sem pullback para confirmar, emite
-**no máximo um** BOS — então uma queda forte de várias pernas imprime um único
-trecho vazio em vez de uma escada.
+Três mecanismos adicionam BOS que a máquina de estados não pôde emitir, sempre
+numa **lista separada**, dedupados contra os BOS reais no final, sem tocar
+estado/referências/CHoCH (flag desligada = saída byte a byte idêntica):
 
-Esse recurso **estagia** um BOS em cada avanço cujo deslocamento além do BOS
-anterior passe de **1,5%**, numa **lista separada**. No fim, esses BOS estagiados
-são **deduplicados** contra os BOS reais e mesclados — então ele **só adiciona**
-marcas nos buracos do impulso. A máquina de estados, as referências e o CHoCH
-ficam **intocados** (com a flag desligada, a saída é byte a byte idêntica).
-
----
-
-## 9. O passo de composição (`_reanchor_bos_close_break`)
-
-Depois do detector, em `load_dashboard_data`, cada BOS passa por um ajuste final:
-
-- é **re-cronometrado** para a **primeira vela que FECHA** além do nível formado
-  que ele rompeu (dentro da janela em que o BOS fica ativo)
-- qualquer BOS cuja perna só **pavou** (nunca fechou) além do nível é **descartado**
-- define o `reference_timestamp` para a vela que **formou** o nível rompido (a
-  origem da linha)
-
-É uma confirmação conservadora por fechamento — pode deixar trechos longos sem
-evento no macro (intencional).
+- **Impulse staging** (`impulse_bos_displacement_pct = 0.015`): num impulso
+  limpo (fundos/topos consecutivos **sem** pivô oposto no meio) a máquina
+  avança a cada passo mas, sem pullback, emite no máximo um BOS deferido — uma
+  queda forte imprimia um trecho vazio. Cada avanço com deslocamento > 1,5%
+  além do BOS anterior estagia uma marca no buraco.
+- **Wick-rejected staging** (`stage_wick_rejected_bos = True`): quando o único
+  pullback de um avanço é um pavio (rejeitado pelo filtro da seção 2) e nenhum
+  pullback real chega antes do trend virar, o rompimento genuíno ficava sem
+  marca. Estagia o BOS na vela do fechamento, **sem** seedar candidato de CHoCH
+  (relaxar o filtro em si foi rejeitado por medição: cascateava e destruía um
+  CHoCH correto — a lição aditivo-sobre-máquina-de-estados).
+- **Failed-window staging** (`stage_choch_failed_window_bos = True`): os BOS
+  comidos pela janela de um CHoCH que depois falhou (seção 4).
 
 ---
 
-## 10. Parâmetros de produção por timeframe
+## 11. Os passes de composição (`load_dashboard_data`)
 
-`_INTERNAL_STRUCTURE_PARAMS` = `(swing_lookback, persistence_candles)`:
+Depois do detector, três passes conservadores rodam sobre a lista de eventos:
 
-| TF  | swing_lookback | persistence_candles | stale_reanchor |
-|-----|----------------|---------------------|----------------|
-| M5  | 2              | 5                   | 120            |
-| M15 | 3              | 8                   | 90             |
-| M30 | 5              | 12                  | 80             |
-| H1  | 5              | 12                  | 80             |
-| H4  | 5              | 8                   | 60             |
-| D1  | 5              | 8                   | 40             |
-| W1  | 5              | 12                  | 26             |
+1. **`_reanchor_bos_close_break`** — cada BOS é **re-cronometrado** para a
+   **primeira vela que FECHA** além do nível formado que rompeu (na janela em
+   que o BOS fica ativo); qualquer BOS cuja perna só **pavou** o nível é
+   **descartado**; define `reference_timestamp` (origem da linha). Confirmação
+   conservadora por fechamento — pode deixar trechos longos sem evento no macro
+   (intencional). Roda no internal **e** no major.
+2. **`_drop_pre_break_reference_bos`** — descarta um BOS de continuação cuja
+   referência se formou **antes** do fechamento confirmador do BOS anterior da
+   mesma perna: um pavio que furou o nível ainda-não-rompido ratcheta o extremo
+   da escada, e o próximo BOS reportaria esse pavio pré-rompimento como o nível
+   que quebrou (caso M15: BOS de 12:45 contra o pavio 61447 de uma tentativa
+   falhada). Um CHoCH reseta a restrição para a direção dele.
+3. **`_drop_resumed_fizzle_markers`** — o cancelamento de fizzle retomado
+   (seção 5). Só no internal.
 
-Flags ligadas em produção (no internal):
-`reanchor_mode="chain"`, `reanchor_chain_establish_only=True`,
-`reanchor_min_price_gap_pct=0.003`, `impulse_bos_displacement_pct=0.015`,
-`bos_pullback_max_wick_pct=0.4`, `confluence_filter=True`.
+Marcas provisórias (seção 7) são puladas pelos três.
 
 ---
 
-## 11. Resumo de uma frase por evento
+## 12. Parâmetros de produção por timeframe
+
+`_INTERNAL_STRUCTURE_PARAMS` = `(swing_lookback, persistence_candles)` — hoje
+**uniforme**: **(5, 12) em todos os timeframes** (medição de 2026-07-11 comparou
+persistência 8 vs 12 e manteve 12 até revisão visual).
+
+| TF  | swing_lookback | persistence | stale_reanchor | barreira ref fraca | min pullback ATR |
+|-----|----------------|-------------|----------------|--------------------|------------------|
+| M5  | 5              | 12          | 120            | 4                  | —                |
+| M15 | 5              | 12          | 90             | 4                  | 1.5              |
+| M30 | 5              | 12          | 80             | 4                  | 1.5              |
+| H1  | 5              | 12          | 80             | 4                  | 1.5              |
+| H4  | 5              | 12          | 60             | —                  | —                |
+| D1  | 5              | 12          | 40             | —                  | —                |
+| W1  | 5              | 12          | 26             | —                  | —                |
+
+Flags ligadas em produção no internal (todas `off` por padrão no construtor):
+
+```
+reanchor_mode="chain"                       reanchor_chain_establish_only=True
+reanchor_min_price_gap_pct=0.003            impulse_bos_displacement_pct=0.015
+bos_pullback_max_wick_pct=0.4               stage_wick_rejected_bos=True
+bos_leg_origin_choch_ref=True               bos_leg_origin_release_gap_atr=3.0
+bos_leg_origin_min_pullback_atr=1.5 (M15–H1)
+bos_leg_origin_require_close_break=True     bos_floor_require_close_break=True
+choch_weak_ref_persistence_candles=4 (M5–H1)
+choch_origin_leg_extreme=True               choch_fizzle_reclaim_candles=30
+choch_failed_fallback_suppress_candles=20   stage_choch_failed_window_bos=True
+choch_weak_ref_fail_at_broken_level=True
+stale_reanchor_displacement_atr=16.0        stale_reanchor_displacement_candles=15
+emit_provisional_bos=True                   emit_provisional_choch=True
+emit_provisional_choch_weak=True            confluence_filter=True
+```
+
+---
+
+## 13. Resumo de uma frase por evento
 
 - **BOS** — a tendência continuou: novo extremo estrutural confirmado por
-  *fechamento* + *escada* + *pullback real*. Linha no degrau anterior.
+  *fechamento* + *escada* + *pullback real*. Linha no degrau anterior
+  (confirmado por fechamento).
 - **CHoCH** — a tendência mudou: rompimento **sustentado** da referência de
-  reversão (pullback do último BOS com continuação). Vira a `trend`.
-- **CHOCH_FAILED** — a reversão não vingou: preço voltou pela origem antes de um
-  BOS confirmar; a `trend` volta.
+  reversão (o fundinho/topo da pernada do último BOS). Vira a `trend`.
+  `CHoCH*` = referência fraca (re-anchor/fallback), persistência própria.
+- **CHOCH_FAILED** — a reversão não vingou: preço voltou pela origem (extremo
+  mais fundo da perna) — ou, para CHoCH de ref fraca, pelo próprio nível
+  rompido — antes de um BOS confirmar; a `trend` volta.
+- **Fizzle (✕ aditivo)** — o CHoCH ficou de pé mas o preço reclamou o nível
+  rompido em ≤30 velas: marcador que termina a linha, **sem** virar o trend.
 - **LIQUIDITY_SWEEP** — furou mas não sustentou: pegada de liquidez, tendência
   inalterada.
+- **`BOS?` / `CHoCH?` / `CHoCH?*`** — live edge: a quebra já aconteceu por
+  fechamento, os pivôs ainda não se formaram. Apagado, pontilhado, pode
+  repintar.
 - **HL/LH** — só um rótulo de pivô que não rompeu nada.
 
 ---
 
-## 12. Onde olhar no código
+## 14. Onde olhar no código
 
 | O quê | Arquivo / símbolo |
 |-------|-------------------|
 | Máquina de estados completa | `liquidity/detectors/internal_structure.py` → `InternalStructureDetector.detect` |
-| Helpers (sustentação, close-break, FVG, confluence) | `liquidity/detectors/_common.py` |
-| Re-anchor de close-break + parâmetros de produção | `app/dashboard_data.py` |
-| Desenho das linhas BOS/CHoCH | `frontend/src/components/MainChart.tsx` → `structureLineEndTime` |
+| Helpers (sustentação, close-break, confluence) | `liquidity/detectors/_common.py` |
+| Passes de composição + parâmetros de produção | `app/dashboard_data.py` (`_run_internal_structure`, `_build_internal_detector`) |
+| Desenho das linhas BOS/CHoCH (terminação, fizzle, provisórias) | `frontend/src/components/MainChart.tsx` → `structureLineEndTime` |
+| Fixtures de regressão (um caso real por flag) | `tests/liquidity/detectors/data/` |
+| Histórico de cada flag (caso motivador + medição) | `CLAUDE.md` na raiz do repo |

@@ -1,4 +1,23 @@
-# Retail Crowd Psychology Estimation
+# Psychology layer
+
+The `psychology` layer models crowd behavior and institutional flow from
+price structure and derivatives market state. Five analyzers, all producing
+descriptive observations (never signals):
+
+| Analyzer | Output | Reads |
+|----------|--------|-------|
+| `RetailTrapAnalyzer` | `RetailBiasEstimate` — what retail is likely thinking/doing | HTF trend, structure events, liquidity zones (detailed below) |
+| `ManipulationCycleDetector` | `ManipulationCycle` — accumulation → sweep → expansion Wyckoff/SMC cycles, retrospective and prospective | zones, sweeps, BOS, volume delta |
+| `BehaviorDivergenceAnalyzer` | `BehaviorDivergence` — institutional flow opposing visible price direction (distribution / accumulation / exhaustion / absorption) | volume delta, zone proximity, structure events |
+| `LeverageLiquidationEstimator` | `LeverageLiquidationMap` — projected force-liquidation bands per leverage tier (10x/25x/50x/100x) around real entry areas | open interest, funding, long/short ratio, zones, POI zones |
+| `OIRegimeAnalyzer` | `OIAnalysis` — the price × OI matrix (long/short buildup, covering, liquidation) plus per-event OI qualification (new money / covering / flush) | candles, OI history, structure events |
+
+Parameters that depend on candle cadence (accumulation windows, divergence
+windows) are timeframe-adaptive. The rest of this document details the
+retail bias estimation; the other analyzers are documented in their module
+docstrings and in `CLAUDE.md`.
+
+## Retail crowd psychology estimation
 
 `RetailTrapAnalyzer` (`liquidity_hunter/psychology/analyzers/retail_trap.py`)
 estimates what retail traders are likely **thinking and doing** given the
