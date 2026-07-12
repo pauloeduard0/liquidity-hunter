@@ -3297,3 +3297,132 @@ def test_provisional_choch_weak_marks_forming_reversal_on_weak_reference() -> No
     assert [(e.timestamp, e.event, e.price_level) for e in non_provisional] == [
         (e.timestamp, e.event, e.price_level) for e in off if not e.provisional
     ]
+
+
+# The ETHUSDT M30 "stuck BOS" case: a 2026-07-06 candle wicked up to 1833.00 but
+# closed at 1812.43 (a failed push). That advance ratcheted the BOS staircase gate
+# (`last_bull_bos_high`) up to the 1833 wick, but the pending BOS was then discarded
+# -- its confirming pullback (1756.62) came in below the prior BOS's confirming low
+# (1772.84) yet stayed above the leg origin, so it neither emitted nor reversed. The
+# gate stayed pinned at 1833, so the 07-11 rally topping at 1829.52 could never
+# advance (below the pinned gate) and printed only LOWER_HIGH labels -- the chart hung
+# on the 07-04 BOS while price made a full new leg. `rollback_staircase_on_discard`
+# restores the gate to its pre-advance value (1808) on that discard, so the later
+# continuation advances and emits. The fixture is the full production internal-detector
+# slice (from the structural anchor), since the ATR guards use the series-wide mean
+# true range.
+_ETH_30M_STAIRCASE_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "ethusdt_30m_2026_06_15_07_12.json"
+)
+
+
+def _load_eth_30m_staircase_candles() -> list[Candle]:
+    rows = json.loads(_ETH_30M_STAIRCASE_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="ETHUSDT",
+            timeframe=TimeFrame.M30,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _eth_30m_staircase_detector(*, rollback: bool) -> InternalStructureDetector:
+    # The full production M30 wiring (the release-gap / min-pullback ATR guards use
+    # the series-wide mean true range, so only the production flag set reproduces
+    # production state); the staircase rollback is the toggle under test.
+    return InternalStructureDetector(
+        swing_lookback=5,
+        persistence_candles=12,
+        confluence_filter=False,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=80,
+        stale_reanchor_displacement_atr=16.0,
+        stale_reanchor_displacement_candles=15,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_pct=0.04,
+        bos_leg_origin_release_gap_atr=3.0,
+        bos_leg_origin_min_pullback_atr=1.5,
+        bos_leg_origin_require_close_break=True,
+        bos_floor_require_close_break=True,
+        choch_weak_ref_persistence_candles=4,
+        emit_provisional_bos=True,
+        emit_provisional_choch=True,
+        emit_provisional_choch_weak=True,
+        choch_origin_leg_extreme=True,
+        choch_fizzle_reclaim_candles=30,
+        choch_failed_fallback_suppress_candles=20,
+        stage_choch_failed_window_bos=True,
+        choch_weak_ref_fail_at_broken_level=True,
+        rollback_staircase_on_discard=rollback,
+    )
+
+
+def test_staircase_rollback_off_leaves_the_stuck_bos() -> None:
+    """Off, the phantom 07-06 advance pins the staircase at the 1833 wick, so the
+    07-11 rally emits no BOS: the last bullish BOS stays at 07-04 (px 1808)."""
+    detector = _eth_30m_staircase_detector(rollback=False)
+    events = detector.detect(_load_eth_30m_staircase_candles())
+
+    bullish_bos = [
+        e
+        for e in events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BULLISH
+        and not e.provisional
+    ]
+    assert bullish_bos[-1].timestamp == datetime(2026, 7, 4, 13, tzinfo=UTC)
+    assert bullish_bos[-1].price_level == 1808.00
+    # No bullish BOS forms anywhere in the 07-11 rally.
+    assert not any(e.timestamp > datetime(2026, 7, 5, tzinfo=UTC) for e in bullish_bos)
+
+
+def test_staircase_rollback_restores_the_gate_and_emits_the_continuation() -> None:
+    """On, discarding the phantom 07-06 advance rolls the staircase gate back to
+    1808, so the 07-11 rally advances and emits a bullish continuation BOS against
+    the 1812.85 swing high it broke -- one additive structural mark, the rest of
+    the BOS/CHoCH sequence unchanged (only trailing HL/LH labels shift downstream,
+    never a structural event removed -- the rollback never touches the CHoCH path)."""
+    candles = _load_eth_30m_staircase_candles()
+    off = _eth_30m_staircase_detector(rollback=False).detect(candles)
+    on = _eth_30m_staircase_detector(rollback=True).detect(candles)
+
+    structural = {
+        StructureEvent.BREAK_OF_STRUCTURE,
+        StructureEvent.CHANGE_OF_CHARACTER,
+        StructureEvent.CHOCH_FAILED,
+    }
+
+    def key(events: list[MarketStructure]) -> list[tuple[object, ...]]:
+        return [
+            (e.timestamp, e.event, e.direction, e.price_level, e.reference_price_level)
+            for e in events
+            if e.event in structural and not e.provisional
+        ]
+
+    off_struct, on_struct = key(off), key(on)
+    added = [e for e in on_struct if e not in off_struct]
+    removed = [e for e in off_struct if e not in on_struct]
+    assert added == [
+        (
+            datetime(2026, 7, 10, 8, tzinfo=UTC),
+            StructureEvent.BREAK_OF_STRUCTURE,
+            MarketDirection.BULLISH,
+            1811.23,
+            1812.85,
+        )
+    ]
+    assert removed == []

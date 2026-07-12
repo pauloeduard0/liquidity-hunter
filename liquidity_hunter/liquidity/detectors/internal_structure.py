@@ -265,6 +265,12 @@ class _PendingBOS:
     # `bos_leg_origin_require_close_break`). `True` when `floor` is `None` (the
     # first BOS of a leg has no floor to close through) or the feature is off.
     floor_closed: bool = True
+    # The staircase gate value (`last_bull_bos_high`/`last_bear_bos_low`) *before*
+    # this advance ratcheted it, so a phantom advance discarded without emitting
+    # (a too-deep confirming pullback that fails the origin-staircase gate) can
+    # roll the gate back rather than leave it pinned at this advance's pivot wick.
+    # Only used when `rollback_staircase_on_discard` is set.
+    prev_staircase: float | None = None
 
 
 class InternalStructureDetector(MarketStructureDetector):
@@ -370,6 +376,29 @@ class InternalStructureDetector(MarketStructureDetector):
     change the CHoCH sequence; it only fills a genuinely-missing mark. A pending BOS
     that later gets a real pullback still emits its normal BOS (deduping the staged
     mark). With the flag off the output is byte-for-byte identical.
+
+    `rollback_staircase_on_discard` (default `False`) undoes a **phantom advance**'s
+    ratchet of the BOS staircase gate (`last_bull_bos_high`/`last_bear_bos_low`). A
+    high pivot beyond the gate advances the state (creating a pending BOS) and
+    ratchets the gate up to that pivot -- but if the pending BOS is then *discarded
+    without emitting* because its confirming pullback came in too deep (below the
+    prior BOS's confirming pullback `last_bullish_bos_origin`, yet still above the
+    leg origin, so it is neither an emitted BOS nor a reversal), the gate stays
+    pinned at that pivot -- often a long upper-wick spike to a new high that closed
+    far lower. A later genuine continuation to a *slightly lower* high can then never
+    advance (it is below the pinned gate) and prints only `LOWER_HIGH` labels, so the
+    chart hangs on a stale BOS while price makes new structure. The motivating case
+    (ETHUSDT M30): a 07-06 candle wicked to 1833 (closed 1812), pinning the gate at
+    1833; the 07-11 rally topped at 1829 and printed no BOS, leaving the last BOS
+    hanging from 07-04. When set, discarding such a pending BOS restores the gate to
+    its pre-advance value (stored in `_PendingBOS.prev_staircase`), so the later
+    continuation advances and confirms normally. It fires **only** on the discard
+    path (never on an emitted BOS or a genuine continuation) and touches nothing but
+    the gate value -- not the confirming-pullback gate, `candidate_choch_<side>`, or
+    any CHoCH state -- so it cannot cascade the reversal sequence (measured
+    BTC/ETH/SOL x 15m..1d: 5/15 combos change, all `+1` BOS or a reference
+    correction, zero structure removed). With the flag off the output is
+    byte-for-byte identical.
 
     `bos_leg_origin_choch_ref` (default `False`) promotes the **leg origin** of a
     confirmed BOS -- the extreme the breaking leg launched from
@@ -605,6 +634,7 @@ class InternalStructureDetector(MarketStructureDetector):
         impulse_bos_displacement_pct: float | None = None,
         bos_pullback_max_wick_pct: float | None = None,
         stage_wick_rejected_bos: bool = False,
+        rollback_staircase_on_discard: bool = False,
         bos_leg_origin_choch_ref: bool = False,
         bos_leg_origin_release_gap_pct: float | None = None,
         bos_leg_origin_release_gap_atr: float | None = None,
@@ -672,6 +702,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._impulse_bos_displacement_pct = impulse_bos_displacement_pct
         self._bos_pullback_max_wick_pct = bos_pullback_max_wick_pct
         self._stage_wick_rejected_bos = stage_wick_rejected_bos
+        self._rollback_staircase_on_discard = rollback_staircase_on_discard
         if bos_leg_origin_release_gap_pct is not None and bos_leg_origin_release_gap_pct <= 0:
             raise ValueError("bos_leg_origin_release_gap_pct must be positive")
         if bos_leg_origin_release_gap_atr is not None and bos_leg_origin_release_gap_atr <= 0:
@@ -1411,6 +1442,17 @@ class InternalStructureDetector(MarketStructureDetector):
                             validated_choch_high = pb
                             validated_choch_high_structural = True
                             choch_origin_high = None
+                        # Mirror of the bullish case: a phantom advance blocked by
+                        # the origin-staircase gate (a lower-high below the leg
+                        # origin but above the prior BOS's confirming high) rolls
+                        # the staircase gate back rather than leaving it pinned.
+                        if (
+                            self._rollback_staircase_on_discard
+                            and pb is not None
+                            and price < pb.price
+                            and pending_bos.prev_staircase is not None
+                        ):
+                            last_bear_bos_low = pending_bos.prev_staircase
                         pending_bos = None
 
                 # Validated reference takes priority; choch_origin_high is the
@@ -1923,6 +1965,7 @@ class InternalStructureDetector(MarketStructureDetector):
                                 bull_leg_high = price
                             # Extend the BOS staircase: the next bullish
                             # continuation must break above this new high.
+                            prev_bull_staircase_snapshot = last_bull_bos_high
                             last_bull_bos_high = price
                             bull_floor_from_bos = True
                             # This BOS's extreme becomes the formed level the next
@@ -2067,6 +2110,7 @@ class InternalStructureDetector(MarketStructureDetector):
                                     pullback_ref=pullback_ref_snapshot,
                                     floor=floor_at_advance,
                                     floor_closed=floor_closed,
+                                    prev_staircase=prev_bull_staircase_snapshot,
                                 )
                 elif price < active_high.price:
                     emit(
@@ -2223,6 +2267,19 @@ class InternalStructureDetector(MarketStructureDetector):
                             validated_choch_low = pb
                             validated_choch_low_structural = True
                             choch_origin_low = None
+                        # Phantom advance blocked by the origin-staircase gate
+                        # (a higher-low above the leg origin but below the prior
+                        # BOS's confirming low): it never emitted and is not a
+                        # reversal, so it must not leave the staircase gate pinned
+                        # at this advance's pivot wick -- roll it back so a later
+                        # genuine continuation can still advance.
+                        if (
+                            self._rollback_staircase_on_discard
+                            and pb is not None
+                            and price > pb.price
+                            and pending_bos.prev_staircase is not None
+                        ):
+                            last_bull_bos_high = pending_bos.prev_staircase
                         pending_bos = None
 
                 # Validated reference takes priority; choch_origin_low is the
@@ -2680,6 +2737,7 @@ class InternalStructureDetector(MarketStructureDetector):
                                 bear_leg_low = price
                             # Extend the BOS staircase: the next bearish
                             # continuation must break below this new low.
+                            prev_bear_staircase_snapshot = last_bear_bos_low
                             last_bear_bos_low = price
                             bear_floor_from_bos = True
                             # This BOS's extreme becomes the formed level the next
@@ -2827,6 +2885,7 @@ class InternalStructureDetector(MarketStructureDetector):
                                     pullback_ref=pullback_ref_snapshot,
                                     floor=floor_at_advance,
                                     floor_closed=floor_closed,
+                                    prev_staircase=prev_bear_staircase_snapshot,
                                 )
                 elif price > active_low.price:
                     emit(

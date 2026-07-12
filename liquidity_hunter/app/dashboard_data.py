@@ -752,6 +752,19 @@ def _build_internal_detector(
         # leg origin -- the BTC D1 -30% crash with the trend stuck bullish.
         # See _CHOCH_WEAK_REF_FAIL_AT_BROKEN_LEVEL.
         choch_weak_ref_fail_at_broken_level=_CHOCH_WEAK_REF_FAIL_AT_BROKEN_LEVEL,
+        # A pending BOS discarded without emitting -- a phantom advance whose
+        # confirming pullback came in too deep (below the prior BOS's confirming
+        # pullback but still above the leg origin, so it neither emits nor
+        # reverses) -- rolls the staircase gate back to its pre-advance value
+        # instead of leaving it pinned at that advance's pivot wick. Without this
+        # a single failed push (a long upper wick to a new high that closed lower)
+        # freezes the staircase at the wick top, so a later genuine continuation
+        # to a slightly lower high can never advance and the chart sits on a stale
+        # BOS while price makes new structure (the ETH M30 case: a 07-06 wick to
+        # 1833 that closed at 1812 pinned the staircase at 1833, so the 07-11 rally
+        # topping at 1829 printed no BOS -- the last one hung from 07-04).
+        # See rollback_staircase_on_discard.
+        rollback_staircase_on_discard=True,
     )
 
 

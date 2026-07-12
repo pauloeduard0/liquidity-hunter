@@ -827,9 +827,10 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   populate `market_structure_events` and `internal_structure_events`
   respectively, both filtered to the visible window. The internal detector's
   base `swing_lookback`/`persistence_candles` are resolved **per timeframe** from
-  `_INTERNAL_STRUCTURE_PARAMS` (M5=`(6, 4)`, M15=`(6, 2)`, M30=`(5, 2)`,
-  H1=`(4, 2)`, H4=`(5, 8)`, D1=`(5, 8)`, W1=`(5, 12)`; `_DEFAULT_INTERNAL_PARAMS
-  = (5, 12)`) — so the constructor defaults (`2`/`5`) apply only to a
+  `_INTERNAL_STRUCTURE_PARAMS` (currently a uniform `(5, 12)` for every timeframe
+  M5→W1, matching `_DEFAULT_INTERNAL_PARAMS = (5, 12)`; the per-TF dict is kept so
+  timeframes can diverge again without touching the wiring) — so the constructor
+  defaults (`swing_lookback=2`/`persistence_candles=5`) apply only to a
   directly-built detector, not the production wiring. The internal detector's
   output is passed through **`_reanchor_bos_close_break`** before the visible
   filter: each `BREAK_OF_STRUCTURE` is
@@ -2088,6 +2089,44 @@ the 07-02 recovery CHoCH untouched). Real-data regression fixture:
 no bearish BOS after January, on → real failure + fundão BOS + trend bearish).
 Off = byte-for-byte identical. Not mirrored into `SwingStructureDetector` (not
 drawn).
+
+**Staircase rollback on a discarded phantom advance**
+(`InternalStructureDetector`, as of 2026-07-12): `rollback_staircase_on_discard`
+(constructor default `False`; wired **`True`** in `load_dashboard_data`). A high
+pivot beyond the BOS staircase gate (`last_bull_bos_high`/`last_bear_bos_low`)
+advances the state machine (creating a pending BOS) and ratchets the gate up to
+that pivot — but the pivot can be a long upper-wick spike to a new high that
+*closed* far lower (a failed push). If the pending BOS is then **discarded
+without emitting** — its confirming pullback comes in below the prior BOS's
+confirming pullback (`last_bullish_bos_origin`) yet stays above the leg origin,
+so it is neither an emitted BOS nor a reversal (the CHoCH path) — the gate stays
+pinned at that wick top. A later *genuine* continuation to a slightly lower high
+can then never advance (it sits below the pinned gate) and prints only
+`LOWER_HIGH`/`HIGHER_LOW` labels, so the chart hangs on a stale BOS while price
+makes a full new leg. Motivating case (measured, ETHUSDT M30 `limit=1200`): a
+07-06 candle wicked to 1833.00 but closed 1812.43, pinning the gate at 1833; its
+pending BOS was discarded when the 1756.62 pullback came in below the prior
+1772.84 confirming low; the 07-11 rally topping at **1829.52 < 1833** printed no
+BOS and the last one hung from 07-04. When set, discarding such a pending BOS
+restores the gate to its pre-advance value (`_PendingBOS.prev_staircase`, snapshotted
+before the advance ratcheted it), so the 07-11 continuation advances and emits a
+BOS against the 1812.85 swing high it broke. It fires **only** on the discard
+path (never on an emitted BOS or a genuine continuation) and touches **nothing but
+the gate value** — not the confirming-pullback gate, `candidate_choch_<side>`, or
+any CHoCH state — so it cannot cascade the reversal sequence (the
+additive-over-state-machine discipline). Measured (BTC/ETH/SOL × 15m/30m/1h/4h/1d,
+`limit=1200`): **5/15 combos change**, each `+1` BOS (ETH M30 the target, ETH 15m,
+ETH 4h, a BTC 4h live-edge provisional) or a single reference correction (SOL 30m
+`+1/−1`, a deeper/earlier reference); the other 10 identical, zero structure
+removed. The relaxed-confirm-gate alternative (`bos_confirm_ignore_origin_staircase`,
+emitting the failed 1833 push itself) was **rejected by measurement**: it seeds
+`candidate_choch_<side>` and cascaded the CHoCH sequence (ETH 15m +4/−7, BTC 1d
++1/−3). Real-data regression fixture:
+`tests/liquidity/detectors/data/ethusdt_30m_2026_06_15_07_12.json` (1309-candle
+production M30 slice from the structural anchor; off → last bullish BOS 07-04, on →
+adds the 07-10 08:00 BOS ref 1812.85, re-timed to 07-11 15:00 by
+`_reanchor_bos_close_break`). Off = byte-for-byte identical. Not mirrored into
+`SwingStructureDetector` (not drawn).
 
 **CHoCH origin = deepest leg extreme** (`InternalStructureDetector`, as of
 2026-07-05): `choch_origin_leg_extreme` (constructor default `False`; wired
