@@ -209,3 +209,7 @@ npm run build   # production build
 - [`docs/psychology.md`](liquidity_hunter/docs/psychology.md) — retail crowd psychology estimation.
 - `CLAUDE.md` — the living design log: every detector flag, its motivating
   case, the measurement that validated it, and the alternatives rejected.
+
+## License
+
+[MIT](LICENSE)
