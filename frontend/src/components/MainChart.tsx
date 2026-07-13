@@ -1080,11 +1080,26 @@ export function MainChart({
     }
 
     for (const event of structureEvents) {
+      // A CHoCH that later failed is represented solely by its `CHoCH ✕`
+      // marker (which spans the same origin->failure lifetime). Drawing the
+      // original CHoCH line too would plot two overlapping CHoCHs, so skip it —
+      // the failure mark replaces it. (Fizzle markers are excluded from
+      // `isFailedChoch`, so a fizzled CHoCH still renders normally.)
+      if (event.event === 'change_of_character' && isFailedChoch(event, scopeEvents)) {
+        continue
+      }
       const style = STRUCTURE_EVENT_STYLES[event.event]
       const oiSuffix = oiSuffixByEvent.get(`${event.timestamp}|${event.event}`)
       const directionIcon = TREND_ICONS[event.direction] ?? ''
       const startTime = toUtcTimestamp(event.timestamp)
-      const endTime = structureLineEndTime(event, scopeEvents, lastCandleTime)
+      // A failed CHoCH is a point-in-time invalidation, not a live reference
+      // level: its line spans only the CHoCH's own lifetime (the broken level's
+      // origin -> the failure candle) and never runs forward into later price
+      // action the way a BOS/CHoCH reference line does.
+      const endTime =
+        event.event === 'choch_failed'
+          ? startTime
+          : structureLineEndTime(event, scopeEvents, lastCandleTime)
 
       const linePrice =
         (event.event === 'change_of_character' ||
@@ -1095,7 +1110,9 @@ export function MainChart({
           : event.price_level
 
       const lineStartTime =
-        (event.event === 'change_of_character' || event.event === 'break_of_structure') &&
+        (event.event === 'change_of_character' ||
+          event.event === 'break_of_structure' ||
+          event.event === 'choch_failed') &&
         event.reference_timestamp != null
           ? toUtcTimestamp(event.reference_timestamp)
           : startTime
