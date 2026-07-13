@@ -650,6 +650,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_fizzle_reclaim_candles: int | None = None,
         choch_failed_fallback_suppress_candles: int | None = None,
         stage_choch_failed_window_bos: bool = False,
+        choch_success_displacement_atr: float | None = None,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -686,6 +687,8 @@ class InternalStructureDetector(MarketStructureDetector):
             raise ValueError("choch_failed_fallback_suppress_candles must be at least 1")
         if impulse_bos_displacement_pct is not None and impulse_bos_displacement_pct <= 0:
             raise ValueError("impulse_bos_displacement_pct must be positive")
+        if choch_success_displacement_atr is not None and choch_success_displacement_atr <= 0:
+            raise ValueError("choch_success_displacement_atr must be positive")
         if bos_pullback_max_wick_pct is not None and not 0 < bos_pullback_max_wick_pct <= 1:
             raise ValueError("bos_pullback_max_wick_pct must be in (0, 1]")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
@@ -729,6 +732,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._choch_fizzle_reclaim_candles = choch_fizzle_reclaim_candles
         self._choch_failed_fallback_suppress_candles = choch_failed_fallback_suppress_candles
         self._stage_choch_failed_window_bos = stage_choch_failed_window_bos
+        self._choch_success_displacement_atr = choch_success_displacement_atr
         # The state-machine trend after the most recent `detect()` call
         # (mirrors `SwingStructureDetector.final_trend`). The single source of
         # truth for "the standing trend": unlike the last emitted event's
@@ -762,6 +766,7 @@ class InternalStructureDetector(MarketStructureDetector):
             self._bos_leg_origin_release_gap_atr is not None
             or self._bos_leg_origin_min_pullback_atr is not None
             or self._stale_reanchor_displacement_atr is not None
+            or self._choch_success_displacement_atr is not None
         ) and len(candles) > 1:
             mean_tr_pct = fmean(
                 max(
@@ -903,6 +908,19 @@ class InternalStructureDetector(MarketStructureDetector):
         # of origin and this level; structural CHoCHs are untouched.
         bull_choch_fail_ref: Pivot | None = None
         bear_choch_fail_ref: Pivot | None = None
+        # The pivot-loop index at which each `*_choch_origin` was armed (the
+        # confirming pivot of the CHoCH that launched the still-provisional
+        # reversal). The CHOCH_FAILED check scans *backward* for the candle that
+        # reclaimed the fail level, and that scan is bounded below by the
+        # previous same-kind pivot -- which can precede the CHoCH itself. A
+        # reversal can only be invalidated by a reclaim that comes *after* it
+        # formed, so the scan (and its `confirms_break` guard) is clamped to
+        # start past this index; otherwise the pre-CHoCH leg (e.g. the very
+        # rally the bearish CHoCH later reversed) is mis-attributed as the
+        # "reclaim" and the failure lands with a timestamp *earlier* than the
+        # CHoCH it fails (the NEAR H1 2026-06-15 phantom `CHoCH ✕ ▼` mid-rally).
+        bull_choch_arm_index = -1
+        bear_choch_arm_index = -1
         # Post-failure fallback suppression
         # (`choch_failed_fallback_suppress_candles`): the pivot-loop index at
         # which the most recent *real* CHOCH_FAILED of each direction was
@@ -1552,12 +1570,37 @@ class InternalStructureDetector(MarketStructureDetector):
                     and bear_choch_fail_ref.price < bear_choch_origin.price
                     else bear_choch_origin
                 )
+                # Mirror of the bullish case: an impulsive bearish reversal leg
+                # that drops >= N x ATR% below the level whose reclaim would fail
+                # it has plainly succeeded, so retire the origin rather than let a
+                # later mean-reversion bounce fire a false CHOCH_FAILED. See
+                # `choch_success_displacement_atr`.
+                if (
+                    self._choch_success_displacement_atr is not None
+                    and mean_tr_pct is not None
+                    and mean_tr_pct > 0
+                    and bear_fail_pivot is not None
+                    and bear_leg_low is not None
+                    and candles[current_index].close > 0
+                    and (bear_fail_pivot.price - bear_leg_low)
+                    / candles[current_index].close
+                    >= self._choch_success_displacement_atr * mean_tr_pct
+                ):
+                    bear_choch_origin = None
+                    bear_choch_fail_ref = None
+                    bear_fail_pivot = None
+                # The reclaim can only invalidate the CHoCH after it formed:
+                # start the scan past the arming pivot, never before (else the
+                # pre-CHoCH rally is mis-read as the reclaim -- see
+                # `bear_choch_arm_index`).
+                bear_fail_scan_start = max(prev_high_pivot_index + 1, bear_choch_arm_index + 1)
                 if (
                     trend is MarketDirection.BEARISH
                     and bear_fail_pivot is not None
                     and price > bear_fail_pivot.price
+                    and bear_fail_scan_start <= current_index
                     and confirms_break(
-                        prev_high_pivot_index + 1,
+                        bear_fail_scan_start,
                         current_index,
                         bear_fail_pivot.price,
                         bullish=True,
@@ -1571,7 +1614,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     break_candle = candles[
                         find_sustained_break_index(
                             candles,
-                            prev_high_pivot_index + 1,
+                            bear_fail_scan_start,
                             current_index,
                             bear_fail_pivot.price,
                             bullish=True,
@@ -1781,6 +1824,9 @@ class InternalStructureDetector(MarketStructureDetector):
                         if self._choch_origin_leg_extreme
                         else active_low
                     )
+                    # The reclaim that would fail this CHoCH must come after it
+                    # formed: record the arming pivot to bound the failure scan.
+                    bull_choch_arm_index = current_index
                     # A weak-referenced CHoCH also arms its own broken level as
                     # an invalidation reference: the synthetic level's break was
                     # the reversal's only evidence, so a sustained close back
@@ -2352,12 +2398,43 @@ class InternalStructureDetector(MarketStructureDetector):
                     and bull_choch_fail_ref.price > bull_choch_origin.price
                     else bull_choch_origin
                 )
+                # Displacement-success retirement: an impulsive reversal leg can
+                # run far above the level whose reclaim would fail it without
+                # ever emitting a confirming BOS (no pullback pivot forms in the
+                # impulse, so the state machine confirms none), leaving the origin
+                # armed. The eventual mean-reversion then fires a false
+                # CHOCH_FAILED on a move that plainly succeeded (the NEAR H1
+                # 2026-06 case: a bullish CHoCH rallied +16% / ~7.6 ATR to 2.56
+                # then got marked failed on the pullback). Once the leg extreme
+                # has displaced >= N x ATR% beyond the fail level, treat the
+                # reversal as established -- a confirming BOS would have retired
+                # the origin here anyway -- so retire it: a later reversal is a
+                # fresh opposite CHoCH, not a failure of this one. See
+                # `choch_success_displacement_atr`.
+                if (
+                    self._choch_success_displacement_atr is not None
+                    and mean_tr_pct is not None
+                    and mean_tr_pct > 0
+                    and bull_fail_pivot is not None
+                    and bull_leg_high is not None
+                    and candles[current_index].close > 0
+                    and (bull_leg_high - bull_fail_pivot.price)
+                    / candles[current_index].close
+                    >= self._choch_success_displacement_atr * mean_tr_pct
+                ):
+                    bull_choch_origin = None
+                    bull_choch_fail_ref = None
+                    bull_fail_pivot = None
+                # Mirror of the bearish case: the reclaim must come after the
+                # CHoCH formed, so start the scan past the arming pivot.
+                bull_fail_scan_start = max(prev_low_pivot_index + 1, bull_choch_arm_index + 1)
                 if (
                     trend is MarketDirection.BULLISH
                     and bull_fail_pivot is not None
                     and price < bull_fail_pivot.price
+                    and bull_fail_scan_start <= current_index
                     and confirms_break(
-                        prev_low_pivot_index + 1,
+                        bull_fail_scan_start,
                         current_index,
                         bull_fail_pivot.price,
                         bullish=False,
@@ -2371,7 +2448,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     break_candle = candles[
                         find_sustained_break_index(
                             candles,
-                            prev_low_pivot_index + 1,
+                            bull_fail_scan_start,
                             current_index,
                             bull_fail_pivot.price,
                             bullish=False,
@@ -2559,6 +2636,9 @@ class InternalStructureDetector(MarketStructureDetector):
                         if self._choch_origin_leg_extreme
                         else active_high
                     )
+                    # Mirror of the bullish case: bound the failure scan to
+                    # reclaims that come after this CHoCH formed.
+                    bear_choch_arm_index = current_index
                     # Mirror of the bullish case: a weak-referenced CHoCH arms
                     # its own broken level as an invalidation reference (a
                     # sustained close back above it fails the CHoCH). See

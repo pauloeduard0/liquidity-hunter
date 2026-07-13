@@ -834,6 +834,84 @@ adds the 07-10 08:00 BOS ref 1812.85, re-timed to 07-11 15:00 by
 `_reanchor_bos_close_break`). Off = byte-for-byte identical. Not mirrored into
 `SwingStructureDetector` (not drawn).
 
+**Displacement-success CHoCH-origin retirement**
+(`InternalStructureDetector`, as of 2026-07-13): `choch_success_displacement_atr`
+(constructor default `None` = off; wired **`4.5`** in `load_dashboard_data` via
+`_CHOCH_SUCCESS_DISPLACEMENT_ATR`). A CHoCH stays *provisional* — its origin
+armed, a sustained reclaim of it a `CHOCH_FAILED` — until a confirming BOS
+retires the origin. But an **impulsive reversal leg emits no BOS**: no pullback
+pivot forms in the impulse, so the state machine confirms none (worse for the
+*first* leg after a CHoCH, which has no prior staircase floor for the
+impulse-BOS staging to fill either). The origin then lingers indefinitely and
+the eventual mean-reversion fires a **false `CHOCH_FAILED` on a move that
+plainly succeeded**. Motivating case (measured, NEARUSDT H1 `limit=1200`): two
+bullish CHoCHs — 2026-06-08 (origin 2.045) and 2026-06-14 (origin 2.173) —
+rallied to 2.264 (~5.0 ATR above origin) and 2.562 (~7.6 ATR), emitted zero
+bullish BOS the whole June window, and both got marked `CHOCH_FAILED` on the
+pullback (the two grey `CHoCH ✕ ▲` at 2.05 and 2.18 the user flagged). When
+set, once the reversal leg's extreme (`bull_leg_high`/`bear_leg_low`) has
+displaced `>= N x ATR%` (`mean_tr_pct`) beyond the fail level, the origin is
+**retired right at the failure check** (`bull_choch_origin`/`bear_choch_origin`
++ the `*_choch_fail_ref` stash set to `None`, `*_fail_pivot` nulled so the
+`if` falls through) exactly as a confirming BOS would — the reversal is
+established, and any *later* reversal is a fresh opposite CHoCH, not a failure
+of this one. Mirrored on both sides; purely a retirement guard (no new events,
+no trend mutation of its own). Threshold **4.5**: the shallower NEAR case is
+~5.0 ATR, so 4.5 leaves ~0.5 ATR of margin against live drift while staying
+well clear of a shallow pop-then-fail (a genuine failed reversal rarely runs
+4.5 ATR). Measured (BTC/ETH/SOL/AAVE/NEAR × 5m..1d, `limit=1200`,
+`confluence_filter=False`, production wiring): non-provisional `CHOCH_FAILED`
+**30 → 23**, `CHANGE_OF_CHARACTER` **171 → 182** (genuine reversals surfaced
+where a false failure had masked them), and — the key safety property — the
+standing `final_trend` is **unchanged on every one of the 30 combos** at *every*
+threshold swept (4.0/4.5/5.0/6.0): the retirement only rewrites intermediate
+narration, never the trend state. Real-data regression fixture:
+`tests/liquidity/detectors/data/nearusdt_1h_2026_05_11_07_13.json` (1500-candle
+production H1 slice; off → both bullish `CHOCH_FAILED` at 2.045 and 2.173, on →
+neither, the 06-08 bullish CHoCH stands). Not mirrored into
+`SwingStructureDetector` (impulsive-leg BOS gaps are an internal-scope concern;
+the major detector's freeze semantics differ).
+
+**`CHOCH_FAILED` scan bounded to after the CHoCH formed**
+(`InternalStructureDetector`, as of 2026-07-13; **not flag-gated** — a
+correctness fix, not a tunable). A `CHOCH_FAILED` fires when price *reclaims*
+the fail level (the origin, or a weak CHoCH's own broken level) before a
+confirming BOS, and its timestamp comes from a **backward scan** for the candle
+that reclaimed it (`find_sustained_break_index`), gated by `confirms_break`.
+Both scanned from `prev_<kind>_pivot_index + 1` — the previous same-kind pivot,
+which **can precede the CHoCH itself**. A reversal can only be invalidated by a
+reclaim that comes *after* it forms, but the unbounded scan would grab the
+**pre-CHoCH leg** — often the very move the CHoCH reversed — as the "reclaim".
+Motivating case (measured, NEARUSDT H1 `limit=1200`, surfaced by the
+displacement-retirement change above keeping the bullish trend alive into the
+06-15 top): a weak bearish CHoCH formed 06-16 14:00 (fail level 2.339, its own
+broken level under `choch_weak_ref_fail_at_broken_level`), but the failure scan
+ran back to the 06-15 **rally up** through 2.339 (price was at ~2.50 heading to
+the 2.56 peak) and stamped a phantom bearish `CHoCH ✕ ▼` at **06-15 16:00 — a
+failure timestamped *before* the 06-16 14:00 CHoCH it invalidates**, drawn
+mid-rally. Fix: track `bull_choch_arm_index` / `bear_choch_arm_index` (the
+pivot-loop index where each origin is armed, i.e. the confirming pivot of the
+CHoCH) and clamp the failure scan start to `max(prev_pivot + 1, arm_index + 1)`
+for **both** the `confirms_break` guard and the `find_sustained_break_index`
+attribution. The clamp only ever **narrows** the window, so it is strictly a
+correctness improvement: a genuine post-CHoCH reclaim still satisfies
+`confirms_break` (and now gets the correct, later timestamp); a failure vanishes
+**only** when its *sole* sustained break lay before the CHoCH (entirely
+spurious). Removing the NEAR phantom also cleared the downstream whipsaw it had
+triggered (a bullish re-flip → re-CHoCH → second failure at 06-16 21:00): with
+the phantom gone the 06-16 14:00 bearish CHoCH stands and leads a clean bearish
+BOS staircase (06-17 19:00 / 06-19 03:00 / 06-22 22:00). Measured
+(BTC/ETH/SOL/AAVE/NEAR × 5m..1d, `limit=1200`, `confluence_filter=False`):
+non-provisional `CHOCH_FAILED` **23 → 20**, **zero** temporally-inverted
+failures remain (an orphan failure with no preceding same-direction CHoCH), and
+the standing `final_trend` is **identical to pristine `HEAD`** (before *either*
+2026-07-13 fix) on all 30 combos. Regression on the same NEAR fixture
+(`test_near_1h_choch_failed_never_predates_its_choch`): every non-provisional
+failure has a preceding same-direction CHoCH, no bearish failure survives the
+06-15..06-16 rally/top window, and the 06-17 19:00 bearish BOS prints. Mirrored
+on both directions; not applied to `SwingStructureDetector` (same rationale as
+above).
+
 **CHoCH origin = deepest leg extreme** (`InternalStructureDetector`, as of
 2026-07-05): `choch_origin_leg_extreme` (constructor default `False`; wired
 **`True`** in `load_dashboard_data`). A CHoCH's *origin* — the level whose

@@ -309,6 +309,28 @@ _CHOCH_FAILED_FALLBACK_SUPPRESS_CANDLES: int | None = 20
 # stretch (the BTC H1 18-25/06 crash: one bearish BOS then only sweeps).
 _STAGE_CHOCH_FAILED_WINDOW_BOS = True
 
+# Displacement-success CHoCH-origin retirement
+# (`InternalStructureDetector.choch_success_displacement_atr`). An impulsive
+# reversal leg can run far past the level whose reclaim would fail it without
+# ever emitting a confirming BOS (the impulse forms no pullback pivot, so the
+# state machine confirms none) -- especially the first leg after a CHoCH, which
+# has no prior staircase floor for the impulse-BOS staging to fill. The origin
+# stays armed and the eventual mean-reversion fires a false CHOCH_FAILED on a
+# move that plainly succeeded (the NEAR H1 2026-06 case: two bullish CHoCHs
+# rallied +11% / ~5.0 ATR and +16% / ~7.6 ATR, then both got marked failed on
+# the pullback). Once the leg extreme has displaced this many ATR% beyond the
+# fail level, retire the origin as a confirming BOS would: the reversal is
+# established, and a later reversal is a fresh opposite CHoCH, not a failure of
+# this one. 4.5 catches both NEAR cases (the shallower is ~5.0 ATR, so ~0.5 ATR
+# of margin against live drift) while staying well clear of a shallow
+# pop-then-fail (a genuine failed reversal rarely runs 4.5 ATR). Measured
+# (BTC/ETH/SOL/AAVE/NEAR x 5m..1d, limit=1200): non-provisional CHOCH_FAILED
+# 30 -> 23, CHANGE_OF_CHARACTER 171 -> 182 (genuine reversals surfaced where a
+# false failure had masked them), and the standing final_trend is *unchanged*
+# on every combo -- the retirement only rewrites intermediate narration, never
+# the trend state.
+_CHOCH_SUCCESS_DISPLACEMENT_ATR: float | None = 4.5
+
 # Volatility-normalized proximity for the liquidity-hunt pool map
 # (`LiquidityHuntEngine.proximity_atr`): "nearby" opposing pools are the ones
 # within N x the visible series' mean true-range% of price, instead of the
@@ -734,6 +756,11 @@ def _build_internal_detector(
         # printed as sweeps while the trend was wrongly flipped), so the
         # resumed leg shows its staircase. See _STAGE_CHOCH_FAILED_WINDOW_BOS.
         stage_choch_failed_window_bos=_STAGE_CHOCH_FAILED_WINDOW_BOS,
+        # Retire a CHoCH origin once its reversal leg has displaced this many
+        # ATR% beyond the fail level, so an impulsive move that emitted no
+        # confirming BOS is not marked a false CHOCH_FAILED on its pullback.
+        # See _CHOCH_SUCCESS_DISPLACEMENT_ATR.
+        choch_success_displacement_atr=_CHOCH_SUCCESS_DISPLACEMENT_ATR,
         # The CHoCH origin (the level a sustained break back through invalidates
         # the unconfirmed reversal, a CHOCH_FAILED) is the *deepest* extreme of
         # the reversed leg, not the trailing `active_<side>`. The trailing

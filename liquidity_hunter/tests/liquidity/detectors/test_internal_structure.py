@@ -1127,6 +1127,45 @@ def test_unconfirmed_bullish_choch_fails_when_origin_broken() -> None:
     assert failed[0].timestamp == candles[13].timestamp
 
 
+def test_displacement_retires_choch_origin_before_failure() -> None:
+    """The same unconfirmed bullish CHoCH as above, but its rally displaces the
+    origin by ~3.9 ATR. With ``choch_success_displacement_atr`` set below that,
+    the origin retires (the reversal is treated as established, as a confirming
+    BOS would), so the later drop back through 100 is not a CHOCH_FAILED.
+    """
+    highs = [150.0] * 20
+    lows = [140.0] * 20
+    highs[1], highs[7], highs[11] = 200.0, 160.0, 200.0
+    lows[3], lows[5], lows[9], lows[13] = 130.0, 110.0, 100.0, 90.0
+
+    candles = make_series(highs, lows)
+    candles[5] = make_candle(5, 150.0, 110.0, close=120.0)
+    candles[9] = make_candle(9, 150.0, 100.0, close=105.0)
+    candles[11] = make_candle(11, 200.0, 140.0, close=190.0)
+    candles[12] = make_candle(12, 195.0, 140.0, close=188.0)
+    candles[13] = make_candle(13, 150.0, 90.0, close=95.0)
+    candles[14] = make_candle(14, 145.0, 92.0, close=95.0)
+
+    events = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=1,
+        choch_success_displacement_atr=1.0,
+    ).detect(candles)
+
+    # The bullish CHoCH still fires, but no failure follows.
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        for e in events
+    )
+    assert not any(e.event is StructureEvent.CHOCH_FAILED for e in events)
+
+
+def test_invalid_choch_success_displacement_atr_raises() -> None:
+    with pytest.raises(ValueError, match="choch_success_displacement_atr must be positive"):
+        InternalStructureDetector(choch_success_displacement_atr=0.0)
+
+
 def test_bos_fields_on_confirmed_event() -> None:
     """Verify all fields on a confirmed BOS event: timestamp, price_level,
     reference_price_level, reference_timestamp, origin_price_level."""

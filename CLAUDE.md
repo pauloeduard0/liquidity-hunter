@@ -1335,8 +1335,12 @@ state in brief:
   volatility-normalized release gap, new-cycle weak-ref barrier,
   shallow-pullback promotion, close-confirmed structural floor, provisional
   live-edge BOS/CHoCH marks, fast-fizzle marker, failed-CHoCH whipsaw fixes,
-  displacement release, weak-ref failure at the broken level, and staircase
-  rollback on a discarded phantom advance.
+  displacement release, weak-ref failure at the broken level, staircase
+  rollback on a discarded phantom advance, and displacement-success
+  CHoCH-origin retirement (an impulsive reversal that emitted no BOS is not
+  marked a false `CHOCH_FAILED` on its pullback). A `CHOCH_FAILED`'s reclaim
+  scan is also bounded to *after* the CHoCH formed (`*_choch_arm_index`), so a
+  failure can never be timestamped before the CHoCH it invalidates.
 
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /

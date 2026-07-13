@@ -838,3 +838,126 @@ def test_btc_1d_weak_fail_off_trend_stays_bullish(
         for e in run.events
     )
     assert run.trend is MarketDirection.BULLISH
+
+
+def _load_near_1h_success_displacement_candles() -> list[Candle]:
+    """NEARUSDT 1h 2026-05-12..07-13, the full 1500-candle production slice.
+
+    Real-data regression for ``choch_success_displacement_atr``: two bullish
+    CHoCHs (2026-06-08 at 2.045, 2026-06-14 at 2.173) each rallied hard -- to
+    2.264 (~5.0 ATR) and 2.562 (~7.6 ATR) -- but the impulsive legs emitted no
+    confirming BOS (no pullback pivot formed in the impulse), so their origins
+    stayed armed and the later mean-reversion marked both a false CHOCH_FAILED
+    even though the reversals plainly succeeded. 5-column rows:
+    ts/open/high/low/close.
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "nearusdt_1h_2026_05_11_07_13.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="NEARUSDT",
+            timeframe=TimeFrame.H1,
+            timestamp=datetime.fromisoformat(row[0]),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def test_near_1h_displaced_bullish_choch_not_marked_failed() -> None:
+    candles = _load_near_1h_success_displacement_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.H1: candles})
+
+    run = _run_internal_structure(provider, "NEARUSDT", TimeFrame.H1, 1200, False)
+
+    # Neither displaced bullish CHoCH is marked failed: their origins retire on
+    # the displacement, so the pullbacks are ordinary structure, not failures.
+    bullish_fails = [
+        e
+        for e in run.events
+        if e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BULLISH
+        and datetime(2026, 6, 6, tzinfo=UTC) <= e.timestamp <= datetime(2026, 6, 22, tzinfo=UTC)
+    ]
+    assert bullish_fails == []
+    # The 2026-06-08 bullish CHoCH still stands (the reversal that succeeded).
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 6, 8, 5, tzinfo=UTC)
+        for e in run.events
+    )
+
+
+def test_near_1h_displacement_retirement_off_marks_false_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dashboard_data, "_CHOCH_SUCCESS_DISPLACEMENT_ATR", None)
+    candles = _load_near_1h_success_displacement_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.H1: candles})
+
+    run = _run_internal_structure(provider, "NEARUSDT", TimeFrame.H1, 1200, False)
+
+    # Off: both displaced bullish CHoCHs are marked failed on their pullbacks,
+    # at the levels they launched from (2.045 and 2.173).
+    fail_refs = {
+        round(e.reference_price_level, 3)
+        for e in run.events
+        if e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BULLISH
+        and datetime(2026, 6, 6, tzinfo=UTC) <= e.timestamp <= datetime(2026, 6, 22, tzinfo=UTC)
+    }
+    assert fail_refs == {2.045, 2.173}
+
+
+def test_near_1h_choch_failed_never_predates_its_choch() -> None:
+    candles = _load_near_1h_success_displacement_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.H1: candles})
+
+    run = _run_internal_structure(provider, "NEARUSDT", TimeFrame.H1, 1200, False)
+
+    # A CHOCH_FAILED can never be timestamped before the CHoCH it invalidates:
+    # every non-provisional failure must have a preceding same-direction CHoCH.
+    # (Before the arm-index scan bound, the backward reclaim scan grabbed the
+    # pre-CHoCH rally through the fail level and stamped a phantom bearish
+    # `CHoCH ✕ ▼` at 2026-06-15 16:00 -- mid rally, before the 06-16 14:00
+    # bearish CHoCH it supposedly failed.)
+    chochs = [e for e in run.events if e.event is StructureEvent.CHANGE_OF_CHARACTER]
+    for failure in run.events:
+        if failure.event is StructureEvent.CHOCH_FAILED and not failure.provisional:
+            assert any(
+                c.direction is failure.direction and c.timestamp < failure.timestamp
+                for c in chochs
+            ), f"CHOCH_FAILED at {failure.timestamp} has no preceding {failure.direction} CHoCH"
+
+    # No bearish failure survives in the rally/top window (06-15..06-16 12:00);
+    # the 06-16 14:00 bearish CHoCH stands and leads a clean bearish BOS
+    # staircase instead of the old phantom-driven whipsaw.
+    rally_top_window = (datetime(2026, 6, 15, tzinfo=UTC), datetime(2026, 6, 16, 12, tzinfo=UTC))
+    assert not any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BEARISH
+        and rally_top_window[0] <= e.timestamp <= rally_top_window[1]
+        for e in run.events
+    )
+    assert any(
+        e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 6, 17, 19, tzinfo=UTC)
+        for e in run.events
+    )
