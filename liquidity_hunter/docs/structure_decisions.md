@@ -1131,6 +1131,51 @@ default** at the API (`narrative=false` query param; `compute_narrative`
 flag in `load_dashboard_data`) — the `NarrativePanel` exists and returns
 untouched whenever the param is re-enabled.
 
+**BOS line-origin anchor robustness** (as of 2026-07-13): a BOS line is drawn
+from the origin of the level it broke (`reference_timestamp`) to where it broke
+it. Both the composition re-anchor (`_reanchor_bos_close_break`) and the
+detector's provisional-BOS path resolved that origin by scanning back for a
+candle whose *own-side* extreme (`low` for a bearish floor, `high` for bullish)
+*exactly* equalled the level. Two failure modes surfaced (both **cosmetic** —
+`reference_timestamp` never feeds detector state or trend; **not** regressions,
+they reproduce on pristine `main`):
+
+1. **`reference_timestamp=None`** (ETH H4 first bearish BOS at 1721.57): the
+   *first* BOS of a leg reports the CHoCH-seeded floor, whose origin is the
+   reversal's *opposite*-polarity extreme (a bearish leg's floor is the reversal
+   *top*, a **high**). The own-side (low) scan never matched → `None` → the
+   frontend drew the line from the chart edge.
+2. **Far-back spurious anchor** (SOL H1 provisional bearish BOS at 75.60): the
+   provisional scan truncated the window at `last_advance_index`, which excluded
+   the real origin (a floor whose pivot low formed *after* the state advance),
+   so an older candle that merely touched the same price (11 days back) won.
+
+Fix: a shared `_common.resolve_break_origin_timestamp(candles, break_index,
+level, *, bearish)` — scans the pre-break window most-recent-first: own-side
+exact → opposite-side exact (the first-BOS case) → range-straddle (excluding the
+break candle) → `None`. `_reanchor_bos_close_break` calls it **only when its own
+own-side scan left `None`** (strictly additive: existing good anchors untouched);
+the provisional path calls it over the full pre-break window (dropping the
+`last_advance_index` truncation). Measured across BTC/ETH/SOL/AAVE/NEAR ×
+M15/H1/H4/D1 (20 combos, live 1500-candle slices): **11 `reference_timestamp`
+corrections** (10 `None`→resolved + 1 far-back→recent), **0 BOS gained/lost**,
+event set otherwise byte-identical to HEAD → trend replay unchanged.
+
+Filling the `None`s *exposed a latent bug* in `_drop_pre_break_reference_bos`
+(one AAVE H4 first bearish BOS at 122.72 was silently dropped): that pass reset
+its "reference must form after the prior same-direction BOS" constraint only on
+a `CHANGE_OF_CHARACTER`, not on a (non-provisional) `CHOCH_FAILED` — but a failed
+CHoCH also flips the trend (to the *opposite* of its direction) and starts a new
+leg, whose first BOS references the CHoCH-seeded level (formed before the flip).
+ETH's analogous first bearish BOS survived only by luck (its 06-07 level origin
+happened to post-date the prior bearish BOS close; AAVE's 122.72 origin fell a
+few candles before it). Added the mirror `CHOCH_FAILED` reset (provisional fizzle
+markers excluded — they don't move the trend), restoring the dropped BOS (total
+back to HEAD's 311). All three fixes are cosmetic/composition-level with pure-
+function cores; covered by synthetic unit tests
+(`resolve_break_origin_timestamp` tiers, the `CHOCH_FAILED` reset, and a
+`_reanchor` opposite-polarity fill) rather than heavy real-data fixtures.
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.

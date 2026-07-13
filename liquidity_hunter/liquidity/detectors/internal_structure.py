@@ -200,6 +200,7 @@ from liquidity_hunter.liquidity.detectors._common import (
     find_sustained_break_index,
     find_wick_break_index,
     is_sustained_break,
+    resolve_break_origin_timestamp,
     validate_candles,
 )
 from liquidity_hunter.liquidity.detectors.base import MarketStructureDetector
@@ -3022,11 +3023,16 @@ class InternalStructureDetector(MarketStructureDetector):
                     )
                     # Anchor the line's start at the floor's origin (the prior
                     # swing extreme at that price), like `_reanchor_bos_close_break`.
-                    reference_timestamp: datetime | None = None
-                    for candle in reversed(candles[: last_advance_index + 1]):
-                        if (candle.low if bearish else candle.high) == floor:
-                            reference_timestamp = candle.timestamp
-                            break
+                    # Scan the whole pre-break window most-recent-first: bounding
+                    # at `last_advance_index` excluded the real origin (a floor set
+                    # by a BOS whose pivot low formed *after* the state advance),
+                    # so an older candle that merely touched the same price won
+                    # instead (the SOL H1 provisional bearish BOS at 75.60 anchored
+                    # 11 days back). The most-recent exact touch is the real origin.
+                    break_index = index_by_timestamp[broke[0].timestamp]
+                    reference_timestamp = resolve_break_origin_timestamp(
+                        candles, break_index, floor, bearish=bearish
+                    )
                     prov_event = MarketStructure(
                         symbol=symbol,
                         timeframe=timeframe,

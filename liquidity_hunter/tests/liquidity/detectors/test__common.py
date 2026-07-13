@@ -1,12 +1,15 @@
 """Tests for `liquidity_hunter.liquidity.detectors._common`."""
 
+from datetime import timedelta
+
 from liquidity_hunter.core.domain import Candle
 from liquidity_hunter.liquidity.detectors._common import (
     find_sustained_break_index,
     find_wick_break_index,
     is_sustained_break,
+    resolve_break_origin_timestamp,
 )
-from liquidity_hunter.tests.liquidity.detectors._factories import make_candle
+from liquidity_hunter.tests.liquidity.detectors._factories import BASE_TIME, make_candle
 
 
 def _candles(*closes: float) -> list[Candle]:
@@ -98,3 +101,42 @@ def test_find_sustained_break_index_persistence_window_may_extend_past_end_index
     assert (
         find_sustained_break_index(candles, 0, 1, 100.0, bullish=True, persistence_candles=2) == 1
     )
+
+
+def test_resolve_break_origin_exact_own_side_prefers_most_recent() -> None:
+    # A bearish floor is a low; among candles that made it, the most recent one
+    # (before the break) is the level's live origin, not an older coincidence.
+    candles = _candles_hl((105.0, 90.0), (105.0, 95.0), (105.0, 90.0), (105.0, 88.0))
+
+    assert resolve_break_origin_timestamp(
+        candles, 3, 90.0, bearish=True
+    ) == BASE_TIME + timedelta(hours=2)
+
+
+def test_resolve_break_origin_falls_back_to_opposite_side() -> None:
+    # The first BOS of a leg reports the CHoCH-seeded floor, whose origin is the
+    # reversal's *high* (opposite polarity for a bearish floor). No candle low
+    # equals it, so the opposite-side (high) match wins -- the ETH H4 1721.57 top.
+    candles = _candles_hl((100.0, 90.0), (98.0, 92.0), (99.0, 85.0))
+
+    assert resolve_break_origin_timestamp(candles, 2, 100.0, bearish=True) == BASE_TIME
+
+
+def test_resolve_break_origin_falls_back_to_straddle_excluding_break() -> None:
+    # No exact touch on either side; the last candle whose range held the level
+    # (excluding the break candle itself) anchors the line.
+    candles = _candles_hl((95.0, 90.0), (96.0, 94.0), (94.0, 88.0))
+
+    assert resolve_break_origin_timestamp(candles, 2, 93.0, bearish=True) == BASE_TIME
+
+
+def test_resolve_break_origin_none_when_level_never_reached() -> None:
+    candles = _candles_hl((105.0, 95.0), (104.0, 96.0), (103.0, 94.0))
+
+    assert resolve_break_origin_timestamp(candles, 2, 200.0, bearish=True) is None
+
+
+def test_resolve_break_origin_bullish_own_side_high() -> None:
+    candles = _candles_hl((100.0, 95.0), (98.0, 94.0), (102.0, 96.0))
+
+    assert resolve_break_origin_timestamp(candles, 2, 100.0, bearish=False) == BASE_TIME

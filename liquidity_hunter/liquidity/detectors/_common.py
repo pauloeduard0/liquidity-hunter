@@ -125,6 +125,59 @@ def find_close_break_index(
     return None
 
 
+def resolve_break_origin_timestamp(
+    candles: Sequence[Candle],
+    break_index: int,
+    level: float,
+    *,
+    bearish: bool,
+) -> datetime | None:
+    """Timestamp of the candle that formed `level`, for a BOS line's start anchor.
+
+    A BOS line is drawn from the origin of the level it broke to where it broke
+    it. That origin is the swing extreme that made `level`. Scans the candles
+    *before* ``break_index`` most-recent-first:
+
+    1. an exact match on the level's own side -- ``low`` for a bearish floor,
+       ``high`` for a bullish one (a continuation floor is the prior BOS extreme
+       on that side);
+    2. failing that, the *opposite* side -- the first BOS of a leg is seeded from
+       the reversal's extreme (a bearish leg's floor is the reversal *top*, a
+       high), so its origin is the opposite polarity;
+    3. failing that, any candle whose range straddles the level -- the last
+       resort so a real level always resolves to where price last held it.
+
+    Purely cosmetic -- never feeds detector state. Returns ``None`` only when the
+    level was never reached before the break (no candle qualifies), in which case
+    the caller keeps whatever anchor it already had.
+    """
+    hi = min(break_index, len(candles) - 1)
+    if hi < 0:
+        return None
+    own_exact = hi
+    while own_exact >= 0:
+        c = candles[own_exact]
+        if (c.low if bearish else c.high) == level:
+            return c.timestamp
+        own_exact -= 1
+    opp_exact = hi
+    while opp_exact >= 0:
+        c = candles[opp_exact]
+        if (c.high if bearish else c.low) == level:
+            return c.timestamp
+        opp_exact -= 1
+    # Straddle: exclude the break candle itself (it necessarily brackets the
+    # level as it breaks through), so this resolves the prior candle that held
+    # the level rather than the break.
+    straddle = min(break_index - 1, len(candles) - 1)
+    while straddle >= 0:
+        c = candles[straddle]
+        if c.low <= level <= c.high:
+            return c.timestamp
+        straddle -= 1
+    return None
+
+
 def bos_confluence(candle: Candle, *, bullish: bool) -> bool:
     """LuxAlgo-style confluence filter for internal BOS candles.
 

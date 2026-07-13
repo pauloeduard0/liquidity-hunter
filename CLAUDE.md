@@ -851,9 +851,15 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   pre-break wick as the formed level it broke — but a reference may only come
   from price action *after* the prior break confirms. A CHoCH resets the
   constraint for its direction (the first BOS of a leg references the
-  CHoCH-seeded level, formed before the flip); BOS without a resolved
-  `reference_timestamp` are kept. Same-timestamp BOS are judged
-  earlier-formed-reference first (the earlier structural break).
+  CHoCH-seeded level, formed before the flip); a non-provisional `CHOCH_FAILED`
+  likewise resets the *opposite* direction (the leg it flips into); BOS without
+  a resolved `reference_timestamp` are kept. Same-timestamp BOS are judged
+  earlier-formed-reference first (the earlier structural break). The
+  `reference_timestamp` itself (the line's start anchor, purely cosmetic) is
+  resolved by `_common.resolve_break_origin_timestamp` — own-side exact →
+  opposite-side exact (a first-BOS floor is the reversal's opposite-polarity
+  extreme) → range-straddle — used both here (to fill a `None` the detector's
+  own-side scan left) and by the provisional-BOS path in the detector.
   A third pass, **`_drop_resumed_fizzle_markers`** (internal stream only, after
   the BOS passes), drops a fast-fizzle `CHOCH_FAILED` marker followed by a
   chart-surviving same-direction BOS — the reclaim was a deep pullback the

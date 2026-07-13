@@ -47,6 +47,9 @@ from liquidity_hunter.liquidity import (
     SwingStructureDetector,
     mark_swept_zones,
 )
+from liquidity_hunter.liquidity.detectors._common import (
+    resolve_break_origin_timestamp,
+)
 from liquidity_hunter.psychology import (
     BehaviorDivergenceAnalyzer,
     LeverageLiquidationEstimator,
@@ -517,6 +520,16 @@ def _reanchor_bos_close_break(
             if extreme == floor:
                 reference_timestamp = candles[i].timestamp
                 break
+        if reference_timestamp is None:
+            # No exact same-side origin and the detector left no anchor -- the
+            # first BOS of a leg reports the CHoCH-seeded floor, whose origin is
+            # the reversal's *opposite*-polarity extreme (a bearish leg's floor is
+            # the reversal top). Resolve it robustly so the line starts at the
+            # level's real origin rather than nowhere (the ETH H4 first bearish
+            # BOS at 1721.57, a high, drew from the chart edge).
+            reference_timestamp = resolve_break_origin_timestamp(
+                candles, start_index, floor, bearish=bearish
+            )
 
         updates: dict[str, datetime] = {}
         if new_timestamp != event.timestamp:
@@ -545,10 +558,12 @@ def _drop_pre_break_reference_bos(
 
     A CHoCH starts a new leg (its first BOS references the CHoCH-seeded
     level, which necessarily formed before the flip), so it resets the
-    constraint for its direction. Events without a resolved
-    ``reference_timestamp`` are kept -- there is nothing to judge. Runs after
-    ``_reanchor_bos_close_break`` so each BOS ``timestamp`` is its confirming
-    close and ``reference_timestamp`` the candle that formed the level.
+    constraint for its direction; a (non-provisional) ``CHOCH_FAILED`` likewise
+    starts a new leg in the *opposite* of its direction and resets that.
+    Events without a resolved ``reference_timestamp`` are kept -- there is
+    nothing to judge. Runs after ``_reanchor_bos_close_break`` so each BOS
+    ``timestamp`` is its confirming close and ``reference_timestamp`` the candle
+    that formed the level.
     """
     result: list[MarketStructure] = []
     last_bos_close: dict[MarketDirection, datetime] = {}
@@ -558,6 +573,22 @@ def _drop_pre_break_reference_bos(
     for event in sorted(events, key=lambda e: (e.timestamp, e.reference_timestamp or e.timestamp)):
         if event.event is StructureEvent.CHANGE_OF_CHARACTER:
             last_bos_close.pop(event.direction, None)
+        elif event.event is StructureEvent.CHOCH_FAILED and not event.provisional:
+            # A failed CHoCH flips the trend back to the *opposite* of the failed
+            # CHoCH's direction, starting a new leg there whose first BOS
+            # references the CHoCH-seeded level (formed before the flip) -- so it
+            # resets that direction's constraint, mirroring the CHoCH reset. Only
+            # a real flip counts; the provisional fizzle marker does not move the
+            # trend, so it must not reset. Without this, the first BOS of the new
+            # leg is dropped whenever the seeded level's origin happens to predate
+            # the prior same-direction BOS (the AAVE H4 first bearish BOS at
+            # 122.72, whose origin fell a few candles before the prior BOS close).
+            flipped = (
+                MarketDirection.BULLISH
+                if event.direction is MarketDirection.BEARISH
+                else MarketDirection.BEARISH
+            )
+            last_bos_close.pop(flipped, None)
         elif event.event is StructureEvent.BREAK_OF_STRUCTURE and not event.provisional:
             prior_close = last_bos_close.get(event.direction)
             if (

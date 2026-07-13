@@ -10,6 +10,7 @@ from liquidity_hunter.app.dashboard_data import (
     _build_internal_detector,
     _drop_pre_break_reference_bos,
     _drop_resumed_fizzle_markers,
+    _reanchor_bos_close_break,
     _run_internal_structure,
     _structural_anchor_index,
     load_dashboard_data,
@@ -575,6 +576,68 @@ def test_drop_pre_break_reference_bos_choch_starts_new_leg() -> None:
     ]
 
     assert _drop_pre_break_reference_bos(events) == events
+
+
+def test_drop_pre_break_reference_bos_choch_failed_starts_new_leg() -> None:
+    # A failed CHoCH flips the trend to the *opposite* of its direction, starting
+    # a new leg there; that leg's first BOS references the CHoCH-seeded level
+    # (formed before the flip), so the CHOCH_FAILED must reset the constraint for
+    # the flipped (bearish) direction -- the AAVE H4 first bearish BOS at 122.72.
+    events = [
+        _structure_event(10, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH),
+        _structure_event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        _structure_event(30, StructureEvent.CHOCH_FAILED, MarketDirection.BULLISH),
+        _structure_event(
+            40, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, reference_minute=5
+        ),
+    ]
+
+    assert _drop_pre_break_reference_bos(events) == events
+
+
+def test_drop_pre_break_reference_bos_provisional_choch_failed_does_not_reset() -> None:
+    # The provisional fizzle marker does not move the trend, so it must not reset
+    # the constraint: a pre-break-reference bearish continuation is still dropped.
+    events = [
+        _structure_event(10, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH),
+        _structure_event(
+            30, StructureEvent.CHOCH_FAILED, MarketDirection.BULLISH, provisional=True
+        ),
+        _structure_event(
+            40, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH, reference_minute=5
+        ),
+    ]
+
+    kept = _drop_pre_break_reference_bos(events)
+
+    assert [e.timestamp.minute for e in kept] == [10, 30]
+
+
+def test_reanchor_fills_none_reference_from_opposite_polarity_origin() -> None:
+    # The first BOS of a leg reports the CHoCH-seeded floor, whose origin is the
+    # reversal *top* (a high) for a bearish BOS -- the detector's own-side (low)
+    # scan finds nothing and leaves reference_timestamp None (the ETH H4 1721.57
+    # case, which drew from the chart edge). The re-anchor pass must fill it from
+    # the level's opposite-polarity origin.
+    candles = make_series(
+        [99.0, 99.0, 100.0, 98.0, 97.0, 96.0],
+        [95.0, 94.0, 96.0, 92.0, 90.0, 88.0],
+    )
+    bos = MarketStructure(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=candles[3].timestamp,
+        event=StructureEvent.BREAK_OF_STRUCTURE,
+        direction=MarketDirection.BEARISH,
+        price_level=88.0,
+        reference_price_level=100.0,
+        reference_timestamp=None,
+        scope=StructureScope.INTERNAL,
+    )
+
+    (result,) = _reanchor_bos_close_break([bos], candles)
+
+    assert result.reference_timestamp == candles[2].timestamp
 
 
 def test_drop_pre_break_reference_bos_keeps_unresolved_reference() -> None:
