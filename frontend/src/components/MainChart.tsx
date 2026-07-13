@@ -260,12 +260,18 @@ function structureLineEndTime(
   const eventTime = toUtcTimestamp(event.timestamp)
 
   if (event.event === 'change_of_character') {
-    const oppositeDirection = event.direction === 'bullish' ? 'bearish' : 'bullish'
+    // A CHoCH line runs until the next real CHoCH supersedes it — of *either*
+    // direction. An opposite-direction CHoCH is a reversal that clears the
+    // stale reference; a *same*-direction CHoCH is simply a newer reference for
+    // that side, so the older one stops there rather than both running to the
+    // edge (the case where the internal trend briefly flipped and back without
+    // surfacing a drawn opposite CHoCH, emitting two same-direction CHoCHs).
+    // Failed/provisional CHoCHs don't count — one that never took hold or is
+    // still forming isn't the active reference.
     const candidates = allEvents
       .filter(
         (other) =>
           other.scope === event.scope &&
-          other.direction === oppositeDirection &&
           other.event === 'change_of_character' &&
           !other.provisional &&
           !isFailedChoch(other, allEvents) &&
