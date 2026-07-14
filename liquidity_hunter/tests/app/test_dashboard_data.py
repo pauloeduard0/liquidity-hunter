@@ -17,6 +17,7 @@ from liquidity_hunter.app.dashboard_data import (
 )
 from liquidity_hunter.core.domain import (
     Candle,
+    ConsolidationStatus,
     FundingRate,
     LongShortRatio,
     MarketDirection,
@@ -1024,3 +1025,78 @@ def test_near_1h_choch_failed_never_predates_its_choch() -> None:
         and e.timestamp == datetime(2026, 6, 17, 19, tzinfo=UTC)
         for e in run.events
     )
+
+
+def _load_range_lock_candles(name: str, symbol: str) -> list[Candle]:
+    """BTC/ETH 1h 2026-05-13..07-14, the full 1500-candle production slice.
+
+    Real-data regressions for consolidation (lateral range) detection: the
+    July 2026 H1 locks where the structure detector went correctly silent for
+    ~10 days (both references pinned outside the box: the BOS staircase at a
+    pre-range wick above, the CHoCH reference at the leg origin below) and
+    the chart read as stuck. 5-column rows: ts-ms/open/high/low/close.
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent / "liquidity" / "detectors" / "data" / name
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol=symbol,
+            timeframe=TimeFrame.H1,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def test_btc_1h_july_range_lock_is_a_live_consolidation() -> None:
+    candles = _load_range_lock_candles("btcusdt_1h_2026_05_13_07_14.json", "BTCUSDT")
+    provider = _FuturesLimitFakeProvider({TimeFrame.H1: candles})
+
+    run = _run_internal_structure(provider, "BTCUSDT", TimeFrame.H1, 1200, False)
+
+    live = [r for r in run.consolidation_ranges if r.status is ConsolidationStatus.ACTIVE]
+    assert len(live) == 1
+    r = live[0]
+    # One box for the whole lock -- from just after the 07-04 17:00 BOS to the
+    # series end -- not split at the detector's dropped (wick-only) 07-10
+    # advance, since segment boundaries are the *surviving* chart events.
+    assert r.start_timestamp == datetime(2026, 7, 4, 18, tzinfo=UTC)
+    assert r.price_low == pytest.approx(61297.0)
+    assert r.price_high == pytest.approx(64691.9)
+    # The June bottom basing resolved bullish into the July rally.
+    assert any(
+        rng.status is ConsolidationStatus.RESOLVED
+        and rng.resolved_direction is MarketDirection.BULLISH
+        and rng.start_timestamp == datetime(2026, 6, 25, 14, tzinfo=UTC)
+        and rng.end_timestamp == datetime(2026, 7, 2, 9, tzinfo=UTC)
+        for rng in run.consolidation_ranges
+    )
+
+
+def test_eth_1h_july_range_lock_is_a_live_consolidation() -> None:
+    candles = _load_range_lock_candles("ethusdt_1h_2026_05_13_07_14.json", "ETHUSDT")
+    provider = _FuturesLimitFakeProvider({TimeFrame.H1: candles})
+
+    run = _run_internal_structure(provider, "ETHUSDT", TimeFrame.H1, 1200, False)
+
+    live = [r for r in run.consolidation_ranges if r.status is ConsolidationStatus.ACTIVE]
+    assert len(live) == 1
+    r = live[0]
+    # The box opens right after the 07-06 21:00 BOS at 1833 ("travou um BOS em
+    # cima") and holds 1712.45-1829.52; the 07-12 spike to 1848 stays outside
+    # (a boundary sweep, not part of the box).
+    assert r.start_timestamp == datetime(2026, 7, 6, 22, tzinfo=UTC)
+    assert r.price_low == pytest.approx(1712.45)
+    assert r.price_high == pytest.approx(1829.52)

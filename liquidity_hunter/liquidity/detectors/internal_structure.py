@@ -618,6 +618,14 @@ class InternalStructureDetector(MarketStructureDetector):
     CHoCH is confirmed instead (they were retraces of a genuine reversal) or
     when a fresh CHoCH re-arms the window. With `False` the output is
     byte-for-byte identical.
+
+    Consolidation (lateral range) detection lives *outside* this detector:
+    `detectors.consolidation.detect_consolidation_ranges` is a pure post-pass
+    the composition root runs over the **surviving** (post-composition-pass)
+    event stream, so range segment boundaries match the events the chart
+    actually draws -- a detector-level advance later dropped as wick-only
+    would split a visible range at an invisible point (measured on the
+    BTCUSDT H1 2026-07 range, split at a dropped 07-10 BOS).
     """
 
     def __init__(

@@ -161,6 +161,19 @@ and `validate_assignment=True`. New entities should follow this pattern.
   the far boundary (below `price_low` for bullish, above `price_high` for
   bearish) invalidates the zone; price touching back inside does not retire
   it. Identical lifecycle for all kinds.
+- **`ConsolidationRange`** — an observed lateral consolidation, defined in
+  `core/domain/consolidation.py`: a stretch of candles with **no structure
+  advance** where price oscillated inside a volatility-bounded box (at least
+  N candles within K×mean-TR% height, touching both boundary zones
+  alternately — see `liquidity/detectors/consolidation.py`). Where the
+  structure detector is *correctly* silent (a range has no BOS/CHoCH), made
+  explicit. Fields: `symbol`, `timeframe`, `start_timestamp`,
+  `end_timestamp` (`None` while open), `price_low`/`price_high` (the box),
+  `status` (`ConsolidationStatus`: `ACTIVE`/`RESOLVED`), `resolved_direction`
+  (the breakout/advance direction when `RESOLVED`), `candle_count`. Resolution
+  = sustained closes beyond a boundary, or a structure advance ending the
+  segment; a wick/unsustained poke beyond the box is a boundary sweep and
+  stays outside it.
 - **`ManipulationCycle`** — an observed institutional manipulation cycle
   (accumulation → sweep → expansion), defined in
   `core/domain/manipulation_cycle.py`. Describes the three-phase Wyckoff/SMC
@@ -247,13 +260,17 @@ and `validate_assignment=True`. New entities should follow this pattern.
   last non-provisional trend-relevant event (`last_event`,
   `last_event_direction`, `last_event_timestamp`, `last_event_candles_ago`),
   any provisional live-edge mark (`forming_event`/`forming_direction` — the
-  dimmed `BOS?`/`CHoCH?`), and a hunt summary (`hunt_phase`, `hunted_side`,
+  dimmed `BOS?`/`CHoCH?`), the consolidation state (`in_consolidation` — price
+  is inside a confirmed ACTIVE `ConsolidationRange`, so `trend` reads as the
+  pre-range cycle — and `consolidation_candles`), and a hunt summary
+  (`hunt_phase`, `hunted_side`,
   `hunt_targets_captured`/`_total`). `MarketOverview` is `symbol` + `entries`
   ordered fine → coarse. Descriptive state per timeframe, not signals.
 
 Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `LiquidityZoneType`, `StructureEvent`, `BiasSource`, `RetailPositioning`,
-`POIZoneStatus`, `POIZoneKind`, `ManipulationPhase`, `ManipulationCycleStatus`,
+`POIZoneStatus`, `POIZoneKind`, `ConsolidationStatus`, `ManipulationPhase`,
+`ManipulationCycleStatus`,
 `DivergenceType`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`,
 `NarrativeEventType`, `AnomalySeverity`) live in
 `core/domain/enums.py`. Extend behavior by adding enum members rather than
@@ -662,6 +679,25 @@ re-exported from `liquidity_hunter.data`.
   zone never retire it. There is no MITIGATED state and no RTO sweep events
   (removed with the old CHoCH→BOS detector).
 
+- **`liquidity/detectors/consolidation.py`** — `detect_consolidation_ranges`,
+  a **pure post-pass** (not a `MarketStructureDetector`) that scans the quiet
+  segments between structure advances for confirmed `ConsolidationRange`s.
+  Inputs: the candle series plus `(candle index, established-trend direction)`
+  advance boundaries; a range may never span an advance. Confirmation =
+  `min_candles` candles inside a box no taller than `max_height_pct` (the
+  caller resolves it as N × the series' mean true-range%) with alternating
+  edge-zone touches (compressed top/bottom sequence ≥ 3 over the outer 25%
+  zones, so a one-way drift inside the cap does not qualify). A confirmed box
+  absorbs candles while total height stays within the cap; an unabsorbable
+  poke either resolves the range (`is_sustained_break` beyond the boundary,
+  `resolve_persistence` closes) or is a boundary sweep left outside the frozen
+  box. Run at the composition level over the *surviving* internal event
+  stream (see `load_dashboard_data`), **not** inside the detector — an
+  in-detector variant was measured and reverted (a detector advance later
+  dropped as wick-only split BTC H1's July 2026 box at an invisible point).
+  Calibration + the motivating BTC/ETH H1 locks are documented in
+  `liquidity_hunter/docs/structure_decisions.md`.
+
 All detectors are re-exported from `liquidity_hunter.liquidity`.
 
 ### Psychology layer (`liquidity_hunter/psychology`)
@@ -811,11 +847,18 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `liquidity_heatmap` (`LiquidityHeatmap | None`),
   `liquidation_map` (`LeverageLiquidationMap | None`),
   `narrative` (`MarketNarrative | None`), `oi_analysis`
-  (`OIAnalysis | None`), `liquidity_hunt` (`LiquidityHuntState | None`), and
+  (`OIAnalysis | None`), `liquidity_hunt` (`LiquidityHuntState | None`),
   `higher_timeframe` (`TimeFrame | None` — the `_HIGHER_TIMEFRAME_MAP` anchor
   pair `higher_timeframe_direction` was measured on, `None` for the top
   timeframe; lets the frontend label readings "vs 4H" instead of a generic
-  "HTF") for one symbol/timeframe.
+  "HTF"), and `consolidation_ranges` (`list[ConsolidationRange]` — confirmed
+  lateral ranges overlapping the visible window, from the
+  `_detect_consolidations` post-pass inside `_run_internal_structure`:
+  `detect_consolidation_ranges` over the *surviving* non-provisional
+  BOS/CHoCH/`CHOCH_FAILED` boundaries, height cap
+  `_CONSOLIDATION_MAX_HEIGHT_ATR` = 8 × mean TR%, `_CONSOLIDATION_MIN_CANDLES`
+  = 60, resolve persistence 4 — calibrated 2026-07-14, see
+  `docs/structure_decisions.md`) for one symbol/timeframe.
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=1200, swing_lookback=..., confluence_filter=False, futures_provider=...)`**
   — fetches a single buffered candle series (`buffered_candles`) and derives the
   visible `candles` from its tail (`buffered_candles[-limit:]`; no separate fetch
@@ -1096,7 +1139,8 @@ only on `app` and `core` (an alternative presentation layer to
   already `DomainModel`s and serialize as-is. `poi_zones`,
   `manipulation_cycles`, `behavior_divergences`,
   `liquidity_heatmap`, `liquidation_map`, `narrative`, `oi_analysis`,
-  `liquidity_hunt`, and `higher_timeframe` fields are included.
+  `liquidity_hunt`, `higher_timeframe`, and `consolidation_ranges` fields are
+  included.
 
 Tested with FastAPI's `TestClient` in `liquidity_hunter/tests/api/test_main.py`.
 
@@ -1122,6 +1166,18 @@ selector.
   `showManipulationBoxes` prop). Accumulation boxes are color-coded by
   status: amber (`in_progress`), green (`confirmed`), gray (`failed`).
   Limited to `MAX_MANIP_BOXES = 3` most relevant (in-progress first).
+
+  **Consolidation range boxes**: a third `POIBoxesPrimitive` instance draws
+  each `data.consolidation_ranges` entry as a neutral slate `▭ RANGE` box
+  (`CONSOLIDATION_BOX_STYLES`, live ranges slightly stronger than resolved
+  ones, resolved boxes labeled with the breakout direction arrow); a live
+  range extends to the right edge via the far-future-sentinel clamp. Toggled
+  by the `▭ Range` toolbar button in `App.tsx` (`showConsolidationRanges`
+  prop, default **on**). While the toggle is on, a BOS/CHoCH line whose level
+  sits *inside* a confirmed box is **truncated at the range start**
+  (`consolidationTruncationTime`) — the range chewed through that level, so
+  the old reference line must not run through/past the box (the ETH "BOS
+  travado em cima" fix). Sweep lines and events are untouched.
 
   **Volume delta pane**: histogram bars colored by candle direction
   (`CANDLE_UP_COLOR`/`CANDLE_DOWN_COLOR`), computed as
@@ -1173,7 +1229,9 @@ selector.
   compact row per `TimeframeOverview` entry (M5 → W1) showing the timeframe
   chip, trend (`▲ BULL` / `▼ BEAR` / `◆ FLAT`, directional colors), the last
   structural event with candles-ago (`BOS ▲ ·12c`), a dimmed forming chip for
-  provisional marks (`BOS? ▼`), and a hunt-phase chip (`⚠` counter-trend /
+  provisional marks (`BOS? ▼`), a slate `▭ RANGE ·Nc` chip when the
+  timeframe is inside a confirmed consolidation (`in_consolidation` /
+  `consolidation_candles`), and a hunt-phase chip (`⚠` counter-trend /
   `⚡ x/y` hunting / `✓` captured). The `CollapsibleSection` header shows an
   alignment summary (`6▲ 1▼`); the full reading is each row's hover title.
   **Clicking a row switches the chart timeframe** (`switchChartTimeframe`,
@@ -1196,7 +1254,8 @@ selector.
   right edge is clamped to `mediaSize.width` (full pane width). Only ACTIVE
   zones are drawn (`selectVisiblePoiZones` drops invalidated ones and keeps
   the most recent few per direction near price).
-  Also reused for manipulation cycle accumulation boxes (second instance).
+  Also reused for manipulation cycle accumulation boxes (second instance) and
+  consolidation range boxes (third instance).
 
 - **`frontend/src/charting/LiquidationBandsPrimitive.ts`** —
   `LiquidationBandsPrimitive` implements `ISeriesPrimitive` and draws
@@ -1233,8 +1292,11 @@ selector.
   `LiquidationBand`, `MarketNarrative`, `NarrativeEvent`, `NarrativeAnomaly`,
   `NarrativeEventType`, `AnomalySeverity`, `OIAnalysis`, `OIRegimeReading`,
   `OIQualifiedEvent`, `OIRegime`, `OIParticipation`, `LiquidityHuntState`,
-  `LiquidityHuntTarget`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`;
-  `DashboardData.higher_timeframe` (`TimeFrame | null`).
+  `LiquidityHuntTarget`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`,
+  `ConsolidationRange`, `ConsolidationStatus`;
+  `DashboardData.higher_timeframe` (`TimeFrame | null`) and
+  `DashboardData.consolidation_ranges`; `TimeframeOverview.in_consolidation`
+  / `consolidation_candles`.
 
 - **Liquidity Hunt KPI card** (frontend, as of 2026-07-06): the KPI row reads
   left-to-right as a story ending in the hunt "conclusion" card — the
@@ -1293,7 +1355,8 @@ selector.
   `oi_analysis.qualified_events`.
 - **`frontend/src/theme.ts`** — color constants for POI zones, structure
   events, manipulation cycle boxes (`MANIPULATION_BOX_STYLES`), volume delta,
-  RSI, the liquidity heatmap gradient, leverage-liquidation bands
+  RSI, consolidation range boxes (`CONSOLIDATION_BOX_STYLES`, neutral slate),
+  the liquidity heatmap gradient, leverage-liquidation bands
   (`LIQUIDATION_LEVERAGE_COLORS`, warm gradient by tier), and other chart
   elements.
 
@@ -1347,6 +1410,12 @@ state in brief:
   marked a false `CHOCH_FAILED` on its pullback). A `CHOCH_FAILED`'s reclaim
   scan is also bounded to *after* the CHoCH formed (`*_choch_arm_index`), so a
   failure can never be timestamped before the CHoCH it invalidates.
+- **Consolidation (lateral range) observation** (phase 1, 2026-07-14): a
+  composition-level post-pass over the surviving event stream turns the
+  detector's correct silence inside a range into explicit
+  `ConsolidationRange`s (chart box + ladder chip + line truncation; events
+  and trend untouched). Phase 2 (planned): additive staged BOS / provisional
+  CHoCH at range resolution referencing the broken boundary.
 
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /

@@ -106,6 +106,7 @@ def test_dashboard_returns_snapshot(client: TestClient) -> None:
     assert liquidation_map is not None
     assert liquidation_map["dominant_leveraged_side"] == "neutral"
     assert isinstance(liquidation_map["bands"], list)
+    assert isinstance(body["consolidation_ranges"], list)
     # Narrative/anomaly synthesis is off by default (the multi-timeframe
     # overview panel took over its sidebar slot); see the opt-in test below.
     assert "narrative" in body
@@ -148,6 +149,7 @@ def test_overview_returns_ladder(client: TestClient) -> None:
             "captured",
         )
         assert entry["current_price"] > 0
+        assert isinstance(entry["in_consolidation"], bool)
 
 
 def test_dashboard_uses_default_query_params(client: TestClient) -> None:

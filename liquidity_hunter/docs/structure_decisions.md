@@ -1176,6 +1176,69 @@ function cores; covered by synthetic unit tests
 (`resolve_break_origin_timestamp` tiers, the `CHOCH_FAILED` reset, and a
 `_reanchor` opposite-polarity fill) rather than heavy real-data fixtures.
 
+**Consolidation (lateral range) detection — phase 1, observation only** (as of
+2026-07-14): inside a broad range the detector goes *correctly* silent — both
+references end up pinned outside the box (the BOS staircase at a pre-range
+extreme above, the CHoCH reference at the leg origin below), so nothing inside
+can trigger, and none of the anti-lock tools apply (the staleness re-anchor's
+CHoCH still needs 12 sustained closes a range never gives; the displacement
+release needs a stretched leg, and a range is compression; the staircase only
+relaxes at a CHoCH). Motivating locks (fixtures
+`btcusdt/ethusdt_1h_2026_05_13_07_14.json`, captured live before resolution):
+BTC H1 10 days after the 07-04 BOS @63450 — the 07-07 rally to 64691.9
+advanced state but its pending BOS died unconfirmed (deep range pullback), the
+64692 wick became the staircase bar the later 64288/64680 rallies missed, and
+the 61297/61520 drops printed only sweeps against a leg-origin CHoCH ref far
+below; ETH H1 mirrored it after the 07-06 BOS @1833 (a −6.6% drop to 1712 = 3
+sweeps; the 1829.52 recovery missed the 1833 staircase by 3.5 dollars).
+
+Phase 1 makes the silence explicit instead of touching the state machine:
+a `ConsolidationRange` domain entity + `detect_consolidation_ranges`
+(`liquidity/detectors/consolidation.py`), a **pure post-pass run at the
+composition level** (`dashboard_data._detect_consolidations`, inside
+`_run_internal_structure`) over the **surviving** event stream. Segment
+boundaries are the post-composition-pass non-provisional
+BOS/CHoCH/`CHOCH_FAILED` (a `CHOCH_FAILED` contributes the *opposite* of its
+direction — the trend it reverts to). **In-detector integration was built
+first and reverted by measurement**: using the detector's internal advances
+(collected in `emit`) split BTC's July box in two at a 07-10 advance whose BOS
+`_reanchor_bos_close_break` later dropped as wick-only — a visible range split
+at an invisible point. With chart-event boundaries it is one box, 07-04 18:00
+→ live.
+
+Definition: per quiet segment, the longest trailing window whose high-low box
+stays within `_CONSOLIDATION_MAX_HEIGHT_ATR` (8.0) × the detection series'
+mean true-range% (the displacement release's normalization), holding at least
+`_CONSOLIDATION_MIN_CANDLES` (60) candles, with alternating edge-zone touches
+(compressed top/bottom sequence ≥ 3, outer 25% zones — filters one-way drifts
+inside the cap). Once confirmed the box absorbs candles while total height
+stays within the cap; an unabsorbable poke either **resolves** the range
+(close beyond the boundary holding `_CONSOLIDATION_RESOLVE_PERSISTENCE` = 4
+further closes, `is_sustained_break`) or stays outside the frozen box (a
+boundary sweep — K=8 chosen over 10 because K=10 absorbed ETH's 07-12 1848
+spike into the box top, hiding the sweep). A structure advance ending the
+segment resolves an open range in the advance's direction; open at series end
+= `ACTIVE`. N=60 confirms both motivating locks; N=40 added sub-2.5-day boxes
+reading as routine pauses; N=80 only delayed confirmation (~3.3 days on H1).
+Live matrix (BTC/ETH/SOL/AAVE/NEAR × 15m/1h/4h/1d): 2–8 ranges per
+1200-candle combo, BTC H1/H4 independently finding the same July box
+[61297–64692], ETH June bottom basing (06-25→06-29 [1511–1610]) resolving
+bullish into the July rally — honest accumulation reads. Zero impact on
+events/trend by construction (`detect()` untouched).
+
+Surfaces: `DashboardData.consolidation_ranges` (+ API), a `▭ RANGE` box on
+the chart (third `POIBoxesPrimitive`, neutral slate, live ranges to the right
+edge via the sentinel clamp, `▭ Range` toolbar toggle default **on**), a
+ladder chip `▭ RANGE ·Nc` (`TimeframeOverview.in_consolidation` /
+`consolidation_candles`, from the ACTIVE range), and **range line
+termination**: a BOS/CHoCH line whose level sits inside a confirmed box is
+truncated at the range start (`consolidationTruncationTime`, frontend-only,
+tied to the toggle) — the ETH "BOS travado em cima" fix. Phase 2 (planned,
+additive-first per the house rule): staged BOS / provisional CHoCH at range
+resolution referencing the broken boundary; phase 3 (flag, only if phase 2
+measures well): resolution re-seeds staircase + CHoCH refs at the boundaries
+("cycle reset").
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.

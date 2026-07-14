@@ -24,10 +24,11 @@ import {
   LiquidationBandsPrimitive,
   type LiquidationBandInput,
 } from '../charting/LiquidationBandsPrimitive'
-import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone } from '../types/dashboard'
+import type { BehaviorDivergence, ConsolidationRange, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
+  CONSOLIDATION_BOX_STYLES,
   DARK_BG,
   DEFAULT_ZONE_COLOR,
   FONT_COLOR,
@@ -303,6 +304,27 @@ function structureLineEndTime(
   return supersededAt.length > 0 ? (Math.min(...supersededAt) as UTCTimestamp) : lastCandleTime
 }
 
+// A confirmed consolidation range ends the useful life of any BOS/CHoCH
+// reference line whose level sits *inside* its box: the range chewed through
+// that level repeatedly, so extending the line through (or past) the box
+// reads as a live reference that no longer exists ("BOS travado em cima").
+// Returns the start of the earliest such range after the event, or null.
+function consolidationTruncationTime(
+  event: MarketStructure,
+  linePrice: number,
+  ranges: ConsolidationRange[],
+): UTCTimestamp | null {
+  if (event.event !== 'break_of_structure' && event.event !== 'change_of_character') {
+    return null
+  }
+  const eventTime = toUtcTimestamp(event.timestamp)
+  const starts = ranges
+    .filter((range) => range.price_low <= linePrice && linePrice <= range.price_high)
+    .map((range) => toUtcTimestamp(range.start_timestamp))
+    .filter((start) => start > eventTime)
+  return starts.length > 0 ? (Math.min(...starts) as UTCTimestamp) : null
+}
+
 // A POI box spans the zone's real lifecycle: it stays open (full width) while
 // the zone is ACTIVE — an armed order block price may still return to — and
 // closes at the candle whose close broke through it (`invalidated_at`).
@@ -495,6 +517,7 @@ function buildManipulationBoxes(
 
 interface MainChartProps {
   data: DashboardData
+  showConsolidationRanges?: boolean
   showManipulationBoxes?: boolean
   showDivergenceMarkers?: boolean
   showHeatmap?: boolean
@@ -512,6 +535,7 @@ interface MainChartProps {
 
 export function MainChart({
   data,
+  showConsolidationRanges = true,
   showManipulationBoxes = true,
   showDivergenceMarkers = true,
   showHeatmap = true,
@@ -544,6 +568,7 @@ export function MainChart({
   const huntWindowPrimitiveRef = useRef<HuntWindowPrimitive | null>(null)
   const poiBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const manipBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
+  const rangeBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const heatmapPrimitiveRef = useRef<HeatmapStripPrimitive | null>(null)
   const liquidationBandsPrimitiveRef = useRef<LiquidationBandsPrimitive | null>(null)
   const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
@@ -688,6 +713,10 @@ export function MainChart({
     series.attachPrimitive(manipBoxesPrimitive)
     manipBoxesPrimitiveRef.current = manipBoxesPrimitive
 
+    const rangeBoxesPrimitive = new POIBoxesPrimitive()
+    series.attachPrimitive(rangeBoxesPrimitive)
+    rangeBoxesPrimitiveRef.current = rangeBoxesPrimitive
+
     const heatmapPrimitive = new HeatmapStripPrimitive()
     series.attachPrimitive(heatmapPrimitive)
     heatmapPrimitiveRef.current = heatmapPrimitive
@@ -779,6 +808,7 @@ export function MainChart({
       labelsPrimitiveRef.current = null
       poiBoxesPrimitiveRef.current = null
       manipBoxesPrimitiveRef.current = null
+      rangeBoxesPrimitiveRef.current = null
       heatmapPrimitiveRef.current = null
       liquidationBandsPrimitiveRef.current = null
       divergenceMarkersRef.current = null
@@ -1098,15 +1128,6 @@ export function MainChart({
       const oiSuffix = oiSuffixByEvent.get(`${event.timestamp}|${event.event}`)
       const directionIcon = TREND_ICONS[event.direction] ?? ''
       const startTime = toUtcTimestamp(event.timestamp)
-      // A failed CHoCH is a point-in-time invalidation, not a live reference
-      // level: its line spans only the CHoCH's own lifetime (the broken level's
-      // origin -> the failure candle) and never runs forward into later price
-      // action the way a BOS/CHoCH reference line does.
-      const endTime =
-        event.event === 'choch_failed'
-          ? startTime
-          : structureLineEndTime(event, scopeEvents, lastCandleTime)
-
       const linePrice =
         (event.event === 'change_of_character' ||
           event.event === 'choch_failed' ||
@@ -1114,6 +1135,24 @@ export function MainChart({
         event.reference_price_level != null
           ? event.reference_price_level
           : event.price_level
+
+      // A failed CHoCH is a point-in-time invalidation, not a live reference
+      // level: its line spans only the CHoCH's own lifetime (the broken level's
+      // origin -> the failure candle) and never runs forward into later price
+      // action the way a BOS/CHoCH reference line does. A confirmed
+      // consolidation range whose box contains the line's level also ends it
+      // (at the range start): the old structure died into the range.
+      const structuralEnd =
+        event.event === 'choch_failed'
+          ? startTime
+          : structureLineEndTime(event, scopeEvents, lastCandleTime)
+      const rangeTruncation = showConsolidationRanges
+        ? consolidationTruncationTime(event, linePrice, data.consolidation_ranges ?? [])
+        : null
+      const endTime =
+        rangeTruncation !== null && rangeTruncation < structuralEnd
+          ? rangeTruncation
+          : structuralEnd
 
       const lineStartTime =
         (event.event === 'change_of_character' ||
@@ -1221,6 +1260,28 @@ export function MainChart({
       : []
     manipBoxesPrimitiveRef.current?.setBoxes(manipBoxes)
 
+    // Consolidation (lateral range) boxes: the stretches where the structure
+    // detector was correctly silent, made explicit. A live (unresolved) range
+    // extends to the right edge via the far-future sentinel clamp.
+    const rangeBoxes: POIBox[] = []
+    for (const range of showConsolidationRanges ? (data.consolidation_ranges ?? []) : []) {
+      const style = CONSOLIDATION_BOX_STYLES[range.status] ?? CONSOLIDATION_BOX_STYLES.active
+      const resolvedIcon =
+        range.resolved_direction != null ? ` ${TREND_ICONS[range.resolved_direction] ?? ''}` : ''
+      rangeBoxes.push({
+        x0: toUtcTimestamp(range.start_timestamp),
+        x1: range.end_timestamp
+          ? toUtcTimestamp(range.end_timestamp)
+          : ((lastCandleTime + 9_999_999) as UTCTimestamp),
+        priceLow: range.price_low,
+        priceHigh: range.price_high,
+        borderColor: style.border,
+        fillColor: style.fill,
+        label: `▭ RANGE${resolvedIcon}`,
+      })
+    }
+    rangeBoxesPrimitiveRef.current?.setBoxes(rangeBoxes)
+
     // Behavior divergence markers
     const divMarkers = showDivergenceMarkers
       ? buildDivergenceMarkers(data.behavior_divergences ?? [])
@@ -1293,7 +1354,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showVolume, showRsiDivergence])
+  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showVolume, showRsiDivergence])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

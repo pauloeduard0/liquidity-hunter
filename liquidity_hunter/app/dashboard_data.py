@@ -5,11 +5,13 @@ single `DashboardData` snapshot for `dashboard` to render.
 """
 
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
+from statistics import fmean
 
 from liquidity_hunter.core.domain import (
     Candle,
+    ConsolidationRange,
     FundingRate,
     LeverageLiquidationMap,
     LiquidityHeatmap,
@@ -45,6 +47,7 @@ from liquidity_hunter.liquidity import (
     SwingHighDetector,
     SwingLowDetector,
     SwingStructureDetector,
+    detect_consolidation_ranges,
     mark_swept_zones,
 )
 from liquidity_hunter.liquidity.detectors._common import (
@@ -138,6 +141,39 @@ _DEFAULT_STALE_REANCHOR_CANDLES = 60
 # 15 keeps a real quiet-period requirement without delaying the release.
 _STALE_REANCHOR_DISPLACEMENT_ATR: float | None = 16.0
 _STALE_REANCHOR_DISPLACEMENT_CANDLES: int | None = 15
+
+# Consolidation (lateral range) detection
+# (`liquidity.detectors.consolidation.detect_consolidation_ranges`, run at the
+# composition level over the *surviving* internal event stream). Inside a
+# range the structure detector is correctly silent -- both references sit
+# outside the box (the staircase at a pre-range wick above, the CHoCH
+# reference at the leg origin below), so nothing inside can trigger -- but
+# that silence is indistinguishable on the chart from a stuck detector (the
+# BTC/ETH H1 2026-07 locks: 10 days of sweeps/labels only). The post-pass
+# turns the silence into an explicit `ConsolidationRange` observation.
+# Segment boundaries are the post-composition-pass, non-provisional
+# BOS/CHoCH/`CHOCH_FAILED` -- the events the chart draws -- rather than the
+# detector's internal advances: a detector advance later dropped as
+# wick-only would split a visible range at an invisible point (measured on
+# BTC H1 07/2026: split at a dropped 07-10 BOS).
+#
+# A range confirms after `_CONSOLIDATION_MIN_CANDLES` candles inside a box no
+# taller than `_CONSOLIDATION_MAX_HEIGHT_ATR` x the series' mean true-range%
+# (volatility-normalized like the displacement release), with alternating
+# touches of both boundary zones; `_CONSOLIDATION_RESOLVE_PERSISTENCE` closes
+# beyond a boundary resolve it. Calibrated 2026-07-14 on the
+# btcusdt/ethusdt_1h_2026_05_13_07_14 fixtures (the motivating locks) plus a
+# BTC/ETH/SOL/AAVE/NEAR x 15m/1h/4h/1d live matrix: both July H1 locks
+# confirm as single live ranges (BTC 07-04-> [61297-64692], ETH 07-06->
+# [1712-1830]) and the matrix stays at 2-8 ranges per 1200-candle combo, with
+# BTC H1/H4 independently finding the same July box. N=40 adds sub-2.5-day
+# boxes that read as routine pauses; N=80 only delays confirmation (~3.3
+# days on H1) without cleaning anything the fixtures care about. K=8 keeps
+# boundary-sweep wicks outside the box (K=10 absorbs ETH's 07-12 1848 spike
+# into the box top, hiding the sweep).
+_CONSOLIDATION_MIN_CANDLES = 60
+_CONSOLIDATION_MAX_HEIGHT_ATR = 8.0
+_CONSOLIDATION_RESOLVE_PERSISTENCE = 4
 
 # Provisional (live-edge) CHoCH against *weak* references
 # (`InternalStructureDetector.emit_provisional_choch_weak`). After any
@@ -411,6 +447,10 @@ class DashboardData:
     # frontend can say *which* pair a reading refers to ("vs 4H") instead of a
     # generic "HTF".
     higher_timeframe: TimeFrame | None = None
+    # Confirmed lateral consolidation ranges overlapping the visible window
+    # (see `_detect_consolidations`): where the structure detector was
+    # *correctly* silent because price was ranging, made explicit.
+    consolidation_ranges: list[ConsolidationRange] = field(default_factory=list)
 
 
 def _structural_anchor_index(candles: list[Candle], visible_start: datetime) -> int:
@@ -848,6 +888,9 @@ class InternalStructureRun:
     events: list[MarketStructure]
     # The detector's state-machine trend (`final_trend`) at the series end.
     trend: MarketDirection
+    # Confirmed consolidation ranges overlapping the visible window (see
+    # `_detect_consolidations`).
+    consolidation_ranges: list[ConsolidationRange]
 
 
 def _run_internal_structure(
@@ -892,12 +935,75 @@ def _run_internal_structure(
     # passes so only chart-surviving BOS count.
     all_events = _drop_resumed_fizzle_markers(all_events)
     events = [e for e in all_events if visible_start <= e.timestamp <= visible_end]
+    # Consolidation post-pass over the *surviving* stream: segment boundaries
+    # match the events the chart draws. Ranges are filtered to those still
+    # visible (their lifetime overlaps the visible window).
+    consolidation_ranges = [
+        r
+        for r in _detect_consolidations(all_events, internal_candles)
+        if (r.end_timestamp or visible_end) >= visible_start
+    ]
     return InternalStructureRun(
         buffered_candles=buffered_candles,
         candles=candles,
         internal_candles=internal_candles,
         events=events,
         trend=detector.final_trend,
+        consolidation_ranges=consolidation_ranges,
+    )
+
+
+def _detect_consolidations(
+    events: list[MarketStructure], candles: list[Candle]
+) -> list[ConsolidationRange]:
+    """Run consolidation detection over the surviving internal event stream.
+
+    Advances are the non-provisional BOS/CHoCH/`CHOCH_FAILED` that survived
+    the composition passes (what the chart draws); a `CHOCH_FAILED`'s
+    `direction` is the *failed* CHoCH's, so the trend it reverts to is the
+    opposite. The height cap is volatility-normalized against the detection
+    series' mean true-range%, the same normalization the detector's
+    displacement features use.
+    """
+    if len(candles) < 2:
+        return []
+    index_by_timestamp = {candle.timestamp: index for index, candle in enumerate(candles)}
+    advances: list[tuple[int, MarketDirection]] = []
+    for event in events:
+        if event.provisional or event.event not in (
+            StructureEvent.BREAK_OF_STRUCTURE,
+            StructureEvent.CHANGE_OF_CHARACTER,
+            StructureEvent.CHOCH_FAILED,
+        ):
+            continue
+        index = index_by_timestamp.get(event.timestamp)
+        if index is None:
+            continue
+        direction = event.direction
+        if event.event is StructureEvent.CHOCH_FAILED:
+            direction = (
+                MarketDirection.BEARISH
+                if direction is MarketDirection.BULLISH
+                else MarketDirection.BULLISH
+            )
+        advances.append((index, direction))
+    mean_tr_pct = fmean(
+        max(
+            curr.high - curr.low,
+            abs(curr.high - prev.close),
+            abs(curr.low - prev.close),
+        )
+        / curr.close
+        for prev, curr in zip(candles, candles[1:], strict=False)
+    )
+    if mean_tr_pct <= 0:
+        return []
+    return detect_consolidation_ranges(
+        candles,
+        advances,
+        min_candles=_CONSOLIDATION_MIN_CANDLES,
+        max_height_pct=_CONSOLIDATION_MAX_HEIGHT_ATR * mean_tr_pct,
+        resolve_persistence=_CONSOLIDATION_RESOLVE_PERSISTENCE,
     )
 
 
@@ -1101,6 +1207,7 @@ def load_dashboard_data(
         liquidity_heatmap=liquidity_heatmap,
         liquidation_map=liquidation_map,
         oi_analysis=oi_analysis,
+        consolidation_ranges=internal_run.consolidation_ranges,
     )
 
     from liquidity_hunter.app.liquidity_hunt import LiquidityHuntEngine

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from liquidity_hunter.core.domain import (
     Candle,
+    ConsolidationRange,
     LeverageLiquidationMap,
     LiquidityHeatmap,
     LiquidityHuntState,
@@ -52,3 +53,4 @@ class DashboardDataResponse(BaseModel):
     narrative: MarketNarrative | None = None
     oi_analysis: OIAnalysis | None = None
     liquidity_hunt: LiquidityHuntState | None = None
+    consolidation_ranges: list[ConsolidationRange] = []

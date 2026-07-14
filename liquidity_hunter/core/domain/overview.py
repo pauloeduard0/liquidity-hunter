@@ -48,6 +48,13 @@ class TimeframeOverview(DomainModel):
     last_event_candles_ago: int | None = Field(default=None, ge=0)
     forming_event: StructureEvent | None = None
     forming_direction: MarketDirection | None = None
+    # Whether price is currently inside a confirmed consolidation range (an
+    # ACTIVE `ConsolidationRange` at the series end) -- the timeframe's
+    # structure is lateral, so its `trend` reads as the *pre-range* cycle
+    # rather than a live directional read. `consolidation_candles` is how
+    # long the range has been running.
+    in_consolidation: bool = False
+    consolidation_candles: int | None = Field(default=None, ge=1)
     hunt_phase: LiquidityHuntPhase = LiquidityHuntPhase.NONE
     hunted_side: RetailPositioning = RetailPositioning.NEUTRAL
     hunt_targets_captured: int = Field(default=0, ge=0)

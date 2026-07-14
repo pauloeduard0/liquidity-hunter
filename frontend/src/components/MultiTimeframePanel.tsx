@@ -61,6 +61,11 @@ function rowTitle(entry: TimeframeOverview): string {
   if (entry.forming_event) {
     parts.push(`${EVENT_LABELS[entry.forming_event] ?? entry.forming_event}? forming`)
   }
+  if (entry.in_consolidation) {
+    parts.push(
+      `consolidating${entry.consolidation_candles != null ? ` for ${entry.consolidation_candles} candles` : ''}`,
+    )
+  }
   if (entry.hunt_phase !== 'none') {
     parts.push(
       `hunting ${entry.hunted_side}s ${entry.hunt_targets_captured}/${entry.hunt_targets_total} pools`,
@@ -128,6 +133,14 @@ function TimeframeRow({
         {formingLabel && (
           <span className="opacity-60" style={{ color: directionColor(entry.forming_direction) }}>
             {formingLabel}? {directionArrow(entry.forming_direction)}
+          </span>
+        )}
+        {entry.in_consolidation && (
+          <span className="text-[#90a4ae]" title="Price is inside a confirmed lateral range">
+            ▭ RANGE
+            {entry.consolidation_candles != null && (
+              <span className="text-[#3d4455]"> ·{entry.consolidation_candles}c</span>
+            )}
           </span>
         )}
       </span>

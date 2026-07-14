@@ -107,6 +107,18 @@ class POIZoneKind(str, Enum):
     MITIGATION_BLOCK = "mitigation_block"
 
 
+class ConsolidationStatus(str, Enum):
+    """Lifecycle state of a `ConsolidationRange`.
+
+    ACTIVE: price is still trading inside the range at the end of the series.
+    RESOLVED: price broke out of the range (sustained closes beyond a
+      boundary) or a structure advance ended it.
+    """
+
+    ACTIVE = "active"
+    RESOLVED = "resolved"
+
+
 class ManipulationPhase(str, Enum):
     """Current phase of an institutional manipulation cycle."""
 

@@ -27,7 +27,7 @@ structure points and who its resting liquidity is, never what to do.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from liquidity_hunter.app.dashboard_data import (
     _HIGHER_TIMEFRAME_MAP,
@@ -39,6 +39,8 @@ from liquidity_hunter.app.dashboard_data import (
 from liquidity_hunter.app.liquidity_hunt import LiquidityHuntEngine
 from liquidity_hunter.core.domain import (
     Candle,
+    ConsolidationRange,
+    ConsolidationStatus,
     LiquidityZone,
     MarketDirection,
     MarketOverview,
@@ -102,6 +104,9 @@ class TimeframeStructureSnapshot:
     trend: MarketDirection
     # Equal-level zones with sweep marking (the hunt's stop-cluster pools).
     liquidity_zones: list[LiquidityZone]
+    # Confirmed consolidation ranges overlapping the visible window (same
+    # composition post-pass `load_dashboard_data` exposes).
+    consolidation_ranges: list[ConsolidationRange] = field(default_factory=list)
 
 
 def load_timeframe_structure(
@@ -134,6 +139,7 @@ def load_timeframe_structure(
         events=run.events,
         trend=run.trend,
         liquidity_zones=liquidity_zones,
+        consolidation_ranges=run.consolidation_ranges,
     )
 
 
@@ -198,6 +204,16 @@ def _build_entry(
     last_event = _latest(snapshot.events, _TREND_EVENTS, provisional=False)
     forming_event = _latest(snapshot.events, _FORMING_EVENTS, provisional=True)
     last_candle = snapshot.candles[-1]
+    # An ACTIVE range means price is still inside it at the series end: the
+    # timeframe is currently consolidating.
+    live_range = next(
+        (
+            r
+            for r in snapshot.consolidation_ranges
+            if r.status is ConsolidationStatus.ACTIVE
+        ),
+        None,
+    )
 
     return TimeframeOverview(
         timeframe=snapshot.timeframe,
@@ -218,6 +234,8 @@ def _build_entry(
         ),
         forming_event=forming_event.event if forming_event else None,
         forming_direction=forming_event.direction if forming_event else None,
+        in_consolidation=live_range is not None,
+        consolidation_candles=live_range.candle_count if live_range else None,
         hunt_phase=hunt.phase,
         hunted_side=hunt.hunted_side,
         hunt_targets_captured=hunt.targets_captured,

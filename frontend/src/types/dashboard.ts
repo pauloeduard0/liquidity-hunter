@@ -305,6 +305,24 @@ export interface LiquidityHuntState {
   description: string
 }
 
+export type ConsolidationStatus = 'active' | 'resolved'
+
+/** A confirmed lateral consolidation: a stretch with no structure advance where
+ *  price oscillated inside a volatility-bounded box. Where the detector was
+ *  *correctly* silent (a range has no BOS/CHoCH), made explicit. */
+export interface ConsolidationRange {
+  symbol: string
+  timeframe: TimeFrame
+  start_timestamp: string
+  /** Resolution candle (first sustained close beyond a boundary); null while active. */
+  end_timestamp: string | null
+  price_low: number
+  price_high: number
+  status: ConsolidationStatus
+  resolved_direction: MarketDirection | null
+  candle_count: number
+}
+
 export interface OIAnalysis {
   symbol: string
   timeframe: TimeFrame
@@ -330,6 +348,10 @@ export interface TimeframeOverview {
   last_event_candles_ago: number | null
   forming_event: StructureEvent | null
   forming_direction: MarketDirection | null
+  /** Whether price is currently inside a confirmed consolidation range (the
+   *  timeframe's structure is lateral; `trend` reads as the pre-range cycle). */
+  in_consolidation: boolean
+  consolidation_candles: number | null
   hunt_phase: LiquidityHuntPhase
   hunted_side: RetailPositioning
   hunt_targets_captured: number
@@ -364,4 +386,5 @@ export interface DashboardData {
   narrative: MarketNarrative | null
   oi_analysis: OIAnalysis | null
   liquidity_hunt: LiquidityHuntState | null
+  consolidation_ranges: ConsolidationRange[]
 }

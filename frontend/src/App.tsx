@@ -109,6 +109,9 @@ function App() {
   const [liquidationLiveOnly, setLiquidationLiveOnly] = useState(false)
   const [sweptZonesVisible, setSweptZonesVisible] = useState(false)
   const [huntWindowVisible, setHuntWindowVisible] = useState(false)
+  // On by default: a confirmed range is the "why is the chart silent here"
+  // answer, the whole point of detecting it.
+  const [rangeBoxesVisible, setRangeBoxesVisible] = useState(true)
   const [obVisible, setObVisible] = useState(false)
   const [sweepVisible, setSweepVisible] = useState(false)
   const [eqlVisible, setEqlVisible] = useState(false)
@@ -419,6 +422,18 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setRangeBoxesVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        rangeBoxesVisible
+                          ? 'bg-[#90a4ae22] text-[#90a4ae]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle consolidation (lateral range) boxes"
+                    >
+                      ▭ Range
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setHuntWindowVisible((v) => !v)}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         huntWindowVisible
@@ -470,7 +485,7 @@ function App() {
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col p-1">
-                  <MainChart key={`${symbol}-${chartTimeframe}`} data={chartData ?? data} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} />
+                  <MainChart key={`${symbol}-${chartTimeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} />
                 </div>
               </div>
 

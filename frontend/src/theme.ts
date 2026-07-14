@@ -61,6 +61,13 @@ export const MANIPULATION_BOX_STYLES: Record<string, { border: string; fill: str
   failed: { border: '#8a8f9c', fill: '#8a8f9c12' },
 }
 
+/** Consolidation (lateral range) box: neutral slate — a structural pause, not
+ *  a directional zone. Live ranges render slightly stronger than resolved ones. */
+export const CONSOLIDATION_BOX_STYLES: Record<string, { border: string; fill: string }> = {
+  active: { border: '#90a4ae', fill: '#90a4ae14' },
+  resolved: { border: '#90a4ae66', fill: '#90a4ae0a' },
+}
+
 /** Behavior divergence type colors and marker shapes. */
 export const DIVERGENCE_STYLES: Record<string, { label: string; color: string; bg: string; icon: string }> = {
   distribution: { label: 'DIST', color: '#ef5350', bg: '#ef535015', icon: '▼' },
