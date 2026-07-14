@@ -180,6 +180,7 @@ confirming BOS discards the stash. Lifecycle is tied 1:1 to the matching
 Every emitted `MarketStructure` has `scope = StructureScope.INTERNAL`.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from statistics import fmean
@@ -193,6 +194,7 @@ from liquidity_hunter.core.domain import (
 )
 from liquidity_hunter.liquidity.detectors._common import (
     Pivot,
+    RangeReset,
     bos_confluence,
     collect_pivots,
     find_close_break_index,
@@ -752,10 +754,23 @@ class InternalStructureDetector(MarketStructureDetector):
         # trend reverts on failure). NEUTRAL until `detect()` runs.
         self.final_trend: MarketDirection = MarketDirection.NEUTRAL
 
-    def detect(self, candles: list[Candle]) -> list[MarketStructure]:
+    def detect(
+        self,
+        candles: list[Candle],
+        *,
+        range_resets: Sequence[RangeReset] | None = None,
+    ) -> list[MarketStructure]:
         validate_candles(candles)
 
         pivots = collect_pivots(candles, self._high_detector, self._low_detector)
+
+        # Consolidation-range reference re-seeds (the phase-3 "range reset
+        # cycle", computed by a first pass + the consolidation post-pass and
+        # replayed here on the second pass). Sorted by candle index; applied
+        # at the top of the pivot loop the moment the loop reaches each one.
+        # `None`/empty is byte-identical to a plain `detect(candles)`.
+        pending_resets = sorted(range_resets or (), key=lambda r: r.candle_index)
+        next_reset = 0
 
         # Effective structural-reference release gap: when
         # `bos_leg_origin_release_gap_atr` is set, the gap is N x the series'
@@ -1196,9 +1211,70 @@ class InternalStructureDetector(MarketStructureDetector):
                 )
             )
 
+        def apply_range_resets(up_to_index: int) -> None:
+            """Consolidation-range reference re-seed (`range_resets`).
+
+            A confirmed range redefines the cycle's structure as its box --
+            inside it nothing is structure, the *boundaries* are the levels.
+            The counter-trend CHoCH reference collapses to the opposite
+            boundary (structural: a boundary defended for the whole box is
+            the most tested level on the chart, so it confirms at normal
+            persistence and renders solid), and the with-trend staircase +
+            reported floor collapse to the with-trend boundary -- so a
+            sustained boundary break in either direction is a *real* machine
+            event (a continuation BOS measured from the box, or a boundary
+            CHoCH whose failure the existing CHOCH_FAILED net still covers),
+            instead of price being judged against references pinned far
+            outside the box. The stale pre-range pullback candidate is
+            cleared (the next promotion must come from post-range price
+            action), and the staleness clock restarts at the directive --
+            otherwise the staleness re-anchor would re-tighten the reference
+            back inside the box on the very next pivot. Applied per side of
+            the standing trend; a NEUTRAL bootstrap has no trend context to
+            re-seed against (mirroring the breakout-staging rule). Called at
+            the top of the pivot loop and once after it (a directive past the
+            last pivot must still arm the live edge for the provisional
+            emission).
+            """
+            nonlocal next_reset
+            nonlocal validated_choch_low, validated_choch_low_structural
+            nonlocal validated_choch_high, validated_choch_high_structural
+            nonlocal candidate_choch_low, candidate_choch_high
+            nonlocal last_bull_bos_high, prev_bull_bos_extreme, bull_floor_from_bos
+            nonlocal last_bear_bos_low, prev_bear_bos_extreme, bear_floor_from_bos
+            nonlocal last_advance_index
+            while (
+                next_reset < len(pending_resets)
+                and pending_resets[next_reset].candle_index <= up_to_index
+            ):
+                reset = pending_resets[next_reset]
+                next_reset += 1
+                if trend is MarketDirection.BULLISH:
+                    validated_choch_low = Pivot(
+                        price=reset.price_low, timestamp=reset.low_formed_timestamp
+                    )
+                    validated_choch_low_structural = True
+                    candidate_choch_low = None
+                    last_bull_bos_high = reset.price_high
+                    prev_bull_bos_extreme = reset.price_high
+                    bull_floor_from_bos = True
+                    last_advance_index = max(last_advance_index, reset.candle_index)
+                elif trend is MarketDirection.BEARISH:
+                    validated_choch_high = Pivot(
+                        price=reset.price_high, timestamp=reset.high_formed_timestamp
+                    )
+                    validated_choch_high_structural = True
+                    candidate_choch_high = None
+                    last_bear_bos_low = reset.price_low
+                    prev_bear_bos_extreme = reset.price_low
+                    bear_floor_from_bos = True
+                    last_advance_index = max(last_advance_index, reset.candle_index)
+
         for timestamp, kind, price in pivots:
             pivot = Pivot(price=price, timestamp=timestamp)
             current_index = index_by_timestamp[timestamp]
+
+            apply_range_resets(current_index)
 
             # --- Trigger "displacement": a fair-value gap in the trend
             # direction, formed in the leg since the previous pivot, re-anchors
@@ -2997,6 +3073,11 @@ class InternalStructureDetector(MarketStructureDetector):
             # candles since this pivot. Updated even on a wick-only break (the
             # pivot still happened chronologically).
             prev_any_pivot_index = current_index
+
+        # A directive past the last pivot (a range that confirmed or expanded
+        # inside the swing-lookback lag) must still arm the live edge before
+        # the provisional emission below reads the final state.
+        apply_range_resets(len(candles) - 1)
 
         # Provisional live-edge BOS (only under `emit_provisional_bos`). Since the
         # last confirmed advance (BOS/CHoCH/CHOCH_FAILED), if the trend has a

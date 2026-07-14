@@ -36,6 +36,7 @@ open at the series end is reported `ACTIVE`.
 """
 
 from collections.abc import Sequence
+from datetime import datetime
 
 from liquidity_hunter.core.domain.candle import Candle
 from liquidity_hunter.core.domain.consolidation import ConsolidationRange
@@ -46,7 +47,7 @@ from liquidity_hunter.core.domain.enums import (
     StructureScope,
 )
 from liquidity_hunter.core.domain.market_structure import MarketStructure
-from liquidity_hunter.liquidity.detectors._common import is_sustained_break
+from liquidity_hunter.liquidity.detectors._common import RangeReset, is_sustained_break
 
 # The outer fraction of the box height, at each boundary, that counts as an
 # "edge zone" for the oscillation requirement.
@@ -113,8 +114,34 @@ def detect_consolidation_ranges(
     advance established -- segment boundaries a range may never span, and the
     fallback resolution when an advance ends a still-open range.
     """
+    ranges, _ = detect_consolidation_ranges_with_resets(
+        candles,
+        advances,
+        min_candles=min_candles,
+        max_height_pct=max_height_pct,
+        resolve_persistence=resolve_persistence,
+    )
+    return ranges
+
+
+def detect_consolidation_ranges_with_resets(
+    candles: Sequence[Candle],
+    advances: Sequence[tuple[int, MarketDirection]],
+    *,
+    min_candles: int,
+    max_height_pct: float,
+    resolve_persistence: int,
+) -> tuple[list[ConsolidationRange], list[RangeReset]]:
+    """`detect_consolidation_ranges` plus the reference re-seed directives.
+
+    Each confirmed range emits a `RangeReset` at its confirmation candle, and
+    another at every absorbed candle that expands a boundary -- always the box
+    **as known at that candle** (the final box would be lookahead). The second
+    detector pass (`range_reset_cycle`) replays these into the state machine
+    so the boundaries become the live structural references.
+    """
     if not candles:
-        return []
+        return [], []
     # Deduplicate by index (keep the last direction recorded for a candle)
     # and sort: emissions are appended in pivot order, but break-candle
     # attribution can place a later emission at an earlier candle.
@@ -124,6 +151,7 @@ def detect_consolidation_ranges(
     ordered = sorted(by_index.items())
 
     ranges: list[ConsolidationRange] = []
+    resets: list[RangeReset] = []
     segment_start = 0
     boundaries: list[tuple[int, MarketDirection | None]] = [
         *ordered,
@@ -142,10 +170,11 @@ def detect_consolidation_ranges(
                     min_candles=min_candles,
                     max_height_pct=max_height_pct,
                     resolve_persistence=resolve_persistence,
+                    resets=resets,
                 )
             )
         segment_start = advance_index + 1
-    return ranges
+    return ranges, resets
 
 
 def _scan_segment(
@@ -158,6 +187,7 @@ def _scan_segment(
     min_candles: int,
     max_height_pct: float,
     resolve_persistence: int,
+    resets: list[RangeReset] | None = None,
 ) -> list[ConsolidationRange]:
     symbol = candles[0].symbol
     timeframe = candles[0].timeframe
@@ -168,6 +198,22 @@ def _scan_segment(
     box_low = float("inf")
     # (start index, box high, box low) once a range is confirmed and unresolved.
     active: tuple[int, float, float] | None = None
+
+    def emit_reset(index: int, range_start: int, high: float, low: float) -> None:
+        if resets is not None:
+            resets.append(
+                RangeReset(
+                    candle_index=index,
+                    price_low=low,
+                    price_high=high,
+                    low_formed_timestamp=_boundary_formed_at(
+                        candles, range_start, index, low, is_high=False
+                    ),
+                    high_formed_timestamp=_boundary_formed_at(
+                        candles, range_start, index, high, is_high=True
+                    ),
+                )
+            )
 
     index = segment_start
     while index <= segment_end:
@@ -188,6 +234,7 @@ def _scan_segment(
                 candles[start : index + 1], box_high, box_low
             ):
                 active = (start, box_high, box_low)
+                emit_reset(index, start, box_high, box_low)
         else:
             range_start, high, low = active
             absorbed_high = max(high, candle.high)
@@ -195,6 +242,10 @@ def _scan_segment(
             if _height_pct(absorbed_high, absorbed_low) <= max_height_pct:
                 # Still inside the volatility envelope: the box widens.
                 active = (range_start, absorbed_high, absorbed_low)
+                if absorbed_high > high or absorbed_low < low:
+                    # A boundary expanded: re-issue the directive with the box
+                    # as known at this candle.
+                    emit_reset(index, range_start, absorbed_high, absorbed_low)
             elif candle.close > high and is_sustained_break(
                 candles, index, high, bullish=True, persistence_candles=resolve_persistence
             ):
@@ -375,6 +426,22 @@ def stage_breakout_events(
             )
         )
     return staged
+
+
+def _boundary_formed_at(
+    candles: Sequence[Candle],
+    start: int,
+    end: int,
+    level: float,
+    *,
+    is_high: bool,
+) -> datetime:
+    """The first candle in `[start, end]` whose extreme formed `level`."""
+    for index in range(start, end + 1):
+        extreme = candles[index].high if is_high else candles[index].low
+        if extreme == level:
+            return candles[index].timestamp
+    return candles[start].timestamp
 
 
 def _resolved(

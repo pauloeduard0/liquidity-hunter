@@ -1275,6 +1275,59 @@ breakout. Fixture `solusdt_4h_2025_11_06_2026_07_14.json` locks the three
 SOL marks. Phase 3 (flag, only if phase 2 proves out in use): resolution
 re-seeds staircase + CHoCH refs at the boundaries ("cycle reset").
 
+**Consolidation cycle reset — phase 3, scoped re-seed** (flag
+`_CONSOLIDATION_RANGE_RESET_CYCLE`, default **OFF**; as of 2026-07-14): the
+state machine can look stuck inside a range because both its references sit
+*outside* the box (staircase at a pre-range wick above, CHoCH reference at the
+leg origin below), so nothing inside the box triggers. Phase 3 re-seeds those
+references onto the box boundaries and replays. The mechanism: the
+consolidation scanner emits `RangeReset` directives
+(`detect_consolidation_ranges_with_resets`) at a range's confirmation and each
+boundary expansion — the box *as known at that candle* (the final box would be
+lookahead); a second `InternalStructureDetector.detect(range_resets=...)` pass
+applies them at the top of the pivot loop, collapsing the counter-trend CHoCH
+reference to the opposite boundary (structural) and the with-trend
+staircase + reported floor to the near boundary, clearing the stale pullback
+candidate and restarting the staleness clock. Empty/absent directives are
+byte-identical to a plain `detect` (the safety invariant, unit-tested).
+
+**Blanket re-seed rejected by measurement.** Applying the directives of *every*
+historical range was measured on the live 5×4 matrix: **20/20 combos changed,
+heavy structural churn (−11 to +13 events), 1 trend flip.** It genuinely
+unsticks real cases (SOL 4H surfaces a whole month of May structure phase 2
+was blind to), but it also **rewrites settled history** — the ETH 4H case
+turned the 06-23 `CHOCH_FAILED` (which lets July's +12% recovery register,
+ending bullish) into a real bearish CHoCH that bypasses the failed-CHoCH net
+and ends bearish against a rising market. That is the "cascades trend state"
+failure the house culture warns about: a reference change at candle N reclassi-
+fies everything after N.
+
+**Scoped to the single ACTIVE range** (`_scope_resets_to_live_range`, the
+shipped form): only the range still open at the edge — the one that looks stuck
+*now* — is re-seeded; resolved ranges keep their additive phase-2 staged marks.
+Because ranges are non-overlapping segments, every reset at/after the active
+range's start index belongs to it and no resolved range's does. Measured
+**0/20 structural changes, 0 trend flips** — the ETH regression is gone (its
+June range is *resolved*, never re-seeded) and settled history is untouched;
+the only current-snapshot effect is BTC 4H dropping a spurious mid-box `BOS?`
+provisional (63990 inside [61297, 64950]). **Conservative by construction**: a
+range un-scopes the moment it resolves (4 sustained closes past a boundary), so
+phase 3 (a) suppresses premature mid-box provisional clutter while price ranges
+inside, and (b) anchors the forming mark at the real boundary during the first
+breakout candles — but does **not** by itself turn a range-exit reversal into a
+real trend flip (the exit resolves the range and hands off to phase-2 staging).
+Tests: detector safety invariant + reset-re-seeds-reference (suppression
+contrast) in `test_internal_structure.py`; scanner reset emission in
+`test_consolidation.py`; active-only scoping in `test_dashboard_data.py`.
+
+**Deferred (Option B, the real cycle-reset).** Making a range-exit reversal a
+*real* trend flip needs the re-seed to persist through resolution (scoped to
+the most-recent range so the cascade stays bounded to the tail) **and** the
+`CHOCH_FAILED` net preserved through the re-seed (so a fake-out back into the
+box still fails rather than locking the flipped trend — the ETH failure mode).
+That is the deep state-machine work; it must be built scoped + measured
+step-by-step, not blanket. Not started.
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.

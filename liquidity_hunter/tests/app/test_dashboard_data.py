@@ -12,6 +12,7 @@ from liquidity_hunter.app.dashboard_data import (
     _drop_resumed_fizzle_markers,
     _reanchor_bos_close_break,
     _run_internal_structure,
+    _scope_resets_to_live_range,
     _structural_anchor_index,
     load_dashboard_data,
 )
@@ -503,6 +504,77 @@ def test_structural_anchor_index_ignores_extreme_outside_region() -> None:
     candles = make_series(highs, lows)
 
     assert _structural_anchor_index(candles, candles[n - 5].timestamp) == n - 60
+
+
+def test_scope_resets_keeps_only_the_active_range() -> None:
+    from liquidity_hunter.core.domain import ConsolidationRange
+    from liquidity_hunter.liquidity.detectors._common import RangeReset
+
+    candles = make_series([100.0] * 40, [90.0] * 40)
+    resolved = ConsolidationRange(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        start_timestamp=candles[0].timestamp,
+        end_timestamp=candles[10].timestamp,
+        price_low=90.0,
+        price_high=100.0,
+        status=ConsolidationStatus.RESOLVED,
+        resolved_direction=MarketDirection.BULLISH,
+        candle_count=10,
+    )
+    active = ConsolidationRange(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        start_timestamp=candles[20].timestamp,
+        price_low=95.0,
+        price_high=105.0,
+        status=ConsolidationStatus.ACTIVE,
+        candle_count=20,
+    )
+    # One directive inside the resolved range, one inside the active range.
+    resolved_reset = RangeReset(
+        candle_index=8, price_low=90.0, price_high=100.0,
+        low_formed_timestamp=candles[1].timestamp,
+        high_formed_timestamp=candles[0].timestamp,
+    )
+    active_reset = RangeReset(
+        candle_index=32, price_low=95.0, price_high=105.0,
+        low_formed_timestamp=candles[21].timestamp,
+        high_formed_timestamp=candles[20].timestamp,
+    )
+
+    scoped = _scope_resets_to_live_range(
+        [resolved_reset, active_reset], [resolved, active], candles
+    )
+
+    # Only the active range's directive survives: re-seeding the resolved
+    # range would rewrite the settled structure after it.
+    assert scoped == [active_reset]
+
+
+def test_scope_resets_empty_when_no_active_range() -> None:
+    from liquidity_hunter.core.domain import ConsolidationRange
+    from liquidity_hunter.liquidity.detectors._common import RangeReset
+
+    candles = make_series([100.0] * 20, [90.0] * 20)
+    resolved = ConsolidationRange(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        start_timestamp=candles[0].timestamp,
+        end_timestamp=candles[10].timestamp,
+        price_low=90.0,
+        price_high=100.0,
+        status=ConsolidationStatus.RESOLVED,
+        resolved_direction=MarketDirection.BULLISH,
+        candle_count=10,
+    )
+    reset = RangeReset(
+        candle_index=8, price_low=90.0, price_high=100.0,
+        low_formed_timestamp=candles[1].timestamp,
+        high_formed_timestamp=candles[0].timestamp,
+    )
+
+    assert _scope_resets_to_live_range([reset], [resolved], candles) == []
 
 
 def _structure_event(

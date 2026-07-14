@@ -33,6 +33,30 @@ class Pivot:
     timestamp: datetime
 
 
+@dataclass(frozen=True)
+class RangeReset:
+    """A consolidation-range reference re-seed directive (the phase-3 cycle reset).
+
+    Emitted by the consolidation scanner (`liquidity.detectors.consolidation`)
+    the moment a range *confirms* -- and again whenever an absorbed candle
+    expands a boundary -- carrying the box **as known at that candle** (never
+    the final box, which would be lookahead). Consumed by
+    `InternalStructureDetector.detect(range_resets=...)` on a second pass:
+    at `candle_index` the box boundaries become the machine's live structural
+    references (counter-trend CHoCH reference at the opposite boundary, BOS
+    staircase and reported floor at the with-trend boundary), so a sustained
+    boundary break is a *real* machine event instead of a level pinned far
+    outside the box. The `*_formed_timestamp` fields are the candles whose
+    extremes formed each boundary, anchoring the drawn reference lines.
+    """
+
+    candle_index: int
+    price_low: float
+    price_high: float
+    low_formed_timestamp: datetime
+    high_formed_timestamp: datetime
+
+
 def collect_pivots(
     candles: list[Candle],
     high_detector: LiquidityZoneDetector,

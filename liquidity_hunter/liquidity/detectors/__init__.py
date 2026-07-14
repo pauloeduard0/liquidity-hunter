@@ -3,6 +3,7 @@
 from liquidity_hunter.liquidity.detectors.base import LiquidityZoneDetector, MarketStructureDetector
 from liquidity_hunter.liquidity.detectors.consolidation import (
     detect_consolidation_ranges,
+    detect_consolidation_ranges_with_resets,
     stage_breakout_events,
 )
 from liquidity_hunter.liquidity.detectors.equal_levels import EqualHighDetector, EqualLowDetector
@@ -22,5 +23,6 @@ __all__ = [
     "SwingLowDetector",
     "SwingStructureDetector",
     "detect_consolidation_ranges",
+    "detect_consolidation_ranges_with_resets",
     "stage_breakout_events",
 ]

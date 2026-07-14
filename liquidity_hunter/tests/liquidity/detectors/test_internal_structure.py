@@ -14,6 +14,7 @@ from liquidity_hunter.core.domain import (
     StructureScope,
     TimeFrame,
 )
+from liquidity_hunter.liquidity.detectors._common import RangeReset
 from liquidity_hunter.liquidity.detectors.internal_structure import InternalStructureDetector
 from liquidity_hunter.tests.liquidity.detectors._factories import make_candle, make_series
 
@@ -3465,3 +3466,98 @@ def test_staircase_rollback_restores_the_gate_and_emits_the_continuation() -> No
         )
     ]
     assert removed == []
+
+
+# ---------------------------------------------------------------------------
+# Consolidation-range reference re-seed (`range_resets`, the phase-3
+# `range_reset_cycle`). The detector accepts `RangeReset` directives that
+# collapse the standing trend's structural references onto a confirmed range's
+# box boundaries; empty/absent directives are byte-identical to a plain run.
+# ---------------------------------------------------------------------------
+
+
+def _bearish_then_low_range_series() -> list[Candle]:
+    """A bearish staircase, a low oscillating range, then a small recovery.
+
+    The recovery forms a high pivot at 124 -- above the range top (118) but
+    far below the bearish leg's natural CHoCH reference. Used to show a
+    `RangeReset` re-seeding `validated_choch_high` above the recovery peak
+    suppresses the bullish CHoCH the natural (lower) reference would fire.
+    """
+    highs: list[float] = []
+    lows: list[float] = []
+    for high, low in [
+        (200, 190), (205, 195), (195, 175), (185, 178), (180, 160),
+        (170, 163), (165, 145), (155, 148), (150, 130),
+    ]:
+        highs.append(float(high))
+        lows.append(float(low))
+    for i in range(26):
+        if i % 2 == 0:
+            highs.append(118.0)
+            lows.append(110.0)
+        else:
+            highs.append(108.0)
+            lows.append(100.0)
+    for high, low in [
+        (120, 116), (122, 118), (124, 120), (121, 117),
+        (123, 119), (122, 118), (120, 116), (119, 115),
+    ]:
+        highs.append(float(high))
+        lows.append(float(low))
+    return make_series(highs, lows)
+
+
+def _structural_keys(events: list[MarketStructure]) -> list[tuple[object, ...]]:
+    structural = {
+        StructureEvent.BREAK_OF_STRUCTURE,
+        StructureEvent.CHANGE_OF_CHARACTER,
+        StructureEvent.CHOCH_FAILED,
+    }
+    return [
+        (e.timestamp, e.event, e.direction, e.reference_price_level, e.provisional)
+        for e in events
+        if e.event in structural
+    ]
+
+
+def test_range_resets_none_and_empty_are_identical_to_plain() -> None:
+    candles = _bearish_then_low_range_series()
+    detector = InternalStructureDetector(swing_lookback=1, persistence_candles=3)
+
+    plain = _structural_keys(detector.detect(candles))
+    empty = _structural_keys(detector.detect(candles, range_resets=[]))
+    none = _structural_keys(detector.detect(candles, range_resets=None))
+
+    assert plain == empty == none
+
+
+def test_range_reset_reseeds_the_choch_reference() -> None:
+    candles = _bearish_then_low_range_series()
+    detector = InternalStructureDetector(swing_lookback=1, persistence_candles=3)
+
+    # Without a directive the recovery to 124 breaks the natural reference and
+    # fires a bullish CHoCH.
+    plain = _structural_keys(detector.detect(candles))
+    assert any(
+        event is StructureEvent.CHANGE_OF_CHARACTER and direction is MarketDirection.BULLISH
+        for _ts, event, direction, _ref, _prov in plain
+    )
+
+    # A reset re-seeds `validated_choch_high` to a box high *above* the
+    # recovery peak (130 > 124): the recovery can no longer break it, so the
+    # bullish CHoCH is suppressed -- proving the directive moved the reference
+    # the reversal is judged against. Trend stays bearish.
+    reset = RangeReset(
+        candle_index=33,
+        price_low=100.0,
+        price_high=130.0,
+        low_formed_timestamp=candles[10].timestamp,
+        high_formed_timestamp=candles[9].timestamp,
+    )
+    reseeded = _structural_keys(detector.detect(candles, range_resets=[reset]))
+    assert not any(
+        event is StructureEvent.CHANGE_OF_CHARACTER and direction is MarketDirection.BULLISH
+        for _ts, event, direction, _ref, _prov in reseeded
+    )
+    assert detector.final_trend is MarketDirection.BEARISH

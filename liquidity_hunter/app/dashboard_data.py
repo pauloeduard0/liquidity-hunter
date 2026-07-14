@@ -12,6 +12,7 @@ from statistics import fmean
 from liquidity_hunter.core.domain import (
     Candle,
     ConsolidationRange,
+    ConsolidationStatus,
     FundingRate,
     LeverageLiquidationMap,
     LiquidityHeatmap,
@@ -47,11 +48,12 @@ from liquidity_hunter.liquidity import (
     SwingHighDetector,
     SwingLowDetector,
     SwingStructureDetector,
-    detect_consolidation_ranges,
+    detect_consolidation_ranges_with_resets,
     mark_swept_zones,
     stage_breakout_events,
 )
 from liquidity_hunter.liquidity.detectors._common import (
+    RangeReset,
     resolve_break_origin_timestamp,
 )
 from liquidity_hunter.psychology import (
@@ -194,6 +196,37 @@ _CONSOLIDATION_RESOLVE_PERSISTENCE = 4
 # read twice; beyond it they are separate structural facts).
 _CONSOLIDATION_STAGE_BREAKOUT_EVENTS = True
 _CONSOLIDATION_STAGE_DEDUP_CANDLES = 12
+
+# Consolidation cycle reset (phase 3, `range_reset_cycle`). Where phase 2 only
+# *stages* an additive mark at a breakout, phase 3 re-seeds the state machine's
+# structural references at the box boundaries (a second
+# `InternalStructureDetector.detect` pass fed the `RangeReset` directives the
+# consolidation scanner emits): the counter-trend CHoCH reference collapses to
+# the opposite boundary, the with-trend staircase to the near boundary, so
+# while price sits in the box the references track the box instead of levels
+# pinned far outside it.
+#
+# Scoped to the single **ACTIVE** range (`_scope_resets_to_live_range`): the
+# one still open at the edge, the range that looks stuck *now*. The blanket
+# re-seed of every historical range was measured and rejected -- re-seeding a
+# resolved range cascades through the settled structure after it and rewrote
+# months of history (it flipped ETH 4H's July conclusion to bearish against a
+# +12% rally; see `docs/structure_decisions.md`). Resolved ranges keep their
+# additive phase-2 staged marks instead.
+#
+# Because a range un-scopes the moment it *resolves* (4 sustained closes past a
+# boundary), the effect is conservative and tail-bounded: while price ranges
+# inside, the re-seed suppresses premature mid-box provisional marks (the
+# "looks stuck" clutter); during the first candles of a breakout, before the
+# range formally resolves, the forming mark is anchored at the real boundary;
+# once resolved, phase-2 staging takes over. It does *not* by itself turn a
+# range-exit reversal into a real trend flip -- that needs the re-seed to
+# persist through resolution (a follow-up, with the CHOCH_FAILED net preserved
+# through the re-seed). Default OFF; measured 0/20 structural changes and
+# 0 trend flips on the live matrix (only BTC 4H's spurious mid-box `BOS?`
+# dropped). With no active range the second pass is skipped and the output is
+# identical to phase 2.
+_CONSOLIDATION_RANGE_RESET_CYCLE = False
 
 # Provisional (live-edge) CHoCH against *weak* references
 # (`InternalStructureDetector.emit_provisional_choch_weak`). After any
@@ -942,30 +975,58 @@ def _run_internal_structure(
     internal_candles = buffered_candles[_structural_anchor_index(buffered_candles, visible_start) :]
 
     detector = _build_internal_detector(timeframe, confluence_filter=confluence_filter)
-    all_events = detector.detect(internal_candles)
-    # Re-time each BOS to the first close beyond the formed level it broke
-    # (dropping wick-only continuations), before the visible filter.
-    all_events = _reanchor_bos_close_break(all_events, internal_candles)
-    # A reference may only form *after* the prior same-direction BOS broke: a
-    # continuation referencing a pre-break wick attempt at the prior level is
-    # dropped (pre-break liquidity, not structure of the new leg).
-    all_events = _drop_pre_break_reference_bos(all_events)
-    # A fizzle marker followed by a surviving same-direction BOS was a deep
-    # pullback the reversal recovered from, not a fizzle -- runs after the BOS
-    # passes so only chart-surviving BOS count.
-    all_events = _drop_resumed_fizzle_markers(all_events)
+
+    def run_passes(range_resets: list[RangeReset]) -> list[MarketStructure]:
+        events = detector.detect(internal_candles, range_resets=range_resets)
+        # Re-time each BOS to the first close beyond the formed level it broke
+        # (dropping wick-only continuations), before the visible filter.
+        events = _reanchor_bos_close_break(events, internal_candles)
+        # A reference may only form *after* the prior same-direction BOS broke:
+        # a continuation referencing a pre-break wick attempt at the prior level
+        # is dropped (pre-break liquidity, not structure of the new leg).
+        events = _drop_pre_break_reference_bos(events)
+        # A fizzle marker followed by a surviving same-direction BOS was a deep
+        # pullback the reversal recovered from, not a fizzle -- runs after the
+        # BOS passes so only chart-surviving BOS count.
+        return _drop_resumed_fizzle_markers(events)
+
+    all_events = run_passes([])
     # Consolidation post-pass over the *surviving* stream: segment boundaries
-    # match the events the chart draws. Ranges are filtered to those still
-    # visible (their lifetime overlaps the visible window).
-    all_ranges = _detect_consolidations(all_events, internal_candles)
+    # match the events the chart draws.
+    all_ranges, range_resets = _detect_consolidations(all_events, internal_candles)
+
+    if _CONSOLIDATION_RANGE_RESET_CYCLE:
+        # Phase 3: re-seed the machine's structural references at the *live*
+        # range's box boundaries and replay, so when that range breaks out the
+        # machine emits a real BOS/CHoCH instead of staying pinned to a
+        # pre-range level. Scoped to the single ACTIVE range (the one still
+        # open at the edge -- the one that looks stuck now): resolved historical
+        # ranges keep their additive phase-2 staged marks below, since
+        # re-seeding settled structure cascades downstream (the blanket
+        # re-seed rewrote months of history and flipped ETH 4H's July
+        # conclusion -- see docs/structure_decisions.md). An active range has
+        # no breakout yet, so its re-seed only arms the references and repaints
+        # the live-edge provisional -- a bounded, tail-only effect. Re-detect
+        # the boxes against the replayed stream so the drawn ranges stay
+        # consistent (the re-detection's own resets are discarded -- a single
+        # re-seed pass, not a fixpoint).
+        scoped_resets = _scope_resets_to_live_range(
+            range_resets, all_ranges, internal_candles
+        )
+        if scoped_resets:
+            all_events = run_passes(scoped_resets)
+            all_ranges, _ = _detect_consolidations(all_events, internal_candles)
     consolidation_ranges = [
         r for r in all_ranges if (r.end_timestamp or visible_end) >= visible_start
     ]
     if _CONSOLIDATION_STAGE_BREAKOUT_EVENTS:
-        # Phase 2: stage additive structure events at range breakouts (a BOS
-        # with the trend / a provisional CHoCH against it, referencing the
-        # broken boundary), deduped against the real events. Merged sorted by
-        # timestamp, the same contract the detector's staged-BOS merge keeps.
+        # Phase 2: stage additive structure events at *resolved* range breakouts
+        # (a BOS with the trend / a provisional CHoCH against it, referencing
+        # the broken boundary), deduped against the real events. Merged sorted
+        # by timestamp, the same contract the detector's staged-BOS merge keeps.
+        # Runs in both modes: phase 3 re-seeds only the live (unresolved) range,
+        # which stages nothing here; once it breaks out the re-seeded machine
+        # emits the real event and this staging's dedup drops the duplicate.
         staged = stage_breakout_events(
             internal_candles,
             all_ranges,
@@ -1021,17 +1082,48 @@ def _advance_boundaries(
     return advances
 
 
+def _scope_resets_to_live_range(
+    resets: list[RangeReset],
+    ranges: list[ConsolidationRange],
+    candles: list[Candle],
+) -> list[RangeReset]:
+    """Keep only the re-seed directives of the live (ACTIVE) range.
+
+    At most one range is ever ACTIVE -- the last quiet segment, still open at
+    the series edge (the range that looks stuck *now*, the pathology phase 3
+    targets). Resolved ranges are earlier in the series and keep their additive
+    phase-2 staged marks; re-seeding them cascades through the settled
+    structure downstream (the blanket re-seed rewrote months of history and
+    flipped ETH 4H's July conclusion). Because ranges are non-overlapping
+    segments, every reset with a candle index at or after the active range's
+    start belongs to it, and no resolved range's resets do.
+    """
+    active = next(
+        (r for r in ranges if r.status is ConsolidationStatus.ACTIVE), None
+    )
+    if active is None:
+        return []
+    index_by_timestamp = {candle.timestamp: index for index, candle in enumerate(candles)}
+    start_index = index_by_timestamp.get(active.start_timestamp)
+    if start_index is None:
+        return []
+    return [reset for reset in resets if reset.candle_index >= start_index]
+
+
 def _detect_consolidations(
     events: list[MarketStructure], candles: list[Candle]
-) -> list[ConsolidationRange]:
+) -> tuple[list[ConsolidationRange], list[RangeReset]]:
     """Run consolidation detection over the surviving internal event stream.
 
     Segment boundaries come from `_advance_boundaries`. The height cap is
     volatility-normalized against the detection series' mean true-range%,
-    the same normalization the detector's displacement features use.
+    the same normalization the detector's displacement features use. Returns
+    the confirmed ranges (for the chart boxes / ladder chip) and the
+    `RangeReset` directives (empty unless a range confirms), replayed into the
+    second detector pass under `_CONSOLIDATION_RANGE_RESET_CYCLE`.
     """
     if len(candles) < 2:
-        return []
+        return [], []
     advances = _advance_boundaries(events, candles)
     mean_tr_pct = fmean(
         max(
@@ -1043,8 +1135,8 @@ def _detect_consolidations(
         for prev, curr in zip(candles, candles[1:], strict=False)
     )
     if mean_tr_pct <= 0:
-        return []
-    return detect_consolidation_ranges(
+        return [], []
+    return detect_consolidation_ranges_with_resets(
         candles,
         advances,
         min_candles=_CONSOLIDATION_MIN_CANDLES,

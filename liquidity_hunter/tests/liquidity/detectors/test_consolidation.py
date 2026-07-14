@@ -12,8 +12,10 @@ from liquidity_hunter.core.domain import (
     StructureScope,
     TimeFrame,
 )
+from liquidity_hunter.liquidity.detectors._common import RangeReset
 from liquidity_hunter.liquidity.detectors.consolidation import (
     detect_consolidation_ranges,
+    detect_consolidation_ranges_with_resets,
     stage_breakout_events,
 )
 
@@ -272,3 +274,60 @@ def test_empty_and_short_inputs_return_no_ranges() -> None:
         )
         == []
     )
+
+
+def test_with_resets_emits_a_directive_at_confirmation() -> None:
+    candles = _oscillating(20)
+    breakout_start = len(candles)
+    for i in range(4):
+        candles.append(_candle(breakout_start + i, 103.0, 101.5, 102.5))
+
+    ranges, resets = detect_consolidation_ranges_with_resets(
+        candles, [], min_candles=10, max_height_pct=0.03, resolve_persistence=2
+    )
+
+    assert len(ranges) == 1
+    # The range confirms at index 9 (min_candles=10 -> indices 0..9), so the
+    # first directive lands there, carrying the box known at that candle and
+    # the candles whose extremes formed each boundary.
+    assert resets[0] == RangeReset(
+        candle_index=9,
+        price_low=99.0,
+        price_high=101.0,
+        low_formed_timestamp=candles[1].timestamp,
+        high_formed_timestamp=candles[0].timestamp,
+    )
+
+
+def test_with_resets_reissues_on_boundary_expansion() -> None:
+    candles = _oscillating(12)
+    # After confirmation (index 9), a candle pokes the top to 101.5 without
+    # breaking out: the box widens and a fresh directive is issued.
+    candles.append(_candle(12, 101.5, 100.5, 101.0))
+    candles.extend(_oscillating(6, start_index=13))
+
+    ranges, resets = detect_consolidation_ranges_with_resets(
+        candles, [], min_candles=10, max_height_pct=0.05, resolve_persistence=2
+    )
+
+    assert len(ranges) == 1
+    # At least two directives: the confirmation one plus the expansion at
+    # index 12, the later one carrying the widened box high.
+    assert len(resets) >= 2
+    expansion = next(r for r in resets if r.candle_index == 12)
+    assert expansion.price_high == 101.5
+
+
+def test_no_range_emits_no_resets() -> None:
+    # A one-way drift confirms no range, so there are no re-seed directives.
+    candles = [
+        _candle(i, 99.0 + i * 0.1 + 0.15, 99.0 + i * 0.1 - 0.15, 99.0 + i * 0.1)
+        for i in range(20)
+    ]
+
+    ranges, resets = detect_consolidation_ranges_with_resets(
+        candles, [], min_candles=10, max_height_pct=0.03, resolve_persistence=2
+    )
+
+    assert ranges == []
+    assert resets == []

@@ -1422,9 +1422,12 @@ state in brief:
   shallow-pullback promotion, close-confirmed structural floor, provisional
   live-edge BOS/CHoCH marks, fast-fizzle marker, failed-CHoCH whipsaw fixes,
   displacement release, weak-ref failure at the broken level, staircase
-  rollback on a discarded phantom advance, and displacement-success
+  rollback on a discarded phantom advance, displacement-success
   CHoCH-origin retirement (an impulsive reversal that emitted no BOS is not
-  marked a false `CHOCH_FAILED` on its pullback). A `CHOCH_FAILED`'s reclaim
+  marked a false `CHOCH_FAILED` on its pullback), and the scoped
+  consolidation cycle reset (`_CONSOLIDATION_RANGE_RESET_CYCLE`, a second
+  `detect(range_resets=…)` pass re-seeding references onto the ACTIVE range's
+  boundaries — active-only, measured 0/20 change). A `CHOCH_FAILED`'s reclaim
   scan is also bounded to *after* the CHoCH formed (`*_choch_arm_index`), so a
   failure can never be timestamped before the CHoCH it invalidates.
 - **Consolidation (lateral range) observation + breakout staging** (phases
@@ -1434,8 +1437,20 @@ state in brief:
   untouched), and each sustained boundary breakout stages one additive event
   at the broken boundary — a real BOS with the segment trend, a
   `provisional=True` CHoCH against it (replay-skipped). Measured +7/−0 on
-  the live matrix, `final_trend` unchanged. Phase 3 (only if phase 2 proves
-  out): resolution re-seeds staircase + CHoCH refs at the boundaries.
+  the live matrix, `final_trend` unchanged. **Phase 3, scoped cycle reset**
+  (flag `_CONSOLIDATION_RANGE_RESET_CYCLE`, default OFF): re-seeds the state
+  machine's references onto the **ACTIVE** range's boundaries (a second
+  `detect(range_resets=…)` pass fed the scanner's `RangeReset` directives),
+  so while price sits in the box the references track the box instead of
+  pre-range levels. Scoped to the one live range only — the blanket re-seed
+  of all history was measured and rejected (20/20 churn, rewrote settled
+  structure, flipped ETH 4H's July conclusion); active-only measures 0/20
+  structural changes, 0 trend flips (just BTC 4H's spurious mid-box `BOS?`
+  dropped). Conservative: suppresses mid-box provisional clutter + anchors
+  the forming breakout mark at the boundary, but does not itself flip the
+  trend at range exit (a range un-scopes on resolution). Full cycle-reset
+  (re-seed persisting through resolution + `CHOCH_FAILED` preserved) is
+  deferred. See `docs/structure_decisions.md`.
 
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
