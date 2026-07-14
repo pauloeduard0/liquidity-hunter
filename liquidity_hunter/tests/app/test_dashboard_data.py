@@ -1083,6 +1083,68 @@ def test_btc_1h_july_range_lock_is_a_live_consolidation() -> None:
         and rng.end_timestamp == datetime(2026, 7, 2, 9, tzinfo=UTC)
         for rng in run.consolidation_ranges
     )
+    # ... and stages nothing: the real 07-02 09:00 bullish CHoCH caught the
+    # same break (breakout staging dedups against it), so exactly one event
+    # marks that candle.
+    breakout_marks = [
+        e for e in run.events if e.timestamp == datetime(2026, 7, 2, 9, tzinfo=UTC)
+    ]
+    assert len(breakout_marks) == 1
+    assert breakout_marks[0].event is StructureEvent.CHANGE_OF_CHARACTER
+
+
+def test_sol_4h_range_breakouts_stage_additive_events() -> None:
+    """Real-data regression for phase-2 breakout staging (SOLUSDT 4h).
+
+    Three range breakouts the state machine never marked (no real
+    same-direction BOS/CHoCH within the dedup window): the March and May
+    bounces breaking their range tops against the standing bearish trend
+    (provisional CHoCH marks -- the additive contract keeps the trend
+    untouched) and the April continuation breaking a range floor (a staged
+    BOS at the defended boundary).
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "solusdt_4h_2025_11_06_2026_07_14.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    candles = [
+        Candle(
+            symbol="SOLUSDT",
+            timeframe=TimeFrame.H4,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+    provider = _FuturesLimitFakeProvider({TimeFrame.H4: candles})
+
+    run = _run_internal_structure(provider, "SOLUSDT", TimeFrame.H4, 1200, False)
+
+    staged_expectations = [
+        (datetime(2026, 3, 15, 20, tzinfo=UTC), StructureEvent.CHANGE_OF_CHARACTER, True),
+        (datetime(2026, 4, 1, 20, tzinfo=UTC), StructureEvent.BREAK_OF_STRUCTURE, False),
+        (datetime(2026, 5, 8, 16, tzinfo=UTC), StructureEvent.CHANGE_OF_CHARACTER, True),
+    ]
+    for timestamp, kind, provisional in staged_expectations:
+        assert any(
+            e.timestamp == timestamp and e.event is kind and e.provisional is provisional
+            for e in run.events
+        ), f"missing staged {kind} at {timestamp}"
+    # The staged reversal marks never touch the state-machine trend.
+    assert run.trend is MarketDirection.BULLISH
 
 
 def test_eth_1h_july_range_lock_is_a_live_consolidation() -> None:

@@ -39,7 +39,13 @@ from collections.abc import Sequence
 
 from liquidity_hunter.core.domain.candle import Candle
 from liquidity_hunter.core.domain.consolidation import ConsolidationRange
-from liquidity_hunter.core.domain.enums import ConsolidationStatus, MarketDirection
+from liquidity_hunter.core.domain.enums import (
+    ConsolidationStatus,
+    MarketDirection,
+    StructureEvent,
+    StructureScope,
+)
+from liquidity_hunter.core.domain.market_structure import MarketStructure
 from liquidity_hunter.liquidity.detectors._common import is_sustained_break
 
 # The outer fraction of the box height, at each boundary, that counts as an
@@ -249,6 +255,126 @@ def _scan_segment(
                 )
             )
     return found
+
+
+def stage_breakout_events(
+    candles: Sequence[Candle],
+    ranges: Sequence[ConsolidationRange],
+    advances: Sequence[tuple[int, MarketDirection]],
+    existing_events: Sequence[MarketStructure],
+    *,
+    dedup_candles: int,
+) -> list[MarketStructure]:
+    """Stage additive structure events at consolidation-range breakouts.
+
+    Inside a range every structural reference is pinned at a pre-range level,
+    so the state machine often stays silent long after a genuine breakout
+    (e.g. a range top at 1829.5 broken while the staircase bar sits at 1833).
+    The range boundary the market defended for the whole box *is* the
+    structural level the breakout broke, so each range resolved by a
+    sustained boundary break stages one event at the breakout candle:
+
+    - breaking **with** the segment's standing trend (the trend established
+      by the advance that opened the quiet segment): a `BREAK_OF_STRUCTURE`
+      referencing the broken boundary -- a continuation mark, safe for trend
+      replay (it re-asserts the direction the replay already holds);
+    - breaking **against** it: a `CHANGE_OF_CHARACTER` with
+      `provisional=True` -- the additive contract: the state machine's trend
+      never flipped, so replay consumers (hunt/narrative) must skip it while
+      the chart still shows the dimmed reversal mark.
+
+    Purely additive and deduplicated: a range resolved *by* a structure
+    advance stages nothing (the real event is already there), a range in the
+    bootstrap segment (no opening advance -- no trend context) stages
+    nothing, and a staged event is dropped when a real same-direction
+    BOS/CHoCH sits within `dedup_candles` of the breakout (the state machine
+    caught the break itself). `reference_timestamp` is the first candle in
+    the range that formed the broken boundary, so the drawn line spans the
+    defended level.
+    """
+    if not candles:
+        return []
+    index_by_timestamp = {candle.timestamp: index for index, candle in enumerate(candles)}
+    direction_by_index: dict[int, MarketDirection] = {}
+    for index, direction in advances:
+        direction_by_index[index] = direction
+    advance_indices = sorted(direction_by_index)
+
+    real_advance_indices: list[tuple[int, MarketDirection]] = []
+    for event in existing_events:
+        if event.provisional or event.event not in (
+            StructureEvent.BREAK_OF_STRUCTURE,
+            StructureEvent.CHANGE_OF_CHARACTER,
+        ):
+            continue
+        event_index = index_by_timestamp.get(event.timestamp)
+        if event_index is not None:
+            real_advance_indices.append((event_index, event.direction))
+
+    staged: list[MarketStructure] = []
+    for range_ in ranges:
+        if (
+            range_.status is not ConsolidationStatus.RESOLVED
+            or range_.end_timestamp is None
+            or range_.resolved_direction is None
+        ):
+            continue
+        start_index = index_by_timestamp.get(range_.start_timestamp)
+        end_index = index_by_timestamp.get(range_.end_timestamp)
+        if start_index is None or end_index is None:
+            continue
+        # Resolved by a structure advance, not by a boundary break: the real
+        # event already marks this candle.
+        if end_index in direction_by_index:
+            continue
+        # The trend standing during the range is the one established by the
+        # advance that opened its quiet segment; with none (bootstrap) there
+        # is no trend context to classify the breakout against.
+        opening = [index for index in advance_indices if index < start_index]
+        if not opening:
+            continue
+        segment_trend = direction_by_index[opening[-1]]
+        if segment_trend is MarketDirection.NEUTRAL:
+            continue
+        # The real machine caught (or is about to catch) this same break.
+        if any(
+            direction is range_.resolved_direction
+            and abs(index - end_index) <= dedup_candles
+            for index, direction in real_advance_indices
+        ):
+            continue
+
+        bullish = range_.resolved_direction is MarketDirection.BULLISH
+        boundary = range_.price_high if bullish else range_.price_low
+        reference_index = next(
+            (
+                index
+                for index in range(start_index, end_index)
+                if (candles[index].high if bullish else candles[index].low) == boundary
+            ),
+            start_index,
+        )
+        breakout = candles[end_index]
+        is_continuation = range_.resolved_direction is segment_trend
+        staged.append(
+            MarketStructure(
+                symbol=range_.symbol,
+                timeframe=range_.timeframe,
+                timestamp=range_.end_timestamp,
+                event=(
+                    StructureEvent.BREAK_OF_STRUCTURE
+                    if is_continuation
+                    else StructureEvent.CHANGE_OF_CHARACTER
+                ),
+                direction=range_.resolved_direction,
+                price_level=breakout.high if bullish else breakout.low,
+                reference_price_level=boundary,
+                reference_timestamp=candles[reference_index].timestamp,
+                scope=StructureScope.INTERNAL,
+                provisional=not is_continuation,
+            )
+        )
+    return staged
 
 
 def _resolved(

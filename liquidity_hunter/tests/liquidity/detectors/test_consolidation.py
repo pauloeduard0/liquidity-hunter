@@ -1,14 +1,21 @@
-"""Tests for `liquidity.detectors.consolidation.detect_consolidation_ranges`."""
+"""Tests for the consolidation detection and breakout staging post-passes."""
 
 from datetime import UTC, datetime, timedelta
 
 from liquidity_hunter.core.domain import (
     Candle,
+    ConsolidationRange,
     ConsolidationStatus,
     MarketDirection,
+    MarketStructure,
+    StructureEvent,
+    StructureScope,
     TimeFrame,
 )
-from liquidity_hunter.liquidity.detectors.consolidation import detect_consolidation_ranges
+from liquidity_hunter.liquidity.detectors.consolidation import (
+    detect_consolidation_ranges,
+    stage_breakout_events,
+)
 
 _START = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -152,6 +159,104 @@ def test_advance_resolves_an_open_range_in_its_direction() -> None:
     assert r.status is ConsolidationStatus.RESOLVED
     assert r.resolved_direction is MarketDirection.BEARISH
     assert r.end_timestamp == candles[25].timestamp
+
+
+def _breakout_series(count: int = 24, breakout_close: float = 102.5) -> list[Candle]:
+    """An oscillating range followed by a sustained upward breakout."""
+    candles = _oscillating(count)
+    for i in range(4):
+        candles.append(
+            _candle(count + i, breakout_close + 0.5, breakout_close - 1.0, breakout_close)
+        )
+    return candles
+
+
+def _staging_inputs(
+    candles: list[Candle], advances: list[tuple[int, MarketDirection]]
+) -> tuple[list[ConsolidationRange], list[tuple[int, MarketDirection]]]:
+    ranges = detect_consolidation_ranges(
+        candles, advances, min_candles=10, max_height_pct=0.03, resolve_persistence=2
+    )
+    return ranges, advances
+
+
+def test_breakout_with_trend_stages_a_bos_at_the_boundary() -> None:
+    candles = _breakout_series()
+    ranges, advances = _staging_inputs(candles, [(0, MarketDirection.BULLISH)])
+
+    staged = stage_breakout_events(candles, ranges, advances, [], dedup_candles=12)
+
+    assert len(staged) == 1
+    event = staged[0]
+    assert event.event is StructureEvent.BREAK_OF_STRUCTURE
+    assert event.direction is MarketDirection.BULLISH
+    assert event.provisional is False
+    assert event.scope is StructureScope.INTERNAL
+    assert event.timestamp == ranges[-1].end_timestamp
+    assert event.reference_price_level == 101.0
+    # The line anchors at the first candle that formed the broken boundary.
+    assert event.reference_timestamp == candles[2].timestamp
+
+
+def test_breakout_against_trend_stages_a_provisional_choch() -> None:
+    candles = _breakout_series()
+    ranges, advances = _staging_inputs(candles, [(0, MarketDirection.BEARISH)])
+
+    staged = stage_breakout_events(candles, ranges, advances, [], dedup_candles=12)
+
+    assert len(staged) == 1
+    event = staged[0]
+    assert event.event is StructureEvent.CHANGE_OF_CHARACTER
+    assert event.direction is MarketDirection.BULLISH
+    # The additive contract: the state-machine trend never flipped, so the
+    # mark must be provisional (replay consumers skip it).
+    assert event.provisional is True
+    assert event.reference_price_level == 101.0
+
+
+def test_staging_dedupes_against_a_nearby_real_event() -> None:
+    candles = _breakout_series()
+    ranges, advances = _staging_inputs(candles, [(0, MarketDirection.BULLISH)])
+    real = MarketStructure(
+        symbol="TESTUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=candles[26].timestamp,
+        event=StructureEvent.BREAK_OF_STRUCTURE,
+        direction=MarketDirection.BULLISH,
+        price_level=103.0,
+        scope=StructureScope.INTERNAL,
+    )
+
+    assert stage_breakout_events(candles, ranges, advances, [real], dedup_candles=12) == []
+    # An opposite-direction real event does not dedup the staged mark.
+    bearish = real.model_copy(update={"direction": MarketDirection.BEARISH})
+    assert (
+        len(stage_breakout_events(candles, ranges, advances, [bearish], dedup_candles=12))
+        == 1
+    )
+
+
+def test_bootstrap_segment_stages_nothing() -> None:
+    candles = _breakout_series()
+    ranges, advances = _staging_inputs(candles, [])
+
+    # The range resolved, but with no opening advance there is no trend
+    # context to classify the breakout against.
+    assert ranges[-1].status is ConsolidationStatus.RESOLVED
+    assert stage_breakout_events(candles, ranges, advances, [], dedup_candles=12) == []
+
+
+def test_advance_resolved_range_stages_nothing() -> None:
+    candles = _oscillating(25)
+    candles.append(_candle(25, 99.5, 97.0, 97.5))
+    advances = [(0, MarketDirection.BULLISH), (25, MarketDirection.BEARISH)]
+    ranges = detect_consolidation_ranges(
+        candles, advances, min_candles=10, max_height_pct=0.03, resolve_persistence=2
+    )
+
+    # The real event already marks the resolution candle.
+    assert ranges[-1].resolved_direction is MarketDirection.BEARISH
+    assert stage_breakout_events(candles, ranges, advances, [], dedup_candles=12) == []
 
 
 def test_empty_and_short_inputs_return_no_ranges() -> None:

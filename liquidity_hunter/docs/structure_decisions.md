@@ -1230,14 +1230,50 @@ Surfaces: `DashboardData.consolidation_ranges` (+ API), a `▭ RANGE` box on
 the chart (third `POIBoxesPrimitive`, neutral slate, live ranges to the right
 edge via the sentinel clamp, `▭ Range` toolbar toggle default **on**), a
 ladder chip `▭ RANGE ·Nc` (`TimeframeOverview.in_consolidation` /
-`consolidation_candles`, from the ACTIVE range), and **range line
-termination**: a BOS/CHoCH line whose level sits inside a confirmed box is
-truncated at the range start (`consolidationTruncationTime`, frontend-only,
-tied to the toggle) — the ETH "BOS travado em cima" fix. Phase 2 (planned,
-additive-first per the house rule): staged BOS / provisional CHoCH at range
-resolution referencing the broken boundary; phase 3 (flag, only if phase 2
-measures well): resolution re-seeds staircase + CHoCH refs at the boundaries
-("cycle reset").
+`consolidation_candles`, from the ACTIVE range). **Range line termination
+was built and reverted on user visual review (2026-07-14, same day)**: the
+initial cut truncated a BOS/CHoCH line whose level sits inside a confirmed
+box at the range start (`consolidationTruncationTime`) — on the SOL H1 chart
+this cut reference lines dead at every box edge, which read as lost
+structure rather than decluttering. Reference lines now run through the box
+untouched; the "stale line to the edge" problem is instead solved by the
+phase-2 staged breakout event, which terminates the old line at the range's
+*resolution* (a structural fact) rather than at its *start* (a cosmetic
+cut).
+
+**Consolidation breakout staging — phase 2, additive events** (as of
+2026-07-14, same day): a range's boundary is the structural level its
+breakout actually broke — often breakable while the state machine's own
+references stay out of reach (ETH's next close above the 1829.5 range top
+would still sit under the 1833 staircase bar). `stage_breakout_events`
+(`detectors/consolidation.py`, pure; run by `_run_internal_structure` under
+`_CONSOLIDATION_STAGE_BREAKOUT_EVENTS`, merged + timestamp-sorted like the
+detector's staged-BOS merge) stages one event per range resolved by a
+sustained boundary break, at the breakout candle: **with** the segment's
+standing trend (the direction established by the advance that opened the
+quiet segment) → a real `BREAK_OF_STRUCTURE` referencing the boundary (safe
+for replay — it re-asserts the trend the replay already holds, and the
+ladder's `last_event` picks it up); **against** it → a `CHANGE_OF_CHARACTER`
+with `provisional=True` (the additive contract: the state-machine trend never
+flipped, so hunt/narrative replay skip it while the chart shows the dimmed
+`CHoCH?` mark — same rationale as the fizzle marker). `reference_timestamp`
+= the first candle that formed the boundary, so the line spans the defended
+level. Nothing is staged for advance-resolved ranges (the real event already
+marks the candle), bootstrap segments (no trend context), or when a real
+same-direction BOS/CHoCH sits within `_CONSOLIDATION_STAGE_DEDUP_CANDLES` =
+12 of the breakout (one confirmation window — the real event and the staged
+one are the same break read twice; e.g. the BTC H1 June-bottom range resolves
+bullish on the same candle as the real 07-02 weak-ref CHoCH, staged mark
+dropped). Measured on the live 5×4 matrix: **+7 events / 0 removed /
+`final_trend` unchanged in all 20 combos** — SOL 4h gains the March + May
+bounce reversals (provisional CHoCH at range tops 91.19/90.71; the May one
+lands on a candle the machine had read as a mere sweep) and the April
+continuation (BOS at the 82.08 range floor), AAVE 4h/1d and BTC 4h one
+honest mark each, NEAR 15m one. BTC/ETH H1 gain nothing *yet* — their July
+ranges are still ACTIVE; the staged mark is what will appear at the eventual
+breakout. Fixture `solusdt_4h_2025_11_06_2026_07_14.json` locks the three
+SOL marks. Phase 3 (flag, only if phase 2 proves out in use): resolution
+re-seeds staircase + CHoCH refs at the boundaries ("cycle reset").
 
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /

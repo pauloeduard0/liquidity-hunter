@@ -24,7 +24,7 @@ import {
   LiquidationBandsPrimitive,
   type LiquidationBandInput,
 } from '../charting/LiquidationBandsPrimitive'
-import type { BehaviorDivergence, ConsolidationRange, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone } from '../types/dashboard'
+import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -302,27 +302,6 @@ function structureLineEndTime(
     .map((other) => toUtcTimestamp(other.timestamp))
 
   return supersededAt.length > 0 ? (Math.min(...supersededAt) as UTCTimestamp) : lastCandleTime
-}
-
-// A confirmed consolidation range ends the useful life of any BOS/CHoCH
-// reference line whose level sits *inside* its box: the range chewed through
-// that level repeatedly, so extending the line through (or past) the box
-// reads as a live reference that no longer exists ("BOS travado em cima").
-// Returns the start of the earliest such range after the event, or null.
-function consolidationTruncationTime(
-  event: MarketStructure,
-  linePrice: number,
-  ranges: ConsolidationRange[],
-): UTCTimestamp | null {
-  if (event.event !== 'break_of_structure' && event.event !== 'change_of_character') {
-    return null
-  }
-  const eventTime = toUtcTimestamp(event.timestamp)
-  const starts = ranges
-    .filter((range) => range.price_low <= linePrice && linePrice <= range.price_high)
-    .map((range) => toUtcTimestamp(range.start_timestamp))
-    .filter((start) => start > eventTime)
-  return starts.length > 0 ? (Math.min(...starts) as UTCTimestamp) : null
 }
 
 // A POI box spans the zone's real lifecycle: it stays open (full width) while
@@ -1139,20 +1118,11 @@ export function MainChart({
       // A failed CHoCH is a point-in-time invalidation, not a live reference
       // level: its line spans only the CHoCH's own lifetime (the broken level's
       // origin -> the failure candle) and never runs forward into later price
-      // action the way a BOS/CHoCH reference line does. A confirmed
-      // consolidation range whose box contains the line's level also ends it
-      // (at the range start): the old structure died into the range.
-      const structuralEnd =
+      // action the way a BOS/CHoCH reference line does.
+      const endTime =
         event.event === 'choch_failed'
           ? startTime
           : structureLineEndTime(event, scopeEvents, lastCandleTime)
-      const rangeTruncation = showConsolidationRanges
-        ? consolidationTruncationTime(event, linePrice, data.consolidation_ranges ?? [])
-        : null
-      const endTime =
-        rangeTruncation !== null && rangeTruncation < structuralEnd
-          ? rangeTruncation
-          : structuralEnd
 
       const lineStartTime =
         (event.event === 'change_of_character' ||

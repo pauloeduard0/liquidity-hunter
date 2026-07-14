@@ -679,9 +679,11 @@ re-exported from `liquidity_hunter.data`.
   zone never retire it. There is no MITIGATED state and no RTO sweep events
   (removed with the old CHoCH→BOS detector).
 
-- **`liquidity/detectors/consolidation.py`** — `detect_consolidation_ranges`,
-  a **pure post-pass** (not a `MarketStructureDetector`) that scans the quiet
-  segments between structure advances for confirmed `ConsolidationRange`s.
+- **`liquidity/detectors/consolidation.py`** — `detect_consolidation_ranges`
+  and `stage_breakout_events`,
+  **pure post-passes** (not a `MarketStructureDetector`): the first scans the
+  quiet segments between structure advances for confirmed
+  `ConsolidationRange`s.
   Inputs: the candle series plus `(candle index, established-trend direction)`
   advance boundaries; a range may never span an advance. Confirmation =
   `min_candles` candles inside a box no taller than `max_height_pct` (the
@@ -695,7 +697,17 @@ re-exported from `liquidity_hunter.data`.
   stream (see `load_dashboard_data`), **not** inside the detector — an
   in-detector variant was measured and reverted (a detector advance later
   dropped as wick-only split BTC H1's July 2026 box at an invisible point).
-  Calibration + the motivating BTC/ETH H1 locks are documented in
+  `stage_breakout_events` (phase 2) stages one additive `MarketStructure`
+  per range resolved by a sustained boundary break, at the breakout candle:
+  a real BOS when the break continues the segment's standing trend (the
+  direction of the advance that opened the segment), a `provisional=True`
+  CHoCH when it reverses it (the additive contract — replay consumers skip
+  it, the chart shows the dimmed `CHoCH?`), both referencing the broken
+  boundary with `reference_timestamp` at its first forming candle. Nothing
+  is staged for advance-resolved ranges, bootstrap segments, or when a real
+  same-direction BOS/CHoCH sits within the dedup window of the breakout.
+  Calibration + the motivating BTC/ETH H1 locks + the phase-2 measurement
+  (+7/−0 on the live matrix, trend unchanged) are documented in
   `liquidity_hunter/docs/structure_decisions.md`.
 
 All detectors are re-exported from `liquidity_hunter.liquidity`.
@@ -858,7 +870,12 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   BOS/CHoCH/`CHOCH_FAILED` boundaries, height cap
   `_CONSOLIDATION_MAX_HEIGHT_ATR` = 8 × mean TR%, `_CONSOLIDATION_MIN_CANDLES`
   = 60, resolve persistence 4 — calibrated 2026-07-14, see
-  `docs/structure_decisions.md`) for one symbol/timeframe.
+  `docs/structure_decisions.md`) for one symbol/timeframe. Under
+  `_CONSOLIDATION_STAGE_BREAKOUT_EVENTS` (default `True`), range breakouts
+  also stage additive events into `internal_structure_events` via
+  `stage_breakout_events` (deduped within
+  `_CONSOLIDATION_STAGE_DEDUP_CANDLES` = 12 of a real same-direction
+  BOS/CHoCH; merged timestamp-sorted).
 - **`load_dashboard_data(provider=..., symbol=..., timeframe=..., limit=1200, swing_lookback=..., confluence_filter=False, futures_provider=...)`**
   — fetches a single buffered candle series (`buffered_candles`) and derives the
   visible `candles` from its tail (`buffered_candles[-limit:]`; no separate fetch
@@ -1173,11 +1190,11 @@ selector.
   ones, resolved boxes labeled with the breakout direction arrow); a live
   range extends to the right edge via the far-future-sentinel clamp. Toggled
   by the `▭ Range` toolbar button in `App.tsx` (`showConsolidationRanges`
-  prop, default **on**). While the toggle is on, a BOS/CHoCH line whose level
-  sits *inside* a confirmed box is **truncated at the range start**
-  (`consolidationTruncationTime`) — the range chewed through that level, so
-  the old reference line must not run through/past the box (the ETH "BOS
-  travado em cima" fix). Sweep lines and events are untouched.
+  prop, default **on**). Range boxes do **not** terminate BOS/CHoCH lines —
+  a truncate-at-range-start variant was built and reverted on visual review
+  (2026-07-14): the reference lines must keep running through the box, and
+  the stale-line problem is solved by the staged breakout event that ends
+  them at the range's resolution instead.
 
   **Volume delta pane**: histogram bars colored by candle direction
   (`CANDLE_UP_COLOR`/`CANDLE_DOWN_COLOR`), computed as
@@ -1410,12 +1427,15 @@ state in brief:
   marked a false `CHOCH_FAILED` on its pullback). A `CHOCH_FAILED`'s reclaim
   scan is also bounded to *after* the CHoCH formed (`*_choch_arm_index`), so a
   failure can never be timestamped before the CHoCH it invalidates.
-- **Consolidation (lateral range) observation** (phase 1, 2026-07-14): a
-  composition-level post-pass over the surviving event stream turns the
-  detector's correct silence inside a range into explicit
-  `ConsolidationRange`s (chart box + ladder chip + line truncation; events
-  and trend untouched). Phase 2 (planned): additive staged BOS / provisional
-  CHoCH at range resolution referencing the broken boundary.
+- **Consolidation (lateral range) observation + breakout staging** (phases
+  1–2, 2026-07-14): a composition-level post-pass over the surviving event
+  stream turns the detector's correct silence inside a range into explicit
+  `ConsolidationRange`s (chart box + ladder chip + line truncation; trend
+  untouched), and each sustained boundary breakout stages one additive event
+  at the broken boundary — a real BOS with the segment trend, a
+  `provisional=True` CHoCH against it (replay-skipped). Measured +7/−0 on
+  the live matrix, `final_trend` unchanged. Phase 3 (only if phase 2 proves
+  out): resolution re-seeds staircase + CHoCH refs at the boundaries.
 
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /

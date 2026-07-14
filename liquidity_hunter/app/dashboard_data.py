@@ -49,6 +49,7 @@ from liquidity_hunter.liquidity import (
     SwingStructureDetector,
     detect_consolidation_ranges,
     mark_swept_zones,
+    stage_breakout_events,
 )
 from liquidity_hunter.liquidity.detectors._common import (
     resolve_break_origin_timestamp,
@@ -174,6 +175,25 @@ _STALE_REANCHOR_DISPLACEMENT_CANDLES: int | None = 15
 _CONSOLIDATION_MIN_CANDLES = 60
 _CONSOLIDATION_MAX_HEIGHT_ATR = 8.0
 _CONSOLIDATION_RESOLVE_PERSISTENCE = 4
+
+# Consolidation breakout staging (phase 2,
+# `liquidity.detectors.consolidation.stage_breakout_events`). A range's
+# boundary is the structural level its breakout actually broke -- often
+# breakable while the state machine's own references (staircase bar at a
+# pre-range wick, CHoCH ref at the leg origin) remain out of reach -- so each
+# range resolved by a sustained boundary break stages one additive event at
+# the breakout candle: a BOS when the break continues the segment's standing
+# trend, a `provisional=True` CHoCH when it reverses it (the additive
+# contract: the state-machine trend never flipped, so hunt/narrative replay
+# skip it while the chart shows the dimmed mark). Deduped when a real
+# same-direction BOS/CHoCH sits within `_CONSOLIDATION_STAGE_DEDUP_CANDLES`
+# of the breakout -- the state machine caught the break itself (e.g. BTC H1
+# 07-02: the June-bottom range resolves bullish on the same candle as the
+# real weak-ref CHoCH). Window = 12 (the internal persistence: within one
+# confirmation window the real event and the staged one are the same break
+# read twice; beyond it they are separate structural facts).
+_CONSOLIDATION_STAGE_BREAKOUT_EVENTS = True
+_CONSOLIDATION_STAGE_DEDUP_CANDLES = 12
 
 # Provisional (live-edge) CHoCH against *weak* references
 # (`InternalStructureDetector.emit_provisional_choch_weak`). After any
@@ -934,15 +954,28 @@ def _run_internal_structure(
     # pullback the reversal recovered from, not a fizzle -- runs after the BOS
     # passes so only chart-surviving BOS count.
     all_events = _drop_resumed_fizzle_markers(all_events)
-    events = [e for e in all_events if visible_start <= e.timestamp <= visible_end]
     # Consolidation post-pass over the *surviving* stream: segment boundaries
     # match the events the chart draws. Ranges are filtered to those still
     # visible (their lifetime overlaps the visible window).
+    all_ranges = _detect_consolidations(all_events, internal_candles)
     consolidation_ranges = [
-        r
-        for r in _detect_consolidations(all_events, internal_candles)
-        if (r.end_timestamp or visible_end) >= visible_start
+        r for r in all_ranges if (r.end_timestamp or visible_end) >= visible_start
     ]
+    if _CONSOLIDATION_STAGE_BREAKOUT_EVENTS:
+        # Phase 2: stage additive structure events at range breakouts (a BOS
+        # with the trend / a provisional CHoCH against it, referencing the
+        # broken boundary), deduped against the real events. Merged sorted by
+        # timestamp, the same contract the detector's staged-BOS merge keeps.
+        staged = stage_breakout_events(
+            internal_candles,
+            all_ranges,
+            _advance_boundaries(all_events, internal_candles),
+            all_events,
+            dedup_candles=_CONSOLIDATION_STAGE_DEDUP_CANDLES,
+        )
+        if staged:
+            all_events = sorted([*all_events, *staged], key=lambda e: e.timestamp)
+    events = [e for e in all_events if visible_start <= e.timestamp <= visible_end]
     return InternalStructureRun(
         buffered_candles=buffered_candles,
         candles=candles,
@@ -953,20 +986,18 @@ def _run_internal_structure(
     )
 
 
-def _detect_consolidations(
+def _advance_boundaries(
     events: list[MarketStructure], candles: list[Candle]
-) -> list[ConsolidationRange]:
-    """Run consolidation detection over the surviving internal event stream.
+) -> list[tuple[int, MarketDirection]]:
+    """Structure-advance candle indices + the trend each advance established.
 
     Advances are the non-provisional BOS/CHoCH/`CHOCH_FAILED` that survived
     the composition passes (what the chart draws); a `CHOCH_FAILED`'s
     `direction` is the *failed* CHoCH's, so the trend it reverts to is the
-    opposite. The height cap is volatility-normalized against the detection
-    series' mean true-range%, the same normalization the detector's
-    displacement features use.
+    opposite. Consumed by the consolidation post-pass (segment boundaries a
+    range may never span) and its breakout staging (the standing trend a
+    breakout is classified against).
     """
-    if len(candles) < 2:
-        return []
     index_by_timestamp = {candle.timestamp: index for index, candle in enumerate(candles)}
     advances: list[tuple[int, MarketDirection]] = []
     for event in events:
@@ -987,6 +1018,21 @@ def _detect_consolidations(
                 else MarketDirection.BULLISH
             )
         advances.append((index, direction))
+    return advances
+
+
+def _detect_consolidations(
+    events: list[MarketStructure], candles: list[Candle]
+) -> list[ConsolidationRange]:
+    """Run consolidation detection over the surviving internal event stream.
+
+    Segment boundaries come from `_advance_boundaries`. The height cap is
+    volatility-normalized against the detection series' mean true-range%,
+    the same normalization the detector's displacement features use.
+    """
+    if len(candles) < 2:
+        return []
+    advances = _advance_boundaries(events, candles)
     mean_tr_pct = fmean(
         max(
             curr.high - curr.low,

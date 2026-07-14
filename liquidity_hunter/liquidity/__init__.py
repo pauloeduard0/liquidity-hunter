@@ -16,6 +16,7 @@ from liquidity_hunter.liquidity.detectors import (
     SwingLowDetector,
     SwingStructureDetector,
     detect_consolidation_ranges,
+    stage_breakout_events,
 )
 from liquidity_hunter.liquidity.mitigation import mark_swept_zones
 
@@ -30,5 +31,6 @@ __all__ = [
     "SwingLowDetector",
     "SwingStructureDetector",
     "detect_consolidation_ranges",
+    "stage_breakout_events",
     "mark_swept_zones",
 ]
