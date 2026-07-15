@@ -26,13 +26,30 @@ Definition (per quiet segment between consecutive advances):
   least twice-plus-once (a compressed touch sequence of length >= 3, e.g.
   top-bottom-top) -- so a slow one-way drift inside the cap does not qualify.
 
-Once confirmed, the box absorbs subsequent candles while its total height
-stays within the cap. A candle poking beyond that cannot be absorbed is
-either a **resolution** (its close is beyond the boundary and holds for
-`resolve_persistence` further closes -- `_common.is_sustained_break`) or a
-boundary sweep (kept outside the frozen box). A structure advance ending the
-segment resolves any open range in the advance's direction; a range still
-open at the series end is reported `ACTIVE`.
+Once confirmed, each candle is classified against the current box, resolution
+first:
+
+- a candle whose close is beyond a boundary and holds for `resolve_persistence`
+  further closes (`_common.is_sustained_break`) **resolves** the range at that
+  boundary -- even if the resulting box would still fit under the height cap;
+- a close beyond a boundary that has *not* held **arms** that boundary: the
+  close is a breakout test, so the boundary is frozen thereafter (a pending
+  break, not part of the range);
+- otherwise the close is inside the box (pure oscillation), and the box widens
+  to include a wick beyond an **un-armed** boundary while total height stays
+  within the cap; an armed boundary stays frozen and a wick beyond the cap is
+  a boundary sweep left outside the box.
+
+Checking resolution/arming before absorption is what keeps a genuine breakout
+from being swallowed by a widening box: absorption has no strictness (any wick
+within the height cap widens the box), so without the arm gate a boundary
+trails a choppy directional push up with price and the break never registers
+as a close beyond it (BTC H4 July 2026 ballooned its top from 64.7k to 65.6k
+this way). A wick that *leads* the closes during two-sided oscillation still
+widens the box (ETH H1 July 2026's 1829.52 top, its closes staying below it)
+-- the arm only fires once a *close* actually breaches the boundary. A
+structure advance ending the segment resolves any open range in the advance's
+direction; a range still open at the series end is reported `ACTIVE`.
 """
 
 from collections.abc import Sequence
@@ -198,6 +215,11 @@ def _scan_segment(
     box_low = float("inf")
     # (start index, box high, box low) once a range is confirmed and unresolved.
     active: tuple[int, float, float] | None = None
+    # A boundary is "armed" once a candle *closes* beyond it: that close is a
+    # breakout test, so the boundary is frozen (later wicks past it must not
+    # ratchet the box in the breakout direction). Cleared when a range ends.
+    top_armed = False
+    bottom_armed = False
 
     def emit_reset(index: int, range_start: int, high: float, low: float) -> None:
         if resets is not None:
@@ -234,19 +256,17 @@ def _scan_segment(
                 candles[start : index + 1], box_high, box_low
             ):
                 active = (start, box_high, box_low)
+                top_armed = False
+                bottom_armed = False
                 emit_reset(index, start, box_high, box_low)
         else:
             range_start, high, low = active
-            absorbed_high = max(high, candle.high)
-            absorbed_low = min(low, candle.low)
-            if _height_pct(absorbed_high, absorbed_low) <= max_height_pct:
-                # Still inside the volatility envelope: the box widens.
-                active = (range_start, absorbed_high, absorbed_low)
-                if absorbed_high > high or absorbed_low < low:
-                    # A boundary expanded: re-issue the directive with the box
-                    # as known at this candle.
-                    emit_reset(index, range_start, absorbed_high, absorbed_low)
-            elif candle.close > high and is_sustained_break(
+            close_above = candle.close > high
+            close_below = candle.close < low
+            # A sustained close beyond a boundary resolves the range there --
+            # checked first so a real breakout is registered rather than
+            # swallowed by a widening box.
+            if close_above and is_sustained_break(
                 candles, index, high, bullish=True, persistence_candles=resolve_persistence
             ):
                 found.append(
@@ -256,10 +276,12 @@ def _scan_segment(
                     )
                 )
                 active = None
+                top_armed = False
+                bottom_armed = False
                 start = index + 1
                 box_high = float("-inf")
                 box_low = float("inf")
-            elif candle.close < low and is_sustained_break(
+            elif close_below and is_sustained_break(
                 candles, index, low, bullish=False, persistence_candles=resolve_persistence
             ):
                 found.append(
@@ -269,11 +291,32 @@ def _scan_segment(
                     )
                 )
                 active = None
+                top_armed = False
+                bottom_armed = False
                 start = index + 1
                 box_high = float("-inf")
                 box_low = float("inf")
-            # Otherwise: a boundary sweep (wick or unsustained close beyond) --
-            # the frozen box holds, the poke stays outside it.
+            elif close_above:
+                # A close beyond the top that has not held yet: a breakout test.
+                # Arm (freeze) the top so its retest wicks can no longer widen
+                # the box -- letting them trail a directional push up is what
+                # lets a real breakout be swallowed instead of resolving.
+                top_armed = True
+            elif close_below:
+                bottom_armed = True
+            else:
+                # Close inside the box: pure oscillation. Widen an *un-armed*
+                # boundary to include a wick beyond it while total height stays
+                # within the volatility envelope. An armed boundary (already
+                # close-breached, breakout pending) stays frozen; a wick beyond
+                # the cap is a boundary sweep left outside the box.
+                absorbed_high = high if top_armed else max(high, candle.high)
+                absorbed_low = low if bottom_armed else min(low, candle.low)
+                if (absorbed_high > high or absorbed_low < low) and _height_pct(
+                    absorbed_high, absorbed_low
+                ) <= max_height_pct:
+                    active = (range_start, absorbed_high, absorbed_low)
+                    emit_reset(index, range_start, absorbed_high, absorbed_low)
         index += 1
 
     if active is not None:

@@ -123,6 +123,32 @@ def test_unsustained_boundary_poke_is_a_sweep_not_a_resolution() -> None:
     assert r.price_high == 101.0
 
 
+def test_choppy_breakout_wick_does_not_balloon_the_box() -> None:
+    # A close above the top *arms* it (a breakout test); a later retest wick
+    # above the top -- with its close back inside the box -- must NOT ratchet
+    # the box top up, even though the widened box would still fit under the
+    # (generous) height cap. Without the arm gate the top would trail the
+    # breakout chop upward (the BTC H4 July 2026 ballooning) and never resolve.
+    candles = _oscillating(20)
+    n = len(candles)
+    candles.append(_candle(n, 101.6, 101.2, 101.5))  # close 101.5 > 101: arms the top
+    candles.append(_candle(n + 1, 102.5, 100.4, 100.6))  # wick 102.5 above, close inside
+    candles.append(_candle(n + 2, 100.3, 99.5, 99.8))  # back inside the box
+    candles.extend(_oscillating(5, start_index=n + 3))
+
+    ranges = detect_consolidation_ranges(
+        candles, [], min_candles=10, max_height_pct=0.05, resolve_persistence=2
+    )
+
+    assert len(ranges) == 1
+    r = ranges[0]
+    assert r.status is ConsolidationStatus.ACTIVE
+    # The armed top stays frozen at the confirmed boundary; the 102.5 retest
+    # wick after the close-breach did not widen it.
+    assert r.price_high == 101.0
+    assert r.price_low == 99.0
+
+
 def test_range_never_spans_a_structure_advance() -> None:
     candles = _oscillating(30)
     advances = [(15, MarketDirection.BULLISH)]

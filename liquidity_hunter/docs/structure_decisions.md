@@ -1328,6 +1328,48 @@ box still fails rather than locking the flipped trend — the ETH failure mode).
 That is the deep state-machine work; it must be built scoped + measured
 step-by-step, not blanket. Not started.
 
+**Consolidation box no longer trails a breakout — the "arm on close" gate**
+(as of 2026-07-15). Reported symptom: a confirmed BTC H4 July 2026 range
+(`61297`–`64692`) *grew its top to `65590`* as price broke out and made new
+highs, instead of resolving at the defended top. Root cause: once a range is
+`active`, absorption was checked **before** resolution, and absorption has no
+strictness — any candle whose inclusion keeps the box under the (generous,
+`8×ATR ≈ 8%` on BTC H4) height cap widens the box. A genuine breakout that
+stayed within that envelope was swallowed candle-by-candle: the top ratcheted
+up with price, so `is_sustained_break` (which needs *all* of the next
+`resolve_persistence`+1 closes beyond the boundary) never caught up against a
+moving target, and the breakout chop (closes dipping back inside) kept leaking
+the top upward via retest **wicks**.
+
+Fix, in `_scan_segment`'s active branch — classify each candle resolution-first
+with a per-side **arm** flag (`top_armed`/`bottom_armed`, cleared when a range
+ends):
+
+1. sustained close beyond a boundary → **resolve** there (checked first);
+2. close beyond a boundary that has *not* held → **arm** that side (a breakout
+   test; the boundary is frozen thereafter — retest wicks can no longer widen
+   it);
+3. close inside the box → widen to include a wick beyond an **un-armed**
+   boundary within the height cap (an armed side stays frozen; a wick beyond
+   the cap is a boundary sweep).
+
+The arm gate is the crux: it distinguishes a directional push (a *close*
+breaches the boundary → freeze) from two-sided oscillation (a wick *leads* the
+closes, closes stay inside → keep widening). It fixes BTC H4 (top stays 64692,
+price trades above the frozen box) **and** preserves ETH H1 July's live range
+(`1712.45`–`1829.52`, whose 1829.52 top is a wick with closes ~1825 below it,
+and whose 07-13 spike to 1848 exceeds the cap as a sweep) — the two fixtures
+`test_eth_1h_july_range_lock_is_a_live_consolidation` /
+`test_sol_4h_range_breakouts_stage_additive_events` still pass unchanged. A
+full box *freeze at confirmation* was tried first and **rejected by
+measurement**: it threw away legitimate oscillation-widening, so ETH July's
+top came in too tight (1816) and normal price action above it produced a false
+bullish resolution. Live matrix (BTC/ETH/SOL/AAVE × M30..D1): the reported BTC
+H4 top corrected 65590→64692; every other boundary is equal-or-tighter (no
+post-confirmation wick-trailing), **zero** resolved-direction flips, `final_trend`
+unchanged on all combos, one additive ETH H4 range from a tighter segment
+split. 497 tests pass.
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.
