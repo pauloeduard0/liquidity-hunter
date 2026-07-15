@@ -1,5 +1,6 @@
 import type { DashboardData, LiquidityHuntState, OIRegime } from '../types/dashboard'
 import type { MarketDirection, RetailPositioning } from '../types/dashboard'
+import { formatPrice } from '../utils/format'
 
 const DIRECTION_CONFIG: Record<MarketDirection, { color: string; icon: string }> = {
   bullish: { color: '#26a69a', icon: '▲' },
@@ -162,10 +163,9 @@ export function KpiRow({ data }: KpiRowProps) {
       : undefined
 
   const dominantLiquidity = data.ranked_zones.length
-    ? (
-        (data.ranked_zones[0].zone.price_high + data.ranked_zones[0].zone.price_low) /
-        2
-      ).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    ? formatPrice(
+        (data.ranked_zones[0].zone.price_high + data.ranked_zones[0].zone.price_low) / 2,
+      )
     : '—'
 
   const topZoneType = data.ranked_zones.length

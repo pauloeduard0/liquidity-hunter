@@ -9,6 +9,7 @@ import { ManipulationCyclesPanel } from './components/ManipulationCyclesPanel'
 import { MultiTimeframePanel } from './components/MultiTimeframePanel'
 import { NarrativePanel } from './components/NarrativePanel'
 import type { DashboardData, MarketOverview, TimeFrame } from './types/dashboard'
+import { formatPrice } from './utils/format'
 
 const REFRESH_INTERVAL_MS = 5_000
 // The ladder's readings change at most once per candle (per timeframe), and
@@ -475,10 +476,10 @@ function App() {
                       const last = d.candles.at(-1)
                       return last ? (
                         <>
-                          <span>O <span className="font-mono text-[#9ca3b4]">{last.open.toFixed(2)}</span></span>
-                          <span>H <span className="font-mono text-[#26a69a]">{last.high.toFixed(2)}</span></span>
-                          <span>L <span className="font-mono text-[#ef5350]">{last.low.toFixed(2)}</span></span>
-                          <span>C <span className="font-mono text-[#9ca3b4]">{last.close.toFixed(2)}</span></span>
+                          <span>O <span className="font-mono text-[#9ca3b4]">{formatPrice(last.open, last.close)}</span></span>
+                          <span>H <span className="font-mono text-[#26a69a]">{formatPrice(last.high, last.close)}</span></span>
+                          <span>L <span className="font-mono text-[#ef5350]">{formatPrice(last.low, last.close)}</span></span>
+                          <span>C <span className="font-mono text-[#9ca3b4]">{formatPrice(last.close, last.close)}</span></span>
                         </>
                       ) : null
                     })()}

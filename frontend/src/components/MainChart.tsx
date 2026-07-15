@@ -186,6 +186,18 @@ function toUtcTimestamp(isoTimestamp: string): UTCTimestamp {
   return (Date.parse(isoTimestamp) / 1000) as UTCTimestamp
 }
 
+// Lightweight Charts defaults the candlestick series to `precision: 2,
+// minMove: 0.01`, so a low-priced pair (ETHBTC ~0.03, ENAUSDT sub-1) snaps to
+// 0.01 ticks and every intrabar move collapses into a handful of levels. Derive
+// the price format from the current magnitude so the axis keeps ~5 significant
+// digits: precision = 4 - floor(log10(ref)), clamped to [2, 8].
+function priceFormatFor(ref: number): { precision: number; minMove: number } {
+  if (!Number.isFinite(ref) || ref <= 0) return { precision: 2, minMove: 0.01 }
+  const exponent = Math.floor(Math.log10(ref))
+  const precision = Math.min(8, Math.max(2, 4 - exponent))
+  return { precision, minMove: 10 ** -precision }
+}
+
 function lineFrom(
   startTime: UTCTimestamp,
   lastCandleTime: UTCTimestamp,
@@ -858,6 +870,16 @@ export function MainChart({
       data.candles.length === 0
     )
       return
+
+    // Adapt the price axis precision to the pair's magnitude so low-priced
+    // pairs (ETHBTC, ENAUSDT) don't collapse onto 0.01 ticks. Use the latest
+    // close as the reference magnitude (stable within a window).
+    series.applyOptions({
+      priceFormat: {
+        type: 'price',
+        ...priceFormatFor(data.candles[data.candles.length - 1].close),
+      },
+    })
 
     series.setData(
       data.candles.map((candle) => ({

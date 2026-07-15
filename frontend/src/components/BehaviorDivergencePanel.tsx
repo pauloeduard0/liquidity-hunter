@@ -1,17 +1,11 @@
 import type { BehaviorDivergence } from '../types/dashboard'
+import { formatPrice } from '../utils/format'
 import { CollapsibleSection } from './CollapsibleSection'
 import { DIVERGENCE_STYLES } from '../theme'
 
 function formatTimestamp(ts: string): string {
   const d = new Date(ts)
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-function formatPrice(price: number): string {
-  return price.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
 }
 
 function DataRow({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {

@@ -1,4 +1,5 @@
 import type { ManipulationCycle } from '../types/dashboard'
+import { formatPrice } from '../utils/format'
 import { CollapsibleSection } from './CollapsibleSection'
 
 const PHASE_STYLES: Record<string, { label: string; color: string; bg: string }> = {
@@ -21,13 +22,6 @@ const ZONE_LABELS: Record<string, string> = {
   order_block: 'OB',
   fair_value_gap: 'FVG',
   liquidity_pool: 'LP',
-}
-
-function formatPrice(price: number): string {
-  return price.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
 }
 
 function formatTimestamp(ts: string): string {
