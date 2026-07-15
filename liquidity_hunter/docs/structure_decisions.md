@@ -1413,6 +1413,55 @@ bearish advance) are dropped, while the April staged continuation BOS
 opposite advance drops, later same advance drops, no later advance keeps,
 later provisional keeps). 502 tests pass.
 
+### Reversal-eaten BOS staging (`stage_reversal_eaten_bos`, 2026-07-15)
+
+A BOS is only *emitted* once a confirming opposite pullback pivot forms after
+the close-break (a state-advance alone leaves a still-pending BOS). On an
+**impulsive final leg that reverses immediately** — the classic SMC "last lower
+low that closes below the prior fundo, then a CHoCH the other way" — the
+reversal reclaims the leg origin *before* that pullback forms, and the same
+pivot that reclaims fires the CHoCH. The still-pending BOS is discarded without
+ever emitting (`internal_structure.py`, the emit-check `else` branch where
+`price > pb.price`, **not** the CHoCH branch — there `pending_bos` is already
+`None`), so the final continuation is invisible even though the trader watched
+its candle *close* below the fundo. This is the break that "permits" the
+reversal, so its absence is exactly what looks wrong.
+
+Motivating case (**ENAUSDT M30**, bearish leg CHoCH ▼ 2026-07-11 22:00 → CHoCH
+▲ 2026-07-14 04:00): the leg's final low 0.07679 closes 0.07754 — below its
+0.07760 fundo — then the bullish CHoCH. Without staging the leg showed only one
+shallow BOS (ref 0.07954) and nothing for the 0.07760 break.
+
+**Fix** (`stage_reversal_eaten_bos`, wired `True` via `_STAGE_REVERSAL_EATEN_BOS`;
+default `False` in the detector): when a pending BOS is discarded at the
+reclaim/reversal (both the bearish-pending and bullish-pending emit-check
+discards, plus the two CHoCH branches defensively), stage an **additive** mark
+for it *iff* its staircase floor already **closed**-broke (`floor_closed`) —
+keyed on the *close* through the floor (the trader's validation), **not** the
+impulse stager's displacement threshold (here 1.04% vs the 1.5% gate, too
+marginal to rely on). Only close-confirmed *continuation* floors qualify (never
+the first-of-leg `ref_price` fallback). Deduped against real BOS and re-timed to
+the close-break by `_reanchor_bos_close_break` like the other staged marks
+(`impulse_bos_displacement_pct`, `stage_wick_rejected_bos`,
+`stage_choch_failed_window_bos`). This is the additive-over-state-machine
+discipline: the state machine, trend, and CHoCH promotion are untouched.
+
+Measured (BTC/ETH/SOL/AAVE/NEAR/ENA × 5m..1d, `limit=1200`,
+`confluence_filter=False`): **0 trend flips** on all 36 combos, **purely
+additive** — every delta is a BOS *count increase* (0 removed, 0 CHoCH change);
+23/36 combos gain +1..+3 marks, each a close-confirmed continuation preceding a
+reversal. Fixture `enausdt_30m_2026_06_20_07_15` + on/off regression tests
+(`test_reversal_eaten_bos_off_misses_final_continuation`,
+`test_reversal_eaten_bos_marks_final_continuation_before_choch`, the latter
+asserting the staged mark is the only new event and the trend is unchanged).
+
+Left as-is (not pursued): the sibling **Gap #1** — the *deeper* first-fundo BOS
+(ENA M30 ref 0.07908) the RAW detector *does* emit but `_reanchor_bos_close_break`
+drops, because within its active window (up to the next same-direction BOS) no
+candle closes below 0.07908 (the close-below lands at 07-13 03:00, already inside
+the next BOS's territory). Recovering it means loosening the conservative
+close-in-window rule; deferred (small residual, 0.07908 vs the reported 0.07954).
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.

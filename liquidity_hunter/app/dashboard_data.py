@@ -423,6 +423,22 @@ _STAGE_CHOCH_FAILED_WINDOW_BOS = True
 # the trend state.
 _CHOCH_SUCCESS_DISPLACEMENT_ATR: float | None = 4.5
 
+# Reversal-eaten BOS staging (`InternalStructureDetector.stage_reversal_eaten_bos`).
+# A BOS is only *emitted* once a confirming opposite pullback pivot forms after
+# the close-break. On an impulsive final leg that reverses immediately -- the
+# classic "last lower low that closes below the prior fundo, then a CHoCH the
+# other way" -- the reversal CHoCH arrives first and the still-pending BOS is
+# discarded without ever emitting, leaving that break (the close that *permits*
+# the reversal) invisible. When the discarded pending BOS's staircase floor had
+# already *closed*-broken, stage an additive mark for it at the CHoCH, keyed on
+# the close through the floor (the trader's validation) rather than the impulse
+# stager's displacement threshold -- deduped against real BOS and re-timed to
+# the close-break by `_reanchor_bos_close_break` like the other staged marks.
+# The ENA M30 2026-07-13 case: a bearish leg's final low (0.07679) closes below
+# its 0.07760 fundo, then a bullish CHoCH; without staging the leg shows no BOS
+# for that break at all.
+_STAGE_REVERSAL_EATEN_BOS = True
+
 # Volatility-normalized proximity for the liquidity-hunt pool map
 # (`LiquidityHuntEngine.proximity_atr`): "nearby" opposing pools are the ones
 # within N x the visible series' mean true-range% of price, instead of the
@@ -925,6 +941,13 @@ def _build_internal_detector(
         # confirming BOS is not marked a false CHOCH_FAILED on its pullback.
         # See _CHOCH_SUCCESS_DISPLACEMENT_ATR.
         choch_success_displacement_atr=_CHOCH_SUCCESS_DISPLACEMENT_ATR,
+        # Additively mark the last continuation BOS an impulsive move made right
+        # before it reversed: when the floor already closed-broke but the
+        # reversal CHoCH arrived before a confirming pullback, the pending BOS is
+        # discarded without emitting. Stage it (deduped, re-timed to the close-
+        # break) so the leg's final lower low -- the close that "permits" the
+        # reversal -- is not invisible. See _STAGE_REVERSAL_EATEN_BOS.
+        stage_reversal_eaten_bos=_STAGE_REVERSAL_EATEN_BOS,
         # The CHoCH origin (the level a sustained break back through invalidates
         # the unconfirmed reversal, a CHOCH_FAILED) is the *deepest* extreme of
         # the reversed leg, not the trailing `active_<side>`. The trailing

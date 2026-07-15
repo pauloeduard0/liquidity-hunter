@@ -3561,3 +3561,120 @@ def test_range_reset_reseeds_the_choch_reference() -> None:
         for _ts, event, direction, _ref, _prov in reseeded
     )
     assert detector.final_trend is MarketDirection.BEARISH
+
+
+# --- Reversal-eaten BOS staging (stage_reversal_eaten_bos) ------------------
+#
+# ENAUSDT M30, the structurally anchored production slice. The bearish leg
+# (bearish CHoCH 2026-07-11 22:00 -> bullish CHoCH 2026-07-14 04:00) makes a
+# final lower low at 0.07679 whose candle *closes* 0.07754 -- below its 0.07760
+# fundo, a real close-confirmed continuation. But the bullish reversal reclaims
+# the leg origin (the same pivot that fires the CHoCH) before a confirming
+# pullback pivot forms, so the still-pending BOS is discarded without emitting:
+# that final break is invisible. With `stage_reversal_eaten_bos` it is staged
+# additively at the close-break.
+_ENA_30M_EATEN_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "enausdt_30m_2026_06_20_07_15.json"
+)
+
+
+def _load_ena_30m_eaten_candles() -> list[Candle]:
+    rows = json.loads(_ENA_30M_EATEN_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="ENAUSDT",
+            timeframe=TimeFrame.M30,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _ena_30m_eaten_detector(*, stage_eaten: bool) -> InternalStructureDetector:
+    # The full production M30 wiring; `stage_reversal_eaten_bos` is the toggle
+    # under test.
+    return InternalStructureDetector(
+        swing_lookback=5,
+        persistence_candles=12,
+        confluence_filter=False,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=80,
+        stale_reanchor_displacement_atr=16.0,
+        stale_reanchor_displacement_candles=15,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        rollback_staircase_on_discard=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_pct=0.04,
+        bos_leg_origin_release_gap_atr=3.0,
+        bos_leg_origin_min_pullback_atr=1.5,
+        bos_leg_origin_require_close_break=True,
+        bos_floor_require_close_break=True,
+        choch_weak_ref_persistence_candles=4,
+        emit_provisional_bos=True,
+        emit_provisional_choch=True,
+        emit_provisional_choch_weak=True,
+        choch_origin_leg_extreme=True,
+        choch_weak_ref_fail_at_broken_level=True,
+        choch_fizzle_reclaim_candles=30,
+        choch_failed_fallback_suppress_candles=20,
+        stage_choch_failed_window_bos=True,
+        choch_success_displacement_atr=4.5,
+        stage_reversal_eaten_bos=stage_eaten,
+    )
+
+
+def _ena_eaten_target_bos(events: list[MarketStructure]) -> list[MarketStructure]:
+    # The final bearish continuation the reversal ate: pivot 0.07679, floor 0.07760.
+    return [
+        e
+        for e in events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and e.reference_price_level is not None
+        and abs(e.reference_price_level - 0.07760) < 0.0002
+        and abs(e.price_level - 0.07679) < 0.0002
+    ]
+
+
+def test_reversal_eaten_bos_off_misses_final_continuation() -> None:
+    """Off, the pending BOS the reversal discards never emits: the leg's final
+    close-confirmed lower low (0.07679 below the 0.07760 fundo) is unmarked."""
+    detector = _ena_30m_eaten_detector(stage_eaten=False)
+    events = detector.detect(_load_ena_30m_eaten_candles())
+    assert _ena_eaten_target_bos(events) == []
+
+
+def test_reversal_eaten_bos_marks_final_continuation_before_choch() -> None:
+    """On, the eaten continuation is staged additively at its close-break, just
+    before the bullish CHoCH it permits -- purely additive, trend unchanged."""
+    off = _ena_30m_eaten_detector(stage_eaten=False)
+    off_events = off.detect(_load_ena_30m_eaten_candles())
+    on = _ena_30m_eaten_detector(stage_eaten=True)
+    on_events = on.detect(_load_ena_30m_eaten_candles())
+
+    marked = _ena_eaten_target_bos(on_events)
+    assert len(marked) == 1
+    eaten = marked[0]
+    assert eaten.timestamp == datetime(2026, 7, 13, 21, 30, tzinfo=UTC)
+    assert not eaten.provisional
+
+    # Purely additive: the staged mark is the only new event, and the standing
+    # trend is untouched (the reversal-eaten staging never mutates the state
+    # machine).
+    off_keys = {(e.timestamp, e.event, e.direction, e.price_level) for e in off_events}
+    on_keys = {(e.timestamp, e.event, e.direction, e.price_level) for e in on_events}
+    assert off_keys <= on_keys
+    new_keys = on_keys - off_keys
+    assert (eaten.timestamp, eaten.event, eaten.direction, eaten.price_level) in new_keys
+    assert on.final_trend is off.final_trend

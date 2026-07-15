@@ -662,6 +662,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_failed_fallback_suppress_candles: int | None = None,
         stage_choch_failed_window_bos: bool = False,
         choch_success_displacement_atr: float | None = None,
+        stage_reversal_eaten_bos: bool = False,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -744,6 +745,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._choch_failed_fallback_suppress_candles = choch_failed_fallback_suppress_candles
         self._stage_choch_failed_window_bos = stage_choch_failed_window_bos
         self._choch_success_displacement_atr = choch_success_displacement_atr
+        self._stage_reversal_eaten_bos = stage_reversal_eaten_bos
         # The state-machine trend after the most recent `detect()` call
         # (mirrors `SwingStructureDetector.final_trend`). The single source of
         # truth for "the standing trend": unlike the last emitted event's
@@ -840,6 +842,46 @@ class InternalStructureDetector(MarketStructureDetector):
         # produced none (the impulsive gaps). The state machine itself is
         # untouched -- with the flag off this list stays empty.
         staged_bos: list[MarketStructure] = []
+
+        def stage_eaten_bos(eaten: _PendingBOS | None) -> None:
+            """Additively stage a pending BOS the reversal CHoCH is about to discard.
+
+            A continuation whose staircase floor already *closed*-broke is a real
+            structural break the trader saw print (the last lower low that closes
+            below the prior fundo -- itself what "permits" the reversal that
+            follows). But if the reversal CHoCH arrives before a confirming
+            pullback pivot forms, the pending BOS is discarded without ever
+            emitting, so the final leg of an impulsive move shows no BOS at all.
+            Stage an additive mark for it (deduped against real BOS at the end,
+            re-timed to the close-break by ``_reanchor_bos_close_break``), keyed
+            on the *close* through the floor -- the trader's validation -- not the
+            displacement threshold the impulse stager uses. Only close-confirmed
+            *continuation* floors qualify (never the first-of-leg ``ref_price``
+            fallback, which can be a stale far-off trailing level). Off unless
+            ``stage_reversal_eaten_bos`` is set.
+            """
+            if (
+                not self._stage_reversal_eaten_bos
+                or eaten is None
+                or eaten.staged
+                or eaten.floor is None
+                or not eaten.floor_closed
+            ):
+                return
+            eaten.staged = True
+            staged_bos.append(
+                MarketStructure(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    timestamp=eaten.close_break_timestamp,
+                    event=StructureEvent.BREAK_OF_STRUCTURE,
+                    direction=eaten.direction,
+                    price_level=eaten.breaking_pivot.price,
+                    reference_price_level=eaten.floor,
+                    scope=StructureScope.INTERNAL,
+                )
+            )
+
         # Trailing references (most recent pivot of each kind); drive BOS
         # detection and HL/LH labels.
         active_high: Pivot | None = None
@@ -1556,6 +1598,10 @@ class InternalStructureDetector(MarketStructureDetector):
                             and pending_bos.prev_staircase is not None
                         ):
                             last_bear_bos_low = pending_bos.prev_staircase
+                        # The reclaim that discards this pending BOS is the reversal
+                        # itself (the CHoCH check runs on this same pivot). Stage the
+                        # eaten continuation if its floor already closed-broke.
+                        stage_eaten_bos(pending_bos)
                         pending_bos = None
 
                 # Validated reference takes priority; choch_origin_high is the
@@ -1981,6 +2027,11 @@ class InternalStructureDetector(MarketStructureDetector):
                     # shallow lower-high during the pullback.
                     prev_bull_bos_extreme = price
                     prev_bear_bos_extreme = None
+                    # This bullish CHoCH ends the bearish leg; a bearish pending
+                    # BOS whose floor already closed-broke is a real continuation
+                    # the reversal is about to swallow -- stage it before discard.
+                    if pending_bos is not None and pending_bos.direction is MarketDirection.BEARISH:
+                        stage_eaten_bos(pending_bos)
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bullish_bos_origin = None
@@ -2411,6 +2462,9 @@ class InternalStructureDetector(MarketStructureDetector):
                             and pending_bos.prev_staircase is not None
                         ):
                             last_bull_bos_high = pending_bos.prev_staircase
+                        # Mirror: the reclaim discarding this bullish pending BOS is
+                        # the bearish reversal; stage the eaten continuation.
+                        stage_eaten_bos(pending_bos)
                         pending_bos = None
 
                 # Validated reference takes priority; choch_origin_low is the
@@ -2794,6 +2848,11 @@ class InternalStructureDetector(MarketStructureDetector):
                     # shallow higher-low during the pullback.
                     prev_bear_bos_extreme = price
                     prev_bull_bos_extreme = None
+                    # Mirror: this bearish CHoCH ends the bullish leg; stage a
+                    # bullish pending BOS whose floor already closed-broke before
+                    # the reversal discards it.
+                    if pending_bos is not None and pending_bos.direction is MarketDirection.BULLISH:
+                        stage_eaten_bos(pending_bos)
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bearish_bos_price = None
