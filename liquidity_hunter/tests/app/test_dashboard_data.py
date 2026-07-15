@@ -10,6 +10,7 @@ from liquidity_hunter.app.dashboard_data import (
     _build_internal_detector,
     _drop_pre_break_reference_bos,
     _drop_resumed_fizzle_markers,
+    _drop_superseded_provisional_choch,
     _reanchor_bos_close_break,
     _run_internal_structure,
     _scope_resets_to_live_range,
@@ -799,6 +800,56 @@ def test_drop_resumed_fizzle_markers_ignores_earlier_and_provisional_bos() -> No
     assert _drop_resumed_fizzle_markers(events) == events
 
 
+def test_drop_superseded_provisional_choch_drops_on_later_opposite_advance() -> None:
+    # A provisional CHoCH? (e.g. a staged range-breakout reversal) invalidated by
+    # a later real opposite-direction BOS -- the reversal failed, so it is dropped.
+    prov_choch = _structure_event(
+        20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, provisional=True
+    )
+    bos = _structure_event(30, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH)
+
+    assert _drop_superseded_provisional_choch([prov_choch, bos]) == [bos]
+
+
+def test_drop_superseded_provisional_choch_drops_on_later_same_advance() -> None:
+    # A provisional CHoCH? superseded by a later real same-direction CHoCH -- real
+    # structure has resumed the reversal, so the stale mark is redundant and dropped.
+    prov_choch = _structure_event(
+        20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, provisional=True
+    )
+    real_choch = _structure_event(
+        40, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH
+    )
+
+    assert _drop_superseded_provisional_choch([prov_choch, real_choch]) == [real_choch]
+
+
+def test_drop_superseded_provisional_choch_keeps_live_edge_mark() -> None:
+    # No real advance after the provisional CHoCH? -- it is a genuine live-edge
+    # forming mark (its fate is not yet settled), so it survives, honoring the `?`.
+    real_bos = _structure_event(10, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH)
+    prov_choch = _structure_event(
+        30, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, provisional=True
+    )
+
+    events = [real_bos, prov_choch]
+    assert _drop_superseded_provisional_choch(events) == events
+
+
+def test_drop_superseded_provisional_choch_ignores_later_provisional() -> None:
+    # A later *provisional* advance is not settled structure -- it may itself
+    # vanish -- so it does not supersede the CHoCH? mark.
+    prov_choch = _structure_event(
+        20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH, provisional=True
+    )
+    prov_bos = _structure_event(
+        30, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH, provisional=True
+    )
+
+    events = [prov_choch, prov_bos]
+    assert _drop_superseded_provisional_choch(events) == events
+
+
 def test_drop_resumed_fizzle_markers_keeps_genuine_choch_failed() -> None:
     # A non-provisional CHOCH_FAILED is a real state-machine failure (the trend
     # flipped back); the resumed trend's BOS after it is expected, not a cancel.
@@ -1174,6 +1225,12 @@ def test_sol_4h_range_breakouts_stage_additive_events() -> None:
     (provisional CHoCH marks -- the additive contract keeps the trend
     untouched) and the April continuation breaking a range floor (a staged
     BOS at the defended boundary).
+
+    Both provisional CHoCH reversals are later contradicted by a real bearish
+    advance (the bounce failed), so ``_drop_superseded_provisional_choch``
+    removes the stale ``CHoCH?`` -- a provisional mark survives only at the live
+    edge, never once real structure has settled its fate. The staged
+    continuation BOS (non-provisional) stays.
     """
     import json
     from pathlib import Path
@@ -1205,16 +1262,26 @@ def test_sol_4h_range_breakouts_stage_additive_events() -> None:
 
     run = _run_internal_structure(provider, "SOLUSDT", TimeFrame.H4, 1200, False)
 
-    staged_expectations = [
-        (datetime(2026, 3, 15, 20, tzinfo=UTC), StructureEvent.CHANGE_OF_CHARACTER, True),
-        (datetime(2026, 4, 1, 20, tzinfo=UTC), StructureEvent.BREAK_OF_STRUCTURE, False),
-        (datetime(2026, 5, 8, 16, tzinfo=UTC), StructureEvent.CHANGE_OF_CHARACTER, True),
+    # The staged continuation BOS at the defended floor survives (non-provisional).
+    assert any(
+        e.timestamp == datetime(2026, 4, 1, 20, tzinfo=UTC)
+        and e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and not e.provisional
+        for e in run.events
+    ), "missing staged continuation BOS at 2026-04-01 20:00"
+    # Both staged reversal CHoCH? were superseded by a later real advance, so the
+    # drop pass removes them -- no stale `CHoCH?` lingers in history.
+    superseded_reversals = [
+        datetime(2026, 3, 15, 20, tzinfo=UTC),
+        datetime(2026, 5, 8, 16, tzinfo=UTC),
     ]
-    for timestamp, kind, provisional in staged_expectations:
-        assert any(
-            e.timestamp == timestamp and e.event is kind and e.provisional is provisional
+    for timestamp in superseded_reversals:
+        assert not any(
+            e.timestamp == timestamp
+            and e.event is StructureEvent.CHANGE_OF_CHARACTER
+            and e.provisional
             for e in run.events
-        ), f"missing staged {kind} at {timestamp}"
+        ), f"superseded staged CHoCH? at {timestamp} should have been dropped"
     # The staged reversal marks never touch the state-machine trend.
     assert run.trend is MarketDirection.BULLISH
 

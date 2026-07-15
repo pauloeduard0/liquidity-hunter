@@ -731,6 +731,46 @@ def _drop_resumed_fizzle_markers(
     ]
 
 
+def _drop_superseded_provisional_choch(
+    events: list[MarketStructure],
+) -> list[MarketStructure]:
+    """Drop provisional ``CHANGE_OF_CHARACTER`` marks that real structure superseded.
+
+    A provisional CHoCH -- a live-edge forming reversal (``emit_provisional_choch``)
+    or a range-breakout reversal staged against the segment trend
+    (``stage_breakout_events``) -- carries a dimmed ``CHoCH?`` on the chart and is
+    skipped by trend replay. The ``?`` promises a *forming* mark: superseded by the
+    confirmed event once the pivots form, or gone if the move fails. A staged
+    reversal, though, is fire-and-forget -- it never resolves, so a ``CHoCH?`` whose
+    fate is already settled lingers on the chart forever (the ETHBTC H4 2026-06-01
+    case: a bullish ``CHoCH?`` the market invalidated four candles later with a real
+    bearish BOS through the range floor; and the 2026-06-16 case: superseded by the
+    real bullish CHoCH that finally flipped the trend on 2026-07-02). Any later
+    *non-provisional* BOS/CHoCH means the state machine has spoken again -- the
+    reversal either failed (an opposite advance) or was confirmed by real structure
+    (a same-direction advance) -- so the provisional mark has served its purpose and
+    is dropped. A genuine live-edge forming mark has no later real advance and
+    survives, honoring the ``?``. Provisional never affects replay, so ``final_trend``
+    (computed upstream from the detector) is unchanged; this only cleans the chart.
+    """
+    real_advance_times = [
+        event.timestamp
+        for event in events
+        if not event.provisional
+        and event.event
+        in (StructureEvent.BREAK_OF_STRUCTURE, StructureEvent.CHANGE_OF_CHARACTER)
+    ]
+    return [
+        event
+        for event in events
+        if not (
+            event.event is StructureEvent.CHANGE_OF_CHARACTER
+            and event.provisional
+            and any(t > event.timestamp for t in real_advance_times)
+        )
+    ]
+
+
 def _build_internal_detector(
     timeframe: TimeFrame, *, confluence_filter: bool
 ) -> InternalStructureDetector:
@@ -1036,6 +1076,11 @@ def _run_internal_structure(
         )
         if staged:
             all_events = sorted([*all_events, *staged], key=lambda e: e.timestamp)
+    # A provisional CHoCH? (staged range-breakout reversal, or a live-edge forming
+    # mark) is meant to resolve -- confirm or vanish. Drop any whose fate real
+    # structure already settled (a later non-provisional BOS/CHoCH), so a stale
+    # `CHoCH?` never lingers in history; only live-edge marks survive.
+    all_events = _drop_superseded_provisional_choch(all_events)
     events = [e for e in all_events if visible_start <= e.timestamp <= visible_end]
     return InternalStructureRun(
         buffered_candles=buffered_candles,

@@ -1370,6 +1370,49 @@ post-confirmation wick-trailing), **zero** resolved-direction flips, `final_tren
 unchanged on all combos, one additive ETH H4 range from a tighter segment
 split. 497 tests pass.
 
+### Superseded provisional `CHoCH?` are dropped from history
+
+`_drop_superseded_provisional_choch` (`app/dashboard_data.py`, composition
+pass; as of 2026-07-15). Reported symptom: two dimmed `CHoCH?` marks stuck in
+ETHBTC H4 history (2026-06-01 and 2026-06-16) that "tried to turn bullish but
+failed" and never cleared, cluttering the chart. Root cause: a *provisional*
+`CHANGE_OF_CHARACTER` — whether the detector's live-edge forming mark
+(`emit_provisional_choch`) or a **range-breakout reversal staged against the
+segment trend** (`stage_breakout_events`, the phase-2 additive contract) — is
+drawn as a dimmed `CHoCH?` and skipped by replay, and the `?` glyph promises a
+*forming* mark that resolves (confirms or vanishes). But a staged reversal is
+**fire-and-forget**: it has no lifecycle, so it lingers forever regardless of
+what price did next. The ETHBTC H4 06-01 mark was a bullish `CHoCH?` the market
+invalidated four candles later with a real bearish BOS through the range floor
+(the reversal *failed*); the 06-16 mark was superseded 96 candles later by the
+real bullish CHoCH that finally flipped the trend on 07-02 (real structure
+*confirmed* the reversal, making the stale mark redundant).
+
+Fix: a provisional `CHANGE_OF_CHARACTER` is dropped if **any later
+non-provisional BOS/CHoCH** exists — the state machine has spoken again, so the
+mark's fate is settled either way (opposite advance = failed, same-direction
+advance = confirmed by real structure). A genuine live-edge forming mark has no
+later real advance and survives, honoring the `?`. A later *provisional* advance
+does not count (it may itself vanish). Runs after the phase-2 staging merge,
+before the visible filter; mirrors `_drop_resumed_fizzle_markers`.
+
+Provably trend-safe: the pass removes only `provisional` events, which never
+participate in replay, so `final_trend` (computed upstream from the detector) is
+unchanged — verified across the live 5×4 matrix (BTC/ETH/SOL/AAVE/ETHBTC ×
+M30/H1/H4/D1), `final_trend` identical on all 20 combos. Scope decision (user,
+AskUserQuestion): **drop all superseded** (rule B) over drop-only-failed (rule
+A) — measured, *all 8* staged `CHoCH?` currently in the matrix windows were
+already superseded (6 by an opposite real advance = failed, 2 by a same-direction
+real advance = confirmed-elsewhere), i.e. none were genuinely live-edge, so the
+historical staged reversal mark was never useful; rule A would have left the two
+same-direction-vindicated ones (incl. ETHBTC 06-16) still cluttering the chart.
+The phase-2 fixture `test_sol_4h_range_breakouts_stage_additive_events` now locks
+the *inverse*: its March + May staged `CHoCH?` (both later contradicted by a real
+bearish advance) are dropped, while the April staged continuation BOS
+(non-provisional) survives. Four unit tests lock the pass directly (later
+opposite advance drops, later same advance drops, no later advance keeps,
+later provisional keeps). 502 tests pass.
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.
