@@ -17,6 +17,15 @@ const REFRESH_INTERVAL_MS = 5_000
 // than this only re-reads caches.
 const OVERVIEW_REFRESH_INTERVAL_MS = 30_000
 
+// Snapshots already fetched this session, so switching back to a
+// symbol/timeframe renders instantly from cache (then revalidates on the next
+// poll). A first-visit switch keeps the previous snapshot on screen, dimmed,
+// instead of tearing the dashboard down to the skeleton.
+const snapshotCache = new Map<string, DashboardData>()
+const overviewCache = new Map<string, MarketOverview>()
+
+const snapshotKey = (symbol: string, timeframe: TimeFrame) => `${symbol}|${timeframe}`
+
 const SYMBOL_OPTIONS: { value: string; label: string }[] = [
   { value: 'BTCUSDT', label: 'BTC' },
   { value: 'ETHUSDT', label: 'ETH' },
@@ -123,8 +132,17 @@ function App() {
 
   const chartDiverged = chartTimeframe !== timeframe
 
+  // The rendered snapshot lags the selection while a first-visit combo loads;
+  // dim the dashboard and show the loading pill instead of a skeleton.
+  const dataStale = data !== null && (data.symbol !== symbol || data.timeframe !== timeframe)
+
+  // Switching keeps the current snapshot on screen (dimmed via the staleness
+  // check below) instead of tearing down to the skeleton; if the target combo
+  // was already visited this session, the fetch effect renders it instantly
+  // from `snapshotCache` while revalidating.
   const switchTimeframe = (tf: TimeFrame) => {
-    setData(null)
+    const cached = snapshotCache.get(snapshotKey(symbol, tf))
+    if (cached) setData(cached)
     setChartData(null)
     setError(null)
     setTimeframe(tf)
@@ -133,16 +151,20 @@ function App() {
 
   const switchSymbol = (sym: string) => {
     if (sym === symbol) return
-    setData(null)
+    const cached = snapshotCache.get(snapshotKey(sym, timeframe))
+    if (cached) setData(cached)
     setChartData(null)
-    setOverview(null)
+    setOverview(overviewCache.get(sym) ?? null)
     setError(null)
     setSymbol(sym)
   }
 
   const switchChartTimeframe = (tf: TimeFrame) => {
     if (tf === chartTimeframe) return
-    setChartData(null)
+    // Synced back to the global timeframe: fall through to the live-polled
+    // `data` rather than pinning a cached snapshot the diverged-chart effect
+    // would never refresh.
+    setChartData(tf === timeframe ? null : (snapshotCache.get(snapshotKey(symbol, tf)) ?? null))
     setChartTimeframe(tf)
   }
 
@@ -153,6 +175,7 @@ function App() {
     const load = () => {
       fetchDashboardData({ symbol, timeframe })
         .then((result) => {
+          snapshotCache.set(snapshotKey(symbol, timeframe), result)
           if (!cancelled) setData(result)
         })
         .catch((err: unknown) => {
@@ -178,6 +201,7 @@ function App() {
     const load = () => {
       fetchDashboardData({ symbol, timeframe: chartTimeframe })
         .then((result) => {
+          snapshotCache.set(snapshotKey(symbol, chartTimeframe), result)
           if (!cancelled) setChartData(result)
         })
         .catch((err: unknown) => {
@@ -201,6 +225,7 @@ function App() {
     const load = () => {
       fetchOverview(symbol)
         .then((result) => {
+          overviewCache.set(symbol, result)
           if (!cancelled) setOverview(result)
         })
         .catch(() => {
@@ -280,7 +305,13 @@ function App() {
       </header>
 
       {/* ── Content ──────────────────────────────────────────── */}
-      <main className="flex min-h-0 flex-1 flex-col px-3 py-2">
+      <main className="relative flex min-h-0 flex-1 flex-col px-3 py-2">
+        {dataStale && (
+          <div className="pointer-events-none absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[#1a1f2e] bg-[#0f1319f0] px-3 py-1.5 text-[11px] font-medium text-[#9ca3b4] shadow-lg">
+            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[#2962ff]" />
+            Loading {symbol} · {timeframe.toUpperCase()}…
+          </div>
+        )}
         {error && (
           <div className="flex items-center gap-3 rounded-lg border border-[#ef535030] bg-[#ef53500a] p-4">
             <span className="text-sm text-[#ef5350]">⬡</span>
@@ -294,7 +325,11 @@ function App() {
         {!error && !data && <LoadingSkeleton />}
 
         {data && (
-          <div className="flex min-h-0 flex-1 flex-col gap-2">
+          <div
+            className={`flex min-h-0 flex-1 flex-col gap-2 transition-opacity duration-150 ${
+              dataStale ? 'pointer-events-none opacity-40' : ''
+            }`}
+          >
             <KpiRow data={data} />
             <div className="flex min-h-0 flex-1 gap-2">
               {/* Chart area */}
@@ -486,7 +521,11 @@ function App() {
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col p-1">
-                  <MainChart key={`${symbol}-${chartTimeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} />
+                  {/* Keyed by the *snapshot's* identity, not the selection:
+                      the mounted chart keeps rendering the previous snapshot
+                      while a switch loads, and remounts only when the new
+                      combo's data actually arrives. */}
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} />
                 </div>
               </div>
 

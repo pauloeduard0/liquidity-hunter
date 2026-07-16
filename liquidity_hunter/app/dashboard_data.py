@@ -5,6 +5,7 @@ single `DashboardData` snapshot for `dashboard` to render.
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from statistics import fmean
@@ -1342,6 +1343,31 @@ def load_dashboard_data(
     """
     if provider is None:
         provider = default_ohlcv_provider()
+    if futures_provider is None:
+        futures_provider = BinanceFuturesDataProvider()
+
+    htf = _HIGHER_TIMEFRAME_MAP.get(timeframe)
+
+    # The cold load is dominated by sequential network round-trips: current-TF
+    # klines, HTF klines, then the futures state (OI/funding/long-short). The
+    # HTF run and the futures fetch depend on nothing computed below, so both
+    # start on background threads here and are joined where their results are
+    # consumed, overlapping their latency with the current-TF run and the
+    # detector compute.
+    futures_state_future = _PREFETCH_POOL.submit(
+        _fetch_futures_state,
+        futures_provider,
+        symbol=symbol,
+        timeframe=timeframe,
+        oi_limit=limit,
+    )
+    htf_run_future = (
+        _PREFETCH_POOL.submit(
+            _run_internal_structure, provider, symbol, htf, limit, confluence_filter
+        )
+        if htf is not None
+        else None
+    )
 
     internal_run = _run_internal_structure(
         provider, symbol, timeframe, limit, confluence_filter
@@ -1401,8 +1427,7 @@ def load_dashboard_data(
     all_poi_zones = POIDetector().detect(internal_run.internal_candles)
     poi_zones = [z for z in all_poi_zones if visible_start <= z.created_at <= visible_end]
 
-    htf = _HIGHER_TIMEFRAME_MAP.get(timeframe)
-    if htf is not None:
+    if htf_run_future is not None:
         # The higher-timeframe trend comes from the *internal* detector run on
         # the HTF series with that timeframe's own production wiring (params +
         # flags via `_build_internal_detector`, buffered fetch + structural
@@ -1416,9 +1441,7 @@ def load_dashboard_data(
         # State-machine trend, not the last event's direction: the latter flips
         # on a descriptive HL/LH pivot or a LIQUIDITY_SWEEP whose `direction`
         # is the pivot/wick side rather than the standing trend.
-        higher_timeframe_direction = _run_internal_structure(
-            provider, symbol, htf, limit, confluence_filter
-        ).trend
+        higher_timeframe_direction = htf_run_future.result().trend
     else:
         # Top timeframe (no higher TF): degrade to the current series' own
         # internal trend, so downstream comparisons (the liquidity hunt's
@@ -1464,13 +1487,9 @@ def load_dashboard_data(
     # One futures fetch feeds both the liquidation map and the OI analysis.
     # The OI history is requested for the whole visible window (the provider
     # paginates past Binance's 500-row cap, clamped to its ~30-day retention),
-    # so structure events across the chart can be OI-qualified.
-    futures_state = _fetch_futures_state(
-        futures_provider if futures_provider is not None else BinanceFuturesDataProvider(),
-        symbol=symbol,
-        timeframe=timeframe,
-        oi_limit=limit,
-    )
+    # so structure events across the chart can be OI-qualified. The fetch was
+    # started on a background thread at the top of this function.
+    futures_state = futures_state_future.result()
     if futures_state is None:
         liquidation_map = None
         oi_analysis = None
@@ -1527,6 +1546,15 @@ def load_dashboard_data(
     return replace(data, narrative=narrative, liquidity_hunt=liquidity_hunt)
 
 
+# Shared pool for the independent network-bound units of a dashboard load
+# (the HTF structure run and the futures-state fetch). Module-level so worker
+# threads are reused across requests; sized for a couple of concurrent
+# snapshot loads (each uses at most two workers). The ccxt sync clients are
+# only issuing stateless public GETs here, which requests handles fine across
+# threads.
+_PREFETCH_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="dashboard-prefetch")
+
+
 def _fetch_futures_state(
     futures_provider: FuturesDataProvider,
     symbol: str,
@@ -1541,11 +1569,19 @@ def _fetch_futures_state(
     become ``None``.
     """
     try:
-        open_interest = futures_provider.get_open_interest_history(
-            symbol, timeframe, limit=oi_limit
-        )
-        funding = futures_provider.get_funding_rate_history(symbol)
-        long_short = futures_provider.get_long_short_ratio(symbol, timeframe)
+        # The three endpoints are independent; the paginated OI history is the
+        # slow one, so funding and long/short ride alongside it.
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            oi_future = pool.submit(
+                futures_provider.get_open_interest_history, symbol, timeframe, limit=oi_limit
+            )
+            funding_future = pool.submit(futures_provider.get_funding_rate_history, symbol)
+            long_short_future = pool.submit(
+                futures_provider.get_long_short_ratio, symbol, timeframe
+            )
+            open_interest = oi_future.result()
+            funding = funding_future.result()
+            long_short = long_short_future.result()
     except DataProviderError:
         logger.warning(
             "Futures data unavailable for %s; skipping liquidation map and OI analysis", symbol
