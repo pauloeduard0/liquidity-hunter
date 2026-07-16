@@ -1421,7 +1421,10 @@ state in brief:
   confirming BOS.
 - **Production flags** (all wired in `load_dashboard_data`, gated off by
   default in the detector; see the doc for each): staleness/chain re-anchor,
-  impulse + wick-rejected BOS staging, leg-origin CHoCH reference family,
+  impulse + wick-rejected + reversal-eaten BOS staging
+  (`stage_reversal_eaten_bos`: the pending continuation a reversal's reclaim
+  pivot discards without emitting is staged at its close-break, so the last
+  fundo/topo before a CHoCH keeps its BOS), leg-origin CHoCH reference family,
   volatility-normalized release gap, new-cycle weak-ref barrier,
   confirmed-trend barrier (`choch_confirmed_trend_persistence_candles`,
   hysteresis: a trend is *pending* until an emitted BOS confirms it — cheap

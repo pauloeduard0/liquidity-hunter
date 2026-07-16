@@ -333,9 +333,9 @@ _BOS_PULLBACK_MAX_WICK_PCT = 0.4
 # SOL 30m one pair); costs are two small delays of genuine weak-ref CHoCH
 # (ETH 30m 9h, ETH 15m one candle). 4 chosen: catches everything 3 does plus
 # the BTC 30m pair, while 5 starts delaying a genuine BTC 30m reversal CHoCH
-# by 6h. Coarse timeframes (H4+, base persistence 8+) are left alone.
-# (M1 deliberately absent: its detector params fall to the default base
-# persistence of 12, which a barrier of 4 would *weaken*, not harden.)
+# by 6h. Coarse timeframes (H4+) are left alone: since the base dropped to a
+# uniform 2 they are covered by the confirmed-trend barrier below instead.
+# (M1 deliberately absent: not on the production ladder, never measured.)
 _CHOCH_WEAK_REF_PERSISTENCE: dict[TimeFrame, int] = {
     TimeFrame.M5: 4,
     TimeFrame.M15: 4,
