@@ -510,6 +510,24 @@ class InternalStructureDetector(MarketStructureDetector):
     cost is bounded at a few candles of confirmation delay. With the value
     `None` the output is byte-for-byte identical.
 
+    `choch_confirmed_trend_persistence_candles` (default `None` = off) is the
+    **confirmed-trend barrier** -- hysteresis on trend flips. A trend is
+    *pending* from the flip that set it (a CHoCH, a `CHOCH_FAILED` revert, or
+    a silent advance flip) until an *emitted* BOS in its direction confirms
+    it -- exactly the moment the CHoCH origin retires (a displacement-success
+    retirement, `choch_success_displacement_atr`, counts too: it stands in
+    for the confirming BOS the impulse never printed). While pending, a
+    reverse CHoCH confirms at the normal persistence and `CHOCH_FAILED`
+    remains the cheap escape valve -- an unconfirmed structure stays easy to
+    undo. Once *confirmed*, a counter-trend CHoCH must sustain at least this
+    many candles (combined with the weak-ref barrier via `max`): a single
+    stop-hunt poke through the reversal reference no longer flips a structure
+    that has printed a confirming BOS -- the existing non-sustained branch
+    reports it as a `LIQUIDITY_SWEEP`, or the CHoCH simply confirms later
+    once a window does hold. The `CHOCH_FAILED` check keeps the base
+    persistence (it only exists while the trend is pending, where the barrier
+    never applies). With `None` the output is byte-for-byte identical.
+
     `bos_leg_origin_min_pullback_atr` (default `None` = off; requires
     `bos_leg_origin_choch_ref`) is the **shallow-pullback leg-origin
     promotion**. The leg origin a BOS promotes to the opposite CHoCH reference
@@ -653,6 +671,7 @@ class InternalStructureDetector(MarketStructureDetector):
         bos_leg_origin_require_close_break: bool = False,
         bos_floor_require_close_break: bool = False,
         choch_weak_ref_persistence_candles: int | None = None,
+        choch_confirmed_trend_persistence_candles: int | None = None,
         emit_provisional_bos: bool = False,
         emit_provisional_choch: bool = False,
         emit_provisional_choch_weak: bool = False,
@@ -729,6 +748,13 @@ class InternalStructureDetector(MarketStructureDetector):
             and choch_weak_ref_persistence_candles < 1
         ):
             raise ValueError("choch_weak_ref_persistence_candles must be at least 1")
+        if (
+            choch_confirmed_trend_persistence_candles is not None
+            and choch_confirmed_trend_persistence_candles < 1
+        ):
+            raise ValueError(
+                "choch_confirmed_trend_persistence_candles must be at least 1"
+            )
         self._bos_leg_origin_choch_ref = bos_leg_origin_choch_ref
         self._bos_leg_origin_release_gap_pct = bos_leg_origin_release_gap_pct
         self._bos_leg_origin_release_gap_atr = bos_leg_origin_release_gap_atr
@@ -736,6 +762,9 @@ class InternalStructureDetector(MarketStructureDetector):
         self._bos_leg_origin_require_close_break = bos_leg_origin_require_close_break
         self._bos_floor_require_close_break = bos_floor_require_close_break
         self._choch_weak_ref_persistence_candles = choch_weak_ref_persistence_candles
+        self._choch_confirmed_trend_persistence_candles = (
+            choch_confirmed_trend_persistence_candles
+        )
         self._emit_provisional_bos = emit_provisional_bos
         self._emit_provisional_choch = emit_provisional_choch
         self._emit_provisional_choch_weak = emit_provisional_choch_weak
@@ -1070,6 +1099,12 @@ class InternalStructureDetector(MarketStructureDetector):
         last_bearish_bos_price: float | None = None
         last_bearish_bos_origin: float | None = None
         trend = MarketDirection.NEUTRAL
+        # Confirmed-trend barrier state (`choch_confirmed_trend_persistence_
+        # candles`): False from the flip that set `trend` until an *emitted*
+        # BOS in its direction -- or a displacement-success origin retirement,
+        # which stands in for the confirming BOS -- confirms the structure.
+        # While False the reverse CHoCH keeps the cheap base persistence.
+        trend_confirmed = False
         # Candle index of the previous pivot of each kind, used to bound the
         # break-candle search below to the leg between consecutive pivots of
         # that kind. -1 (no previous pivot) is never read: every branch below
@@ -1532,6 +1567,10 @@ class InternalStructureDetector(MarketStructureDetector):
                             pre_choch_bull_bos_high = None
                             pre_choch_bull_bos_extreme = None
                             pending_bos = None
+                            # An emitted in-trend BOS confirms the structure:
+                            # the confirmed-trend barrier now governs any
+                            # bullish reversal CHoCH.
+                            trend_confirmed = True
                         elif (
                             self._stage_wick_rejected_bos
                             and not pending_bos.staged
@@ -1690,6 +1729,24 @@ class InternalStructureDetector(MarketStructureDetector):
                     and self._choch_weak_ref_persistence_candles is not None
                     else self._persistence_candles
                 )
+                # Confirmed-trend barrier
+                # (`choch_confirmed_trend_persistence_candles`): once the
+                # bearish trend printed an emitted BOS (its CHoCH origin
+                # retired), a bullish reversal must sustain the barrier
+                # persistence -- a single stop-hunt poke through the reference
+                # is a sweep, not a flip. A still-pending trend keeps the
+                # cheap flip: hysteresis makes confirmed structure harder to
+                # invalidate than pending structure. The CHOCH_FAILED escape
+                # valve above is untouched (it only exists while pending).
+                if (
+                    self._choch_confirmed_trend_persistence_candles is not None
+                    and trend is MarketDirection.BEARISH
+                    and trend_confirmed
+                ):
+                    choch_high_persistence = max(
+                        choch_high_persistence,
+                        self._choch_confirmed_trend_persistence_candles,
+                    )
                 # A weak-referenced CHoCH's own broken level (below the far
                 # origin, so reclaimed first) is the tighter -- and thus
                 # governing -- invalidation reference; structural CHoCHs keep
@@ -1720,6 +1777,9 @@ class InternalStructureDetector(MarketStructureDetector):
                     bear_choch_origin = None
                     bear_choch_fail_ref = None
                     bear_fail_pivot = None
+                    # Displacement-success stands in for the confirming BOS the
+                    # impulse never printed: the bearish structure is confirmed.
+                    trend_confirmed = True
                 # The reclaim can only invalidate the CHoCH after it formed:
                 # start the scan past the arming pivot, never before (else the
                 # pre-CHoCH rally is mis-read as the reclaim -- see
@@ -1761,6 +1821,10 @@ class InternalStructureDetector(MarketStructureDetector):
                         reference_timestamp=bear_fail_pivot.timestamp,
                     )
                     trend = MarketDirection.BULLISH
+                    # The resumed bullish trend is pending again: it must print
+                    # a fresh emitted BOS before the confirmed-trend barrier
+                    # guards it.
+                    trend_confirmed = False
                     # Post-failure fallback suppression window starts here (a
                     # bearish CHoCH just failed; see the fallback chain above).
                     bear_choch_failed_index = current_index
@@ -1936,6 +2000,9 @@ class InternalStructureDetector(MarketStructureDetector):
                         reference_structural=not choch_high_weak_ref,
                     )
                     trend = MarketDirection.BULLISH
+                    # The fresh bullish trend is pending until an emitted BOS
+                    # confirms it (see `choch_confirmed_trend_persistence_candles`).
+                    trend_confirmed = False
                     # The low this rally launched from is the bullish CHoCH's
                     # origin: a sustained break back below it (before a confirming
                     # BOS) invalidates the CHoCH (CHOCH_FAILED). Under
@@ -2223,6 +2290,11 @@ class InternalStructureDetector(MarketStructureDetector):
                                 and pending_bos.direction is MarketDirection.BULLISH
                             ):
                                 pullback_ref_snapshot = pending_bos.pullback_ref
+                            # A direction change here (bootstrap, or a silent
+                            # advance flip) starts a *pending* trend: only the
+                            # emitted BOS confirms it.
+                            if trend is not MarketDirection.BULLISH:
+                                trend_confirmed = False
                             trend = MarketDirection.BULLISH
                             active_low = pending_low
                             pending_low = None
@@ -2406,6 +2478,10 @@ class InternalStructureDetector(MarketStructureDetector):
                             pre_choch_bear_bos_low = None
                             pre_choch_bear_bos_extreme = None
                             pending_bos = None
+                            # An emitted in-trend BOS confirms the structure:
+                            # the confirmed-trend barrier now governs any
+                            # bearish reversal CHoCH.
+                            trend_confirmed = True
                         elif (
                             self._stage_wick_rejected_bos
                             and not pending_bos.staged
@@ -2526,6 +2602,19 @@ class InternalStructureDetector(MarketStructureDetector):
                     and self._choch_weak_ref_persistence_candles is not None
                     else self._persistence_candles
                 )
+                # Confirmed-trend barrier (mirror of the high side): a bearish
+                # reversal against a *confirmed* bullish trend (an emitted BOS
+                # retired its CHoCH origin) must sustain the barrier
+                # persistence; a pending trend keeps the cheap flip.
+                if (
+                    self._choch_confirmed_trend_persistence_candles is not None
+                    and trend is MarketDirection.BULLISH
+                    and trend_confirmed
+                ):
+                    choch_low_persistence = max(
+                        choch_low_persistence,
+                        self._choch_confirmed_trend_persistence_candles,
+                    )
                 # Mirror of the bearish case: a weak-referenced CHoCH's own
                 # broken level (above the far origin, so lost first) governs
                 # the invalidation; structural CHoCHs keep the origin. See
@@ -2564,6 +2653,9 @@ class InternalStructureDetector(MarketStructureDetector):
                     bull_choch_origin = None
                     bull_choch_fail_ref = None
                     bull_fail_pivot = None
+                    # Displacement-success stands in for the confirming BOS the
+                    # impulse never printed: the bullish structure is confirmed.
+                    trend_confirmed = True
                 # Mirror of the bearish case: the reclaim must come after the
                 # CHoCH formed, so start the scan past the arming pivot.
                 bull_fail_scan_start = max(prev_low_pivot_index + 1, bull_choch_arm_index + 1)
@@ -2603,6 +2695,10 @@ class InternalStructureDetector(MarketStructureDetector):
                         reference_timestamp=bull_fail_pivot.timestamp,
                     )
                     trend = MarketDirection.BEARISH
+                    # The resumed bearish trend is pending again: it must print
+                    # a fresh emitted BOS before the confirmed-trend barrier
+                    # guards it.
+                    trend_confirmed = False
                     # Post-failure fallback suppression window starts here (a
                     # bullish CHoCH just failed; see the fallback chain above).
                     bull_choch_failed_index = current_index
@@ -2764,6 +2860,9 @@ class InternalStructureDetector(MarketStructureDetector):
                         reference_structural=not choch_low_weak_ref,
                     )
                     trend = MarketDirection.BEARISH
+                    # The fresh bearish trend is pending until an emitted BOS
+                    # confirms it (see `choch_confirmed_trend_persistence_candles`).
+                    trend_confirmed = False
                     # The high this drop launched from is the bearish CHoCH's
                     # origin (mirror of the bullish case): under
                     # `choch_origin_leg_extreme`, the *highest* high of the reversed
@@ -3041,6 +3140,11 @@ class InternalStructureDetector(MarketStructureDetector):
                                 and pending_bos.direction is MarketDirection.BEARISH
                             ):
                                 pullback_ref_snapshot = pending_bos.pullback_ref
+                            # A direction change here (bootstrap, or a silent
+                            # advance flip) starts a *pending* trend: only the
+                            # emitted BOS confirms it.
+                            if trend is not MarketDirection.BEARISH:
+                                trend_confirmed = False
                             trend = MarketDirection.BEARISH
                             active_high = pending_high
                             pending_high = None

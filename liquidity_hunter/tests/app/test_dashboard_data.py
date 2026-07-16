@@ -926,7 +926,7 @@ def test_run_internal_structure_drops_eth_1h_resumed_fizzle() -> None:
     assert any(
         e.event is StructureEvent.CHANGE_OF_CHARACTER
         and e.direction is MarketDirection.BULLISH
-        and e.timestamp == datetime(2026, 6, 29, 16, tzinfo=UTC)
+        and e.timestamp == datetime(2026, 6, 27, 10, tzinfo=UTC)
         for e in run.events
     )
 
@@ -936,15 +936,16 @@ def _load_btc_1d_weak_fail_candles() -> list[Candle]:
 
     Real-data regression for ``choch_weak_ref_fail_at_broken_level``: the
     2026-04-30 bullish CHoCH fired against a *weak* re-anchor reference
-    (75998.9) and collapsed within days, but its 59800 leg origin was never
-    sustained-broken -- with the flag off the trend sits bullish through the
-    entire 82.8k -> 57.7k crash, every new low prints as a counter-trend
-    sweep, and the chart shows no bearish BOS at the bottom (unlike ETH D1,
-    whose rally never fired a CHoCH and whose June break of 1736 printed the
-    continuation BOS). With the flag on the CHoCH fails for real at its
-    broken level (2026-05-26), the trend resumes bearish, and the June close
-    below the restored 59800 floor prints the BOS at the bottom. 5-column
-    rows: ts/open/high/low/close.
+    (75998.9) and collapsed within days. At the original base persistence of
+    12 its origin was never sustained-broken, so with the flag off the trend
+    sat bullish through the entire 82.8k -> 57.7k crash (every new low a
+    counter-trend sweep, no bearish BOS at the bottom); at the current base
+    persistence of 2 the origin break confirms and a bearish CHoCH resolves
+    the crash on 2026-05-27 even with the flag off. With the flag on the
+    CHoCH fails for real at its own broken level (2026-05-26, tighter and one
+    day sooner), the trend resumes bearish, and the June close below the
+    restored 59800 floor prints the BOS at the bottom. 5-column rows:
+    ts/open/high/low/close.
     """
     import json
     from pathlib import Path
@@ -1002,7 +1003,7 @@ def test_btc_1d_weak_choch_fails_at_broken_level_and_prints_bottom_bos() -> None
     assert run.trend is MarketDirection.BEARISH
 
 
-def test_btc_1d_weak_fail_off_trend_stays_bullish(
+def test_btc_1d_weak_fail_off_resolves_later_via_origin_choch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(dashboard_data, "_CHOCH_WEAK_REF_FAIL_AT_BROKEN_LEVEL", False)
@@ -1011,20 +1012,26 @@ def test_btc_1d_weak_fail_off_trend_stays_bullish(
 
     run = _run_internal_structure(provider, "BTCUSDT", TimeFrame.D1, 1200, False)
 
-    # Off: only the additive fizzle marker fires (trend never flips), so the
-    # crash prints no bearish BOS after the January one.
+    # Off, at base persistence 2 (2026-07-16): the crash now resolves anyway
+    # -- the 74868 origin is sustained-broken and a real bearish CHoCH fires
+    # 2026-05-27 (at persistence 12 that break never confirmed and the trend
+    # sat bullish through the whole -30%). The flag's remaining value on this
+    # window is the earlier, tighter failure: with it on, the weak CHoCH
+    # fails at its own 75998.9 broken level on 05-26, one day sooner (see the
+    # flag-on regression above).
     assert not any(
         e.event is StructureEvent.CHOCH_FAILED and not e.provisional
         for e in run.events
         if e.timestamp >= datetime(2026, 1, 1, tzinfo=UTC)
     )
-    assert not any(
-        e.event is StructureEvent.BREAK_OF_STRUCTURE
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
         and e.direction is MarketDirection.BEARISH
-        and e.timestamp > datetime(2026, 2, 1, tzinfo=UTC)
+        and e.timestamp == datetime(2026, 5, 27, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(74868.0)
         for e in run.events
     )
-    assert run.trend is MarketDirection.BULLISH
+    assert run.trend is MarketDirection.BEARISH
 
 
 def _load_near_1h_success_displacement_candles() -> list[Candle]:
@@ -1100,8 +1107,11 @@ def test_near_1h_displacement_retirement_off_marks_false_failures(
 
     run = _run_internal_structure(provider, "NEARUSDT", TimeFrame.H1, 1200, False)
 
-    # Off: both displaced bullish CHoCHs are marked failed on their pullbacks,
-    # at the levels they launched from (2.045 and 2.173).
+    # Off: the displaced 06-08 bullish CHoCH (rallied ~5 ATR to 2.264 with no
+    # confirming BOS) is falsely marked failed on its pullback, at the 2.045
+    # level it launched from. (At the original base persistence of 12 the
+    # 06-14 rally's CHoCH was a second false failure at 2.173; at base 2 that
+    # leg confirms an emitted BOS, which retires the origin the normal way.)
     fail_refs = {
         round(e.reference_price_level, 3)
         for e in run.events
@@ -1109,7 +1119,7 @@ def test_near_1h_displacement_retirement_off_marks_false_failures(
         and e.direction is MarketDirection.BULLISH
         and datetime(2026, 6, 6, tzinfo=UTC) <= e.timestamp <= datetime(2026, 6, 22, tzinfo=UTC)
     }
-    assert fail_refs == {2.045, 2.173}
+    assert fail_refs == {2.045}
 
 
 def test_near_1h_choch_failed_never_predates_its_choch() -> None:
@@ -1132,9 +1142,11 @@ def test_near_1h_choch_failed_never_predates_its_choch() -> None:
                 for c in chochs
             ), f"CHOCH_FAILED at {failure.timestamp} has no preceding {failure.direction} CHoCH"
 
-    # No bearish failure survives in the rally/top window (06-15..06-16 12:00);
-    # the 06-16 14:00 bearish CHoCH stands and leads a clean bearish BOS
-    # staircase instead of the old phantom-driven whipsaw.
+    # No bearish failure survives in the rally/top window (06-15..06-16 12:00)
+    # -- the old phantom `CHoCH ✕ ▼` was stamped mid-rally, before the bearish
+    # CHoCH it supposedly failed. The genuine bearish reversal off the 2.543
+    # top confirms on 06-19 (at base persistence 2 + the confirmed-trend
+    # barrier, the earlier pokes at the top are counter-trend sweeps).
     rally_top_window = (datetime(2026, 6, 15, tzinfo=UTC), datetime(2026, 6, 16, 12, tzinfo=UTC))
     assert not any(
         e.event is StructureEvent.CHOCH_FAILED
@@ -1143,9 +1155,9 @@ def test_near_1h_choch_failed_never_predates_its_choch() -> None:
         for e in run.events
     )
     assert any(
-        e.event is StructureEvent.BREAK_OF_STRUCTURE
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
         and e.direction is MarketDirection.BEARISH
-        and e.timestamp == datetime(2026, 6, 17, 19, tzinfo=UTC)
+        and e.timestamp == datetime(2026, 6, 19, 7, tzinfo=UTC)
         for e in run.events
     )
 
@@ -1192,10 +1204,11 @@ def test_btc_1h_july_range_lock_is_a_live_consolidation() -> None:
     live = [r for r in run.consolidation_ranges if r.status is ConsolidationStatus.ACTIVE]
     assert len(live) == 1
     r = live[0]
-    # One box for the whole lock -- from just after the 07-04 17:00 BOS to the
+    # One box for the whole lock -- from just after the 07-05 22:00 BOS (the
+    # last surviving advance of the July rally at base persistence 2) to the
     # series end -- not split at the detector's dropped (wick-only) 07-10
     # advance, since segment boundaries are the *surviving* chart events.
-    assert r.start_timestamp == datetime(2026, 7, 4, 18, tzinfo=UTC)
+    assert r.start_timestamp == datetime(2026, 7, 5, 23, tzinfo=UTC)
     assert r.price_low == pytest.approx(61297.0)
     assert r.price_high == pytest.approx(64691.9)
     # The June bottom basing resolved bullish into the July rally.

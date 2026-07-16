@@ -1462,6 +1462,59 @@ candle closes below 0.07908 (the close-below lands at 07-13 03:00, already insid
 the next BOS's territory). Recovering it means loosening the conservative
 close-in-window rule; deferred (small residual, 0.07908 vs the reported 0.07954).
 
+### Base persistence 12 → 2 + confirmed-trend barrier (hysteresis, 2026-07-16)
+
+Two paired changes. First, the internal detector's base `persistence_candles`
+dropped from the uniform 12 to a uniform **2** on every timeframe
+(`_INTERNAL_STRUCTURE_PARAMS`), a deliberate recalibration toward faster trend
+identification: a CHoCH now confirms on 2 sustained closes instead of 12.
+That alone re-derives several fixture locks (5 regression tests recalibrated —
+notably BTC D1's flag-off crash pathology *self-resolves* at base 2, the 74868
+origin break now confirms, so `choch_weak_ref_fail_at_broken_level`'s value on
+that window shrinks to "one day sooner at the tighter level"; the NEAR H1
+displacement-off window drops from two false failures to one, the 06-14 leg's
+BOS now confirming and retiring its origin normally; BTC H1's July ACTIVE
+range start moves to 07-05 23:00 behind a newly-surviving BOS — box identical).
+Note the weak-ref new-cycle barrier (4) covers only M5–H1: at base 12 the
+coarse timeframes were protected by the base itself, at base 2 they rely on
+the confirmed-trend barrier below.
+
+Second, the compensating **confirmed-trend barrier**
+(`InternalStructureDetector.choch_confirmed_trend_persistence_candles`, wired
+**4** on all timeframes via `_CHOCH_CONFIRMED_TREND_PERSISTENCE`): hysteresis
+on trend flips, so a *confirmed* structure is harder to invalidate than a
+*pending* one. A trend is pending from the flip that set it (CHoCH,
+`CHOCH_FAILED` revert, or silent advance flip) until an **emitted** BOS in its
+direction confirms it — exactly the moment the CHoCH origin retires (a
+displacement-success retirement counts, standing in for the BOS an impulse
+never printed). While pending, reverse CHoCHs keep base persistence and
+`CHOCH_FAILED` stays the cheap escape valve. Once confirmed, a counter-trend
+CHoCH must sustain `max(barrier, weak-ref barrier)` closes: a stop-hunt poke
+through the reversal reference is reported as a `LIQUIDITY_SWEEP` by the
+existing non-sustained branch (no new event semantics), or the CHoCH confirms
+a few candles later when the break is real. The provisional live-edge `CHoCH?`
+path is untouched (it keeps showing the *attempt* forming while the confirmed
+event waits out the barrier).
+
+Measured (BTC/ETH/SOL/AAVE/NEAR × 5m..1d, `limit=1200`, production wiring,
+barrier 4/6/8 vs off at base 2): the diff signature at every level is the
+intended one — whipsaw CHoCH+`CHOCH_FAILED` pairs reclassified to sweeps with
+the continuation preserved, genuine CHoCHs re-timed a few candles later at the
+same reference. Barrier 4: −154/+163 events, CHoCH −68/+36, `CHOCH_FAILED`
+7→4, +58 sweeps, **1** standing-trend change (BTC 15m — a live-edge
+`CHOCH_FAILED` whipsaw killed while price flushed to new lows, the corrected
+reading). Barrier 6 doubles the churn (−293/+293) and changes a second
+standing conclusion (AAVE 1h, needs visual review); 8 rewrites settled coarse
+history (4 flips). **4 chosen** (2× base — the same value the weak-ref
+barrier measured best); raise after visual review if stop hunts still flip
+confirmed structures. Unit tests on the AAVE H1 wick-window fixture: the
+confirmed-phase whipsaw (bearish CHoCH 06-18 + ✕ 06-20) reclassified with the
+genuine 06-23 CHoCH surviving at the same 72.61 reference, and the
+pending-phase whipsaw (bullish CHoCH 06-08 / ✕ 06-09 / re-fire 06-11)
+byte-identical with the barrier on
+(`test_confirmed_trend_barrier_reclassifies_stop_hunt_reversal`,
+`test_confirmed_trend_barrier_spares_pending_trend_flips`).
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.

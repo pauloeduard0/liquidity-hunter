@@ -75,15 +75,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_SWING_LOOKBACK = 10
 
 _INTERNAL_STRUCTURE_PARAMS: dict[TimeFrame, tuple[int, int]] = {
-    TimeFrame.M5: (5, 12),
-    TimeFrame.M15: (5, 12),
-    TimeFrame.M30: (5, 12),
-    TimeFrame.H1: (5, 12),
-    TimeFrame.H4: (5, 12),
-    TimeFrame.D1: (5, 12),
-    TimeFrame.W1: (5, 12),
+    TimeFrame.M5: (5, 2),
+    TimeFrame.M15: (5, 2),
+    TimeFrame.M30: (5, 2),
+    TimeFrame.H1: (5, 2),
+    TimeFrame.H4: (5, 2),
+    TimeFrame.D1: (5, 2),
+    TimeFrame.W1: (5, 2),
 }
-_DEFAULT_INTERNAL_PARAMS = (5, 12)
+_DEFAULT_INTERNAL_PARAMS = (5, 2)
 
 # Staleness threshold for both structure detectors' reversal re-anchor
 # (`*StructureDetector.stale_reanchor_candles`): how many candles a trend may run
@@ -341,6 +341,30 @@ _CHOCH_WEAK_REF_PERSISTENCE: dict[TimeFrame, int] = {
     TimeFrame.M30: 4,
     TimeFrame.H1: 4,
 }
+
+# Confirmed-trend barrier, all timeframes
+# (`InternalStructureDetector.choch_confirmed_trend_persistence_candles`):
+# hysteresis on trend flips. A trend set by a CHoCH is *pending* until an
+# emitted BOS in its direction confirms it (the same moment the CHoCH origin
+# retires; a displacement-success retirement counts) -- while pending, the
+# reverse CHoCH keeps the cheap base persistence and CHOCH_FAILED remains the
+# escape valve. Once *confirmed*, a counter-trend CHoCH must sustain this many
+# closes: with the base persistence dropped to 2 (fast flips), a single
+# stop-hunt poke through the reversal reference would otherwise flip a
+# structure that already printed a confirming BOS -- the barrier reports it as
+# a LIQUIDITY_SWEEP instead (existing non-sustained branch), or the CHoCH
+# simply confirms a few candles later when the break is real. Measured
+# 2026-07-16 (BTC/ETH/SOL/AAVE/NEAR x 5m..1d, barrier 4/6/8 vs off, at base
+# persistence 2): the diff signature at every level is the intended one --
+# whipsaw CHoCH+CHOCH_FAILED pairs reclassified to sweeps, the genuine CHoCH
+# re-confirming a few candles later (barrier 4: -68 CHoCH/+36 re-timed,
+# CHOCH_FAILED 7->4, +58 sweeps, one standing-trend change -- a BTC 15m
+# live-edge whipsaw correctly killed). 4 chosen (2x base, the same value the
+# weak-ref barrier measured best): 6 doubles the churn and starts changing
+# standing conclusions that need visual review (AAVE 1h), 8 rewrites settled
+# coarse history (4 trend flips). Raise after visual review if stop hunts
+# still flip confirmed structures.
+_CHOCH_CONFIRMED_TREND_PERSISTENCE: int | None = 4
 
 # Fast-fizzle CHoCH invalidation marker
 # (`InternalStructureDetector.choch_fizzle_reclaim_candles`, applied additively).
@@ -896,6 +920,11 @@ def _build_internal_detector(
         # reference needs a longer sustained hold on the intraday timeframes;
         # structural references keep the base persistence.
         choch_weak_ref_persistence_candles=_CHOCH_WEAK_REF_PERSISTENCE.get(timeframe),
+        # Confirmed-trend barrier: once an emitted BOS confirms the standing
+        # trend, a reverse CHoCH must sustain this many closes (hysteresis --
+        # a confirmed structure is harder to invalidate than a pending one).
+        # See _CHOCH_CONFIRMED_TREND_PERSISTENCE.
+        choch_confirmed_trend_persistence_candles=_CHOCH_CONFIRMED_TREND_PERSISTENCE,
         # Emit a provisional (live-edge) BOS when a continuation has closed beyond
         # the staircase floor but its confirming swing pivots have not formed yet
         # (the swing-lookback lag). Purely additive and confined to the last few

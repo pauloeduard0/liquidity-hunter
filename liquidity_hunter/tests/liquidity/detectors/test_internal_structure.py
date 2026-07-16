@@ -2309,6 +2309,100 @@ def test_wick_only_leg_origin_weak_defers_choch_to_barrier_when_on() -> None:
     )
 
 
+# --- Confirmed-trend barrier (hysteresis on trend flips) ---------------------
+#
+# Same AAVEUSDT H1 window, exercised through the confirmed-trend barrier alone
+# (no `bos_leg_origin_require_close_break`): the bullish trend from the 06-08
+# CHoCH prints confirming BOS (confirmed structure), then the 06-18 stop-hunt
+# poke through the 72.61 leg origin sustains only briefly -- at base
+# persistence 2 it fires a premature bearish CHoCH that fails 06-20 (whipsaw
+# pair), while the barrier demands 4 sustained closes from a reversal against
+# a *confirmed* trend, reclassifying the poke as a sweep; the genuine bearish
+# CHoCH confirms 06-23 against the same 72.61 level. The pending-phase whipsaw
+# earlier in the window (bullish CHoCH 06-08, failed 06-09, re-fired 06-11 --
+# no confirming BOS in between) is untouched: an unconfirmed structure keeps
+# the cheap flip and the CHOCH_FAILED escape valve at base persistence.
+
+
+def _aave_1h_confirmed_barrier_detector(
+    barrier: int | None,
+) -> InternalStructureDetector:
+    """Compact wiring: leg-origin references at base persistence 2, the
+    confirmed-trend barrier injectable, no other emission filters."""
+    return InternalStructureDetector(
+        swing_lookback=5,
+        persistence_candles=2,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_atr=3.0,
+        choch_confirmed_trend_persistence_candles=barrier,
+    )
+
+
+def test_invalid_choch_confirmed_trend_persistence_raises() -> None:
+    with pytest.raises(ValueError, match="choch_confirmed_trend_persistence_candles"):
+        InternalStructureDetector(choch_confirmed_trend_persistence_candles=0)
+
+
+def test_confirmed_trend_barrier_reclassifies_stop_hunt_reversal() -> None:
+    """A single unsustained break against a *confirmed* trend must not flip
+    it: the 06-18 premature bearish CHoCH and its 06-20 CHOCH_FAILED are
+    reclassified, and the genuine reversal confirms 06-23 against the same
+    structural leg origin."""
+    candles = _load_aave_1h_wick_window_candles()
+
+    base_detector = _aave_1h_confirmed_barrier_detector(None)
+    base = base_detector.detect(candles)
+    base_bear = _bear_chochs(base)
+    assert base_bear[0].timestamp == datetime(2026, 6, 18, 15, tzinfo=UTC)
+    assert base_bear[0].reference_price_level == 72.61
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 6, 20, 21, tzinfo=UTC)
+        for e in base
+    )
+
+    barrier_detector = _aave_1h_confirmed_barrier_detector(4)
+    events = barrier_detector.detect(candles)
+    bear = _bear_chochs(events)
+    assert len(bear) == 1
+    assert bear[0].timestamp == datetime(2026, 6, 23, 6, tzinfo=UTC)
+    assert bear[0].reference_price_level == 72.61
+    assert not any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BEARISH
+        for e in events
+    )
+    # The final reading is unchanged -- the barrier delays/reclassifies, it
+    # does not lose the genuine reversal.
+    assert base_detector.final_trend is MarketDirection.BEARISH
+    assert barrier_detector.final_trend is MarketDirection.BEARISH
+
+
+def test_confirmed_trend_barrier_spares_pending_trend_flips() -> None:
+    """While the trend is still *pending* (no emitted BOS since its flip),
+    reversals keep the base persistence: the early bullish whipsaw (CHoCH
+    06-08, CHOCH_FAILED 06-09, CHoCH again 06-11) is byte-identical with the
+    barrier on."""
+    candles = _load_aave_1h_wick_window_candles()
+
+    pending_window_end = datetime(2026, 6, 12, tzinfo=UTC)
+
+    def pending_phase(events: list[MarketStructure]) -> list[MarketStructure]:
+        return [e for e in events if e.timestamp < pending_window_end]
+
+    base = _aave_1h_confirmed_barrier_detector(None).detect(candles)
+    barrier = _aave_1h_confirmed_barrier_detector(4).detect(candles)
+
+    assert pending_phase(barrier) == pending_phase(base)
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 6, 9, 14, tzinfo=UTC)
+        for e in barrier
+    )
+
+
 # --- Reported staircase floor only ratchets on close-confirmed breaks ----------
 # Real AAVEUSDT H1 window (2026-06-05 .. 06-27), extending the fixture above.
 # The bullish leg tops at 77.70 (06-15 16:00 advance, close-confirmed). The

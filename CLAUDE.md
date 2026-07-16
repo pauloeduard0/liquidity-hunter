@@ -887,8 +887,9 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   populate `market_structure_events` and `internal_structure_events`
   respectively, both filtered to the visible window. The internal detector's
   base `swing_lookback`/`persistence_candles` are resolved **per timeframe** from
-  `_INTERNAL_STRUCTURE_PARAMS` (currently a uniform `(5, 12)` for every timeframe
-  M5→W1, matching `_DEFAULT_INTERNAL_PARAMS = (5, 12)`; the per-TF dict is kept so
+  `_INTERNAL_STRUCTURE_PARAMS` (currently a uniform `(5, 2)` for every timeframe
+  M5→W1, matching `_DEFAULT_INTERNAL_PARAMS = (5, 2)` — fast flips, compensated
+  by the confirmed-trend barrier below; the per-TF dict is kept so
   timeframes can diverge again without touching the wiring) — so the constructor
   defaults (`swing_lookback=2`/`persistence_candles=5`) apply only to a
   directly-built detector, not the production wiring. The internal detector's
@@ -1419,6 +1420,10 @@ state in brief:
   default in the detector; see the doc for each): staleness/chain re-anchor,
   impulse + wick-rejected BOS staging, leg-origin CHoCH reference family,
   volatility-normalized release gap, new-cycle weak-ref barrier,
+  confirmed-trend barrier (`choch_confirmed_trend_persistence_candles`,
+  hysteresis: a trend is *pending* until an emitted BOS confirms it — cheap
+  reverse flips — then a counter-CHoCH must sustain the barrier persistence,
+  so a single stop-hunt poke reports as a sweep),
   shallow-pullback promotion, close-confirmed structural floor, provisional
   live-edge BOS/CHoCH marks, fast-fizzle marker, failed-CHoCH whipsaw fixes,
   displacement release, weak-ref failure at the broken level, staircase
