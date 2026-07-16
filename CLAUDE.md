@@ -923,8 +923,11 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   own-side scan left) and by the provisional-BOS path in the detector.
   A third pass, **`_drop_resumed_fizzle_markers`** (internal stream only, after
   the BOS passes), drops a fast-fizzle `CHOCH_FAILED` marker followed by a
-  chart-surviving same-direction BOS — the reclaim was a deep pullback the
-  reversal recovered from, not a fizzle (see the fizzle-marker status block).
+  chart-surviving same-direction BOS **or by a candle closing beyond the marked
+  CHoCH's own extreme** (`price_level`) — either way the reclaim was a deep
+  pullback the reversal recovered from, not a fizzle (see the fizzle-marker
+  status block; the close rule covers a resumed leg whose BOS hasn't confirmed
+  a pullback yet, the SOL M15 2026-07-16 case).
   `confluence_filter` is exposed for tests that exercise state-machine logic
   without needing emission-quality filters. `higher_timeframe_direction` (as of
   2026-07-06) is the **state-machine trend** (`final_trend`) of the **internal**

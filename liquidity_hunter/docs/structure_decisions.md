@@ -1566,6 +1566,41 @@ off (on that window the pending-fail preempts the fizzle marker with a real
 failure — the marker keeps its niche for reclaims sustaining fewer closes
 than the pending-fail persistence).
 
+### Resumed-fizzle cancel by new extreme (2026-07-16)
+
+User report (SOLUSDT M15): the 2026-07-16 00:15 bearish CHoCH (ref 77.21, a
+correct reversal — price crashed to 75.6 after) carried a `✕` fizzle marker at
+05:30, stacked next to the CHoCH label. A shallow bounce had sustained exactly
+six closes back above 77.21 (topping at 77.59, ~1.2 ATR) before collapsing
+through the CHoCH's own 76.64 fundo two hours later. The state-machine trend
+never flipped (the pending-fail did *not* fire: its reclaim window must start
+at or before a swing-high pivot, and by the next qualifying pivot the
+displacement-success retirement had already cleared the level) — the bug was
+the *additive marker* alone.
+
+A reclaim-depth gate at emission was measured and ruled out: the **genuine**
+June fizzle's reclaim was *shallower* (0.98 ATR) than this false one
+(1.18 ATR) — depth cannot separate them. What separates them is what happens
+*after* the reclaim: the false marker's reversal **resumed** (new extreme
+beyond the CHoCH's own pivot), the genuine fizzle's never did. So the existing
+`_drop_resumed_fizzle_markers` composition pass gained a second resumption
+proof alongside the chart-surviving same-direction BOS: **a candle closing
+beyond the marked CHoCH's `price_level`** (the triggering pivot's fundo/topo)
+after the marker — covering a resumed leg whose BOS hasn't confirmed a
+pullback yet. Close-based (a wick through the extreme is a sweep, not
+resumption); the standing CHoCH is the last same-direction non-provisional
+CHoCH before the marker (the fizzle only ever marks the stream's last CHoCH).
+Live-edge semantics preserved: the marker still shows honestly while only the
+reclaim is known, and repaints away within a candle or two of the resumption
+close (verified by truncation at 06:45 vs 08:00).
+
+Matrix impact (BTC/ETH/SOL/AAVE/NEAR × 5m..1d): exactly two markers dropped —
+the motivating SOL M15 05:30 and its M30 sibling of the same event; zero other
+event changes, `final_trend` untouched by construction (markers never feed
+replay). Fixture `solusdt_15m_2026_07_01_07_16.json` locks both the batch
+cancel and the truncated live-edge marker; synthetic tests lock the close-vs-
+wick semantics.
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.

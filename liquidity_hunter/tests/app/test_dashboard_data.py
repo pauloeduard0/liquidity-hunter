@@ -761,7 +761,7 @@ def test_drop_resumed_fizzle_markers_drops_marker_before_same_direction_bos() ->
     )
     bos = _structure_event(30, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH)
 
-    assert _drop_resumed_fizzle_markers([choch, fizzle, bos]) == [choch, bos]
+    assert _drop_resumed_fizzle_markers([choch, fizzle, bos], []) == [choch, bos]
 
 
 def test_drop_resumed_fizzle_markers_keeps_marker_with_no_later_bos() -> None:
@@ -772,7 +772,7 @@ def test_drop_resumed_fizzle_markers_keeps_marker_with_no_later_bos() -> None:
         20, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH, provisional=True
     )
 
-    assert _drop_resumed_fizzle_markers([choch, fizzle]) == [choch, fizzle]
+    assert _drop_resumed_fizzle_markers([choch, fizzle], []) == [choch, fizzle]
 
 
 def test_drop_resumed_fizzle_markers_ignores_opposite_direction_bos() -> None:
@@ -782,7 +782,7 @@ def test_drop_resumed_fizzle_markers_ignores_opposite_direction_bos() -> None:
     )
     bos = _structure_event(30, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH)
 
-    assert _drop_resumed_fizzle_markers([fizzle, bos]) == [fizzle, bos]
+    assert _drop_resumed_fizzle_markers([fizzle, bos], []) == [fizzle, bos]
 
 
 def test_drop_resumed_fizzle_markers_ignores_earlier_and_provisional_bos() -> None:
@@ -797,7 +797,58 @@ def test_drop_resumed_fizzle_markers_ignores_earlier_and_provisional_bos() -> No
     )
 
     events = [early_bos, fizzle, prov_bos]
-    assert _drop_resumed_fizzle_markers(events) == events
+    assert _drop_resumed_fizzle_markers(events, []) == events
+
+
+def _minute_candle(minute: int, *, low: float, high: float, close: float) -> Candle:
+    return Candle(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.M15,
+        timestamp=datetime(2026, 7, 2, 0, minute, tzinfo=UTC),
+        open=close,
+        high=high,
+        low=low,
+        close=close,
+        volume=1.0,
+        taker_buy_volume=0.5,
+    )
+
+
+def test_drop_resumed_fizzle_markers_drops_marker_on_new_extreme_close() -> None:
+    # After the marker, a candle *closes* beyond the marked CHoCH's own
+    # extreme (price_level=100.0, the fundo of the bearish reversal): the leg
+    # resumed even though its BOS has not confirmed a pullback yet, so the
+    # marker is a false invalidation (the SOL M15 2026-07-16 case).
+    choch = _structure_event(10, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH)
+    fizzle = _structure_event(
+        20, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH, provisional=True
+    )
+    candles = [_minute_candle(30, low=94.0, high=99.0, close=95.0)]
+
+    assert _drop_resumed_fizzle_markers([choch, fizzle], candles) == [choch]
+
+
+def test_drop_resumed_fizzle_markers_keeps_marker_without_new_extreme() -> None:
+    # Price stays on the reclaim side of the CHoCH extreme: genuine fizzle.
+    choch = _structure_event(10, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH)
+    fizzle = _structure_event(
+        20, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH, provisional=True
+    )
+    candles = [_minute_candle(30, low=101.0, high=106.0, close=105.0)]
+
+    assert _drop_resumed_fizzle_markers([choch, fizzle], candles) == [choch, fizzle]
+
+
+def test_drop_resumed_fizzle_markers_wick_beyond_extreme_does_not_cancel() -> None:
+    # A wick through the CHoCH extreme that closes back inside is a sweep,
+    # not resumption -- the cancel is close-based.
+    choch = _structure_event(10, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH)
+    fizzle = _structure_event(
+        20, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH, provisional=True
+    )
+    candles = [_minute_candle(30, low=95.0, high=103.0, close=101.0)]
+
+    assert _drop_resumed_fizzle_markers([choch, fizzle], candles) == [choch, fizzle]
 
 
 def test_drop_superseded_provisional_choch_drops_on_later_opposite_advance() -> None:
@@ -856,7 +907,7 @@ def test_drop_resumed_fizzle_markers_keeps_genuine_choch_failed() -> None:
     failed = _structure_event(20, StructureEvent.CHOCH_FAILED, MarketDirection.BULLISH)
     bos = _structure_event(30, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH)
 
-    assert _drop_resumed_fizzle_markers([failed, bos]) == [failed, bos]
+    assert _drop_resumed_fizzle_markers([failed, bos], []) == [failed, bos]
 
 
 def _load_eth_1h_fizzle_candles() -> list[Candle]:
@@ -1282,6 +1333,93 @@ def test_aave_1h_pending_fail_off_leaves_stale_bearish_trend(
         and e.timestamp == datetime(2026, 7, 10, 1, tzinfo=UTC)
         for e in run.events
     )
+
+
+def _load_sol_m15_fizzle_cancel_candles() -> list[Candle]:
+    """SOLUSDT 15m 2026-06-30..07-16, the full 1500-candle production slice.
+
+    Real-data regression for the price-based resumed-fizzle cancel: the
+    2026-07-16 00:15 bearish CHoCH (ref 77.21) got a fizzle marker at 05:30
+    when a shallow bounce sustained six closes back above the level -- then
+    price crashed straight through the CHoCH's own 76.64 fundo two hours
+    later. The reversal plainly resumed, but no bearish BOS had confirmed a
+    pullback yet, so the BOS-based cancel alone left a `✕` next to a CHoCH
+    that worked. Reclaim depth cannot separate this false marker (1.18 ATR)
+    from the genuine June fizzle (0.98 ATR); the resumption close can.
+    5-column rows: ts-ms/open/high/low/close.
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "solusdt_15m_2026_07_01_07_16.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="SOLUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def test_sol_m15_resumed_fizzle_cancelled_by_new_extreme() -> None:
+    candles = _load_sol_m15_fizzle_cancel_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: candles})
+
+    run = _run_internal_structure(provider, "SOLUSDT", TimeFrame.M15, 1200, False)
+
+    # The bearish CHoCH stands, un-invalidated: no CHOCH_FAILED (real or
+    # marker) after it, and the shallow reclaim reads as a bullish sweep.
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 7, 16, 0, 15, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(77.21)
+        for e in run.events
+    )
+    assert not any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and e.timestamp > datetime(2026, 7, 16, tzinfo=UTC)
+        for e in run.events
+    )
+    assert run.trend is MarketDirection.BEARISH
+
+
+def test_sol_m15_fizzle_marker_still_shows_before_resumption() -> None:
+    # Truncated right after the reclaim (before the crash): the marker is
+    # honest live-edge information and still shows; the resumption close two
+    # hours later is what repaints it away (see the batch test above).
+    candles = [
+        c
+        for c in _load_sol_m15_fizzle_cancel_candles()
+        if c.timestamp <= datetime(2026, 7, 16, 6, 45, tzinfo=UTC)
+    ]
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: candles})
+
+    run = _run_internal_structure(provider, "SOLUSDT", TimeFrame.M15, 1200, False)
+
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and e.provisional
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 7, 16, 5, 30, tzinfo=UTC)
+        for e in run.events
+    )
+    assert run.trend is MarketDirection.BEARISH
 
 
 def _load_range_lock_candles(name: str, symbol: str) -> list[Candle]:

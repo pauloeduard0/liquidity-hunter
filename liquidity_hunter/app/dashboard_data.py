@@ -761,36 +761,76 @@ def _drop_pre_break_reference_bos(
 
 def _drop_resumed_fizzle_markers(
     events: list[MarketStructure],
+    candles: list[Candle],
 ) -> list[MarketStructure]:
     """Drop fizzle ``CHOCH_FAILED`` markers whose reversal later resumed on-chart.
 
     The fast-fizzle marker (a *provisional* ``CHOCH_FAILED``) flags a standing
     CHoCH whose broken level was reclaimed shortly after the flip, so the chart
     can terminate a stale line. But a reclaim the reversal *recovers* from is a
-    deep pullback, not a fizzle: a same-direction BOS printing after the
-    reclaim proves the CHoCH's cycle resumed, and the marker would falsely
-    invalidate a standing reversal (the ETHUSDT H1 2026-06-30 case: price
-    reclaimed the 1583 reference for a day, then printed a bullish BOS
-    staircase to 1833 -- the CHoCH never fizzled). Only *chart-surviving* BOS
-    count: this pass runs after ``_reanchor_bos_close_break``, so a wick-only
-    continuation dropped there (the SOL M15 motivating fizzle, whose only
-    follow-up BOS never closed beyond its level) does not cancel the marker.
-    The detector cannot make this call itself -- it does not know which of its
-    BOS survive composition. No confirmed CHoCH can sit between the marker and
-    a later BOS (the fizzle only ever marks the *last* CHoCH of the stream),
-    so any later same-direction BOS belongs to the marked CHoCH's own cycle.
+    deep pullback, not a fizzle. Two resumption proofs cancel the marker:
+
+    - a *chart-surviving* same-direction BOS printing after the reclaim (the
+      ETHUSDT H1 2026-06-30 case: price reclaimed the 1583 reference for a
+      day, then printed a bullish BOS staircase to 1833 -- the CHoCH never
+      fizzled). This pass runs after ``_reanchor_bos_close_break``, so a
+      wick-only continuation dropped there (the SOL M15 motivating fizzle,
+      whose only follow-up BOS never closed beyond its level) does not cancel
+      the marker.
+    - a candle *closing* beyond the marked CHoCH's own extreme
+      (``price_level``, the triggering pivot's fundo/topo) after the marker:
+      the leg made a new extreme, so the reversal plainly resumed even before
+      its BOS confirms a pullback (the SOLUSDT M15 2026-07-16 case: a shallow
+      6-close reclaim of 77.21 stamped the marker at the top of a bounce,
+      then price crashed through the 76.64 CHoCH fundo within two hours --
+      the ✕ sat next to a CHoCH that worked). Reclaim depth cannot make this
+      call at emission time (the genuine June fizzle's reclaim was *shallower*
+      than this false one, 0.98 vs 1.18 ATR); only the resumption can.
+
+    The detector cannot make either call itself -- it does not know which of
+    its BOS survive composition, and the marker is emitted from final state.
+    No confirmed CHoCH can sit between the marker and later evidence (the
+    fizzle only ever marks the *last* CHoCH of the stream), so any later
+    same-direction BOS or new extreme belongs to the marked CHoCH's own cycle.
     """
     bos_times: dict[MarketDirection, list[datetime]] = {}
     for event in events:
         if event.event is StructureEvent.BREAK_OF_STRUCTURE and not event.provisional:
             bos_times.setdefault(event.direction, []).append(event.timestamp)
+
+    def leg_resumed_past_choch_extreme(marker: MarketStructure) -> bool:
+        standing = next(
+            (
+                e
+                for e in reversed(events)
+                if e.event is StructureEvent.CHANGE_OF_CHARACTER
+                and e.direction is marker.direction
+                and not e.provisional
+                and e.timestamp <= marker.timestamp
+            ),
+            None,
+        )
+        if standing is None:
+            return False
+        bearish = marker.direction is MarketDirection.BEARISH
+        return any(
+            (candle.close < standing.price_level)
+            if bearish
+            else (candle.close > standing.price_level)
+            for candle in candles
+            if candle.timestamp > marker.timestamp
+        )
+
     return [
         event
         for event in events
         if not (
             event.event is StructureEvent.CHOCH_FAILED
             and event.provisional
-            and any(t > event.timestamp for t in bos_times.get(event.direction, []))
+            and (
+                any(t > event.timestamp for t in bos_times.get(event.direction, []))
+                or leg_resumed_past_choch_extreme(event)
+            )
         )
     ]
 
@@ -1108,10 +1148,11 @@ def _run_internal_structure(
         # a continuation referencing a pre-break wick attempt at the prior level
         # is dropped (pre-break liquidity, not structure of the new leg).
         events = _drop_pre_break_reference_bos(events)
-        # A fizzle marker followed by a surviving same-direction BOS was a deep
-        # pullback the reversal recovered from, not a fizzle -- runs after the
-        # BOS passes so only chart-surviving BOS count.
-        return _drop_resumed_fizzle_markers(events)
+        # A fizzle marker followed by a surviving same-direction BOS -- or by a
+        # close beyond the marked CHoCH's own extreme -- was a deep pullback
+        # the reversal recovered from, not a fizzle. Runs after the BOS passes
+        # so only chart-surviving BOS count.
+        return _drop_resumed_fizzle_markers(events, internal_candles)
 
     all_events = run_passes([])
     # Consolidation post-pass over the *surviving* stream: segment boundaries
