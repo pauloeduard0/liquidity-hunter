@@ -384,6 +384,30 @@ _CHOCH_CONFIRMED_TREND_PERSISTENCE: int | None = 4
 # never touching the state machine.)
 _CHOCH_FIZZLE_RECLAIM_CANDLES: int | None = 30
 
+# Pending-CHoCH invalidation at the broken level, structural references too
+# (`InternalStructureDetector.choch_pending_fail_at_broken_level` +
+# `choch_pending_fail_persistence_candles`): the pending half of the
+# PENDING/CONFIRMED hysteresis. A CHoCH with no confirming BOS also dies on a
+# sustained reclaim of the very level it broke -- without this, an impulsive
+# counter-move that never printed a BOS leaves both exits (origin CHOCH_FAILED
+# and the reverse-CHoCH reference) pinned at the reversed leg's extreme, and a
+# full recovery prints as a chain of sweeps under a stale trend (AAVEUSDT H1
+# 2026-07-08: bearish CHoCH at the structural 87.90, no bearish BOS, +14% of
+# rally read as three bullish sweeps until the 97.4 origin broke three days
+# later). The structural-level failure demands its own persistence (below),
+# stronger than base, so an ordinary retest of a genuine leg origin does not
+# kill the reversal; weak references keep the existing weak-fail behavior.
+# Measured 2026-07-16 (BTC/ETH/SOL/AAVE/NEAR x 5m..1d, persistence 5/6/8 vs
+# off): signature is the intended one -- +89 real CHOCH_FAILED at pers 6 (each
+# a pending CHoCH properly disregarded on the reclaim), net sweeps down, two
+# standing-trend corrections (AAVE 30m + 1h bearish->bullish, the motivating
+# stale-trend case). 6 chosen: 5 also kills an ordinary retest (the AAVE H1
+# 07-04 dip against the correct 07-03 bullish CHoCH, and a SOL 15m standing
+# flip); 8 is near-identical to 6 -- the plateau between "ordinary retest"
+# (held < 5) and "real fizzle reclaim" (held >> 8) is wide.
+_CHOCH_PENDING_FAIL_AT_BROKEN_LEVEL = True
+_CHOCH_PENDING_FAIL_PERSISTENCE: int | None = 6
+
 # Weak-referenced CHoCH invalidation at the broken level itself
 # (`InternalStructureDetector.choch_weak_ref_fail_at_broken_level`). A CHoCH
 # fired against a *weak* reference (a synthetic re-anchor level or the
@@ -995,6 +1019,13 @@ def _build_internal_detector(
         # leg origin -- the BTC D1 -30% crash with the trend stuck bullish.
         # See _CHOCH_WEAK_REF_FAIL_AT_BROKEN_LEVEL.
         choch_weak_ref_fail_at_broken_level=_CHOCH_WEAK_REF_FAIL_AT_BROKEN_LEVEL,
+        # Pending half of the hysteresis: an unconfirmed CHoCH (no emitted BOS
+        # yet) dies on a sustained reclaim of its broken level even when the
+        # reference was structural, at the stronger pending-fail persistence
+        # (the AAVE H1 07-08 stale-trend case). See
+        # _CHOCH_PENDING_FAIL_AT_BROKEN_LEVEL.
+        choch_pending_fail_at_broken_level=_CHOCH_PENDING_FAIL_AT_BROKEN_LEVEL,
+        choch_pending_fail_persistence_candles=_CHOCH_PENDING_FAIL_PERSISTENCE,
         # A pending BOS discarded without emitting -- a phantom advance whose
         # confirming pullback came in too deep (below the prior BOS's confirming
         # pullback but still above the leg origin, so it neither emits nor

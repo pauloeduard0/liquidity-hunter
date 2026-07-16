@@ -1515,6 +1515,57 @@ byte-identical with the barrier on
 (`test_confirmed_trend_barrier_reclassifies_stop_hunt_reversal`,
 `test_confirmed_trend_barrier_spares_pending_trend_flips`).
 
+### Pending-CHoCH invalidation at the broken level (`choch_pending_fail_at_broken_level`, 2026-07-16)
+
+The pending half of the PENDING/CONFIRMED hysteresis, motivated by a user
+report on AAVEUSDT H1: the 2026-07-08 12:00 bearish CHoCH broke the
+*structural* 87.90 leg origin, no bearish BOS ever confirmed it (impulsive
+drop, no pullback pivot), and both exits sat at the reversed leg's 97.4
+extreme — the origin `CHOCH_FAILED` needed 97.4 reclaimed, the reverse-CHoCH
+reference (`choch_origin_high`) *was* 97.4, and the weak-fail flag did not
+apply (the reference was structural). Result: a +14% recovery rally printed
+as three bullish sweeps (88.85 → 93.1 → 98.28) under a stale bearish trend
+for three days. (The additive fizzle marker did fire *live* on 07-09 but is
+live-edge-only by construction — `standing_choch_ref` tracks only the current
+standing CHoCH — so batch reruns show no `✕` in history, and it never flips
+the trend anyway.)
+
+With the flag on, a *pending* CHoCH (no emitted BOS yet; the same
+`trend_confirmed` boundary as the confirmed-trend barrier, and
+displacement-success retires the level exactly like it retires the origin)
+also arms **its own broken level** as an invalidation reference even when
+structural. The structural-level failure demands its own persistence,
+`choch_pending_fail_persistence_candles` (wired **6**), stronger than base so
+an ordinary retest does not kill a genuine reversal; weak references keep the
+existing `choch_weak_ref_fail_at_broken_level` behavior (base persistence,
+weak-level staircase re-seed), while a structural-level failure restores the
+pre-CHoCH staircase stash (the interrupted cycle was alive — on AAVE that
+makes the resumed rally's first BOS reference the genuine 97.4 top).
+
+Calibration (AAVE window): persistence 5 (and below) also kills the ordinary
+07-04 retest against the *correct* 07-03 bullish CHoCH (the dip to 86.81 held
+2–4 closes below 87.83) and cascades the prior sequence; 6 spares it and
+catches the real 07-09 fizzle reclaim (held far longer); 8 ≈ 6 — the plateau
+between "ordinary retest" and "real fizzle" is wide. Matrix measurement
+(BTC/ETH/SOL/AAVE/NEAR × 5m..1d, persistence 5/6/8 vs off): at 6,
+−346/+311 events, +89 real `CHOCH_FAILED` (each a pending CHoCH properly
+disregarded on its reclaim), net sweeps down (112 removed / 78 added), and
+**2 standing-trend corrections — AAVE 30m and AAVE 1h bearish → bullish, the
+motivating case**; 5 adds a SOL 15m flip (the over-eager retest kill). Fixture
+`aaveusdt_1h_2026_05_15_07_16.json` locks the production reading (CHoCH
+07-08 → real `✕` 07-09 05:00 at 87.9 → rally BOS 07-10 against 97.4) and the
+off-variant locks the old pathology. Knock-on recalibrations: the BTC D1
+crash window now resolves upstream (January bullish CHoCH pending-fails
+01-20, April flips at the structural 71999.9 instead of the weak 75998.9
+re-anchor, May crash is a plain bearish CHoCH at 74868 — the weak-fail flag
+is belt-and-suspenders on that fixture now, still load-bearing for weak refs
+generally); the NEAR H1 displacement-off window gains two level-reclaim false
+failures (2.083, 2.173) that the displacement retirement (production on)
+correctly prevents; the ETH H1 resumed-fizzle composition test pins the flag
+off (on that window the pending-fail preempts the fizzle marker with a real
+failure — the marker keeps its niche for reclaims sustaining fewer closes
+than the pending-fail persistence).
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.

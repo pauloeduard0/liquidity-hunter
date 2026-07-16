@@ -1424,6 +1424,11 @@ state in brief:
   hysteresis: a trend is *pending* until an emitted BOS confirms it — cheap
   reverse flips — then a counter-CHoCH must sustain the barrier persistence,
   so a single stop-hunt poke reports as a sweep),
+  pending-CHoCH invalidation at the broken level
+  (`choch_pending_fail_at_broken_level` + its own persistence: an unconfirmed
+  CHoCH also dies on a sustained reclaim of the very level it broke, even
+  structural — so an impulsive counter-move that never printed a BOS can't
+  hold a stale trend through a full recovery),
   shallow-pullback promotion, close-confirmed structural floor, provisional
   live-edge BOS/CHoCH marks, fast-fizzle marker, failed-CHoCH whipsaw fixes,
   displacement release, weak-ref failure at the broken level, staircase

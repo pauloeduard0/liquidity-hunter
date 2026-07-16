@@ -2343,6 +2343,11 @@ def test_invalid_choch_confirmed_trend_persistence_raises() -> None:
         InternalStructureDetector(choch_confirmed_trend_persistence_candles=0)
 
 
+def test_invalid_choch_pending_fail_persistence_raises() -> None:
+    with pytest.raises(ValueError, match="choch_pending_fail_persistence_candles"):
+        InternalStructureDetector(choch_pending_fail_persistence_candles=0)
+
+
 def test_confirmed_trend_barrier_reclassifies_stop_hunt_reversal() -> None:
     """A single unsustained break against a *confirmed* trend must not flip
     it: the 06-18 premature bearish CHoCH and its 06-20 CHOCH_FAILED are
