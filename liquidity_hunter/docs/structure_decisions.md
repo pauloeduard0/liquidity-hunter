@@ -1731,6 +1731,68 @@ BOS confirms). Fixture `muusdt_4h_2026_04_07_07_16.json` locks the
 motivating window both ways (re-fire + BOS with the flag, sweeps +
 stuck-bullish trend without).
 
+### Persistent re-arm memory (`choch_failed_rearm_persistent`, 2026-07-17)
+
+**BTCUSDT D1 2025-08..11**: a bearish CHoCH broke 111850 (ref formed
+2025-08-03) and failed on 2025-09-10 (sustained reclaim). The user's read:
+the failure was real at the time, but the October rally that "confirmed" it
+— one continuation BOS at a marginal new high (126208 over the 124546 prior
+high) — was a **liquidity sweep of the top**, fully given back in the
+November crash. The original CHoCH deserved re-activation on the sustained
+break back through 111850. Under the one-shot `choch_failed_rearm` nothing
+could re-fire: a late-September dip had already consumed the re-arm (a
+re-fire that then failed on the October rally, collapsed to the original ✕
+by `_drop_failed_refire_cycles`), and a re-fire's own failure never re-arms.
+The crash's reversal waited for the late, weak trailing reference at 98888.8
+(11-14, eleven candles after price left 111850).
+
+`choch_failed_rearm_persistent` (wired True) makes the re-arm memory
+persistent while the level stays contested:
+
+- **Every failure re-arms** — the one-shot-per-chain guard is lifted, so a
+  failed re-fire arms the level again (only the most recent failure's level
+  is remembered per side; any CHoCH emission still replaces the memory with
+  its own cycle).
+- **Opposite-trend confirmation demotes instead of retiring**: a demoted
+  re-arm coexisting with a live fallback is arbitrated by **whichever level
+  price crosses first in the break direction** (bearish: the higher level;
+  bullish: the lower). Both halves measured load-bearing: at full rank a far
+  armed level shadows every nearer live reference (a bullish re-arm at 94760
+  from the January 2026 failure swallowed the frozen fixture's April CHoCH
+  at the 75998.9 re-anchor); strictly below the fallback, the October
+  re-fire loses to the farther 103470 trailing low and the target case
+  degrades back to HEAD. Structural references keep their authority (the
+  re-arm still ranks below validated/pending/origin).
+- **Collapse-pass re-anchor**: with the chain no longer one-shot, a
+  surviving re-fire can reference a failure `_drop_failed_refire_cycles`
+  just dropped; its `reference_timestamp` is remapped to the nearest earlier
+  surviving same-direction real failure, so the frontend's `↻` suffix still
+  matches and the line starts at the visible ✕ (BTC D1: the 10-15 re-fire
+  anchors at the 09-10 failure, not the collapsed September cycle's
+  invisible 09-28 mark).
+
+Result on the target: `CHoCH ↻ ▼` on 2025-10-15 at the proven 111850 (five
+days after the 10-10 flash crash, a month earlier than HEAD's weak 11-14
+CHoCH), and the crash prints a bearish BOS staircase (103470 → 98888 →
+80600) instead of sweep + weak CHoCH.
+
+**Measurement** (BTC/ETH/SOL/AAVE/NEAR/ENA × 15m..1d, limit=1200, HEAD vs
+wired): 11/30 combos change, **0 standing-trend flips**. ETH 1D's 2024-08
+carry-trade crash flips bearish on 08-01 (CHoCH ref 3205) instead of 08-27
+(ref 2533) — the same signature as the target. The noisy 15m combos net
+*fewer* events (whipsaw CHoCH pairs read as sweeps); ENA 1h differs only at
+the live edge. **Known window sensitivity**: on the frozen D1 fixture (same
+candles, window shifted 6 days earlier vs live) the January 2026 cascade
+leaves a different trailing `active_high`, the staleness re-anchor's
+tighten-only guard then never establishes the frozen 75998.9 reference, and
+the April 2026 bullish cycle reads as sweeps — the live production window
+keeps the April CHoCH → BOS → pending-fail cycle byte-identical. The fixture
+lock (`test_btc_1d_crash_resolves_bearish_with_bottom_bos`) was recalibrated
+into the real-data lock for the re-fire itself (✕ 09-10 → `↻` 10-15 with the
+remapped anchor → January death → June bottom BOS → trend bearish), with an
+off-lock (`test_btc_1d_rearm_persistent_off_refire_lost_to_late_weak_reference`)
+pinning the pathology.
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.

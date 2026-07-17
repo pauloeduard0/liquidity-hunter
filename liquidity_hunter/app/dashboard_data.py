@@ -464,6 +464,40 @@ _CHOCH_FAILED_FALLBACK_SUPPRESS_CANDLES: int | None = 20
 # CHOCH_FAILED against a +7% rally that then made higher lows).
 _CHOCH_FAILED_REARM = True
 
+# Persistent re-arm memory
+# (`InternalStructureDetector.choch_failed_rearm_persistent`). The re-arm
+# above is one-shot: it retires at opposite-trend confirmation and a failed
+# re-fire never re-arms. The motivating BTCUSDT D1 2025-08..11 case: a bearish
+# CHoCH at 111850 (ref formed 2025-08-03) failed on 2025-09-10, a late-September
+# dip re-fired it, the re-fire failed on the October rally to a marginal new
+# high (126208 over 124546 -- one continuation BOS at the sweep-shaped top),
+# and the chain died -- so when the whole leg was given back nothing could
+# re-fire, and the November crash's reversal waited for a late, weak trailing
+# reference (98889 on 11-14, eleven candles after the 111850 break). When set,
+# every failure (re-fires included) re-arms the level, and opposite-trend
+# confirmation *demotes* the memory instead of retiring it: a demoted re-arm
+# coexisting with a live fallback is arbitrated by whichever level price
+# crosses first in the break direction, so a far armed level cannot shadow a
+# nearer live reference (full rank swallowed the fixture's April 2026 CHoCH
+# behind a 94760 re-arm) while a nearer armed level still catches the round
+# trip early (a strict below-fallback rank lost the October re-fire to the
+# farther 103470 trailing low). The sustained October break re-fires the
+# CHoCH at the proven 111850 level on 10-15 (a month earlier than HEAD's
+# 11-14 weak reference), and the crash prints as a bearish BOS staircase.
+# Ping-pong stays bounded by the per-flip persistence rules and the
+# failed-re-fire collapse pass (which re-anchors a surviving re-fire's
+# reference_timestamp to the surviving failure). Measured 2026-07-17
+# (BTC/ETH/SOL/AAVE/NEAR/ENA x 15m..1d, limit=1200): 11/30 combos change,
+# 0 standing-trend flips; ETH 1D's 2024-08 carry-trade crash flips bearish on
+# 08-01 (CHoCH ref 3205) instead of 08-27 (ref 2533), and the noisy 15m
+# combos net *fewer* events (whipsaw CHoCH pairs read as sweeps). Known
+# window sensitivity: on the frozen D1 fixture (same candles, window shifted
+# 6 days earlier) the January cascade leaves a different trailing
+# `active_high`, the staleness re-anchor's tighten-only guard then never
+# establishes the frozen 75998.9 reference, and the April 2026 bullish cycle
+# reads as sweeps -- the live window keeps it intact.
+_CHOCH_FAILED_REARM_PERSISTENT = True
+
 # Live-edge CHOCH_FAILED emission
 # (`InternalStructureDetector.choch_fail_live_edge`). The failure checks are
 # pivot-gated, so on a relentless one-way move (every candle a new extreme, no
@@ -890,11 +924,18 @@ def _drop_failed_refire_cycles(events: list[MarketStructure]) -> list[MarketStru
     original failure, and drawing the pair stacks three or four marks on one
     line (the MUUSDT H4 962.15 cluster: ✕ → ↻ → ✕ while the crash resumed).
     Drop both. Trend-replay safe: the pair flips the trend away and back, so
-    every replay reading after it is unchanged (and the one-shot re-arm chain
-    means no third re-fire can reference the dropped failure). A re-fire that
+    every replay reading after it is unchanged. A re-fire that
     *survived* -- confirmed, still standing, or merely fizzle-marked (the
     additive marker never flips the trend, so hiding the CHoCH would desync
     the chart from ``final_trend``) -- is kept: it earned its ``↻``.
+
+    Under ``choch_failed_rearm_persistent`` the chain is no longer one-shot:
+    a later surviving re-fire can reference a failure this pass just dropped
+    (the BTCUSDT D1 2025-10 re-fire referencing the collapsed September
+    cycle's failure). Its ``reference_timestamp`` is re-anchored to the
+    nearest earlier *surviving* same-direction real failure, so the ``↻``
+    suffix still matches and the line starts at the visible ``✕`` instead of
+    at a dropped, invisible mark.
     """
     real_failures = [
         e for e in events if e.event is StructureEvent.CHOCH_FAILED and not e.provisional
@@ -943,7 +984,34 @@ def _drop_failed_refire_cycles(events: list[MarketStructure]) -> list[MarketStru
             dropped.add(own_failure_index)
     if not dropped:
         return events
-    return [e for i, e in enumerate(events) if i not in dropped]
+    kept = [e for i, e in enumerate(events) if i not in dropped]
+    dropped_failure_keys = {
+        (events[j].direction, events[j].timestamp)
+        for j in dropped
+        if events[j].event is StructureEvent.CHOCH_FAILED
+    }
+    for i, event in enumerate(kept):
+        if (
+            event.event is not StructureEvent.CHANGE_OF_CHARACTER
+            or event.provisional
+            or event.reference_timestamp is None
+            or (event.direction, event.reference_timestamp) not in dropped_failure_keys
+        ):
+            continue
+        anchor = max(
+            (
+                f.timestamp
+                for f in kept
+                if f.event is StructureEvent.CHOCH_FAILED
+                and not f.provisional
+                and f.direction is event.direction
+                and f.timestamp <= event.reference_timestamp
+            ),
+            default=None,
+        )
+        if anchor is not None:
+            kept[i] = event.model_copy(update={"reference_timestamp": anchor})
+    return kept
 
 
 def _drop_superseded_provisional_choch(
@@ -1141,6 +1209,7 @@ def _build_internal_detector(
         # resumed move to print as a chain of sweeps under the wrong trend (the
         # MUUSDT H4 stuck-bullish crash). See _CHOCH_FAILED_REARM.
         choch_failed_rearm=_CHOCH_FAILED_REARM,
+        choch_failed_rearm_persistent=_CHOCH_FAILED_REARM_PERSISTENT,
         # Emit a long-since-confirmed CHOCH_FAILED at the live edge instead of
         # waiting for a swing pivot that a relentless one-way move never forms
         # (the same crash's trend stayed bullish for days otherwise). See

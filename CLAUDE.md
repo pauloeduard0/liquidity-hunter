@@ -1449,12 +1449,19 @@ state in brief:
   broken level as a re-arm reference — a later sustained break back beyond it
   re-fires the CHoCH, so a failure whose "reclaim" was the old trend's last
   gasp doesn't leave the resumed move printing as sweeps under the wrong
-  trend; one-shot per failure chain, retired on opposite-trend confirmation —
-  the MUUSDT H4 stuck-bullish crash; the re-arm pivot carries the *failure's*
-  timestamp so the re-fired CHoCH's line starts at the `✕`, drawn by the
-  frontend with a `↻` suffix; a re-fire that itself failed is collapsed with
-  its failure by the composition pass `_drop_failed_refire_cycles` — the
-  ✕ → ↻ → ✕ stack reads as the original ✕ alone),
+  trend — the MUUSDT H4 stuck-bullish crash; the re-arm pivot carries the
+  *failure's* timestamp so the re-fired CHoCH's line starts at the `✕`, drawn
+  by the frontend with a `↻` suffix; a re-fire that itself failed is collapsed
+  with its failure by the composition pass `_drop_failed_refire_cycles` — the
+  ✕ → ↻ → ✕ stack reads as the original ✕ alone, and a later surviving
+  re-fire's `reference_timestamp` is remapped to the surviving ✕),
+  persistent re-arm memory (`choch_failed_rearm_persistent`: every failure —
+  re-fires included — re-arms the level, and opposite-trend confirmation
+  *demotes* the memory instead of retiring it: a demoted re-arm vs a live
+  fallback is arbitrated by whichever level price crosses first in the break
+  direction, so a far armed level can't shadow a nearer live reference — the
+  BTCUSDT D1 2025-10 sweep-shaped top, where the given-back rally re-fires
+  the CHoCH at the proven level a month before the weak trailing reference),
   live-edge CHOCH_FAILED emission (`choch_fail_live_edge`: the pivot-gated
   failure check runs once more over final state at the end of `detect`, so a
   relentless one-way move that never forms a swing pivot cannot leave a

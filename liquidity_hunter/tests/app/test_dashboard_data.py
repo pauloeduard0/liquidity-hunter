@@ -1037,41 +1037,56 @@ def test_btc_1d_crash_resolves_bearish_with_bottom_bos() -> None:
     ``choch_failed_rearm`` wired (2026-07-16) the upstream history shifts
     once more (the August 2024 flush -- a re-fired bearish CHoCH where the
     old reading kept a bullish trend through the 70k -> 49k crash -- cascades
-    different trailing references into 2026), but the protected conclusion is
-    unchanged: the January bullish CHoCH dies on the crash's first leg
-    (pending-fail, 01-20), the April rally flips bullish (now at the 75998.9
-    March sweep extreme), the May crash kills it (pending-fail at the broken
-    level, 05-26), and June prints the continuation BOS at the bottom with
-    the standing trend bearish."""
+    different trailing references into 2026). With
+    ``choch_failed_rearm_persistent`` wired (2026-07-17) this fixture is also
+    the real-data lock for the persistent re-arm itself: the August 2025
+    bearish CHoCH at 111850 fails (09-10), its September re-fire dies on the
+    October rally (collapsed by ``_drop_failed_refire_cycles``), the rally
+    tops in a marginal-high sweep (the 10-06 BOS at 126208), and the
+    persistent memory re-fires the CHoCH at the proven 111850 level on 10-15
+    -- ``reference_timestamp`` re-anchored to the surviving 09-10 failure, so
+    the chart draws consecutive ``✕ -> ↻`` segments along the level -- after
+    which the crash prints as a bearish BOS staircase. The protected
+    conclusion is unchanged: the January bullish CHoCH dies on the crash's
+    first leg (pending-fail, now 01-18), and June prints the continuation
+    BOS at the bottom with the standing trend bearish. (The April 2026
+    bullish CHoCH the pre-flag reading showed at 75998.9 is window-sensitive
+    on this frozen series -- the January cascade leaves a trailing
+    ``active_high`` that blocks the staleness re-anchor's establish -- and
+    reads as sweeps here; the live window keeps it, see
+    ``_CHOCH_FAILED_REARM_PERSISTENT``.)"""
     candles = _load_btc_1d_weak_fail_candles()
     provider = _FuturesLimitFakeProvider({TimeFrame.D1: candles})
 
     run = _run_internal_structure(provider, "BTCUSDT", TimeFrame.D1, 1200, False)
 
+    # August 2025: the bearish CHoCH at 111850 fails on the sustained reclaim.
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and not e.provisional
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2025, 9, 10, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(111850.0)
+        for e in run.events
+    )
+    # October: the persistent re-arm re-fires the CHoCH at the proven level
+    # once the sweep-shaped top is given back, anchored at the surviving
+    # failure (the collapsed September cycle's own failure is remapped).
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2025, 10, 15, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(111850.0)
+        and e.reference_timestamp == datetime(2025, 9, 10, tzinfo=UTC)
+        for e in run.events
+    )
     # January: the bullish CHoCH is invalidated by the crash's first leg
     # (a real pending-fail, not a fizzle marker).
     assert any(
         e.event is StructureEvent.CHOCH_FAILED
         and not e.provisional
         and e.direction is MarketDirection.BULLISH
-        and e.timestamp == datetime(2026, 1, 20, tzinfo=UTC)
-        for e in run.events
-    )
-    # April: the rally flips bullish at the March sweep extreme...
-    assert any(
-        e.event is StructureEvent.CHANGE_OF_CHARACTER
-        and e.direction is MarketDirection.BULLISH
-        and e.timestamp == datetime(2026, 4, 21, tzinfo=UTC)
-        and e.reference_price_level == pytest.approx(75998.9)
-        for e in run.events
-    )
-    # ... May kills it on the crash (pending-fail at the broken level) ...
-    assert any(
-        e.event is StructureEvent.CHOCH_FAILED
-        and not e.provisional
-        and e.direction is MarketDirection.BULLISH
-        and e.timestamp == datetime(2026, 5, 26, tzinfo=UTC)
-        and e.reference_price_level == pytest.approx(75998.9)
+        and e.timestamp == datetime(2026, 1, 18, tzinfo=UTC)
         for e in run.events
     )
     # ... and June prints the continuation BOS at the bottom.
@@ -1083,6 +1098,46 @@ def test_btc_1d_crash_resolves_bearish_with_bottom_bos() -> None:
         for e in run.events
     )
     assert run.trend is MarketDirection.BEARISH
+
+
+def test_btc_1d_rearm_persistent_off_refire_lost_to_late_weak_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pathology lock (`choch_failed_rearm_persistent` off): the one-shot
+    re-arm chain dies with the collapsed September re-fire cycle, so when the
+    October rally's sweep-shaped top (126208 over 124546) is fully given back
+    nothing re-fires at the proven 111850 level -- the first break below it
+    reads as a sweep and the crash's reversal waits for the late, weak
+    trailing reference at 98888.8 (11-14, eleven candles after the 111850
+    break)."""
+    monkeypatch.setattr(dashboard_data, "_CHOCH_FAILED_REARM_PERSISTENT", False)
+    candles = _load_btc_1d_weak_fail_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.D1: candles})
+
+    run = _run_internal_structure(provider, "BTCUSDT", TimeFrame.D1, 1200, False)
+
+    # No October re-fire at the proven level...
+    assert not any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BEARISH
+        and datetime(2025, 10, 1, tzinfo=UTC) <= e.timestamp <= datetime(2025, 11, 1, tzinfo=UTC)
+        for e in run.events
+    )
+    # ... the break below it reads as a sweep, and the reversal only lands at
+    # the weak trailing low a month later.
+    assert any(
+        e.event is StructureEvent.LIQUIDITY_SWEEP
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2025, 11, 4, tzinfo=UTC)
+        for e in run.events
+    )
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2025, 11, 14, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(98888.8)
+        for e in run.events
+    )
 
 
 def test_btc_1d_weak_fail_off_conclusion_unchanged(
