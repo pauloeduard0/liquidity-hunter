@@ -8,6 +8,7 @@ from liquidity_hunter.app import dashboard_data
 from liquidity_hunter.app.dashboard_data import (
     _STRUCTURAL_ANCHOR_REGION,
     _build_internal_detector,
+    _drop_failed_refire_cycles,
     _drop_pre_break_reference_bos,
     _drop_resumed_fizzle_markers,
     _drop_superseded_provisional_choch,
@@ -584,6 +585,7 @@ def _structure_event(
     direction: MarketDirection,
     *,
     reference_minute: int | None = None,
+    reference_level: float = 90.0,
     provisional: bool = False,
 ) -> MarketStructure:
     return MarketStructure(
@@ -593,7 +595,7 @@ def _structure_event(
         event=event,
         direction=direction,
         price_level=100.0,
-        reference_price_level=90.0,
+        reference_price_level=reference_level,
         reference_timestamp=(
             datetime(2026, 7, 2, 0, reference_minute, tzinfo=UTC)
             if reference_minute is not None
@@ -667,6 +669,68 @@ def test_drop_pre_break_reference_bos_choch_failed_starts_new_leg() -> None:
     ]
 
     assert _drop_pre_break_reference_bos(events) == events
+
+
+def test_drop_failed_refire_cycles_groups_same_level_structural_reattempt() -> None:
+    # ENAUSDT 4H 0.07463: a bearish CHoCH failed, the resumed bullish leg
+    # printed a BOS, then a second bearish CHoCH re-attempted the *same level*
+    # through a structural reference (its reference_timestamp is the level's
+    # formation, not the failure) and died within a day. Same one-line story as
+    # a failed re-fire -- the level-match must group it with the original ✕.
+    events = [
+        _structure_event(
+            10, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, reference_minute=5
+        ),
+        _structure_event(20, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH),
+        _structure_event(30, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH),
+        _structure_event(
+            40, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, reference_minute=5
+        ),
+        _structure_event(50, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH),
+    ]
+
+    kept = _drop_failed_refire_cycles(events)
+
+    assert [e.timestamp.minute for e in kept] == [10, 20, 30]
+
+
+def test_drop_failed_refire_cycles_keeps_surviving_same_level_reattempt() -> None:
+    # A same-level re-attempt whose trend still stands is kept -- hiding it
+    # would desync the chart from final_trend.
+    events = [
+        _structure_event(
+            10, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, reference_minute=5
+        ),
+        _structure_event(20, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH),
+        _structure_event(
+            40, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, reference_minute=5
+        ),
+    ]
+
+    assert _drop_failed_refire_cycles(events) == events
+
+
+def test_drop_failed_refire_cycles_keeps_different_level_failure() -> None:
+    # A later failed CHoCH at a *different* level is an independent attempt,
+    # not a re-fire of the first failure -- both cycles stay visible.
+    events = [
+        _structure_event(
+            10, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, reference_minute=5
+        ),
+        _structure_event(20, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH),
+        _structure_event(
+            40,
+            StructureEvent.CHANGE_OF_CHARACTER,
+            MarketDirection.BEARISH,
+            reference_minute=35,
+            reference_level=85.0,
+        ),
+        _structure_event(
+            50, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH, reference_level=85.0
+        ),
+    ]
+
+    assert _drop_failed_refire_cycles(events) == events
 
 
 def test_drop_pre_break_reference_bos_provisional_choch_failed_does_not_reset() -> None:

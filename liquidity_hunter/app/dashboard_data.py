@@ -918,7 +918,11 @@ def _drop_failed_refire_cycles(events: list[MarketStructure]) -> list[MarketStru
     re-arm pivot carries the failure's own timestamp, so a re-fired CHoCH is
     identified by a prior same-direction real ``CHOCH_FAILED`` sitting exactly
     at its ``reference_timestamp`` (the same match the frontend keys its ``↻``
-    suffix on). When the re-fire then dies too -- a later same-direction real
+    suffix on) — or, since a CHoCH can re-attempt the same level through a
+    *structural* reference rather than the re-arm memory (the ENAUSDT 4H
+    0.07463 cluster, where the pending leg origin and the armed failure level
+    are one pivot), by a prior same-direction failure at the exact same
+    ``reference_price_level``. When the re-fire then dies too -- a later same-direction real
     ``CHOCH_FAILED`` with no intervening same-direction CHoCH -- the cycle
     added no standing structure: the level's story is already told by the
     original failure, and drawing the pair stacks three or four marks on one
@@ -948,13 +952,25 @@ def _drop_failed_refire_cycles(events: list[MarketStructure]) -> list[MarketStru
         if (
             event.event is not StructureEvent.CHANGE_OF_CHARACTER
             or event.provisional
-            or event.reference_timestamp is None
         ):
             continue
+        # A re-fire carries the failure's timestamp as its reference anchor.
+        # A CHoCH can also re-attempt the *same level* through a structural
+        # reference instead of the re-arm memory (the ENAUSDT 4H 0.07463
+        # cluster: the pending leg origin and the armed failure level are the
+        # same pivot), so a prior same-direction failure at the exact same
+        # reference level identifies the cycle too — different identity, same
+        # story, same one-line ✕ → CHoCH → ✕ stack when it dies again.
         is_refire = any(
             f.direction is event.direction
-            and f.timestamp == event.reference_timestamp
             and f.timestamp <= event.timestamp
+            and (
+                f.timestamp == event.reference_timestamp
+                or (
+                    event.reference_price_level is not None
+                    and f.reference_price_level == event.reference_price_level
+                )
+            )
             for f in real_failures
         )
         if not is_refire:

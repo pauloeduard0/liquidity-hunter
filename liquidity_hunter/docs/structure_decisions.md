@@ -1709,6 +1709,17 @@ causes, two fixes:
   one-shot re-arm means no third re-fire references the dropped failure). A
   surviving or merely fizzle-marked re-fire is kept (hiding a CHoCH whose
   trend still stands would desync the chart from `final_trend`).
+  **2026-07-17 extension**: a re-fire is matched by the failure's timestamp
+  at its `reference_timestamp` *or* by a prior same-direction failure at the
+  exact same `reference_price_level` — a CHoCH can re-attempt the level
+  through a *structural* reference instead of the re-arm memory (ENAUSDT 4H:
+  after the ✕ at 0.07463, the pending leg origin *is* the same pivot, so the
+  07-08 re-attempt fired `reference_structural=True` with the level
+  formation's own `ref_ts` and escaped the timestamp match, stacking a second
+  ✕ + CHoCH on the same line as the first ✕ and the rebuild BOS). Measured
+  on the live 6×5 matrix: exactly 1/30 combos changed (the motivating ENA 4H
+  pair dropped; its dip reads as the `LIQUIDITY_SWEEP` already printed
+  there), zero trend changes.
 
 Measured against the reviewed state (same matrix): **purely subtractive** —
 −62 events (31 failed-re-fire CHoCH + their 31 failure marks, across 22/36

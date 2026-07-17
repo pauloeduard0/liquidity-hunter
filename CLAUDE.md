@@ -1216,7 +1216,14 @@ selector.
   reverted the trend — a leg that dies by failure has no opposite CHoCH to end
   its BOS, the BTC 1D 2026-05 case); CHoCH lines at
   the next opposite-direction CHoCH (so a reversal clears stale references
-  rather than letting them run to the chart edge). **Both BOS and CHoCH lines
+  rather than letting them run to the chart edge), and also at the next
+  same-direction BOS whose reference sits on the *wrong side* of the CHoCH's
+  level (below it for a bullish CHoCH, above for bearish): the trend collapsed
+  through the level and rebuilt from the other side — an excursion whose
+  opposite CHoCHs all failed stays transparent above, yet the old reversal
+  reference is stale (the ENA 4H 2026-06 line at 0.086 running to the edge
+  across a dive to 0.070). A normal leg's staircase only moves away from the
+  CHoCH level, so this never fires mid-trend. **Both BOS and CHoCH lines
   are drawn at `reference_price_level`** (the level that was broken — the formed
   swing extreme for BOS, the validated swing for CHoCH), not `price_level`,
   since the breaking pivot's extreme can be far beyond the confirmed level. Both
@@ -1455,8 +1462,11 @@ state in brief:
   trend — the MUUSDT H4 stuck-bullish crash; the re-arm pivot carries the
   *failure's* timestamp so the re-fired CHoCH's line starts at the `✕`, drawn
   by the frontend with a `↻` suffix; a re-fire that itself failed is collapsed
-  with its failure by the composition pass `_drop_failed_refire_cycles` — the
-  ✕ → ↻ → ✕ stack reads as the original ✕ alone, and a later surviving
+  with its failure by the composition pass `_drop_failed_refire_cycles` — a
+  re-fire matched by the failure's timestamp at its `reference_timestamp` *or*
+  by a prior same-direction failure at the exact same `reference_price_level`
+  (a structural re-attempt of the same level, the ENAUSDT 4H 0.07463 cluster) —
+  the ✕ → CHoCH → ✕ stack reads as the original ✕ alone, and a later surviving
   re-fire's `reference_timestamp` is remapped to the surviving ✕),
   persistent re-arm memory (`choch_failed_rearm_persistent`: every failure —
   re-fires included — re-arms the level, and opposite-trend confirmation
