@@ -294,6 +294,31 @@ function structureLineEndTime(
     // If this CHoCH itself failed, its line stops at the failure point.
     const ownFailure = failedChochTime(event, allEvents)
     if (ownFailure !== null) candidates.push(ownFailure)
+    // A later same-direction BOS whose reference sits on the *wrong side* of
+    // this CHoCH's level (below it for a bullish CHoCH, above for bearish)
+    // means the trend collapsed through the level and rebuilt from the other
+    // side — an excursion whose opposite CHoCH failed, so it is transparent
+    // above, yet the old reversal reference is plainly stale (ENA 4H 2026-06:
+    // a bullish CHoCH at 0.086 ran to the edge across a dive to 0.070 because
+    // both superseding bearish CHoCHs failed). A normal leg's staircase only
+    // moves away from the CHoCH level, so this never fires mid-trend.
+    if (event.reference_price_level != null) {
+      const rebasedAt = allEvents
+        .filter(
+          (other) =>
+            other.scope === event.scope &&
+            other.event === 'break_of_structure' &&
+            !other.provisional &&
+            other.direction === event.direction &&
+            other.reference_price_level != null &&
+            (event.direction === 'bullish'
+              ? other.reference_price_level < event.reference_price_level!
+              : other.reference_price_level > event.reference_price_level!) &&
+            toUtcTimestamp(other.timestamp) > eventTime,
+        )
+        .map((other) => toUtcTimestamp(other.timestamp))
+      candidates.push(...rebasedAt)
+    }
     return candidates.length > 0 ? (Math.min(...candidates) as UTCTimestamp) : lastCandleTime
   }
 
