@@ -306,7 +306,12 @@ function structureLineEndTime(
         toUtcTimestamp(other.timestamp) > eventTime &&
         ((other.direction === event.direction &&
           (other.event === 'break_of_structure' ||
-            (other.event === 'change_of_character' && !isFailedChoch(other, allEvents)))) ||
+            (other.event === 'change_of_character' && !isFailedChoch(other, allEvents)) ||
+            // A real same-direction CHOCH_FAILED invalidates the leg this BOS
+            // extended and reverts the trend, so the BOS reference is no longer
+            // standing — the line ends at the ✕ instead of running to the edge
+            // (a leg that ends via failure has no opposite CHoCH to end it).
+            (event.event === 'break_of_structure' && other.event === 'choch_failed'))) ||
           (other.direction === oppositeDirection &&
             other.event === 'change_of_character' &&
             !isFailedChoch(other, allEvents))),

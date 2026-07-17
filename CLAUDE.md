@@ -1211,7 +1211,10 @@ selector.
 
   **BOS/CHoCH line rendering**: each event draws a horizontal line to the next
   event that terminates it (`structureLineEndTime`): BOS lines end at the next
-  same-direction BOS or opposite-direction (non-failed) CHoCH; CHoCH lines at
+  same-direction BOS, opposite-direction (non-failed) CHoCH, or same-direction
+  real `choch_failed` (the ✕ that invalidated the leg the BOS extended and
+  reverted the trend — a leg that dies by failure has no opposite CHoCH to end
+  its BOS, the BTC 1D 2026-05 case); CHoCH lines at
   the next opposite-direction CHoCH (so a reversal clears stale references
   rather than letting them run to the chart edge). **Both BOS and CHoCH lines
   are drawn at `reference_price_level`** (the level that was broken — the formed
