@@ -1235,6 +1235,16 @@ selector.
   Provisional marks are also excluded from line *termination*
   (`!other.provisional` in `structureLineEndTime`): a forming mark never truncates
   a confirmed BOS/CHoCH line — it only draws its own dimmed line to the edge.
+  A **re-fired (re-activated) CHoCH** — one whose `reference_timestamp` sits
+  exactly on a prior same-direction real `choch_failed` (the re-arm pivot
+  carries the failure's timestamp by construction) — renders with a `↻`
+  suffix (`CHoCH ↻ ▼`), and because its line starts at the failure, a
+  CHoCH → ✕ → re-fire cycle draws as consecutive segments along the level
+  rather than overlapping full-span lines. A **fizzle marker** (provisional
+  `choch_failed`) draws **no line of its own** — label only, anchored at the
+  reclaim candle — since the fizzled CHoCH still renders normally and its own
+  line already stops at the reclaim (the marker's line would trace the same
+  segment twice).
 
 - **`frontend/src/components/ManipulationCyclesPanel.tsx`** —
   `ManipulationCyclesPanel` sidebar component: renders manipulation cycle
@@ -1435,6 +1445,20 @@ state in brief:
   CHoCH also dies on a sustained reclaim of the very level it broke, even
   structural — so an impulsive counter-move that never printed a BOS can't
   hold a stale trend through a full recovery),
+  failed-CHoCH re-activation (`choch_failed_rearm`: a `CHOCH_FAILED` arms the
+  broken level as a re-arm reference — a later sustained break back beyond it
+  re-fires the CHoCH, so a failure whose "reclaim" was the old trend's last
+  gasp doesn't leave the resumed move printing as sweeps under the wrong
+  trend; one-shot per failure chain, retired on opposite-trend confirmation —
+  the MUUSDT H4 stuck-bullish crash; the re-arm pivot carries the *failure's*
+  timestamp so the re-fired CHoCH's line starts at the `✕`, drawn by the
+  frontend with a `↻` suffix; a re-fire that itself failed is collapsed with
+  its failure by the composition pass `_drop_failed_refire_cycles` — the
+  ✕ → ↻ → ✕ stack reads as the original ✕ alone),
+  live-edge CHOCH_FAILED emission (`choch_fail_live_edge`: the pivot-gated
+  failure check runs once more over final state at the end of `detect`, so a
+  relentless one-way move that never forms a swing pivot cannot leave a
+  long-since-invalidated CHoCH holding the wrong trend at the live edge),
   shallow-pullback promotion, close-confirmed structural floor, provisional
   live-edge BOS/CHoCH marks, fast-fizzle marker, failed-CHoCH whipsaw fixes,
   displacement release, weak-ref failure at the broken level, staircase

@@ -38,6 +38,8 @@ const SYMBOL_OPTIONS: { value: string; label: string }[] = [
   { value: 'ENAUSDT', label: 'ENA' },
   { value: 'HYPEUSDT', label: 'HYPE' },
   { value: 'ETHBTC', label: 'ETH/BTC' },
+  { value: 'MUUSDT', label: 'MU' },
+  { value: 'ZECUSDT', label: 'ZEC' },
 ]
 
 const TIMEFRAME_OPTIONS: { value: TimeFrame; label: string }[] = [

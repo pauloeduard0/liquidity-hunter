@@ -1033,12 +1033,16 @@ def test_btc_1d_crash_resolves_bearish_with_bottom_bos() -> None:
     """Production reading of the 2026 BTC D1 crash window. Originally the
     real-data lock for ``choch_weak_ref_fail_at_broken_level`` (the trend sat
     bullish through the whole -30%); at base persistence 2 with the
-    pending-fail wired, the window resolves upstream instead: the January
-    bullish CHoCH dies on the crash's first leg (pending-fail, 01-20), the
-    April rally flips bullish at a *structural* local lower-high (71999.9,
-    not the weak 75998.9 re-anchor), and the May crash is a plain bearish
-    CHoCH at the 74868 leg origin with the June continuation BOS at the
-    bottom."""
+    pending-fail wired, the window resolves upstream instead. With
+    ``choch_failed_rearm`` wired (2026-07-16) the upstream history shifts
+    once more (the August 2024 flush -- a re-fired bearish CHoCH where the
+    old reading kept a bullish trend through the 70k -> 49k crash -- cascades
+    different trailing references into 2026), but the protected conclusion is
+    unchanged: the January bullish CHoCH dies on the crash's first leg
+    (pending-fail, 01-20), the April rally flips bullish (now at the 75998.9
+    March sweep extreme), the May crash kills it (pending-fail at the broken
+    level, 05-26), and June prints the continuation BOS at the bottom with
+    the standing trend bearish."""
     candles = _load_btc_1d_weak_fail_candles()
     provider = _FuturesLimitFakeProvider({TimeFrame.D1: candles})
 
@@ -1053,21 +1057,29 @@ def test_btc_1d_crash_resolves_bearish_with_bottom_bos() -> None:
         and e.timestamp == datetime(2026, 1, 20, tzinfo=UTC)
         for e in run.events
     )
-    # May: the crash off the April rally is a real bearish CHoCH at the
-    # 74868 leg origin...
+    # April: the rally flips bullish at the March sweep extreme...
     assert any(
         e.event is StructureEvent.CHANGE_OF_CHARACTER
-        and e.direction is MarketDirection.BEARISH
-        and e.timestamp == datetime(2026, 5, 27, tzinfo=UTC)
-        and e.reference_price_level == pytest.approx(74868.0)
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 4, 21, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(75998.9)
+        for e in run.events
+    )
+    # ... May kills it on the crash (pending-fail at the broken level) ...
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and not e.provisional
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 5, 26, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(75998.9)
         for e in run.events
     )
     # ... and June prints the continuation BOS at the bottom.
     assert any(
         e.event is StructureEvent.BREAK_OF_STRUCTURE
         and e.direction is MarketDirection.BEARISH
-        and e.timestamp == datetime(2026, 6, 30, tzinfo=UTC)
-        and e.reference_price_level == pytest.approx(59080.0)
+        and e.timestamp == datetime(2026, 6, 25, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(59800.0)
         for e in run.events
     )
     assert run.trend is MarketDirection.BEARISH
@@ -1179,10 +1191,15 @@ def test_near_1h_displacement_retirement_off_marks_false_failures(
 
     # Off: the displaced bullish CHoCHs are falsely marked failed on their
     # pullbacks -- the 06-08 rally (~5 ATR to 2.264, no confirming BOS) at
-    # the 2.045 origin it launched from, plus the 06-12/06-14 legs at their
-    # broken levels (2.083, 2.173 -- the pending-fail arms those, and without
-    # the displacement retirement an impulsive success dies on its own
-    # pullback). With the flag on (production) none of these fire.
+    # the 2.045 origin it launched from, plus the 06-12 leg at its broken
+    # level (2.083 -- the pending-fail arms it, and without the displacement
+    # retirement an impulsive success dies on its own pullback). With
+    # `choch_failed_rearm` wired the third false failure the pre-rearm
+    # reading showed (2.173) no longer exists: the 2.083 failure arms a
+    # re-arm, the 06-13 push re-fires the bullish CHoCH at the same 2.083
+    # level, and the 06-14 rally BOS confirms it -- the re-arm partially
+    # mitigates the very pathology this off-mode test documents. With the
+    # displacement flag on (production) none of these failures fire.
     fail_refs = {
         round(e.reference_price_level, 3)
         for e in run.events
@@ -1190,7 +1207,15 @@ def test_near_1h_displacement_retirement_off_marks_false_failures(
         and e.direction is MarketDirection.BULLISH
         and datetime(2026, 6, 6, tzinfo=UTC) <= e.timestamp <= datetime(2026, 6, 22, tzinfo=UTC)
     }
-    assert fail_refs == {2.045, 2.083, 2.173}
+    assert fail_refs == {2.045, 2.083}
+    # The re-fired CHoCH at the failed level (the re-arm in action).
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 6, 13, 15, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(2.083)
+        for e in run.events
+    )
 
 
 def test_near_1h_choch_failed_never_predates_its_choch() -> None:
@@ -1574,3 +1599,178 @@ def test_eth_1h_july_range_lock_is_a_live_consolidation() -> None:
     assert r.start_timestamp == datetime(2026, 7, 6, 22, tzinfo=UTC)
     assert r.price_low == pytest.approx(1712.45)
     assert r.price_high == pytest.approx(1829.52)
+
+
+def _load_mu_4h_rearm_candles() -> list[Candle]:
+    """MUUSDT 4h 2026-04-07..07-16, the full production slice (a new listing,
+    602 candles). The real-data regression for ``choch_failed_rearm``: the
+    06-23 bearish CHoCH (ref 1120.6) failed on a genuinely violent reclaim
+    (one candle 1050 -> 1215, days at 1120-1255), then the second bearish
+    CHoCH (07-02, weak 1026.86) died on a flat drift hugging the level
+    (closes 0.1-1.9%% above it) -- and the -19%% collapse that followed read
+    as two sweeps (one inside the post-failure fallback suppression with no
+    reference at all, one against the dead-cat bounce's 875.67 leg origin)
+    while the trend sat bullish for weeks. 5-column rows: ts/open/high/low/
+    close."""
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "muusdt_4h_2026_04_07_07_16.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="MUUSDT",
+            timeframe=TimeFrame.H4,
+            timestamp=datetime.fromisoformat(row[0]),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def test_mu_4h_failed_choch_rearm_refires_and_crash_prints_bos() -> None:
+    """Production reading of the MUUSDT 4h June-July window with the re-arm
+    wired: the 06-23 bearish CHoCH's failure stands (the reclaim was violent
+    and sustained), but once price rolls back over and sustains below the
+    broken 1120.6 the CHoCH *re-fires* (07-01) instead of the old reading's
+    fresh weak CHoCH at 1026.86 that immediately died on a flat drift -- so
+    the July collapse prints a bearish BOS staircase instead of sweeps under
+    a stuck-bullish trend."""
+    candles = _load_mu_4h_rearm_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.H4: candles})
+
+    run = _run_internal_structure(provider, "MUUSDT", TimeFrame.H4, 1200, False)
+
+    # The original bearish CHoCH and its genuine failure both stand.
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 6, 23, 12, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(1120.6)
+        for e in run.events
+    )
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and not e.provisional
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 6, 24, 20, tzinfo=UTC)
+        for e in run.events
+    )
+    # The re-fired bearish CHoCH at the same broken level, once price
+    # sustains back below it (the re-arm in action). Its
+    # `reference_timestamp` is the *failure's* timestamp -- the line starts
+    # where the failure ended instead of re-drawing the original CHoCH's
+    # whole span (and the frontend keys its `↻` re-activation suffix on
+    # exactly this match).
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and not e.provisional
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 7, 1, 12, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(1120.6)
+        and e.reference_timestamp == datetime(2026, 6, 24, 20, tzinfo=UTC)
+        for e in run.events
+    )
+    # The old reading's false second failure (the 07-02 weak CHoCH at 1026.86
+    # dying 07-03 on closes hugging the level) no longer exists...
+    assert not any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BEARISH
+        and datetime(2026, 7, 2, tzinfo=UTC) <= e.timestamp <= datetime(2026, 7, 6, tzinfo=UTC)
+        for e in run.events
+    )
+    # ... and the collapse prints a real bearish continuation BOS.
+    assert any(
+        e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 7, 7, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(951.42)
+        for e in run.events
+    )
+    # The +18% bounce off 875 reads as a bullish CHoCH (07-09, at the 962.15
+    # leg origin) that fails on 07-13 -- and the level's story ends there: the
+    # 07-14 re-fire also died when the crash resumed, so the composition
+    # collapse (`_drop_failed_refire_cycles`) removes the re-fire and its
+    # failure, leaving a single ✕ instead of the ✕ → ↻ → ✕ stack.
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and not e.provisional
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 7, 13, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(962.15)
+        for e in run.events
+    )
+    assert not any(
+        e.timestamp > datetime(2026, 7, 13, tzinfo=UTC)
+        and e.event in (StructureEvent.CHANGE_OF_CHARACTER, StructureEvent.CHOCH_FAILED)
+        and e.direction is MarketDirection.BULLISH
+        for e in run.events
+    )
+    # And the standing trend is bearish: the fixture's vertical final drop
+    # (875 -> 816 with no swing pivot forming) confirmed the re-fire's failure
+    # at the live edge (`choch_fail_live_edge`) -- without it the trend sat
+    # bullish 19% above price waiting for a pivot.
+    assert run.trend is MarketDirection.BEARISH
+
+
+def test_mu_4h_live_edge_fail_off_trend_hangs_bullish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The live-edge gap lock (`choch_fail_live_edge` off): the re-fired
+    bullish CHoCH's fail level is sustained-broken by six closes, but the
+    vertical drop never forms the low pivot that would emit the failure, so
+    the detector's standing trend hangs bullish 19% above price (only the
+    additive fizzle marker shows, and it never flips the trend)."""
+    monkeypatch.setattr(dashboard_data, "_CHOCH_FAIL_LIVE_EDGE", False)
+    candles = _load_mu_4h_rearm_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.H4: candles})
+
+    run = _run_internal_structure(provider, "MUUSDT", TimeFrame.H4, 1200, False)
+
+    assert run.trend is MarketDirection.BULLISH
+
+
+def test_mu_4h_rearm_off_crash_reads_as_sweeps_under_stuck_trend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pathology lock (re-arm off): after the second failure the fallback
+    suppression leaves the crash's first break with no reference at all and
+    the dead-cat bounce pins the next one at the 875.67 leg origin, so the
+    -19%% July collapse prints zero bearish BOS/CHoCH and the standing trend
+    stays bullish."""
+    monkeypatch.setattr(dashboard_data, "_CHOCH_FAILED_REARM", False)
+    candles = _load_mu_4h_rearm_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.H4: candles})
+
+    run = _run_internal_structure(provider, "MUUSDT", TimeFrame.H4, 1200, False)
+
+    # The false second failure fires...
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 7, 3, 20, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(1026.86)
+        for e in run.events
+    )
+    # ... and the whole collapse window prints no bearish structure at all
+    # (only sweeps), leaving the trend stuck bullish.
+    assert not any(
+        e.event in (StructureEvent.BREAK_OF_STRUCTURE, StructureEvent.CHANGE_OF_CHARACTER)
+        and e.direction is MarketDirection.BEARISH
+        and not e.provisional
+        and e.timestamp >= datetime(2026, 7, 4, tzinfo=UTC)
+        for e in run.events
+    )
+    assert run.trend is MarketDirection.BULLISH

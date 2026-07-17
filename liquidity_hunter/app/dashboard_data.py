@@ -439,6 +439,47 @@ _CHOCH_WEAK_REF_FAIL_AT_BROKEN_LEVEL = True
 # fires. The motivating whipsaw fired 15 candles after the failure.
 _CHOCH_FAILED_FALLBACK_SUPPRESS_CANDLES: int | None = 20
 
+# Failed-CHoCH re-activation
+# (`InternalStructureDetector.choch_failed_rearm`). A `CHOCH_FAILED`
+# permanently discards its CHoCH (one-shot origins + the fallback suppression
+# above), so when the "reclaim" that failed it turns out to be the old trend's
+# last gasp -- price rolls back over and sustains beyond the very level the
+# CHoCH had broken -- nothing re-fires, and the resumed move prints as a chain
+# of sweeps under the wrong trend. The motivating MUUSDT H4 2026-07 case: a
+# bearish CHoCH at the weak 1026.86 failed on a flat drift hugging the level
+# (closes 0.1-1.9% above it), then the -19% collapse read as two sweeps (one
+# inside the suppression window with ref=None, one against the dead-cat
+# bounce's 875.67 leg origin) while the trend sat bullish for weeks. When set,
+# the failure arms the broken level as a re-arm reference: a later sustained
+# break back beyond it (scanned from the failure onward, at the original
+# reference's weak/structural persistence class) re-emits the CHoCH and flips
+# the trend. One-shot per failure chain (a re-fired CHoCH's own failure does
+# not re-arm); the memory drops at any CHoCH emission or once the opposite
+# trend is confirmed (emitted BOS / displacement-success). Measured 2026-07-16
+# (BTC/ETH/SOL/AAVE/NEAR/MU x 5m..1d, limit=1200): 31/36 combos change with
+# the intended signature -- sweep chains under stale trends become re-fired
+# CHoCH + BOS staircases (sweeps -69/+46, CHoCH -57/+80, CHOCH_FAILED -24/+39
+# -- the extra failures are honest re-failures of re-fires), 2 standing-trend
+# changes (NEAR 15m/30m bearish -> bullish, the 30m one correcting a false
+# CHOCH_FAILED against a +7% rally that then made higher lows).
+_CHOCH_FAILED_REARM = True
+
+# Live-edge CHOCH_FAILED emission
+# (`InternalStructureDetector.choch_fail_live_edge`). The failure checks are
+# pivot-gated, so on a relentless one-way move (every candle a new extreme, no
+# swing pivot forming for days) a CHoCH whose fail level has long been
+# sustained-broken keeps its wrong trend standing at the live edge: the MUUSDT
+# H4 2026-07-14 re-fired bullish CHoCH sat with the trend bullish while price
+# fell 19% below the 962.15 level and six closes cleared the pending-fail
+# persistence -- the vertical drop never formed the low pivot that would have
+# emitted the failure (the additive fizzle marker showed, but it never flips
+# the trend, so the ladder/hunt read bullish through the crash). When set, the
+# same failure check runs once more over the final state at the end of
+# `detect` and emits the real `CHOCH_FAILED` (trend flip included) at the
+# sustained-break candle. Deterministic across runs, and the in-loop path
+# emits the identical event once a pivot finally forms.
+_CHOCH_FAIL_LIVE_EDGE = True
+
 # Retro-staging of the continuation BOS a failed CHoCH ate
 # (`InternalStructureDetector.stage_choch_failed_window_bos`). While a CHoCH
 # awaits its confirming BOS the trend is flipped, so new extremes in the
@@ -836,6 +877,75 @@ def _drop_resumed_fizzle_markers(
     ]
 
 
+def _drop_failed_refire_cycles(events: list[MarketStructure]) -> list[MarketStructure]:
+    """Drop a re-fired CHoCH that itself failed, together with its failure mark.
+
+    Under ``choch_failed_rearm`` a ``CHOCH_FAILED`` can re-fire its CHoCH; the
+    re-arm pivot carries the failure's own timestamp, so a re-fired CHoCH is
+    identified by a prior same-direction real ``CHOCH_FAILED`` sitting exactly
+    at its ``reference_timestamp`` (the same match the frontend keys its ``↻``
+    suffix on). When the re-fire then dies too -- a later same-direction real
+    ``CHOCH_FAILED`` with no intervening same-direction CHoCH -- the cycle
+    added no standing structure: the level's story is already told by the
+    original failure, and drawing the pair stacks three or four marks on one
+    line (the MUUSDT H4 962.15 cluster: ✕ → ↻ → ✕ while the crash resumed).
+    Drop both. Trend-replay safe: the pair flips the trend away and back, so
+    every replay reading after it is unchanged (and the one-shot re-arm chain
+    means no third re-fire can reference the dropped failure). A re-fire that
+    *survived* -- confirmed, still standing, or merely fizzle-marked (the
+    additive marker never flips the trend, so hiding the CHoCH would desync
+    the chart from ``final_trend``) -- is kept: it earned its ``↻``.
+    """
+    real_failures = [
+        e for e in events if e.event is StructureEvent.CHOCH_FAILED and not e.provisional
+    ]
+    if not real_failures:
+        return events
+
+    dropped: set[int] = set()
+    for i, event in enumerate(events):
+        if (
+            event.event is not StructureEvent.CHANGE_OF_CHARACTER
+            or event.provisional
+            or event.reference_timestamp is None
+        ):
+            continue
+        is_refire = any(
+            f.direction is event.direction
+            and f.timestamp == event.reference_timestamp
+            and f.timestamp <= event.timestamp
+            for f in real_failures
+        )
+        if not is_refire:
+            continue
+        own_failure_index = next(
+            (
+                j
+                for j, other in enumerate(events)
+                if j not in dropped
+                and other.event is StructureEvent.CHOCH_FAILED
+                and not other.provisional
+                and other.direction is event.direction
+                and other.timestamp > event.timestamp
+                and not any(
+                    mid.event is StructureEvent.CHANGE_OF_CHARACTER
+                    and not mid.provisional
+                    and mid.direction is event.direction
+                    and event.timestamp < mid.timestamp <= other.timestamp
+                    for mid in events
+                    if mid is not event and mid is not other
+                )
+            ),
+            None,
+        )
+        if own_failure_index is not None:
+            dropped.add(i)
+            dropped.add(own_failure_index)
+    if not dropped:
+        return events
+    return [e for i, e in enumerate(events) if i not in dropped]
+
+
 def _drop_superseded_provisional_choch(
     events: list[MarketStructure],
 ) -> list[MarketStructure]:
@@ -1026,6 +1136,16 @@ def _build_internal_detector(
         # window so a bounce can't immediately re-flip the trend (the BTC H1
         # 06-25 whipsaw). See _CHOCH_FAILED_FALLBACK_SUPPRESS_CANDLES.
         choch_failed_fallback_suppress_candles=_CHOCH_FAILED_FALLBACK_SUPPRESS_CANDLES,
+        # Failed-CHoCH re-activation: when price later sustains back beyond the
+        # failed CHoCH's broken level, re-fire the CHoCH instead of leaving the
+        # resumed move to print as a chain of sweeps under the wrong trend (the
+        # MUUSDT H4 stuck-bullish crash). See _CHOCH_FAILED_REARM.
+        choch_failed_rearm=_CHOCH_FAILED_REARM,
+        # Emit a long-since-confirmed CHOCH_FAILED at the live edge instead of
+        # waiting for a swing pivot that a relentless one-way move never forms
+        # (the same crash's trend stayed bullish for days otherwise). See
+        # _CHOCH_FAIL_LIVE_EDGE.
+        choch_fail_live_edge=_CHOCH_FAIL_LIVE_EDGE,
         # Retro-stage the continuation BOS a failed CHoCH's window ate (they
         # printed as sweeps while the trend was wrongly flipped), so the
         # resumed leg shows its staircase. See _STAGE_CHOCH_FAILED_WINDOW_BOS.
@@ -1153,7 +1273,12 @@ def _run_internal_structure(
         # close beyond the marked CHoCH's own extreme -- was a deep pullback
         # the reversal recovered from, not a fizzle. Runs after the BOS passes
         # so only chart-surviving BOS count.
-        return _drop_resumed_fizzle_markers(events, internal_candles)
+        events = _drop_resumed_fizzle_markers(events, internal_candles)
+        # A re-fired CHoCH that itself failed added no standing structure: the
+        # level's story is already told by the original failure, so drop the
+        # pair (re-fire + its own failure). Runs after the fizzle pass so a
+        # *resumed* re-fire (its fizzle dropped above) is never collapsed.
+        return _drop_failed_refire_cycles(events)
 
     all_events = run_passes([])
     # Consolidation post-pass over the *surviving* stream: segment boundaries

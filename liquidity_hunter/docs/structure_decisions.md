@@ -1601,6 +1601,136 @@ replay). Fixture `solusdt_15m_2026_07_01_07_16.json` locks both the batch
 cancel and the truncated live-edge marker; synthetic tests lock the close-vs-
 wick semantics.
 
+### Failed-CHoCH re-activation (`choch_failed_rearm`, 2026-07-16)
+
+**Motivating case (MUUSDT H4, a new listing):** two bearish CHoCHs cancelled
+and the trend stuck bullish through a −19% collapse. The 06-23 CHoCH
+(structural ref 1120.6) failed legitimately — a one-candle 1050→1215 reclaim
+that held days at 1120–1255 (the user's own read: "sweep forte, poderia até
+falhar"). But the second bearish CHoCH (07-02, weak sweep-re-anchor ref
+1026.86) died on a **flat drift hugging the level** — twelve closes 0.1–1.9%
+above 1026.86 (well under half an ATR of displacement), killed at the weak-ref
+base persistence 2 — and then the machine had no way back:
+
+1. The failure nulls all reversal references (one-shot, anti-ping-pong) and
+   `choch_failed_fallback_suppress_candles=20` keeps the trailing fallback
+   off — so the crash's first break (**eleven** consecutive closes below the
+   951.42 extreme, 07-07) evaluated with `choch_low_ref=None` → sweep.
+2. The dead-cat bounce (875→1035) armed a pending bullish BOS whose leg
+   origin — **875.67, the crash low itself** — became the bearish CHoCH
+   reference, so the next break (7 closes below 954.36, 07-13) demanded a
+   close below the bottom of the very crash it was trying to read → sweep.
+
+**Mechanism** (`choch_failed_rearm`, wired True): a `CHOCH_FAILED` arms the
+failed CHoCH's *broken reference* as a **re-arm** level. A later sustained
+break back beyond it — scanned only from the failure onward (the arm-index
+clamp, mirroring `*_choch_arm_index`), at the original reference's
+weak/structural persistence class — **re-emits the `CHANGE_OF_CHARACTER`**
+and flips the trend again: the "reclaim" that failed the CHoCH was the old
+trend's last gasp, not a recovery. Placement and lifecycle:
+
+- Ranks **just above the trailing fallback** in the reference chain
+  (`validated / pending-leg / origin` keep authority; a first-priority
+  variant was built and demoted — while armed it *blocked* lower refs, e.g.
+  BTC D1's April 2026 fallback CHoCH). Exempt from the post-failure fallback
+  suppression: the level is a proven structural fact, not a hair-trigger
+  trailing pivot, so the anti-ping-pong window doesn't apply.
+- **One-shot per failure chain**: a re-fired CHoCH's own failure does not
+  re-arm (`*_choch_from_rearm`), so a level being chopped cannot ping-pong
+  CHoCH→✕→CHoCH→✕ indefinitely.
+- The memory drops at any CHoCH emission (a fresh cycle owns the narrative)
+  and when the opposite trend is **confirmed** (emitted BOS or
+  displacement-success): once the reclaim built real structure, a much-later
+  break of the old level is a fresh reversal, not a re-activation.
+
+**MUUSDT H4 outcome:** the 06-23 CHoCH still fails 06-24 (genuine), the
+re-arm re-fires the bearish CHoCH 07-01 at the same 1120.6 once price
+sustains back below, the false 1026.86 CHoCH/✕ pair never exists, and the
+collapse prints a real bearish BOS (07-07, ref 951.42). The +18% bounce off
+875 reads as a bullish CHoCH that fails 07-13, re-fires 07-14 (a real +11%
+push), and fizzle-marks on the final flush — honest narration of violent
+chop.
+
+**Historical validation:** the first divergence on the BTC D1 fixture is the
+**2024-08-05 yen-carry flush** — the old reading kept a bullish trend through
+70k→49k (the 07-04 bearish CHoCH had failed on the 07-14 bounce, and the
+crash printed as a counter-trend *sweep* at 48888); the re-arm re-fires the
+bearish CHoCH on 08-04. Exactly the MUUSDT pathology, on the most famous
+liquidation day of that year.
+
+**Rendering (visual review 2026-07-16):** the first review flagged stacked
+marks — a re-arm cycle put up to four events at one level (CHoCH, ✕,
+re-fired CHoCH, ✕/fizzle), each drawing a full-span line from the *same*
+`reference_timestamp`, so lines and labels sat on top of each other
+("dobrando os CHoCH ✕"). Three-part fix, per user choice (sequential
+segments + distinct label):
+
+- the re-arm pivot keeps the level's *price* but carries the **failure's
+  timestamp**, so the re-fired CHoCH's line starts where the `✕` ended —
+  the cycle reads as consecutive segments along the level (`✕` line
+  origin→failure, re-fire line failure→its own end) instead of overlays;
+- the frontend renders the re-fired CHoCH with a **`↻` suffix**
+  (`CHoCH ↻ ▼`), identified by a prior same-direction real `✕` sitting
+  exactly at the CHoCH's `reference_timestamp` (exact by construction —
+  both come from the same sustained-break candle);
+- a **fizzle marker draws no line of its own** (label only, anchored at the
+  reclaim candle): the fizzled CHoCH still renders normally and its line
+  already stops at the reclaim, so the marker's line traced the exact same
+  segment twice (a pre-existing duplication the re-arm made denser).
+
+**Second visual review (same day):** the tail cluster remained — at 962.15
+the +18% bounce fired a bullish CHoCH (07-09, legitimate: five closes above a
+structural leg origin, past the confirmed-trend barrier), failed 07-13,
+re-fired 07-14 (+11% real push), and the final flush left **three marks on
+one level with the machine trend still bullish 19% above price**. Two root
+causes, two fixes:
+
+- **Live-edge failure emission** (`choch_fail_live_edge`, wired True): the
+  `CHOCH_FAILED` checks are pivot-gated, and a relentless one-way move forms
+  *no* swing pivot (every candle a new extreme — lows 875→859→847→841→828→816
+  with never five candles of respite), so the re-fire's failure sat
+  condition-complete (six closes past the pending-fail persistence) but
+  unemitted for days; only the additive fizzle marker showed, which never
+  flips the trend, so the ladder/hunt read bullish through the crash. The
+  same failure check (same reference arbitration, persistence class, and
+  displacement-success retirement) now runs once more over the final state at
+  the end of `detect` and emits the real failure at the sustained-break
+  candle. Deterministic across runs; the in-loop path emits the identical
+  event once a pivot finally forms (its skipped bookkeeping only feeds
+  subsequent pivots, of which there are none). The provisional/fizzle
+  live-edge marks are suppressed on a run that emits one (their floor state
+  reflects the pre-flip trend).
+- **Failed-re-fire collapse** (`_drop_failed_refire_cycles`, composition,
+  user choice via review): a re-fired CHoCH that itself failed (a later
+  same-direction real `CHOCH_FAILED` with no intervening same-direction
+  CHoCH) added no standing structure — the level's story is already told by
+  the original failure — so the pair is dropped and the ✕ → ↻ → ✕ stack
+  becomes a single ✕. Trend-replay safe (the pair flips away and back;
+  one-shot re-arm means no third re-fire references the dropped failure). A
+  surviving or merely fizzle-marked re-fire is kept (hiding a CHoCH whose
+  trend still stands would desync the chart from `final_trend`).
+
+Measured against the reviewed state (same matrix): **purely subtractive** —
+−62 events (31 failed-re-fire CHoCH + their 31 failure marks, across 22/36
+combos), zero added, and exactly one standing-trend change: MUUSDT 4h
+bullish→bearish, the motivating live-edge case.
+
+**Measurement** (BTC/ETH/SOL/AAVE/NEAR/MU × 5m..1d, limit=1200, HEAD vs
+wired): 31/36 combos change with the intended signature — sweep chains under
+stale trends become re-fired CHoCH + BOS staircases (sweeps −69/+46, CHoCH
+−57/+80, BOS −43/+55, `CHOCH_FAILED` −24/+39; the extra failures are honest
+re-failures of re-fires). Two standing-trend changes, both NEAR
+(15m/30m bearish→bullish): the 30m corrects a false `CHOCH_FAILED` against a
++7% rally that then made higher lows; the 15m is live-edge chop either way.
+Two production fixture locks recalibrated with conclusions preserved: BTC D1
+still resolves the 2026 crash bearish with the bottom BOS (narration shifts:
+the April flip lands at the 75998.9 sweep extreme and dies by pending-fail
+05-26); NEAR H1 displacement-off shows the re-arm *mitigating* that
+pathology (the third false failure is replaced by a re-fire the 06-14 rally
+BOS confirms). Fixture `muusdt_4h_2026_04_07_07_16.json` locks the
+motivating window both ways (re-fire + BOS with the flag, sweeps +
+stuck-bullish trend without).
+
 **Not yet implemented**:
 - Wiring `LIQUIDITY_SWEEP` events to `LiquidityZone.is_mitigated` /
   `invalidated_at` for the swept zone.

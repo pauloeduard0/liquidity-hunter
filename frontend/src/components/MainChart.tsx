@@ -1175,6 +1175,28 @@ export function MainChart({
       // the pivot forms, or it vanishes if price reclaims the level (a sweep).
       const provisionalChoch =
         event.event === 'change_of_character' && event.provisional === true
+      // A fizzle marker (provisional `choch_failed`) never replaces its
+      // CHoCH's line -- the fizzled CHoCH still renders normally and its own
+      // line already stops at the reclaim -- so drawing the marker's line
+      // would trace the exact same segment twice. Label only, anchored at
+      // the reclaim candle.
+      const fizzleMarker = event.event === 'choch_failed' && event.provisional === true
+      // A re-fired (re-activated) CHoCH: its re-arm reference carries the
+      // failure's own timestamp, so a prior same-direction real `CHoCH ✕`
+      // sitting exactly at `reference_timestamp` identifies it. Rendered with
+      // a `↻` suffix so a re-activation is tellable from a fresh CHoCH.
+      const reactivatedChoch =
+        event.event === 'change_of_character' &&
+        event.provisional !== true &&
+        event.reference_timestamp != null &&
+        scopeEvents.some(
+          (other) =>
+            other.scope === event.scope &&
+            other.event === 'choch_failed' &&
+            other.provisional !== true &&
+            other.direction === event.direction &&
+            other.timestamp === event.reference_timestamp,
+        )
       const dimmed = weakChoch || provisionalBos || provisionalChoch
       const lineColor = dimmed ? `${style.color}99` : style.color
       // A provisional mark against a weak reference (emit_provisional_choch_weak)
@@ -1196,26 +1218,29 @@ export function MainChart({
           event.event === 'break_of_structure' ||
           event.event === 'choch_failed')
 
-      const structureSeries = chart.addSeries(LineSeries, {
-        color: lineColor,
-        lineWidth: 1,
-        lineStyle: dimmed ? LineStyle.SparseDotted : LineStyle.Dashed,
-        lastValueVisible: false,
-        priceLineVisible: false,
-        crosshairMarkerVisible: false,
-      })
-      structureSeries.setData(lineFrom(lineStartTime, endTime, linePrice, firstCandleTime))
-      overlaySeriesRef.current.push(structureSeries)
+      if (!fizzleMarker) {
+        const structureSeries = chart.addSeries(LineSeries, {
+          color: lineColor,
+          lineWidth: 1,
+          lineStyle: dimmed ? LineStyle.SparseDotted : LineStyle.Dashed,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        })
+        structureSeries.setData(lineFrom(lineStartTime, endTime, linePrice, firstCandleTime))
+        overlaySeriesRef.current.push(structureSeries)
+      }
 
       // Centered on the line segment (TradingView-style): the break candle
       // sits at one end of the line, where the label would be buried in the
-      // candles -- the middle of the drawn segment is the open gap.
+      // candles -- the middle of the drawn segment is the open gap. A
+      // line-less fizzle marker anchors at the reclaim candle instead.
       labels.push({
-        time: lineStartTime,
-        timeEnd: endTime,
+        time: fizzleMarker ? startTime : lineStartTime,
+        timeEnd: fizzleMarker ? startTime : endTime,
         price: linePrice,
         color: lineColor,
-        text: `${style.label}${labelSuffix} ${directionIcon}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}`,
+        text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''} ${directionIcon}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}`,
       })
     }
 
