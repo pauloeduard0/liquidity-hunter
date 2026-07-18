@@ -1301,7 +1301,7 @@ export function MainChart({
         : []) {
         const style = POI_BOX_STYLES[zone.direction] ?? POI_BOX_STYLES.bearish
         const endTime = poiBoxEndTime(zone, lastCandleTime)
-        const dirIcon = zone.direction === 'bullish' ? '▲' : '▼'
+        // No direction arrow: the box color already encodes it.
         const kindLabel = POI_KIND_LABELS[zone.kind] ?? 'OB'
 
         poiBoxes.push({
@@ -1311,7 +1311,7 @@ export function MainChart({
           priceHigh: zone.price_high,
           borderColor: style.border,
           fillColor: style.fill,
-          label: `${kindLabel} ${dirIcon}`,
+          label: kindLabel,
         })
       }
       poiBoxesPrimitiveRef.current?.setBoxes(poiBoxes)
@@ -1411,13 +1411,16 @@ export function MainChart({
     labelsPrimitiveRef.current?.setLabels(labels)
     // Feed the candles' wick extents to the labels primitive so segment
     // labels (BOS/CHoCH/…) can slide along their line to a candle-free spot.
-    labelsPrimitiveRef.current?.setCandles(
-      data.candles.map((c) => ({
-        time: toChartTime(c.timestamp) as Time,
-        high: c.high,
-        low: c.low,
-      })),
-    )
+    const labelCandles = data.candles.map((c) => ({
+      time: toChartTime(c.timestamp) as Time,
+      high: c.high,
+      low: c.low,
+    }))
+    labelsPrimitiveRef.current?.setCandles(labelCandles)
+    // Box labels (OB/MB, accumulation, range) dodge candles the same way.
+    poiBoxesPrimitiveRef.current?.setCandles(labelCandles)
+    manipBoxesPrimitiveRef.current?.setCandles(labelCandles)
+    rangeBoxesPrimitiveRef.current?.setCandles(labelCandles)
 
     if (!hasFittedRef.current) {
       chart.timeScale().fitContent()

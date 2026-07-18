@@ -59,10 +59,12 @@ export const TREND_ICONS: Record<string, string> = {
   neutral: '▬',
 }
 
-/** POI order block box colors — border and fill (TradingView style). */
+/** POI order block box colors — border and fill (TradingView style).
+ *  Kept deliberately faint: the zone is context behind the candles, so the
+ *  fill sits near ~7% alpha and the border is a translucent hairline. */
 export const POI_BOX_STYLES: Record<string, { border: string; fill: string }> = {
-  bullish: { border: '#2979ff', fill: '#2979ff2e' },   // vivid blue demand zone
-  bearish: { border: '#ef5350', fill: '#ef53502e' },   // red supply zone
+  bullish: { border: '#5b9cf699', fill: '#2979ff12' },  // soft blue demand zone
+  bearish: { border: '#ef535099', fill: '#ef535012' },  // soft red supply zone
 }
 
 /** Manipulation cycle accumulation box colors by status. */
