@@ -1409,6 +1409,15 @@ export function MainChart({
     huntWindowPrimitiveRef.current?.setWindows(huntWindows)
 
     labelsPrimitiveRef.current?.setLabels(labels)
+    // Feed the candles' wick extents to the labels primitive so segment
+    // labels (BOS/CHoCH/…) can slide along their line to a candle-free spot.
+    labelsPrimitiveRef.current?.setCandles(
+      data.candles.map((c) => ({
+        time: toChartTime(c.timestamp) as Time,
+        high: c.high,
+        low: c.low,
+      })),
+    )
 
     if (!hasFittedRef.current) {
       chart.timeScale().fitContent()
