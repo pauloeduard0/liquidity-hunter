@@ -1303,6 +1303,12 @@ class InternalStructureDetector(MarketStructureDetector):
         last_bearish_bos_price: float | None = None
         last_bearish_bos_origin: float | None = None
         trend = MarketDirection.NEUTRAL
+        # Candle index at which `trend` last changed direction. A CHoCH's
+        # sustained-break scan may not reach behind this point: a break that
+        # predates the flip into the trend being reversed belonged to the
+        # *prior* leg, and stamping the CHoCH there back-dates it before the
+        # very flip it reverses (the SOLUSDT 30m 2026-07-05 inverted pair).
+        trend_flip_index = -1
         # Confirmed-trend barrier state (`choch_confirmed_trend_persistence_
         # candles`): False from the flip that set `trend` until an *emitted*
         # BOS in its direction -- or a displacement-success origin retirement,
@@ -2098,6 +2104,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         reference_timestamp=bear_fail_pivot.timestamp,
                     )
                     trend = MarketDirection.BULLISH
+                    trend_flip_index = index_by_timestamp[break_candle.timestamp]
                     # The resumed bullish trend is pending again: it must print
                     # a fresh emitted BOS before the confirmed-trend barrier
                     # guards it.
@@ -2298,10 +2305,19 @@ class InternalStructureDetector(MarketStructureDetector):
                         persistence=choch_high_persistence,
                     )
                 ):
+                    # Timestamp attribution only: never stamp the CHoCH on a
+                    # break that predates the flip into the (bearish) trend it
+                    # reverses -- that break belonged to the prior leg, and the
+                    # back-dated mark would sort before the very flip enabling
+                    # it (the SOLUSDT 30m 2026-07-05 inverted pair). Eligibility
+                    # (`confirms_break` above) is deliberately unclamped: the
+                    # state machine's decisions stay byte-identical, only the
+                    # stamp moves (falls back to the pivot candle if no
+                    # post-flip window qualifies).
                     break_candle = candles[
                         find_sustained_break_index(
                             candles,
-                            choch_high_scan_start,
+                            max(choch_high_scan_start, trend_flip_index + 1),
                             current_index,
                             choch_high_ref.price,
                             bullish=True,
@@ -2321,6 +2337,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         reference_structural=not choch_high_weak_ref,
                     )
                     trend = MarketDirection.BULLISH
+                    trend_flip_index = index_by_timestamp[break_candle.timestamp]
                     # The fresh bullish trend is pending until an emitted BOS
                     # confirms it (see `choch_confirmed_trend_persistence_candles`).
                     trend_confirmed = False
@@ -2634,6 +2651,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             # emitted BOS confirms it.
                             if trend is not MarketDirection.BULLISH:
                                 trend_confirmed = False
+                                trend_flip_index = close_idx
                             trend = MarketDirection.BULLISH
                             active_low = pending_low
                             pending_low = None
@@ -3105,6 +3123,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         reference_timestamp=bull_fail_pivot.timestamp,
                     )
                     trend = MarketDirection.BEARISH
+                    trend_flip_index = index_by_timestamp[break_candle.timestamp]
                     # The resumed bearish trend is pending again: it must print
                     # a fresh emitted BOS before the confirmed-trend barrier
                     # guards it.
@@ -3284,10 +3303,12 @@ class InternalStructureDetector(MarketStructureDetector):
                         persistence=choch_low_persistence,
                     )
                 ):
+                    # Mirror of the bullish case: attribution-only clamp to the
+                    # flip into the (bullish) trend this CHoCH reverses.
                     break_candle = candles[
                         find_sustained_break_index(
                             candles,
-                            choch_low_scan_start,
+                            max(choch_low_scan_start, trend_flip_index + 1),
                             current_index,
                             choch_low_ref.price,
                             bullish=False,
@@ -3306,6 +3327,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         reference_structural=not choch_low_weak_ref,
                     )
                     trend = MarketDirection.BEARISH
+                    trend_flip_index = index_by_timestamp[break_candle.timestamp]
                     # The fresh bearish trend is pending until an emitted BOS
                     # confirms it (see `choch_confirmed_trend_persistence_candles`).
                     trend_confirmed = False
@@ -3607,6 +3629,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             # emitted BOS confirms it.
                             if trend is not MarketDirection.BEARISH:
                                 trend_confirmed = False
+                                trend_flip_index = close_idx
                             trend = MarketDirection.BEARISH
                             active_high = pending_high
                             pending_high = None
