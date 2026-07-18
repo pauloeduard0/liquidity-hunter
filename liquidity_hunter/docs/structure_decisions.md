@@ -1919,3 +1919,56 @@ Tests: synthetic on/off + bound + bullish-mirror + leg-dies coverage in
 (`test_run_internal_structure_rescues_ena_30m_leg_launch_bos` and its off-lock,
 which asserts the RAW detector emits the 0.07908 BOS and the pass is what
 decides its fate).
+
+### Superseded-continuation BOS staging (`stage_superseded_continuation_bos`, 2026-07-18)
+
+Sibling of the reversal-eaten staging above, found during the visual review of
+the leg-launch rescue branch. A BOS only *emits* once a confirming
+opposite-direction pullback pivot forms. In an **impulsive leg of consecutive
+same-side pivots**, the next advance overwrites the still-pending BOS before
+that pivot appears — and the reported floor (`prev_bull_bos_extreme` /
+`prev_bear_bos_extreme`) has meanwhile ratcheted to the new pivot. So only the
+**last** pending of such a run ever emits, the tops/bottoms that genuinely
+formed and were broken in between get no mark, and the surviving BOS references
+a later level than the leg actually broke first.
+
+The user framed the symptom precisely: "it works after a CHoCH, but not after a
+BOS." A CHoCH *seeds* the reported floor with the reversal's extreme, so the
+first BOS of a leg references it correctly (the leg-launch fix above); a
+*continuation* pending has no such seeding — superseded, its floor is simply
+lost.
+
+Motivating case (**NEARUSDT M15** 2026-07-14, pivots in UTC):
+
+```
+07:15  HIGH 2.0120   <- formed, then broken: deserves a BOS
+10:15  HIGH 1.9960   (lower high, trails active_high down)
+11:00  LOW  1.9670   (the pullback)
+12:30  HIGH 2.0400   <- advance; floor_at_advance = 2.0120
+15:30  HIGH 2.0660   <- next advance; NO low pivot in between
+17:00  LOW  2.0180   (confirms only the 15:30 pending)
+```
+
+The 12:30 pending (floor 2.0120, `reference_timestamp` 07:15) was superseded
+silently, so the leg's only continuation referenced 2.0400 with its line
+starting at 12:30. Staged, the leg reads BOS 2.0120 → BOS 2.0400.
+
+**Fix** (`stage_superseded_continuation_bos`, wired `True` via
+`_STAGE_SUPERSEDED_CONTINUATION_BOS`; default `False` in the detector): at both
+advance sites, before `pending_bos` is overwritten by a same-direction
+`_PendingBOS`, stage the outgoing one. Shares `stage_pending_bos` with
+`stage_eaten_bos` — same **close-through-the-floor** key (`floor_closed`), so a
+floor the leg only *wicked* stays unmarked, and the same dedup + re-anchor
+re-timing as every other staged mark. Additive-over-state-machine discipline:
+trend, staircase gate, and CHoCH promotion untouched.
+
+Measured (BTC/ETH/SOL/AAVE/NEAR/ENA × 5m..1d, `limit=1200`,
+`confluence_filter=False`): **9/36 combos changed, 0 trend flips, +13 marks**.
+Effectively additive — the one apparent removal (NEAR 5m) is the *same* BOS at
+the *same* timestamp whose reference moved 1.955 → 1.957, the documented
+same-timestamp arbitration in `_drop_pre_break_reference_bos` picking the
+earlier-formed reference. No leg loses a mark.
+
+Fixture `nearusdt_15m_2026_07_02_07_18` + on/off locks
+(`test_run_internal_structure_stages_near_15m_superseded_continuation`,
+`..._superseded_lost_without_staging`).

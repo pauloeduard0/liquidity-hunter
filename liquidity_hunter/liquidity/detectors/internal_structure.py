@@ -792,6 +792,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_success_displacement_atr: float | None = None,
         choch_success_displacement_max_pct: float | None = None,
         stage_reversal_eaten_bos: bool = False,
+        stage_superseded_continuation_bos: bool = False,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -907,6 +908,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._choch_success_displacement_atr = choch_success_displacement_atr
         self._choch_success_displacement_max_pct = choch_success_displacement_max_pct
         self._stage_reversal_eaten_bos = stage_reversal_eaten_bos
+        self._stage_superseded_continuation_bos = stage_superseded_continuation_bos
         # The state-machine trend after the most recent `detect()` call
         # (mirrors `SwingStructureDetector.final_trend`). The single source of
         # truth for "the standing trend": unlike the last emitted event's
@@ -1021,27 +1023,60 @@ class InternalStructureDetector(MarketStructureDetector):
             fallback, which can be a stale far-off trailing level). Off unless
             ``stage_reversal_eaten_bos`` is set.
             """
+            stage_pending_bos(eaten, enabled=self._stage_reversal_eaten_bos)
+
+        def stage_pending_bos(pending: _PendingBOS | None, *, enabled: bool) -> None:
+            """Stage an additive BOS for a pending the machine is about to drop.
+
+            Shared body of ``stage_eaten_bos`` and ``stage_superseded_bos``: a
+            pending BOS whose staircase floor already *closed*-broke is a real
+            structural break the trader watched print, so it earns a mark even
+            though the machine never emitted it. Deduped against real BOS at the
+            end and re-timed by ``_reanchor_bos_close_break``.
+            """
             if (
-                not self._stage_reversal_eaten_bos
-                or eaten is None
-                or eaten.staged
-                or eaten.floor is None
-                or not eaten.floor_closed
+                not enabled
+                or pending is None
+                or pending.staged
+                or pending.floor is None
+                or not pending.floor_closed
             ):
                 return
-            eaten.staged = True
+            pending.staged = True
             staged_bos.append(
                 MarketStructure(
                     symbol=symbol,
                     timeframe=timeframe,
-                    timestamp=eaten.close_break_timestamp,
+                    timestamp=pending.close_break_timestamp,
                     event=StructureEvent.BREAK_OF_STRUCTURE,
-                    direction=eaten.direction,
-                    price_level=eaten.breaking_pivot.price,
-                    reference_price_level=eaten.floor,
+                    direction=pending.direction,
+                    price_level=pending.breaking_pivot.price,
+                    reference_price_level=pending.floor,
                     scope=StructureScope.INTERNAL,
                 )
             )
+
+        def stage_superseded_bos(superseded: _PendingBOS | None) -> None:
+            """Additively stage a pending BOS the *next advance* is about to replace.
+
+            A BOS only emits once a confirming opposite-direction pullback pivot
+            forms. In an impulsive leg of consecutive same-side pivots, the next
+            advance overwrites the still-pending BOS before that pivot appears,
+            and the reported floor has meanwhile ratcheted to the new pivot -- so
+            the top/bottom that genuinely formed and was broken never gets a mark,
+            and the surviving BOS references a later level. Only the *last* pending
+            of such a run ever emitted.
+
+            The NEARUSDT M15 2026-07-14 case: the 07:15 topo 2.0120 formed, price
+            pulled back to 1.9670, then closed through it -- but no low pivot
+            formed between the 12:30 (2.0400) and 15:30 (2.0660) advances, so the
+            12:30 pending (floor 2.0120) was superseded silently and the leg's only
+            BOS referenced 2.0400. Staging the superseded pending restores the
+            staircase (2.0120 then 2.0400). Same close-through-the-floor key as
+            ``stage_eaten_bos``, so a floor the leg only wicked stays unmarked.
+            Off unless ``stage_superseded_continuation_bos`` is set.
+            """
+            stage_pending_bos(superseded, enabled=self._stage_superseded_continuation_bos)
 
         # Trailing references (most recent pivot of each kind); drive BOS
         # detection and HL/LH labels.
@@ -2660,6 +2695,16 @@ class InternalStructureDetector(MarketStructureDetector):
                                     not self._bos_leg_origin_require_close_break
                                     or floor_did_close
                                 )
+                                # This advance replaces a still-pending bullish BOS
+                                # from an earlier advance in the same leg (no
+                                # confirming low pivot formed in between): stage it
+                                # so its floor -- the topo that actually formed and
+                                # broke -- is not lost with it.
+                                if (
+                                    pending_bos is not None
+                                    and pending_bos.direction is MarketDirection.BULLISH
+                                ):
+                                    stage_superseded_bos(pending_bos)
                                 pending_bos = _PendingBOS(
                                     direction=MarketDirection.BULLISH,
                                     breaking_pivot=pivot,
@@ -3622,6 +3667,14 @@ class InternalStructureDetector(MarketStructureDetector):
                                     not self._bos_leg_origin_require_close_break
                                     or floor_did_close
                                 )
+                                # Mirror of the bullish case: stage the pending
+                                # bearish BOS this advance replaces, so the fundo
+                                # that formed and broke keeps its mark.
+                                if (
+                                    pending_bos is not None
+                                    and pending_bos.direction is MarketDirection.BEARISH
+                                ):
+                                    stage_superseded_bos(pending_bos)
                                 pending_bos = _PendingBOS(
                                     direction=MarketDirection.BEARISH,
                                     breaking_pivot=pivot,

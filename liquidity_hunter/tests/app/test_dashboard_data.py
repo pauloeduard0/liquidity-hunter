@@ -2212,3 +2212,91 @@ def test_run_internal_structure_ena_30m_launch_bos_lost_without_rescue(
         pytest.approx(0.07954),
         pytest.approx(0.07760),
     ]
+
+
+# --- Superseded-continuation BOS staging (_STAGE_SUPERSEDED_CONTINUATION_BOS) --
+#
+# NEARUSDT M15. A BOS only emits once a confirming opposite pullback pivot
+# forms. In the bullish leg of 2026-07-14 the pivots run
+# 07:15 HIGH 2.0120 -> 10:15 HIGH 1.9960 -> 11:00 LOW 1.9670 ->
+# 12:30 HIGH 2.0400 -> 15:30 HIGH 2.0660 -> 17:00 LOW 2.0180: no low pivot forms
+# between the 12:30 and 15:30 advances, so the 12:30 pending (floor 2.0120, the
+# topo that formed and was broken) is silently superseded and only the 15:30
+# advance emits -- referencing 2.0400, its line starting at 12:30 instead of the
+# 07:15 topo. Staged, the leg reads BOS 2.0120 then BOS 2.0400.
+
+
+def _load_near_15m_superseded_candles() -> list[Candle]:
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "nearusdt_15m_2026_07_02_07_18.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="NEARUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def _near_bullish_leg_bos(run: dashboard_data.InternalStructureRun) -> list[MarketStructure]:
+    leg_start = datetime(2026, 7, 14, 5, tzinfo=UTC)
+    leg_end = datetime(2026, 7, 14, 18, tzinfo=UTC)
+    return [
+        e
+        for e in run.events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BULLISH
+        and not e.provisional
+        and leg_start <= e.timestamp <= leg_end
+    ]
+
+
+def test_run_internal_structure_stages_near_15m_superseded_continuation() -> None:
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: _load_near_15m_superseded_candles()})
+
+    run = _run_internal_structure(provider, "NEARUSDT", TimeFrame.M15, 1200, False)
+
+    # The staged mark restores the staircase: the 2.0120 topo (formed 07:15) is
+    # referenced by its own BOS before the 2.0400 one.
+    bos = _near_bullish_leg_bos(run)
+    assert [e.reference_price_level for e in bos] == [
+        pytest.approx(1.9760),
+        pytest.approx(2.0120),
+        pytest.approx(2.0400),
+    ]
+    staged = bos[1]
+    assert staged.timestamp == datetime(2026, 7, 14, 12, 30, tzinfo=UTC)
+    assert staged.reference_timestamp == datetime(2026, 7, 14, 7, 15, tzinfo=UTC)
+
+
+def test_run_internal_structure_near_15m_superseded_lost_without_staging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Off-lock: the leg's only continuation references the later 2.0400 top --
+    # the 2.0120 topo that formed and broke has no mark at all.
+    monkeypatch.setattr(dashboard_data, "_STAGE_SUPERSEDED_CONTINUATION_BOS", False)
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: _load_near_15m_superseded_candles()})
+
+    run = _run_internal_structure(provider, "NEARUSDT", TimeFrame.M15, 1200, False)
+
+    assert [e.reference_price_level for e in _near_bullish_leg_bos(run)] == [
+        pytest.approx(1.9760),
+        pytest.approx(2.0400),
+    ]

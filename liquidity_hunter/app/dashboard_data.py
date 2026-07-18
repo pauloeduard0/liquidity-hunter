@@ -607,6 +607,22 @@ _STAGE_REVERSAL_EATEN_BOS = True
 # reads CHoCH -> BOS 0.07908 -> BOS 0.07760 -> CHoCH.
 _RESCUE_LEG_LAUNCH_BOS = True
 
+# Superseded-continuation BOS staging
+# (`InternalStructureDetector.stage_superseded_continuation_bos`). A BOS only
+# *emits* once a confirming opposite pullback pivot forms. In an impulsive leg
+# of consecutive same-side pivots, the next advance overwrites the still-pending
+# BOS before that pivot appears -- and the reported floor has meanwhile ratcheted
+# to the new pivot -- so only the *last* pending of the run ever emits, and the
+# top/bottom that genuinely formed and was broken never gets a mark. Sibling of
+# `_STAGE_REVERSAL_EATEN_BOS` (a pending eaten by the *reversal*); here the
+# pending is eaten by the next *continuation*, and the same
+# close-through-the-floor key applies. The NEARUSDT M15 2026-07-14 case: the
+# 07:15 topo 2.0120 formed, price pulled back to 1.9670 and closed through it,
+# but no low pivot formed between the 12:30 (2.0400) and 15:30 (2.0660)
+# advances -- the leg's only BOS referenced 2.0400, its line starting at 12:30
+# instead of the 07:15 topo. Staged, the leg reads BOS 2.0120 then BOS 2.0400.
+_STAGE_SUPERSEDED_CONTINUATION_BOS = True
+
 # Volatility-normalized proximity for the liquidity-hunt pool map
 # (`LiquidityHuntEngine.proximity_atr`): "nearby" opposing pools are the ones
 # within N x the visible series' mean true-range% of price, instead of the
@@ -1419,6 +1435,12 @@ def _build_internal_detector(
         # break) so the leg's final lower low -- the close that "permits" the
         # reversal -- is not invisible. See _STAGE_REVERSAL_EATEN_BOS.
         stage_reversal_eaten_bos=_STAGE_REVERSAL_EATEN_BOS,
+        # Sibling of the above: a pending BOS the *next advance* replaces (an
+        # impulsive run of same-side pivots with no confirming pullback between)
+        # is staged too, so each top/bottom that formed and broke keeps a mark
+        # instead of only the run's last one. See
+        # _STAGE_SUPERSEDED_CONTINUATION_BOS.
+        stage_superseded_continuation_bos=_STAGE_SUPERSEDED_CONTINUATION_BOS,
         # The CHoCH origin (the level a sustained break back through invalidates
         # the unconfirmed reversal, a CHOCH_FAILED) is the *deepest* extreme of
         # the reversed leg, not the trailing `active_<side>`. The trailing
