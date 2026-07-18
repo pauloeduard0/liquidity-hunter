@@ -899,7 +899,16 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   (`reference_price_level`), within the window the BOS stays active (up to the
   next same-direction BOS or opposite-direction CHoCH); any BOS whose leg only
   *wicked* past that level (never closed) is **dropped** — a conservative
-  close-break confirmation matching the macro SMC cycle. The pass also sets each
+  close-break confirmation matching the macro SMC cycle. Under
+  `_RESCUE_LEG_LAUNCH_BOS` (wired `True`), a **leg-launch** BOS (the first of its
+  leg, referencing the CHoCH-seeded launch level) that finds no close in its own
+  window gets an extended search through the *next* same-direction BOS's window
+  before being dropped — a leg that retests the CHoCH can close through its
+  launch level a few candles into the successor's territory — and the shallower
+  continuations it passes over are suppressed, so the leg reads
+  `CHoCH → BOS at the launch fundo/topo → …`. The one-continuation bound is
+  load-bearing (unbounded, an AAVE D1 launch BOS scanned 7 months and ate the
+  real staircase); see `docs/structure_decisions.md`. The pass also sets each
   BOS's `reference_timestamp` to the candle that *formed* the broken level (the
   prior swing extreme, found by scanning back for a matching low/high), so the
   frontend can start the line at the level's origin. The same pass runs on the

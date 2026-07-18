@@ -1497,12 +1497,13 @@ reversal. Fixture `enausdt_30m_2026_06_20_07_15` + on/off regression tests
 `test_reversal_eaten_bos_marks_final_continuation_before_choch`, the latter
 asserting the staged mark is the only new event and the trend is unchanged).
 
-Left as-is (not pursued): the sibling **Gap #1** — the *deeper* first-fundo BOS
+Left as-is at the time: the sibling **Gap #1** — the *deeper* first-fundo BOS
 (ENA M30 ref 0.07908) the RAW detector *does* emit but `_reanchor_bos_close_break`
 drops, because within its active window (up to the next same-direction BOS) no
 candle closes below 0.07908 (the close-below lands at 07-13 03:00, already inside
 the next BOS's territory). Recovering it means loosening the conservative
-close-in-window rule; deferred (small residual, 0.07908 vs the reported 0.07954).
+close-in-window rule; deferred then, **resolved 2026-07-18** by the leg-launch
+rescue below.
 
 ### Base persistence 12 → 2 + confirmed-trend barrier (hysteresis, 2026-07-16)
 
@@ -1856,3 +1857,65 @@ pinning the pathology.
 - React frontend behavior divergence sidebar panel and chart overlay.
 - React frontend liquidity targets, retail trap, and market structure
   sidebar panels.
+
+### Leg-launch BOS rescue (`_RESCUE_LEG_LAUNCH_BOS`, 2026-07-18)
+
+Closes **Gap #1** of the reversal-eaten BOS investigation above.
+
+The **first BOS of a leg** reports the CHoCH-seeded launch level — the
+fundo/topo the reversal itself formed (see "First BOS of leg reference"). But
+`_reanchor_bos_close_break` confirms every BOS inside *its own* window, which
+ends at the **next same-direction BOS**. On a leg that **retests the CHoCH
+before breaking down**, the launch level's first confirming close can land a few
+candles *inside that successor's territory*: the launch BOS is dropped as
+"wick-only" and the chart promotes a shallow, late fundo to first-of-leg
+reference. The two roles the window plays were conflated — it is right for
+*re-timing*, too strict as a *validity gate*, since a leg does not end at its
+next continuation.
+
+Motivating case (**ENAUSDT M30**, the same bearish leg as Gap #3 above): the leg
+launches from the 0.07908 fundo the CHoCH formed (2026-07-12 00:30), price
+retests the CHoCH, and the first close through 0.07908 comes at 07-13 03:00 —
+three candles past the successor's stamp (07-13 01:30, ref 0.07954, a shallow
+fundo formed **22 hours after** the launch level). The user read the chart as
+"the BOS after the CHoCH should reference the fundo that formed and went back to
+test the CHoCH, not the later shallow one" — exactly the launch level.
+
+**Fix** (`_RESCUE_LEG_LAUNCH_BOS`, wired `True`; the pass takes
+`rescue_leg_launch`, default `False`): when a **leg-launch** BOS (no
+same-direction BOS between the flip that started the leg — a same-direction
+CHoCH or opposite-direction `CHOCH_FAILED` — and the event) finds no close in
+its own window, extend the search instead of dropping it. A close through the
+floor there confirms the break and re-times the BOS to it; the shallower
+same-direction continuations it passed over are **suppressed** (variant 1 of the
+two the user chose between): they are premature clutter next to the launch
+break, *and* their confirming close would otherwise re-kill the rescued mark in
+`_drop_pre_break_reference_bos`, whose leg reset the rescued BOS now owns. A leg
+that reverses without ever closing through still drops — the wick-only
+protection is untouched.
+
+**The bound came from measurement.** An unbounded search (to the leg's death:
+next opposite CHoCH / same-direction `CHOCH_FAILED`) over-reached badly on
+**AAVEUSDT D1**: a launch BOS whose floor (80.01) sat far beyond the leg
+(trading at 145) scanned **seven months** and suppressed the real bearish
+staircase it passed — 176.46 → 145.0 → 91.85 → 91.85 replaced by a single mark
+(−5/+2). So the extended search runs through the **next same-direction BOS's
+window only**: the launch break may confirm at most *one continuation late*. If
+the level has not closed through by the second continuation, it is no longer the
+leg's launch break. AAVE D1 then reduces to a clean −1/+1.
+
+Measured (BTC/ETH/SOL/AAVE/NEAR/ENA × 5m..1d, `limit=1200`,
+`confluence_filter=False`): **6/36 combos changed, 0 trend flips**, and every
+delta is a **1:1 swap** (+7/−7) of a shallow late reference for the deeper
+launch reference — never a net gain or loss of marks. AAVE 30m/1h (90.17 →
+91.05), AAVE 1d (106.75 → 114.73), NEAR 15m (1.97 → 1.976), ENA 15m (two swaps),
+ENA 30m (the motivating 0.07954 → 0.07908). Far narrower than the sibling
+eaten-BOS staging (23/36). The rescued reference is the more extreme level in
+every case, which is the point: the launch fundo/topo is structurally more
+significant than the shallow retrace pivot that displaced it.
+
+Tests: synthetic on/off + bound + bullish-mirror + leg-dies coverage in
+`test_dashboard_data.py`, plus fixture locks on `enausdt_30m_2026_06_20_07_15`
+(`test_run_internal_structure_rescues_ena_30m_leg_launch_bos` and its off-lock,
+which asserts the RAW detector emits the 0.07908 BOS and the pass is what
+decides its fate).

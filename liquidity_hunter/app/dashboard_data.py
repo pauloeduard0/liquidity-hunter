@@ -581,6 +581,32 @@ _CHOCH_SUCCESS_DISPLACEMENT_MAX_PCT: float | None = 0.20
 # for that break at all.
 _STAGE_REVERSAL_EATEN_BOS = True
 
+# Leg-launch BOS rescue in `_reanchor_bos_close_break`. The first BOS of a leg
+# reports the CHoCH-seeded launch level (the fundo/topo the reversal formed),
+# but the re-anchor pass confirms each BOS only within its own window, which
+# ends at the *next* same-direction BOS. On a leg that retests the CHoCH before
+# breaking down, the launch level's first confirming close can land a few
+# candles inside that successor's territory -- the launch BOS is dropped as
+# "wick-only" and the chart promotes a shallow, late fundo to first-of-leg
+# reference. When the *leg-launch* BOS (no same-direction BOS between the flip
+# that started the leg and it) finds no close in its own window, extend the
+# search through the *next* same-direction BOS's window -- the launch break may
+# confirm at most one continuation late. A close through the launch level there
+# confirms the break, the BOS is re-timed to it, and the passed-over shallower
+# continuations are suppressed -- they are premature clutter next to the launch
+# break, and their confirming close would re-kill the rescued mark in
+# `_drop_pre_break_reference_bos` (whose leg reset the rescued BOS now owns).
+# The one-continuation bound is load-bearing: unbounded (to the leg's death), an
+# AAVEUSDT D1 launch BOS whose floor sat far beyond the leg scanned seven months
+# and suppressed the real staircase it passed. See `_leg_launch_rescue_index`.
+# A leg that reverses without ever closing through still drops (the wick-only
+# protection is untouched). The ENA M30 2026-07-12 case: the bearish leg's
+# launch BOS (ref 0.07908, the CHoCH fundo that retested the CHoCH) only
+# close-breaks at 07-13 03:00, three candles past its successor (ref 0.07954,
+# a shallow fundo formed 22 hours after the launch level) -- rescued, the leg
+# reads CHoCH -> BOS 0.07908 -> BOS 0.07760 -> CHoCH.
+_RESCUE_LEG_LAUNCH_BOS = True
+
 # Volatility-normalized proximity for the liquidity-hunt pool map
 # (`LiquidityHuntEngine.proximity_atr`): "nearby" opposing pools are the ones
 # within N x the visible series' mean true-range% of price, instead of the
@@ -690,8 +716,93 @@ def _structural_anchor_index(candles: list[Candle], visible_start: datetime) -> 
     return next(i for i, candle in enumerate(candles) if candle.timestamp == anchor.timestamp)
 
 
+def _leg_launch_rescue_index(
+    event: MarketStructure,
+    ordered: list[MarketStructure],
+    candles: list[Candle],
+    index_by_ts: dict[datetime, int],
+    end_index: int,
+    floor: float,
+    *,
+    bearish: bool,
+) -> int | None:
+    """Find the close that rescues a leg-launch BOS past its primary window.
+
+    Applies only to the *first* BOS of a leg: no same-direction BOS between the
+    flip that started the leg -- a same-direction CHoCH or opposite-direction
+    ``CHOCH_FAILED`` -- and the event. Its reported floor is the CHoCH-seeded
+    launch level, whose first confirming close can land inside the *next*
+    continuation's window (the ENA M30 case behind ``_RESCUE_LEG_LAUNCH_BOS``).
+    The extended search runs from the end of the primary window through the
+    *next* same-direction BOS's window only -- the launch break may confirm at
+    most one continuation late. An unbounded search to the leg's death lets a
+    launch BOS whose floor sits far beyond the leg (the AAVEUSDT D1 2025-11
+    case: floor 80.01 on a leg trading at 145) scan for months and suppress the
+    real staircase it passes (176.46 -> 145.0 -> 91.85). Leg death (the next
+    non-provisional opposite-direction CHoCH or same-direction
+    ``CHOCH_FAILED``) still caps it. The index of the first close through the
+    floor is returned; ``None`` when the event is not a leg launch, or nothing
+    closed through in that bounded span -- the wick-only drop then stands.
+    """
+    launch = False
+    for other in reversed(ordered):
+        if other.timestamp >= event.timestamp or other.provisional:
+            continue
+        if other.event is StructureEvent.BREAK_OF_STRUCTURE:
+            if other.direction is event.direction:
+                return None  # a prior continuation: not the leg's launch BOS
+            continue
+        if other.event is StructureEvent.CHANGE_OF_CHARACTER:
+            launch = other.direction is event.direction
+            break
+        if other.event is StructureEvent.CHOCH_FAILED:
+            # A failed CHoCH flips the trend back to the *opposite* of the
+            # failed CHoCH's direction, starting a leg there.
+            launch = other.direction is not event.direction
+            break
+    if not launch:
+        return None
+
+    limit_index = len(candles)
+    successors = 0
+    for other in ordered:
+        if other.timestamp <= event.timestamp or other.provisional:
+            continue
+        dies = (
+            other.event is StructureEvent.CHANGE_OF_CHARACTER
+            and other.direction is not event.direction
+        ) or (
+            other.event is StructureEvent.CHOCH_FAILED and other.direction is event.direction
+        )
+        if not dies and not (
+            other.event is StructureEvent.BREAK_OF_STRUCTURE
+            and other.direction is event.direction
+        ):
+            continue
+        if not dies:
+            # The first same-direction continuation ends the primary window
+            # (already `end_index`); the search may run through its window, so
+            # only the *second* one bounds it.
+            successors += 1
+            if successors < 2:
+                continue
+        other_index = index_by_ts.get(other.timestamp)
+        if other_index is not None:
+            limit_index = other_index
+        break
+
+    for i in range(end_index + 1, limit_index):
+        close = candles[i].close
+        if (bearish and close < floor) or (not bearish and close > floor):
+            return i
+    return None
+
+
 def _reanchor_bos_close_break(
-    events: list[MarketStructure], candles: list[Candle]
+    events: list[MarketStructure],
+    candles: list[Candle],
+    *,
+    rescue_leg_launch: bool = False,
 ) -> list[MarketStructure]:
     """Re-anchor each continuation BOS to the first *close* beyond the level it broke.
 
@@ -706,6 +817,13 @@ def _reanchor_bos_close_break(
     never closed beyond it -- a wick-only break is not a confirmed continuation.
     The trailing references and CHoCH promotion inside the detector are
     untouched; only the emitted BOS events are re-timed here.
+
+    With ``rescue_leg_launch``, a *leg-launch* BOS (the first of its leg, whose
+    floor is the CHoCH-seeded launch level) that finds no close in its own
+    window is given a bounded extended search -- through the next
+    same-direction BOS's window -- instead of being dropped, suppressing the
+    shallower continuations it passes over. See ``_RESCUE_LEG_LAUNCH_BOS`` and
+    ``_leg_launch_rescue_index``.
     """
     if not events or not candles:
         return events
@@ -714,8 +832,11 @@ def _reanchor_bos_close_break(
     ordered = sorted(events, key=lambda event: event.timestamp)
     last_index = len(candles) - 1
     result: list[MarketStructure] = []
+    suppressed: set[int] = set()
 
     for event in ordered:
+        if id(event) in suppressed:
+            continue  # passed over by an earlier leg-launch rescue
         if event.event is not StructureEvent.BREAK_OF_STRUCTURE or event.provisional:
             # A provisional BOS is already anchored to its close-break at the live
             # edge (and must not be dropped as "wick-only"); pass it through.
@@ -758,7 +879,35 @@ def _reanchor_bos_close_break(
                 break
 
         if new_timestamp is None:
-            continue  # leg only wicked the formed level: not a confirmed BOS
+            rescue_index = (
+                _leg_launch_rescue_index(
+                    event, ordered, candles, index_by_ts, end_index, floor, bearish=bearish
+                )
+                if rescue_leg_launch
+                else None
+            )
+            if rescue_index is None:
+                continue  # leg only wicked the formed level: not a confirmed BOS
+            new_timestamp = candles[rescue_index].timestamp
+            # The rescued launch BOS's close-break landed inside a successor's
+            # window: the shallower same-direction continuations it passed over
+            # are premature clutter next to the launch break (and their
+            # confirming close would re-kill the rescued mark in
+            # `_drop_pre_break_reference_bos`); suppress them.
+            for other in ordered:
+                if (
+                    event.timestamp < other.timestamp <= new_timestamp
+                    and other.event is StructureEvent.BREAK_OF_STRUCTURE
+                    and not other.provisional
+                    and other.direction is event.direction
+                    and other.reference_price_level is not None
+                    and (
+                        other.reference_price_level > floor
+                        if bearish
+                        else other.reference_price_level < floor
+                    )
+                ):
+                    suppressed.add(id(other))
 
         # Anchor the line's *start* at the formed level's origin -- the candle
         # that made the prior swing extreme (low for bearish, high for bullish)
@@ -1372,7 +1521,9 @@ def _run_internal_structure(
         events = detector.detect(internal_candles, range_resets=range_resets)
         # Re-time each BOS to the first close beyond the formed level it broke
         # (dropping wick-only continuations), before the visible filter.
-        events = _reanchor_bos_close_break(events, internal_candles)
+        events = _reanchor_bos_close_break(
+            events, internal_candles, rescue_leg_launch=_RESCUE_LEG_LAUNCH_BOS
+        )
         # A reference may only form *after* the prior same-direction BOS broke:
         # a continuation referencing a pre-break wick attempt at the prior level
         # is dropped (pre-break liquidity, not structure of the new leg).
@@ -1644,7 +1795,9 @@ def load_dashboard_data(
         ),
     )
     all_major_events = major_detector.detect(buffered_candles)
-    all_major_events = _reanchor_bos_close_break(all_major_events, buffered_candles)
+    all_major_events = _reanchor_bos_close_break(
+        all_major_events, buffered_candles, rescue_leg_launch=_RESCUE_LEG_LAUNCH_BOS
+    )
     all_major_events = _drop_pre_break_reference_bos(all_major_events)
     market_structure_events = [
         e for e in all_major_events if visible_start <= e.timestamp <= visible_end
