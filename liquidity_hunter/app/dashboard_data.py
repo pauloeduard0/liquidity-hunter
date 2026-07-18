@@ -1114,7 +1114,11 @@ def _drop_failed_refire_cycles(events: list[MarketStructure]) -> list[MarketStru
     every replay reading after it is unchanged. A re-fire that
     *survived* -- confirmed, still standing, or merely fizzle-marked (the
     additive marker never flips the trend, so hiding the CHoCH would desync
-    the chart from ``final_trend``) -- is kept: it earned its ``↻``.
+    the chart from ``final_trend``) -- is kept: it earned its ``↻``. So is a
+    re-fire that failed only *after* a chart-surviving same-direction BOS:
+    its leg broke structure, so the pair is real history (reversal confirmed,
+    then ended), not a dead re-attempt (the ENAUSDT H1 2026-07-12 re-fire at
+    0.08104 that dropped to a 0.0776 BOS before the V-recovery failed it).
 
     Under ``choch_failed_rearm_persistent`` the chain is no longer one-shot:
     a later surviving re-fire can reference a failure this pass just dropped
@@ -1179,6 +1183,24 @@ def _drop_failed_refire_cycles(events: list[MarketStructure]) -> list[MarketStru
             None,
         )
         if own_failure_index is not None:
+            # A re-fire whose leg *broke structure* -- a chart-surviving
+            # same-direction BOS between the re-fire and its failure -- did
+            # add standing structure: it demonstrably worked, and the later
+            # failure marks where the confirmed move ended, not a dead
+            # re-attempt. Collapsing the pair would erase a CHoCH that broke
+            # structure and leave its BOS orphaned (the ENAUSDT H1 2026-07-12
+            # re-fire at 0.08104: dropped to 0.0776 with a BOS, then the
+            # V-recovery stamped the failure). Keep the whole cycle.
+            failure_ts = events[own_failure_index].timestamp
+            refire_worked = any(
+                mid.event is StructureEvent.BREAK_OF_STRUCTURE
+                and not mid.provisional
+                and mid.direction is event.direction
+                and event.timestamp < mid.timestamp <= failure_ts
+                for mid in events
+            )
+            if refire_worked:
+                continue
             dropped.add(i)
             dropped.add(own_failure_index)
     if not dropped:
