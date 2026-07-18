@@ -1972,3 +1972,38 @@ earlier-formed reference. No leg loses a mark.
 Fixture `nearusdt_15m_2026_07_02_07_18` + on/off locks
 (`test_run_internal_structure_stages_near_15m_superseded_continuation`,
 `..._superseded_lost_without_staging`).
+
+### Chart timezone: local intraday, exchange time on D1/W1 (2026-07-18)
+
+Not a detector decision, but it belongs here because it twice corrupted a
+structure review. Lightweight Charts has no timezone support: it renders every
+`UTCTimestamp` in UTC. The chart therefore spoke UTC while the user read it as
+local time (UTC−3), so "the BOS at 05:15" was really 02:15 local, and "the fundo
+at 12/07 00:30" was 11/07 21:30. Both investigations above (ENA M30 Gap #1 and
+NEAR M15) opened with three hours of misalignment between what the user saw and
+what the data said — each cost a round trip to notice.
+
+**Fix** (`frontend/src/utils/chartTime.ts`): `toChartTime(iso)` shifts each
+timestamp by its own local UTC offset before handing it to the library — the
+library's documented workaround for displaying another timezone. Per-timestamp
+(not a single cached offset) so candles either side of a DST transition each get
+the right one; verified against `America/New_York` across the 2026-03-08
+transition (01:00 EST / 04:00 EDT).
+
+**Daily and weekly are exempt.** Their timestamp *is* the exchange day (00:00
+UTC); shifting would relabel the 14 Jul daily bar as "13 Jul 21:00". Those
+timeframes keep exchange time, like every other platform.
+
+Why the shift lives in the data rather than in `localization.timeFormatter` /
+`tickMarkFormatter`: formatting alone leaves the library placing tick marks on
+*UTC* boundaries, so the day-change tick would land at 21:00 local and the axis
+would change date mid-evening. Shifting the data puts day boundaries where the
+viewer expects them. The cost — chart times are no longer real epoch values — is
+contained: nothing converts back (`param.time` is only forwarded between the
+synced panes), and the helpers that compare event times to candle times are
+shift-invariant because every time flows through the one converter. The function
+is named `toChartTime`, not `toUtcTimestamp`, so that stays obvious.
+
+A toolbar chip next to the OHLC readout shows the active clock (`UTC-3`
+intraday, `UTC` on D1/W1) — the actual guard against a repeat, since the
+ambiguity, not the offset, is what cost the time.

@@ -155,6 +155,13 @@ Ou seja, o preço cai, faz o fundo (avança o estado), **repica** formando um to
 menor — e *aí* o BOS é confirmado e desenhado. Esse pullback é importante porque
 ele também vira a **semente da referência do CHoCH** (ver seção 3).
 
+**E se o pullback nunca vier?** O pendente é perdido — e é daí que vêm dois dos
+stagings aditivos da seção 10: se quem chega antes é a **reversão**, o pendente é
+descartado no flip (*reversal-eaten*); se é o **próximo avanço da mesma direção**
+(perna impulsiva de pivôs consecutivos do mesmo lado), o pendente é sobrescrito
+(*superseded-continuation*). Nos dois casos o rompimento foi real e fechou através
+do piso — por isso ganha marca aditiva em vez de sumir.
+
 #### Filtro de pavio no pullback (`bos_pullback_max_wick_pct = 0.4`)
 
 O pullback que confirma pode ser um **pavio de uma vela só** — a vela espeta o
@@ -182,7 +189,7 @@ o pending BOS fica vivo esperando um pullback de verdade.
   desenhada no **extremo do swing anterior**, formando a escada limpa — e não
   no extremo novo.
 - **`reference_timestamp`** = a vela que *formou* aquele nível rompido (origem da
-  linha), preenchido depois pelo passo de composição (seção 10).
+  linha), preenchido depois pelo passo de composição (seção 11).
 
 ---
 
@@ -638,7 +645,7 @@ usa `"chain"`.
 
 ## 10. Staging aditivo de BOS (marcas extras, máquina intocada)
 
-Quatro mecanismos adicionam BOS que a máquina de estados não pôde emitir, sempre
+Cinco mecanismos adicionam BOS que a máquina de estados não pôde emitir, sempre
 numa **lista separada**, dedupados contra os BOS reais no final, sem tocar
 estado/referências/CHoCH (flag desligada = saída byte a byte idêntica):
 
@@ -664,12 +671,30 @@ estado/referências/CHoCH (flag desligada = saída byte a byte idêntica):
   fechamento (a chave é o fechamento, não o limiar de deslocamento do impulse
   staging). Puramente aditivo: 0 flips de trend na matriz, 23/36 combos com
   +1..3 marcas.
+- **Superseded-continuation staging** (`stage_superseded_continuation_bos = True`,
+  2026-07-18): o irmão do anterior — lá o pendente é comido pela *reversão*, aqui
+  pela *continuação seguinte*. Numa perna impulsiva de pivôs consecutivos do mesmo
+  lado, o avanço seguinte **sobrescreve** o pendente antes que o pivô de pullback
+  confirmador apareça — e o piso reportado já catracou para o pivô novo. Só o
+  **último** pendente da sequência emitia: os topos/fundos que realmente se
+  formaram e foram rompidos no meio ficavam sem marca, e o BOS sobrevivente
+  referenciava um nível posterior ao que a perna rompeu primeiro. O sintoma, na
+  frase do usuário: *"funciona depois de um CHoCH, mas depois desse BOS não"* — o
+  CHoCH **semeia** o piso reportado com o extremo da reversão (seção 2), então o
+  1º BOS da perna referencia certo; um pendente de *continuação* não tem essa
+  semeadura e simplesmente perde o piso. Caso NEAR M15 de 14/07: o topo 2,0120
+  (das 07:15 UTC) formou, o preço corrigiu até 1,9670 e fechou através dele, mas
+  **nenhum pivô de fundo** se formou entre os avanços das 12:30 (2,0400) e 15:30
+  (2,0660) — a única continuação da perna referenciava 2,0400, com a linha
+  começando às 12:30 em vez do topo das 07:15. Estagiando o pendente que sai (nos
+  dois sites de avanço, mesma chave de *close* através do piso), a perna volta a
+  ler BOS 2,0120 → BOS 2,0400. Medição: 9/36 combos, **0 flips**, +13 marcas.
 
 ---
 
 ## 11. Os passes de composição (`load_dashboard_data`)
 
-Depois do detector, três passes conservadores rodam sobre a lista de eventos:
+Depois do detector, cinco passes conservadores rodam sobre a lista de eventos:
 
 1. **`_reanchor_bos_close_break`** — cada BOS é **re-cronometrado** para a
    **primeira vela que FECHA** além do nível formado que rompeu (na janela em
@@ -677,6 +702,27 @@ Depois do detector, três passes conservadores rodam sobre a lista de eventos:
    **descartado**; define `reference_timestamp` (origem da linha). Confirmação
    conservadora por fechamento — pode deixar trechos longos sem evento no macro
    (intencional). Roda no internal **e** no major.
+
+   **Resgate do BOS de lançamento** (`_RESCUE_LEG_LAUNCH_BOS = True`,
+   2026-07-18): a janela de cada BOS termina no **próximo BOS da mesma direção**
+   — certa para *re-cronometrar*, estrita demais como *porteira de validade*,
+   porque a perna não morre na continuação seguinte. Numa perna que **retesta o
+   CHoCH antes de cair**, o primeiro fechamento através do nível de lançamento
+   (o fundo/topo semeado pelo CHoCH, seção 2) cai algumas velas *dentro* do
+   território do sucessor: o BOS de lançamento era descartado como "só pavio" e
+   o gráfico promovia um fundo raso e tardio a referência de 1º-da-perna. Agora,
+   quando o BOS **de lançamento** (nenhum BOS da mesma direção entre o flip que
+   abriu a perna e ele) não acha fechamento na própria janela, a busca se
+   estende — e as continuações rasas que ele ultrapassa são **suprimidas** (não
+   é cosmético: o fechamento confirmador delas re-mataria a marca resgatada no
+   passe 2, cujo reset de perna o resgatado agora é dono). Caso ENA M30: a perna
+   passou a ler CHoCH → BOS 0,07908 → BOS 0,07760 → CHoCH.
+
+   ⚠️ **A busca estendida é limitada a UMA continuação** — o lançamento pode
+   confirmar no máximo uma continuação atrasado. Sem esse limite (varrendo até a
+   morte da perna) um BOS de lançamento do AAVE D1, com piso 80,01 numa perna
+   operando a 145, varreu **sete meses** e engoliu a escada bearish real
+   (176,46 → 145,0 → 91,85). O limite veio da medição, não do desenho.
 2. **`_drop_pre_break_reference_bos`** — descarta um BOS de continuação cuja
    referência se formou **antes** do fechamento confirmador do BOS anterior da
    mesma perna: um pavio que furou o nível ainda-não-rompido ratcheta o extremo
@@ -685,8 +731,15 @@ Depois do detector, três passes conservadores rodam sobre a lista de eventos:
    falhada). Um CHoCH reseta a restrição para a direção dele.
 3. **`_drop_resumed_fizzle_markers`** — o cancelamento de fizzle retomado
    (seção 5). Só no internal.
+4. **`_drop_failed_refire_cycles`** — um CHoCH re-fired que ele mesmo falhou não
+   acrescentou estrutura nenhuma: a história do nível já está contada pelo `✕`
+   original, então o par (re-fire + falha própria) é descartado. Roda depois do
+   passe 3, para que um re-fire *retomado* nunca seja colapsado. Só no internal.
+5. **`_drop_superseded_provisional_choch`** — `CHoCH?` estagiados que ficaram
+   obsoletos saem do histórico: se qualquer BOS/CHoCH **real** vier depois, só o
+   provisório de live-edge sobrevive. Só no internal.
 
-Marcas provisórias (seção 7) são puladas pelos três.
+Marcas provisórias (seção 7) são puladas pelos passes de BOS.
 
 ---
 
@@ -723,6 +776,7 @@ choch_pending_fail_at_broken_level=True     choch_pending_fail_persistence_candl
 choch_origin_leg_extreme=True               choch_fizzle_reclaim_candles=30
 choch_failed_fallback_suppress_candles=20   stage_choch_failed_window_bos=True
 choch_weak_ref_fail_at_broken_level=True    stage_reversal_eaten_bos=True
+stage_superseded_continuation_bos=True
 choch_failed_rearm=True                     choch_failed_rearm_persistent=True
 choch_fail_live_edge=True
 choch_success_displacement_atr=4.5          choch_success_displacement_max_pct=0.20
