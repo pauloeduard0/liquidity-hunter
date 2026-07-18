@@ -1484,7 +1484,9 @@ state in brief:
   displacement release, weak-ref failure at the broken level, staircase
   rollback on a discarded phantom advance, displacement-success
   CHoCH-origin retirement (an impulsive reversal that emitted no BOS is not
-  marked a false `CHOCH_FAILED` on its pullback), and the scoped
+  marked a false `CHOCH_FAILED` on its pullback; its ATR threshold is capped
+  at `choch_success_displacement_max_pct` = 20% of price, where the ATR unit
+  degenerates on volatile dailies — the AERO 1D −31% V-reversal), and the scoped
   consolidation cycle reset (`_CONSOLIDATION_RANGE_RESET_CYCLE`, a second
   `detect(range_resets=…)` pass re-seeding references onto the ACTIVE range's
   boundaries — active-only, measured 0/20 change). A `CHOCH_FAILED`'s reclaim

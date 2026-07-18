@@ -872,6 +872,48 @@ neither, the 06-08 bullish CHoCH stands). Not mirrored into
 `SwingStructureDetector` (impulsive-leg BOS gaps are an internal-scope concern;
 the major detector's freeze semantics differ).
 
+**Displacement-success percentage cap**
+(`InternalStructureDetector`, as of 2026-07-17):
+`choch_success_displacement_max_pct` (constructor default `None` = uncapped;
+wired **`0.20`** in `load_dashboard_data` via
+`_CHOCH_SUCCESS_DISPLACEMENT_MAX_PCT`). The ATR unit above self-adapts to each
+series' volatility — that is what makes the threshold config-free per asset —
+but on an extremely volatile series it **degenerates**: surveyed on the
+production slices (2026-07-17), 4.5 ATR as a percentage move is BTC 1D 16%,
+ETH 23%, SOL 32%, AAVE 33%, NEAR 36%, AERO 44%, ENA 49% (vs a sane 3–9% on
+every H1). A volatile alt daily thus demands an unreachable 30–50% move to
+credit an unconfirmed reversal, so a plainly successful impulse still gets its
+CHoCH retroactively cancelled on the give-back. Motivating case (AEROUSDT 1D):
+the 2026-05-16 bearish CHoCH (broke the 0.43900 HL) fell **−31%** to 0.30440
+with a real close-break of its 0.38430 fundo — but the V-recovery to 0.58
+formed **no pullback pivot** (no high pivot between 06-06 and 06-23), so no
+confirming BOS ever emitted, the origin stayed armed, ~2.6 in-detector ATRs
+fell short of the 4.5 threshold, and the sustained reclaim of 0.439 fired a
+retroactive `CHOCH_FAILED` (+ the recovery absorbed into the flip, no fresh
+bullish CHoCH). When set, the effective threshold becomes
+`min(atr_mult × mean_tr_pct, max_pct)` (`_displacement_success_threshold`, all
+four check sites — both pivot-loop sides + both live-edge sides). **20%** ≈
+2.05 ATR on AERO 1D (the cleanest of the sweep: 3.0 changed nothing, 2.5
+left a live-edge ✕ ping-pong, 2.0 read best); every intraday combo sits far
+below the cap, so the NEAR H1 calibration above is untouched. Inert without
+`choch_success_displacement_atr` (nothing to cap — wiring that toggles the
+base flag off need not clear it). Measured (BTC/ETH/SOL/NEAR/AAVE/AERO/ENA ×
+15m/30m/1h/4h/1d, `limit=1200`, production wiring, raw + composed streams):
+**4/35 combos changed — all dailies** (NEAR/AAVE/AERO/ENA 1D), every intraday
+combo byte-identical, **`final_trend` unchanged on all 35**. The daily diffs
+consistently read better: AAVE 1D's four-✕ ping-pong across mid-2024 becomes
+the real 76→185 rally credited as CHoCH ▲ 05-23 + a clean BOS ▲ staircase
+(118 → 148.89 → 159 → 185.24); AERO 1D's Oct-2025 crash (0.96 → 0.23) becomes
+a credited bearish CHoCH chain instead of three failed bullish CHoCHs, and its
+Nov rally to 1.30 — which fully retraced — correctly reads as a sweep; NEAR
+and ENA 1D gain BOS staircases on their big legs. Real-data regression
+fixture: `tests/liquidity/detectors/data/aerousdt_1d_2024_12_2026_07.json`
+(592-candle production D1 slice from the structural anchor; uncapped → the
+06-16 bearish `CHOCH_FAILED` at 0.439 and no bullish CHoCH, capped → the
+May bearish CHoCH stands and the recovery is a fresh bullish CHoCH at the
+0.4809 LH, `final_trend` bullish either way). Not mirrored into
+`SwingStructureDetector` (the base flag isn't either).
+
 **`CHOCH_FAILED` scan bounded to after the CHoCH formed**
 (`InternalStructureDetector`, as of 2026-07-13; **not flag-gated** — a
 correctness fix, not a tunable). A `CHOCH_FAILED` fires when price *reclaims*

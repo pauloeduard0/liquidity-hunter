@@ -547,6 +547,24 @@ _STAGE_CHOCH_FAILED_WINDOW_BOS = True
 # the trend state.
 _CHOCH_SUCCESS_DISPLACEMENT_ATR: float | None = 4.5
 
+# Percentage cap on the displacement-success threshold
+# (`InternalStructureDetector.choch_success_displacement_max_pct`). The ATR
+# unit above self-adapts to each series' volatility, but on an extremely
+# volatile series it degenerates: on an alt daily with a ~10% mean TR, 4.5 ATR
+# demands a 32-49% move (survey 2026-07-17: BTC 1D 16%, ETH 23%, SOL 32%,
+# AAVE 33%, AERO 44%, ENA 49%), so a plainly successful impulse still gets its
+# CHoCH cancelled on the give-back (the AEROUSDT 1D 2026-06 case: a bearish
+# CHoCH + close-broken BOS fell -31% -- ~2.6 ATR as the detector measures it --
+# then the V-recovery reclaimed the level and fired a retroactive CHOCH_FAILED
+# instead of a fresh bullish CHoCH). Capping the threshold at 20% of price
+# bounds the requirement exactly where the ATR unit breaks down: every
+# intraday combo sits far below the cap (H1 3-9%, H4 6-15%, byte-for-byte
+# identical) and only the volatile dailies are governed by it. Measured
+# (BTC/ETH/SOL/AAVE/NEAR/AERO/ENA x 1h/4h/1d, limit=1200): only volatile-daily
+# combos change, final_trend preserved; AERO 1D keeps its May-June bearish
+# cycle valid and reads the June V-recovery as a fresh bullish CHoCH.
+_CHOCH_SUCCESS_DISPLACEMENT_MAX_PCT: float | None = 0.20
+
 # Reversal-eaten BOS staging (`InternalStructureDetector.stage_reversal_eaten_bos`).
 # A BOS is only *emitted* once a confirming opposite pullback pivot forms after
 # the close-break. On an impulsive final leg that reverses immediately -- the
@@ -1240,6 +1258,11 @@ def _build_internal_detector(
         # confirming BOS is not marked a false CHOCH_FAILED on its pullback.
         # See _CHOCH_SUCCESS_DISPLACEMENT_ATR.
         choch_success_displacement_atr=_CHOCH_SUCCESS_DISPLACEMENT_ATR,
+        # Cap the ATR-derived displacement threshold at a fraction of price, so
+        # a volatile daily (mean TR ~10%) does not demand an unreachable 40%+
+        # move to credit a successful reversal. See
+        # _CHOCH_SUCCESS_DISPLACEMENT_MAX_PCT.
+        choch_success_displacement_max_pct=_CHOCH_SUCCESS_DISPLACEMENT_MAX_PCT,
         # Additively mark the last continuation BOS an impulsive move made right
         # before it reversed: when the floor already closed-broke but the
         # reversal CHoCH arrived before a confirming pullback, the pending BOS is

@@ -790,6 +790,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_fail_live_edge: bool = False,
         stage_choch_failed_window_bos: bool = False,
         choch_success_displacement_atr: float | None = None,
+        choch_success_displacement_max_pct: float | None = None,
         stage_reversal_eaten_bos: bool = False,
     ) -> None:
         if persistence_candles < 1:
@@ -836,6 +837,11 @@ class InternalStructureDetector(MarketStructureDetector):
             raise ValueError("impulse_bos_displacement_pct must be positive")
         if choch_success_displacement_atr is not None and choch_success_displacement_atr <= 0:
             raise ValueError("choch_success_displacement_atr must be positive")
+        if (
+            choch_success_displacement_max_pct is not None
+            and choch_success_displacement_max_pct <= 0
+        ):
+            raise ValueError("choch_success_displacement_max_pct must be positive")
         if bos_pullback_max_wick_pct is not None and not 0 < bos_pullback_max_wick_pct <= 1:
             raise ValueError("bos_pullback_max_wick_pct must be in (0, 1]")
         self._high_detector = SwingHighDetector(lookback=swing_lookback)
@@ -899,6 +905,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._choch_fail_live_edge = choch_fail_live_edge
         self._stage_choch_failed_window_bos = stage_choch_failed_window_bos
         self._choch_success_displacement_atr = choch_success_displacement_atr
+        self._choch_success_displacement_max_pct = choch_success_displacement_max_pct
         self._stage_reversal_eaten_bos = stage_reversal_eaten_bos
         # The state-machine trend after the most recent `detect()` call
         # (mirrors `SwingStructureDetector.final_trend`). The single source of
@@ -1986,7 +1993,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     and candles[current_index].close > 0
                     and (bear_fail_pivot.price - bear_leg_low)
                     / candles[current_index].close
-                    >= self._choch_success_displacement_atr * mean_tr_pct
+                    >= self._displacement_success_threshold(mean_tr_pct)
                 ):
                     bear_choch_origin = None
                     bear_choch_fail_ref = None
@@ -2971,7 +2978,9 @@ class InternalStructureDetector(MarketStructureDetector):
                 # CHOCH_FAILED on a move that plainly succeeded (the NEAR H1
                 # 2026-06 case: a bullish CHoCH rallied +16% / ~7.6 ATR to 2.56
                 # then got marked failed on the pullback). Once the leg extreme
-                # has displaced >= N x ATR% beyond the fail level, treat the
+                # has displaced >= N x ATR% beyond the fail level (capped at
+                # `choch_success_displacement_max_pct` of price, where the ATR
+                # unit degenerates on very volatile series), treat the
                 # reversal as established -- a confirming BOS would have retired
                 # the origin here anyway -- so retire it: a later reversal is a
                 # fresh opposite CHoCH, not a failure of this one. See
@@ -2985,7 +2994,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     and candles[current_index].close > 0
                     and (bull_leg_high - bull_fail_pivot.price)
                     / candles[current_index].close
-                    >= self._choch_success_displacement_atr * mean_tr_pct
+                    >= self._displacement_success_threshold(mean_tr_pct)
                 ):
                     bull_choch_origin = None
                     bull_choch_fail_ref = None
@@ -3683,7 +3692,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     and candles[last_index].close > 0
                     and (bull_leg_high - le_fail_pivot.price)
                     / candles[last_index].close
-                    >= self._choch_success_displacement_atr * mean_tr_pct
+                    >= self._displacement_success_threshold(mean_tr_pct)
                 ):
                     le_fail_pivot = None
                 le_fail_persistence = self._persistence_candles
@@ -3742,7 +3751,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     and candles[last_index].close > 0
                     and (le_fail_pivot.price - bear_leg_low)
                     / candles[last_index].close
-                    >= self._choch_success_displacement_atr * mean_tr_pct
+                    >= self._displacement_success_threshold(mean_tr_pct)
                 ):
                     le_fail_pivot = None
                 le_fail_persistence = self._persistence_candles
@@ -4074,6 +4083,27 @@ class InternalStructureDetector(MarketStructureDetector):
             merged.append(fizzle_event)
         merged.sort(key=lambda e: e.timestamp)
         return merged
+
+    def _displacement_success_threshold(self, mean_tr_pct: float) -> float:
+        """The displacement (fraction of price) that retires a CHoCH origin.
+
+        `choch_success_displacement_atr` x the series' mean true-range%, capped
+        at `choch_success_displacement_max_pct` when set. The ATR unit adapts
+        the threshold to each series' own volatility, but on an extremely
+        volatile series (an alt daily with a ~10% mean TR) the multiple
+        degenerates into an unreachable percentage move (AEROUSDT D1: 4.5 ATR
+        = 44%), so a plainly successful impulse still gets marked
+        `CHOCH_FAILED` on the give-back. The cap bounds the requirement where
+        the ATR unit breaks down while leaving calmer series (whose ATR-derived
+        threshold sits far below it) byte-for-byte identical. Inert when
+        `choch_success_displacement_atr` is unset (the base retirement is off,
+        so there is no threshold to cap).
+        """
+        assert self._choch_success_displacement_atr is not None
+        threshold = self._choch_success_displacement_atr * mean_tr_pct
+        if self._choch_success_displacement_max_pct is not None:
+            threshold = min(threshold, self._choch_success_displacement_max_pct)
+        return threshold
 
     def _pullback_quality_ok(self, candle: Candle, *, high_pivot: bool) -> bool:
         """Whether a confirming pullback pivot is a *real* bounce, not a wick.

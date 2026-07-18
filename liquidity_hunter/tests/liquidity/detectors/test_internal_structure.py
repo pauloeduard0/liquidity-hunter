@@ -1167,6 +1167,97 @@ def test_invalid_choch_success_displacement_atr_raises() -> None:
         InternalStructureDetector(choch_success_displacement_atr=0.0)
 
 
+def test_invalid_choch_success_displacement_max_pct_raises() -> None:
+    with pytest.raises(
+        ValueError, match="choch_success_displacement_max_pct must be positive"
+    ):
+        InternalStructureDetector(
+            choch_success_displacement_atr=4.5,
+            choch_success_displacement_max_pct=0.0,
+        )
+
+
+def test_choch_success_displacement_max_pct_inert_without_atr() -> None:
+    """The cap bounds the ATR-derived threshold; with the base retirement off
+    (`choch_success_displacement_atr=None`) there is nothing to cap and the
+    output is identical to the default configuration -- so wiring that toggles
+    the base flag off need not also clear the cap."""
+    highs = [150.0] * 20
+    lows = [140.0] * 20
+    highs[1], highs[7], highs[11] = 200.0, 160.0, 200.0
+    lows[3], lows[5], lows[9], lows[13] = 130.0, 110.0, 100.0, 90.0
+
+    def build_candles() -> list[Candle]:
+        candles = make_series(highs, lows)
+        candles[5] = make_candle(5, 150.0, 110.0, close=120.0)
+        candles[9] = make_candle(9, 150.0, 100.0, close=105.0)
+        candles[11] = make_candle(11, 200.0, 140.0, close=190.0)
+        candles[12] = make_candle(12, 195.0, 140.0, close=188.0)
+        candles[13] = make_candle(13, 150.0, 90.0, close=95.0)
+        candles[14] = make_candle(14, 145.0, 92.0, close=95.0)
+        return candles
+
+    default = InternalStructureDetector(
+        swing_lookback=1, persistence_candles=1
+    ).detect(build_candles())
+    inert = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=1,
+        choch_success_displacement_max_pct=0.2,
+    ).detect(build_candles())
+    assert [(e.timestamp, e.event, e.direction) for e in default] == [
+        (e.timestamp, e.event, e.direction) for e in inert
+    ]
+
+
+def test_displacement_max_pct_caps_atr_threshold() -> None:
+    """The same unconfirmed bullish CHoCH as above (rally displaces the origin
+    by ~3.9 ATR). With an ATR multiplier set *above* that, the ATR-derived
+    threshold alone is unreachable and the CHOCH_FAILED still fires; capping
+    the threshold with ``choch_success_displacement_max_pct`` below the leg's
+    absolute displacement retires the origin instead -- the cap governs where
+    the ATR unit demands more than the move could ever deliver.
+    """
+    highs = [150.0] * 20
+    lows = [140.0] * 20
+    highs[1], highs[7], highs[11] = 200.0, 160.0, 200.0
+    lows[3], lows[5], lows[9], lows[13] = 130.0, 110.0, 100.0, 90.0
+
+    def build_candles() -> list[Candle]:
+        candles = make_series(highs, lows)
+        candles[5] = make_candle(5, 150.0, 110.0, close=120.0)
+        candles[9] = make_candle(9, 150.0, 100.0, close=105.0)
+        candles[11] = make_candle(11, 200.0, 140.0, close=190.0)
+        candles[12] = make_candle(12, 195.0, 140.0, close=188.0)
+        candles[13] = make_candle(13, 150.0, 90.0, close=95.0)
+        candles[14] = make_candle(14, 145.0, 92.0, close=95.0)
+        return candles
+
+    # ATR multiplier alone too high: the origin stays armed and the drop back
+    # through 100 still fails the CHoCH.
+    uncapped = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=1,
+        choch_success_displacement_atr=10.0,
+    ).detect(build_candles())
+    assert any(e.event is StructureEvent.CHOCH_FAILED for e in uncapped)
+
+    # Same multiplier, but the percentage cap bounds the threshold below the
+    # leg's displacement: the origin retires and no failure fires.
+    capped = InternalStructureDetector(
+        swing_lookback=1,
+        persistence_candles=1,
+        choch_success_displacement_atr=10.0,
+        choch_success_displacement_max_pct=0.30,
+    ).detect(build_candles())
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        for e in capped
+    )
+    assert not any(e.event is StructureEvent.CHOCH_FAILED for e in capped)
+
+
 def test_bos_fields_on_confirmed_event() -> None:
     """Verify all fields on a confirmed BOS event: timestamp, price_level,
     reference_price_level, reference_timestamp, origin_price_level."""
@@ -3777,3 +3868,145 @@ def test_reversal_eaten_bos_marks_final_continuation_before_choch() -> None:
     new_keys = on_keys - off_keys
     assert (eaten.timestamp, eaten.event, eaten.direction, eaten.price_level) in new_keys
     assert on.final_trend is off.final_trend
+
+
+# --- Displacement-success percentage cap (choch_success_displacement_max_pct) -
+#
+# AEROUSDT 1D, the structurally anchored production slice. The bearish CHoCH of
+# 2026-05-16 (broke the 0.43900 higher-low) fell -31% to 0.30440 with a real
+# close-break of its 0.38430 fundo -- but the V-recovery to 0.58 formed no
+# pullback pivot (no high pivot between 06-06 and 06-23), so no confirming BOS
+# ever *emitted* and the origin stayed armed. On this daily the mean TR is
+# ~10%, so the 4.5-ATR displacement-success threshold demands a ~44% move: the
+# -31% (~2.6 ATR as measured in-detector) impulse cannot retire the origin,
+# and the sustained reclaim of 0.439 fires a retroactive CHOCH_FAILED on a
+# reversal that plainly worked. Capping the threshold at 20% of price credits
+# the impulse, so the recovery reads as a fresh bullish CHoCH instead.
+_AERO_1D_CAP_DATA = Path(__file__).parent / "data" / "aerousdt_1d_2024_12_2026_07.json"
+
+
+def _load_aero_1d_candles() -> list[Candle]:
+    rows = json.loads(_AERO_1D_CAP_DATA.read_text())
+    return [
+        Candle(
+            symbol="AEROUSDT",
+            timeframe=TimeFrame.D1,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _aero_1d_detector(*, max_pct: float | None) -> InternalStructureDetector:
+    # The full production D1 wiring; `choch_success_displacement_max_pct` is
+    # the toggle under test.
+    return InternalStructureDetector(
+        swing_lookback=5,
+        persistence_candles=2,
+        confluence_filter=False,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=40,
+        stale_reanchor_displacement_atr=16.0,
+        stale_reanchor_displacement_candles=15,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        rollback_staircase_on_discard=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_pct=0.04,
+        bos_leg_origin_release_gap_atr=3.0,
+        bos_leg_origin_require_close_break=True,
+        bos_floor_require_close_break=True,
+        choch_confirmed_trend_persistence_candles=4,
+        emit_provisional_bos=True,
+        emit_provisional_choch=True,
+        emit_provisional_choch_weak=True,
+        choch_origin_leg_extreme=True,
+        choch_weak_ref_fail_at_broken_level=True,
+        choch_pending_fail_at_broken_level=True,
+        choch_pending_fail_persistence_candles=6,
+        choch_fizzle_reclaim_candles=30,
+        choch_failed_fallback_suppress_candles=20,
+        choch_failed_rearm=True,
+        choch_failed_rearm_persistent=True,
+        choch_fail_live_edge=True,
+        stage_choch_failed_window_bos=True,
+        choch_success_displacement_atr=4.5,
+        choch_success_displacement_max_pct=max_pct,
+        stage_reversal_eaten_bos=True,
+    )
+
+
+def test_uncapped_atr_threshold_fails_successful_daily_reversal() -> None:
+    """Without the cap, the -31% impulse cannot reach the ~44% ATR-derived
+    threshold: the origin stays armed and the June recovery retroactively
+    cancels the bearish CHoCH (CHOCH_FAILED at the 0.439 reclaim)."""
+    events = _aero_1d_detector(max_pct=None).detect(_load_aero_1d_candles())
+
+    failed = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 6, 16, tzinfo=UTC)
+    ]
+    assert len(failed) == 1
+    assert failed[0].reference_price_level == pytest.approx(0.439, abs=0.001)
+    # The recovery is absorbed by the failure flip: no fresh bullish CHoCH.
+    assert not any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 6, 20, tzinfo=UTC)
+        for e in events
+    )
+
+
+def test_capped_threshold_credits_daily_reversal_as_fresh_choch() -> None:
+    """With the 20% cap the -31% impulse clears the threshold: the origin
+    retires (the reversal is established, as a confirming BOS would have done),
+    the bearish cycle keeps its CHoCH, and the June recovery reads as a fresh
+    bullish CHoCH at the 0.4809 lower-high instead of a retroactive failure."""
+    detector = _aero_1d_detector(max_pct=0.20)
+    events = detector.detect(_load_aero_1d_candles())
+
+    # The May bearish CHoCH survives...
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 5, 16, tzinfo=UTC)
+        for e in events
+    )
+    # ...is never retroactively cancelled...
+    assert not any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 6, 16, tzinfo=UTC)
+        for e in events
+    )
+    # ...and the recovery is a fresh bullish CHoCH off the 0.4809 lower-high.
+    fresh = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and e.timestamp == datetime(2026, 6, 20, tzinfo=UTC)
+    ]
+    assert len(fresh) == 1
+    assert fresh[0].reference_price_level == pytest.approx(0.4809, abs=0.001)
+    assert not fresh[0].provisional
+
+    # The standing trend matches the uncapped run: the cap rewrites the
+    # narration of the reversal, never the trend state.
+    uncapped = _aero_1d_detector(max_pct=None)
+    uncapped.detect(_load_aero_1d_candles())
+    assert detector.final_trend is uncapped.final_trend
+    assert detector.final_trend is MarketDirection.BULLISH
