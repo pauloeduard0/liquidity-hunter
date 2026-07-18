@@ -25,9 +25,15 @@ export interface LineLabel {
   text: string
   /** Text color -- matches the line's color, mirroring the Streamlit/Plotly annotations. */
   color: string
+  /**
+   * Draw the label just *below* the line instead of above it
+   * (TradingView-style: bullish structure labels sit above their line,
+   * bearish ones below). Defaults to above.
+   */
+  below?: boolean
 }
 
-const FONT = '10px sans-serif'
+const FONT = '500 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
 const GAP_ABOVE_LINE = 2
 const EDGE_PADDING = 4
 const LINE_HEIGHT = 12
@@ -40,6 +46,7 @@ interface PositionedLabel {
   text: string
   color: string
   align: 'left' | 'right' | 'center'
+  below: boolean
 }
 
 class LineLabelsRenderer implements IPrimitivePaneRenderer {
@@ -67,14 +74,18 @@ class LineLabelsRenderer implements IPrimitivePaneRenderer {
           (label.align === 'left' ? x : label.align === 'center' ? x - width / 2 : x - width) - 2
         const right = left + width
 
-        let bottom = label.y - GAP_ABOVE_LINE
+        // `below` labels start just under the line and fan out downward on
+        // collision; above labels (the default) start just over it and fan up.
+        let bottom = label.below
+          ? label.y + GAP_ABOVE_LINE + LINE_HEIGHT
+          : label.y - GAP_ABOVE_LINE
         for (let i = 0; i < MAX_STACK; i++) {
           const top = bottom - LINE_HEIGHT
           const collides = placed.some(
             (p) => left < p.right && right > p.left && top < p.bottom && bottom > p.top,
           )
           if (!collides) break
-          bottom -= LINE_HEIGHT
+          bottom += label.below ? LINE_HEIGHT : -LINE_HEIGHT
         }
         placed.push({ left, right, top: bottom - LINE_HEIGHT, bottom })
 
@@ -148,13 +159,21 @@ class LineLabelsPaneView implements IPrimitivePaneView {
           text: label.text,
           color: label.color,
           align: 'center',
+          below: label.below ?? false,
         })
         continue
       }
 
       const x = timeScale.timeToCoordinate(label.time)
       if (x !== null) {
-        positioned.push({ x, y, text: label.text, color: label.color, align: 'left' })
+        positioned.push({
+          x,
+          y,
+          text: label.text,
+          color: label.color,
+          align: 'left',
+          below: label.below ?? false,
+        })
         continue
       }
 
@@ -169,6 +188,7 @@ class LineLabelsPaneView implements IPrimitivePaneView {
         text: label.text,
         color: label.color,
         align: isBefore ? 'left' : 'right',
+        below: label.below ?? false,
       })
     }
 

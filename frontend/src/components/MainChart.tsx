@@ -40,6 +40,7 @@ import {
   RSI_LINE_COLOR,
   RSI_OVERBOUGHT_COLOR,
   RSI_OVERSOLD_COLOR,
+  STRUCTURE_DIRECTION_COLORS,
   STRUCTURE_EVENT_STYLES,
   TREND_ICONS,
   VOLUME_DOWN_COLOR,
@@ -1160,7 +1161,15 @@ export function MainChart({
       }
       const style = STRUCTURE_EVENT_STYLES[event.event]
       const oiSuffix = oiSuffixByEvent.get(`${event.timestamp}|${event.event}`)
-      const directionIcon = TREND_ICONS[event.direction] ?? ''
+      // BOS/CHoCH are colored by direction (green bullish, red bearish), so
+      // their labels drop the ▲/▼ arrow — the color already says it. Neutral
+      // events (Sweep, CHoCH ✕) keep their own color and the arrow.
+      const directionColored =
+        event.event === 'break_of_structure' || event.event === 'change_of_character'
+      const baseColor =
+        (directionColored ? STRUCTURE_DIRECTION_COLORS[event.direction] : undefined) ??
+        style.color
+      const directionIcon = directionColored ? '' : (TREND_ICONS[event.direction] ?? '')
       const startTime = toChartTime(event.timestamp)
       const linePrice =
         (event.event === 'change_of_character' ||
@@ -1231,7 +1240,7 @@ export function MainChart({
             other.timestamp === event.reference_timestamp,
         )
       const dimmed = weakChoch || provisionalBos || provisionalChoch
-      const lineColor = dimmed ? `${style.color}99` : style.color
+      const lineColor = dimmed ? `${baseColor}99` : baseColor
       // A provisional mark against a weak reference (emit_provisional_choch_weak)
       // is both forming and weak: `?` (the stronger caveat -- it may repaint
       // entirely) leads, with `*` appended (`CHoCH?* ▲`).
@@ -1268,12 +1277,16 @@ export function MainChart({
       // sits at one end of the line, where the label would be buried in the
       // candles -- the middle of the drawn segment is the open gap. A
       // line-less fizzle marker anchors at the reclaim candle instead.
+      // TradingView-style placement: bullish labels sit above their line,
+      // bearish ones below, so the label always hangs on the side price broke
+      // *from* and stays out of the move that followed.
       labels.push({
         time: fizzleMarker ? startTime : lineStartTime,
         timeEnd: fizzleMarker ? startTime : endTime,
         price: linePrice,
         color: lineColor,
-        text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''} ${directionIcon}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}`,
+        below: event.direction === 'bearish',
+        text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''}${directionIcon ? ` ${directionIcon}` : ''}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}`,
       })
     }
 

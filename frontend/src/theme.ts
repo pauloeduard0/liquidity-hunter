@@ -39,7 +39,18 @@ export const STRUCTURE_EVENT_STYLES: Record<string, { label: string; color: stri
   break_of_structure: { label: 'BOS', color: '#26a69a' },
   change_of_character: { label: 'CHoCH', color: '#ffb74d' },
   choch_failed: { label: 'CHoCH ✕', color: '#9e9e9e' },
-  liquidity_sweep: { label: 'Sweep', color: '#ef5350' },
+  liquidity_sweep: { label: 'Sweep', color: '#8d6fc4' },
+}
+
+/**
+ * Direction colors for BOS/CHoCH lines and labels (TradingView-style): the
+ * color carries the direction, so those labels drop the ▲/▼ arrow. Neutral
+ * events (Sweep, CHoCH ✕) keep their own `STRUCTURE_EVENT_STYLES` color and
+ * arrow — red/green stays reserved for direction.
+ */
+export const STRUCTURE_DIRECTION_COLORS: Record<string, string> = {
+  bullish: '#2fbf8f',
+  bearish: '#f2545b',
 }
 
 export const TREND_ICONS: Record<string, string> = {
