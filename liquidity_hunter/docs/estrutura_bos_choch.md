@@ -434,6 +434,22 @@ o topo genuíno 97.4). Refs fracas mantêm o comportamento da subseção anterio
 A aposentadoria por displacement-success aposenta esse nível junto com a origem
 (uma reversão impulsiva que deu certo não é morta no pullback).
 
+### Sucesso por deslocamento (`choch_success_displacement_atr = 4.5`, cap 20%)
+
+Uma perna de reversão impulsiva pode não formar **nenhum pivô de pullback** —
+sem pullback não há BOS emitido, e o CHoCH ficaria provisório para sempre, com
+a origem armada esperando matar no primeiro reclaim (caso NEAR H1: rallies de
+~5 e ~7.6 ATR sem BOS, ambos marcados `✕` no pullback). Quando o extremo da
+perna desloca **≥ 4.5 × TR% médio** além do nível de falha, a origem (e o nível
+de falha junto) aposenta como um BOS confirmador faria: a reversão está
+estabelecida, e uma reversão *posterior* é um CHoCH oposto novo, não uma falha
+desta. O limiar é **capado em 20% do preço**
+(`choch_success_displacement_max_pct`): a unidade ATR se adapta sozinha a cada
+ativo, mas num diário muito volátil (TR ~10%) 4.5 ATR viraria uma exigência de
+30–50% inalcançável — o AERO 1D caiu −31% com BOS de fechamento e ainda levou
+um `✕` retroativo na recuperação em V. Com o cap, só os diários voláteis são
+governados pelos 20%; todo intraday fica byte-idêntico (limiar ATR 3–15%).
+
 ### Staging dos BOS "comidos" pela janela provisória
 (`stage_choch_failed_window_bos = True`)
 
@@ -697,6 +713,7 @@ Flags ligadas em produção no internal (todas `off` por padrão no construtor):
 reanchor_mode="chain"                       reanchor_chain_establish_only=True
 reanchor_min_price_gap_pct=0.003            impulse_bos_displacement_pct=0.015
 bos_pullback_max_wick_pct=0.4               stage_wick_rejected_bos=True
+rollback_staircase_on_discard=True
 bos_leg_origin_choch_ref=True               bos_leg_origin_release_gap_atr=3.0
 bos_leg_origin_min_pullback_atr=1.5 (M15–H1)
 bos_leg_origin_require_close_break=True     bos_floor_require_close_break=True
@@ -706,6 +723,9 @@ choch_pending_fail_at_broken_level=True     choch_pending_fail_persistence_candl
 choch_origin_leg_extreme=True               choch_fizzle_reclaim_candles=30
 choch_failed_fallback_suppress_candles=20   stage_choch_failed_window_bos=True
 choch_weak_ref_fail_at_broken_level=True    stage_reversal_eaten_bos=True
+choch_failed_rearm=True                     choch_failed_rearm_persistent=True
+choch_fail_live_edge=True
+choch_success_displacement_atr=4.5          choch_success_displacement_max_pct=0.20
 stale_reanchor_displacement_atr=16.0        stale_reanchor_displacement_candles=15
 emit_provisional_bos=True                   emit_provisional_choch=True
 emit_provisional_choch_weak=True            confluence_filter=True
