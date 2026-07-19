@@ -1857,18 +1857,15 @@ def test_btc_1h_july_range_lock_is_a_live_consolidation() -> None:
 def test_sol_4h_range_breakouts_stage_additive_events() -> None:
     """Real-data regression for phase-2 breakout staging (SOLUSDT 4h).
 
-    Three range breakouts the state machine never marked (no real
-    same-direction BOS/CHoCH within the dedup window): the March and May
-    bounces breaking their range tops against the standing bearish trend
-    (provisional CHoCH marks -- the additive contract keeps the trend
-    untouched) and the April continuation breaking a range floor (a staged
-    BOS at the defended boundary).
-
-    Both provisional CHoCH reversals are later contradicted by a real bearish
-    advance (the bounce failed), so ``_drop_superseded_provisional_choch``
-    removes the stale ``CHoCH?`` -- a provisional mark survives only at the live
-    edge, never once real structure has settled its fate. The staged
-    continuation BOS (non-provisional) stays.
+    With the per-timeframe absolute height cap (2026-07-19) the Feb-May
+    16%-tall boxes re-cut into three <= 14% ranges. The March box resolves
+    bearish at a boundary break the state machine never marked (no real
+    same-direction BOS/CHoCH within the dedup window), staging a continuation
+    BOS at the defended floor; the April box's bullish resolution against the
+    standing bearish trend stages a provisional ``CHoCH?`` that a later real
+    advance supersedes, so ``_drop_superseded_provisional_choch`` removes it
+    -- a provisional mark survives only at the live edge, never once real
+    structure has settled its fate. The staged marks never touch the trend.
     """
     import json
     from pathlib import Path
@@ -1902,15 +1899,15 @@ def test_sol_4h_range_breakouts_stage_additive_events() -> None:
 
     # The staged continuation BOS at the defended floor survives (non-provisional).
     assert any(
-        e.timestamp == datetime(2026, 4, 1, 20, tzinfo=UTC)
+        e.timestamp == datetime(2026, 3, 27, 8, tzinfo=UTC)
         and e.event is StructureEvent.BREAK_OF_STRUCTURE
         and not e.provisional
         for e in run.events
-    ), "missing staged continuation BOS at 2026-04-01 20:00"
-    # Both staged reversal CHoCH? were superseded by a later real advance, so the
-    # drop pass removes them -- no stale `CHoCH?` lingers in history.
+    ), "missing staged continuation BOS at 2026-03-27 08:00"
+    # Staged reversal CHoCH? superseded by a later real advance are removed by
+    # the drop pass -- no stale `CHoCH?` lingers in history.
     superseded_reversals = [
-        datetime(2026, 3, 15, 20, tzinfo=UTC),
+        datetime(2026, 4, 16, 16, tzinfo=UTC),
         datetime(2026, 5, 8, 16, tzinfo=UTC),
     ]
     for timestamp in superseded_reversals:

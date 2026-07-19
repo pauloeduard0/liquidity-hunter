@@ -179,6 +179,35 @@ _CONSOLIDATION_MIN_CANDLES = 60
 _CONSOLIDATION_MAX_HEIGHT_ATR = 8.0
 _CONSOLIDATION_RESOLVE_PERSISTENCE = 4
 
+# Absolute per-timeframe ceiling on the consolidation height cap:
+# `max_height = min(_CONSOLIDATION_MAX_HEIGHT_ATR x TR%, this)`. On a
+# high-volatility asset the ATR unit degenerates (the same failure mode
+# `choch_success_displacement_max_pct` guards): HYPE H1's 1.6%/candle TR
+# authorized 12.8%-tall "ranges", so a single rally-and-dump rotation spanning
+# 11.7% read as a lateral box (2026-07-13..16) -- statistically contained in
+# ATR terms, but tradeable swing structure, not consolidation. An oscillation-
+# strictness fix was measured and rejected first: no edge-touch or midline-
+# crossing cut separates that rotation from the genuine ETH H1 July lock
+# (identical profile, frac ~0.9 / 3 edge touches / ~0.10 crossings-per-candle).
+# The absolute cap does separate them because the difference lives in the
+# asset's volatility, not the box's shape. Measured 2026-07-19 on the
+# BTC/ETH/SOL/AAVE/NEAR/ENA/HYPE x 15m..1d matrix (23/35 combos changed,
+# -78/+43 ranges): BTC unchanged everywhere, both motivating H1 July locks
+# intact, HYPE H1's four ~11% rotations dropped while its genuine 4.9% box
+# survives, and most tall losses re-tighten to a contained sub-window rather
+# than vanish (HYPE 4H's 23% box -> a 12.1% core; volatile dailies' 50-90%
+# "ranges" -> ~38-40% boxes).
+_CONSOLIDATION_MAX_HEIGHT_ABS: dict[TimeFrame, float] = {
+    TimeFrame.M1: 0.015,
+    TimeFrame.M5: 0.025,
+    TimeFrame.M15: 0.04,
+    TimeFrame.M30: 0.05,
+    TimeFrame.H1: 0.07,
+    TimeFrame.H4: 0.14,
+    TimeFrame.D1: 0.40,
+    TimeFrame.W1: 0.60,
+}
+
 # Consolidation breakout staging (phase 2,
 # `liquidity.detectors.consolidation.stage_breakout_events`). A range's
 # boundary is the structural level its breakout actually broke -- often
@@ -1746,11 +1775,15 @@ def _detect_consolidations(
     )
     if mean_tr_pct <= 0:
         return [], []
+    max_height_pct = _CONSOLIDATION_MAX_HEIGHT_ATR * mean_tr_pct
+    abs_cap = _CONSOLIDATION_MAX_HEIGHT_ABS.get(candles[0].timeframe)
+    if abs_cap is not None:
+        max_height_pct = min(max_height_pct, abs_cap)
     return detect_consolidation_ranges_with_resets(
         candles,
         advances,
         min_candles=_CONSOLIDATION_MIN_CANDLES,
-        max_height_pct=_CONSOLIDATION_MAX_HEIGHT_ATR * mean_tr_pct,
+        max_height_pct=max_height_pct,
         resolve_persistence=_CONSOLIDATION_RESOLVE_PERSISTENCE,
     )
 

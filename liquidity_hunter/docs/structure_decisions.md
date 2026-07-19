@@ -2053,3 +2053,40 @@ advance flip) plus two descriptive-label ref changes; final trend unchanged.
 
 **Fixture**: `enausdt_4h_2026_04_20_07_10.json` +
 `test_pullback_seed_*` in `test_internal_structure.py`.
+
+## 2026-07-19 — Consolidation height: per-timeframe absolute cap
+
+**Status: committed.** `_CONSOLIDATION_MAX_HEIGHT_ABS` in `load_dashboard_data`:
+the range height cap is now `min(8 × mean TR%, abs_cap[timeframe])` with
+M1 1.5% / M5 2.5% / M15 4% / M30 5% / H1 7% / H4 14% / D1 40% / W1 60%.
+
+**The bug (HYPEUSDT H1, 2026-07-13..16)**: on a high-volatility asset the ATR
+unit degenerates — the same failure mode `choch_success_displacement_max_pct`
+guards. HYPE H1's 1.6%/candle mean TR authorized 12.8%-tall boxes, so a single
+rally-and-dump rotation (61.8 → 69 → dump, 11.7% tall) confirmed as a lateral
+"range" despite being tradeable swing structure, not consolidation. Four ~11%
+HYPE H1 boxes had the same shape.
+
+**Rejected first attempt (oscillation strictness)**: raising the alternating
+edge-touch requirement (3 → 5 for boxes taller than half the cap) changed
+32/35 combos and dropped 95 ranges — including the motivating ETH H1 July
+lock. Profiling every range showed **no shape metric separates the cases**:
+the HYPE rotation and the genuine ETH H1 July lock have identical profiles
+(frac-of-cap ~0.9, 3 edge touches, ~0.10 midline crossings per candle). The
+difference lives in the asset's volatility (what one "box height" means in
+tradeable terms), not in the box's oscillation shape — hence an absolute cap,
+not a stricter shape gate.
+
+**Measurement** (BTC/ETH/SOL/AAVE/NEAR/ENA/HYPE × 15m/30m/1h/4h/1d,
+limit=1200): 23/35 combos changed, −78/+43 ranges. BTC unchanged everywhere
+(its ATR cap stays binding); both motivating H1 July locks intact; HYPE H1's
+four ~11% rotations dropped while its genuine 4.9% box (07-08..11) survives.
+The dominant pattern is *re-tightening*, not loss: HYPE 4H's 23% box
+(06-17→07-13) re-cuts to a 12.1% core (07-02→07-13); volatile dailies' 50-90%
+"ranges" become ~38-40% boxes or split. `final_trend` untouched by
+construction (ranges only stage additive/provisional events).
+
+**Fixture impact**: `solusdt_4h_2025_11_06_2026_07_14` re-cuts its Feb-May
+16% boxes into three ≤14% ranges; `test_sol_4h_range_breakouts_stage_additive_events`
+re-pinned (staged continuation BOS now at 03-27 08:00, ref 85.0). ETH H1 lock
+test unchanged.
