@@ -872,7 +872,11 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `_detect_consolidations` post-pass inside `_run_internal_structure`:
   `detect_consolidation_ranges` over the *surviving* non-provisional
   BOS/CHoCH/`CHOCH_FAILED` boundaries, height cap
-  `_CONSOLIDATION_MAX_HEIGHT_ATR` = 8 × mean TR%, `_CONSOLIDATION_MIN_CANDLES`
+  min(`_CONSOLIDATION_MAX_HEIGHT_ATR` = 8 × mean TR%,
+  `_CONSOLIDATION_MAX_HEIGHT_ABS[timeframe]` — an absolute per-TF ceiling, e.g.
+  H1 7%, added 2026-07-19 because a high-vol asset's ATR unit degenerates and
+  let an 11.7% rally-and-dump rotation confirm as a "range" on HYPE H1),
+  `_CONSOLIDATION_MIN_CANDLES`
   = 60, resolve persistence 4 — calibrated 2026-07-14, see
   `docs/structure_decisions.md`) for one symbol/timeframe. Under
   `_CONSOLIDATION_STAGE_BREAKOUT_EVENTS` (default `True`), range breakouts
