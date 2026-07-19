@@ -1481,7 +1481,14 @@ state in brief:
   overwritten by the *next same-direction advance* — an impulsive run of
   consecutive same-side pivots with no pullback pivot between — so each
   top/bottom that formed and broke keeps a mark instead of only the run's last
-  one), leg-origin CHoCH reference family,
+  one), first-pending pullback seed at the CHoCH origin
+  (`bos_pullback_seed_choch_origin`: the first pending BOS of a CHoCH-launched
+  leg often snapshots a `None` pullback ref — the flip promoted an empty
+  `pending_<side>` and the `None`-inheritance only covers continuations — so
+  it can never confirm and the reverse-CHoCH reference family is never built;
+  a persistent launch-pivot snapshot of the CHoCH origin seeds it, the ENAUSDT
+  H4 2026-06 case where a −22% drop printed only sweeps under a stuck bullish
+  trend), leg-origin CHoCH reference family,
   volatility-normalized release gap, new-cycle weak-ref barrier,
   confirmed-trend barrier (`choch_confirmed_trend_persistence_candles`,
   hysteresis: a trend is *pending* until an emitted BOS confirms it — cheap

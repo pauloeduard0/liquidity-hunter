@@ -793,6 +793,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_success_displacement_max_pct: float | None = None,
         stage_reversal_eaten_bos: bool = False,
         stage_superseded_continuation_bos: bool = False,
+        bos_pullback_seed_choch_origin: bool = False,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -909,6 +910,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._choch_success_displacement_max_pct = choch_success_displacement_max_pct
         self._stage_reversal_eaten_bos = stage_reversal_eaten_bos
         self._stage_superseded_continuation_bos = stage_superseded_continuation_bos
+        self._bos_pullback_seed_choch_origin = bos_pullback_seed_choch_origin
         # The state-machine trend after the most recent `detect()` call
         # (mirrors `SwingStructureDetector.final_trend`). The single source of
         # truth for "the standing trend": unlike the last emitted event's
@@ -1125,6 +1127,21 @@ class InternalStructureDetector(MarketStructureDetector):
         # flip (CHoCH) and at the NEUTRAL bootstrap; mirror for bull_leg_high.
         bear_leg_low: float | None = None
         bull_leg_high: float | None = None
+        # The pivot the current leg launched from (`bos_pullback_seed_choch_origin`):
+        # a snapshot of the CHoCH's origin, persisting after the origin itself
+        # is retired (confirming BOS / displacement-success). The first pending
+        # BOS of a CHoCH-launched leg often snapshots a `None` pullback ref
+        # (the flip promoted an empty pending_<side>, and there is no prior
+        # pending to inherit from), so it can never confirm -- and with no
+        # emission, the whole reverse-CHoCH reference family (leg origin,
+        # candidate) is never built: the ENAUSDT H4 2026-06 case, where a -22%
+        # drop printed only sweeps. Seeding that first pending with the leg's
+        # launch pivot lets it confirm at the first opposite pivot, exactly as
+        # the "leg keeps rising from the same low" inheritance does for
+        # continuations. Cleared at trend flips (the new leg has its own
+        # origin) and on silent advance flips (launch unknown).
+        bull_leg_launch_low: Pivot | None = None
+        bear_leg_launch_high: Pivot | None = None
         # The price level of the previous confirmed BOS in the current trend
         # (the low established by the last bearish BOS / high by the last
         # bullish BOS). A new continuation BOS must *extend* the staircase --
@@ -2283,6 +2300,10 @@ class InternalStructureDetector(MarketStructureDetector):
                     bull_choch_origin = None
                     bear_choch_fail_ref = None
                     bull_choch_fail_ref = None
+                    # The resumed leg's launch is unknown (see
+                    # `bos_pullback_seed_choch_origin`).
+                    bull_leg_launch_low = None
+                    bear_leg_launch_high = None
                     # The failed CHoCH's line ended here: no standing CHoCH to
                     # fizzle-mark (the resumed trend is not a fresh CHoCH).
                     standing_choch_ref = None
@@ -2372,6 +2393,10 @@ class InternalStructureDetector(MarketStructureDetector):
                         if self._choch_origin_leg_extreme
                         else active_low
                     )
+                    # Persistent launch snapshot for the new bullish leg (see
+                    # `bos_pullback_seed_choch_origin` at the declarations).
+                    bull_leg_launch_low = bull_choch_origin
+                    bear_leg_launch_high = None
                     # The reclaim that would fail this CHoCH must come after it
                     # formed: record the arming pivot to bound the failure scan.
                     bull_choch_arm_index = current_index
@@ -2646,12 +2671,26 @@ class InternalStructureDetector(MarketStructureDetector):
                                 and pending_bos.direction is MarketDirection.BULLISH
                             ):
                                 pullback_ref_snapshot = pending_bos.pullback_ref
+                            # First advance of a CHoCH-launched leg with nothing
+                            # to inherit: the leg rose from the CHoCH's origin,
+                            # so seed the pullback ref there -- otherwise this
+                            # pending can never confirm and the reverse-CHoCH
+                            # reference family is never built (see
+                            # `bos_pullback_seed_choch_origin`).
+                            if (
+                                pullback_ref_snapshot is None
+                                and self._bos_pullback_seed_choch_origin
+                            ):
+                                pullback_ref_snapshot = bull_leg_launch_low
                             # A direction change here (bootstrap, or a silent
                             # advance flip) starts a *pending* trend: only the
                             # emitted BOS confirms it.
                             if trend is not MarketDirection.BULLISH:
                                 trend_confirmed = False
                                 trend_flip_index = close_idx
+                                # A silently flipped leg has no known launch
+                                # pivot (see `bos_pullback_seed_choch_origin`).
+                                bull_leg_launch_low = None
                             trend = MarketDirection.BULLISH
                             active_low = pending_low
                             pending_low = None
@@ -3281,6 +3320,10 @@ class InternalStructureDetector(MarketStructureDetector):
                     bear_choch_origin = None
                     bull_choch_fail_ref = None
                     bear_choch_fail_ref = None
+                    # The resumed leg's launch is unknown (see
+                    # `bos_pullback_seed_choch_origin`).
+                    bull_leg_launch_low = None
+                    bear_leg_launch_high = None
                     # The failed CHoCH's line ended here: no standing CHoCH to
                     # fizzle-mark (the resumed trend is not a fresh CHoCH).
                     standing_choch_ref = None
@@ -3352,6 +3395,10 @@ class InternalStructureDetector(MarketStructureDetector):
                         if self._choch_origin_leg_extreme
                         else active_high
                     )
+                    # Persistent launch snapshot for the new bearish leg (see
+                    # `bos_pullback_seed_choch_origin` at the declarations).
+                    bear_leg_launch_high = bear_choch_origin
+                    bull_leg_launch_low = None
                     # Mirror of the bullish case: bound the failure scan to
                     # reclaims that come after this CHoCH formed.
                     bear_choch_arm_index = current_index
@@ -3624,12 +3671,23 @@ class InternalStructureDetector(MarketStructureDetector):
                                 and pending_bos.direction is MarketDirection.BEARISH
                             ):
                                 pullback_ref_snapshot = pending_bos.pullback_ref
+                            # Mirror of the bullish case: seed a first pending
+                            # with the leg's launch pivot (see
+                            # `bos_pullback_seed_choch_origin`).
+                            if (
+                                pullback_ref_snapshot is None
+                                and self._bos_pullback_seed_choch_origin
+                            ):
+                                pullback_ref_snapshot = bear_leg_launch_high
                             # A direction change here (bootstrap, or a silent
                             # advance flip) starts a *pending* trend: only the
                             # emitted BOS confirms it.
                             if trend is not MarketDirection.BEARISH:
                                 trend_confirmed = False
                                 trend_flip_index = close_idx
+                                # A silently flipped leg has no known launch
+                                # pivot (see `bos_pullback_seed_choch_origin`).
+                                bear_leg_launch_high = None
                             trend = MarketDirection.BEARISH
                             active_high = pending_high
                             pending_high = None

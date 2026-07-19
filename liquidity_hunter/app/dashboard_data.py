@@ -623,6 +623,17 @@ _RESCUE_LEG_LAUNCH_BOS = True
 # instead of the 07:15 topo. Staged, the leg reads BOS 2.0120 then BOS 2.0400.
 _STAGE_SUPERSEDED_CONTINUATION_BOS = True
 
+# Seed a first pending BOS's pullback ref with the CHoCH origin the leg
+# launched from (`bos_pullback_seed_choch_origin`): the first advance of a
+# CHoCH-launched leg often snapshots a `None` pullback ref (the flip promoted
+# an empty pending_<side> and there is no prior pending to inherit from), so
+# the BOS can never confirm -- and with no emission the whole reverse-CHoCH
+# reference family (leg origin, candidate) is never built, leaving the
+# counter-trend side with zero references (the ENAUSDT H4 2026-06 case: a
+# -22% drop from 0.0905 to 0.070 printed only sweeps, then a CHoCH at the
+# very low that instantly failed).
+_BOS_PULLBACK_SEED_CHOCH_ORIGIN = True
+
 # Volatility-normalized proximity for the liquidity-hunt pool map
 # (`LiquidityHuntEngine.proximity_atr`): "nearby" opposing pools are the ones
 # within N x the visible series' mean true-range% of price, instead of the
@@ -1463,6 +1474,7 @@ def _build_internal_detector(
         # instead of only the run's last one. See
         # _STAGE_SUPERSEDED_CONTINUATION_BOS.
         stage_superseded_continuation_bos=_STAGE_SUPERSEDED_CONTINUATION_BOS,
+        bos_pullback_seed_choch_origin=_BOS_PULLBACK_SEED_CHOCH_ORIGIN,
         # The CHoCH origin (the level a sustained break back through invalidates
         # the unconfirmed reversal, a CHOCH_FAILED) is the *deepest* extreme of
         # the reversed leg, not the trailing `active_<side>`. The trailing

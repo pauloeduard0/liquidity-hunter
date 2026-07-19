@@ -162,6 +162,24 @@ descartado no flip (*reversal-eaten*); se é o **próximo avanço da mesma dire�
 (*superseded-continuation*). Nos dois casos o rompimento foi real e fechou através
 do piso — por isso ganha marca aditiva em vez de sumir.
 
+**E se a referência de pullback nasce vazia?**
+(`bos_pullback_seed_choch_origin = True`, 2026-07-18): o *primeiro* avanço de
+uma perna lançada por CHoCH pode snapshotar um `pullback_ref = None` — o flip
+promoveu um `pending_<lado>` vazio, e a herança de `None` só cobre
+continuações (herda do pendente *anterior*, que um primeiro pendente não tem).
+Esse pendente **nunca confirma**: sem emissão, a promoção do leg-origin e o
+candidate nunca rodam, e o lado contrário fica com **zero referências** de
+CHoCH. Caso ENAUSDT H4 de 06/2026: a queda de −22% (0,0905 → 0,070) imprimiu
+só sweeps, o CHoCH ▼ saiu no fundo (0,07463, fallback trailing) e falhou na
+hora, e a trend ficou presa de alta o crash inteiro. O fix: cada CHoCH grava
+um snapshot persistente do seu *origin* (o fundo/topo de onde a perna nasceu,
+`bull_leg_launch_low`/`bear_leg_launch_high`, sobrevivendo à aposentadoria do
+origin) e um primeiro pendente sem pullback é **semeado** com esse pivô — a
+extensão natural da regra "a perna continua subindo do mesmo fundo". Limpo em
+trend flips, advance flips silenciosos e flips por `CHOCH_FAILED`. Medição:
+2/36 combos, 1 flip (a própria ENA H4, agora CHoCH ▼ 27/06 no fundo de
+lançamento 0,07869 + escada de baixa).
+
 #### Filtro de pavio no pullback (`bos_pullback_max_wick_pct = 0.4`)
 
 O pullback que confirma pode ser um **pavio de uma vela só** — a vela espeta o
@@ -776,7 +794,7 @@ choch_pending_fail_at_broken_level=True     choch_pending_fail_persistence_candl
 choch_origin_leg_extreme=True               choch_fizzle_reclaim_candles=30
 choch_failed_fallback_suppress_candles=20   stage_choch_failed_window_bos=True
 choch_weak_ref_fail_at_broken_level=True    stage_reversal_eaten_bos=True
-stage_superseded_continuation_bos=True
+stage_superseded_continuation_bos=True      bos_pullback_seed_choch_origin=True
 choch_failed_rearm=True                     choch_failed_rearm_persistent=True
 choch_fail_live_edge=True
 choch_success_displacement_atr=4.5          choch_success_displacement_max_pct=0.20

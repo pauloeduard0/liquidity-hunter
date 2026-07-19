@@ -2007,3 +2007,49 @@ is named `toChartTime`, not `toUtcTimestamp`, so that stays obvious.
 A toolbar chip next to the OHLC readout shows the active clock (`UTC-3`
 intraday, `UTC` on D1/W1) — the actual guard against a repeat, since the
 ambiguity, not the offset, is what cost the time.
+
+## First-pending pullback seed at the CHoCH origin (2026-07-18)
+
+**Flag**: `bos_pullback_seed_choch_origin` (wired `True` via
+`_BOS_PULLBACK_SEED_CHOCH_ORIGIN`).
+
+**The bug (ENAUSDT H4, 2026-06)**: the bullish leg launched by the re-fired
+weak CHoCH of 06-15 (ref 0.08599) advanced impulsively — the flip promoted an
+empty `pending_low`, so the first pending BOS snapshotted a `None` pullback
+ref. The existing `None`-inheritance only covers *continuations* (inherit the
+prior pending's ref); a first pending of a CHoCH-launched leg has no prior
+pending, so it could **never confirm**. With no emitted BOS, the whole
+reverse-CHoCH reference family was never built (no leg-origin promotion, no
+candidate), the displacement-success retirement consumed the CHoCH origin, and
+the bearish side ended up with **zero references**: the −22% drop from 0.0905
+to 0.070 printed only sweeps, the eventual CHoCH ▼ fired at the very low
+(0.07463, the trailing fallback after it re-bootstrapped) and instantly
+failed, and the trend sat bullish through the whole crash. (The BOS ▲ of
+06-17 only appeared on the chart because the reversal-eaten staging rescued
+it retroactively at the 06-30 CHoCH.)
+
+**The fix**: at each CHoCH, snapshot its origin (the fundo/topo the new leg
+launched from) into a persistent `bull_leg_launch_low`/`bear_leg_launch_high`
+that outlives the origin's retirement. When a first pending BOS would
+snapshot a `None` pullback ref (after the continuation inheritance also comes
+up empty), seed it with the launch pivot — the natural extension of the "leg
+keeps rising from the same low" rule. The pending then confirms at the first
+opposite pivot, emission runs, and the leg-origin/candidate machinery exists
+for the reversal. Cleared at trend flips, silent advance flips, and
+CHOCH_FAILED flips (those legs' launches are unknown).
+
+**Rejected first attempt**: `choch_candidate_fallback` (rank the unpromoted
+candidate in the counter-CHoCH reference chain) measured **0/36** — the
+candidate slot was empty too, since it is only set at BOS *emission*, which
+is exactly what never happened.
+
+**Measurement** (BTC/ETH/SOL/AAVE/NEAR/ENA × M5..D1, limit=1200): 2/36
+combos changed, 1 trend flip — ENA H4 itself (bullish → bearish: CHoCH ▼
+06-27 at the 0.07869 launch fundo + BOS ▼ 0.07463; the July recovery reads
+as a corrective rally that swept 0.086 and rejected, with a live-edge
+`CHoCH? ▲`). SOL H4: a 01-02 bullish BOS reclassified as an explicit CHoCH
+at the same candle/level (the seeded pending confirms before the silent
+advance flip) plus two descriptive-label ref changes; final trend unchanged.
+
+**Fixture**: `enausdt_4h_2026_04_20_07_10.json` +
+`test_pullback_seed_*` in `test_internal_structure.py`.
