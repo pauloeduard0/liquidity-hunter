@@ -1329,8 +1329,10 @@ export function MainChart({
     const rangeBoxes: POIBox[] = []
     for (const range of showConsolidationRanges ? (data.consolidation_ranges ?? []) : []) {
       const style = CONSOLIDATION_BOX_STYLES[range.status] ?? CONSOLIDATION_BOX_STYLES.active
+      // Label is just the resolution arrow (nothing while the range is live):
+      // the box itself already reads as "lateral", the RANGE text was noise.
       const resolvedIcon =
-        range.resolved_direction != null ? ` ${TREND_ICONS[range.resolved_direction] ?? ''}` : ''
+        range.resolved_direction != null ? (TREND_ICONS[range.resolved_direction] ?? '') : ''
       rangeBoxes.push({
         x0: toChartTime(range.start_timestamp),
         x1: range.end_timestamp
@@ -1340,7 +1342,7 @@ export function MainChart({
         priceHigh: range.price_high,
         borderColor: style.border,
         fillColor: style.fill,
-        label: `▭ RANGE${resolvedIcon}`,
+        label: resolvedIcon,
       })
     }
     rangeBoxesPrimitiveRef.current?.setBoxes(rangeBoxes)
