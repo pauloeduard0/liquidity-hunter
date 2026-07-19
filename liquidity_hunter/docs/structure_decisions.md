@@ -1497,12 +1497,13 @@ reversal. Fixture `enausdt_30m_2026_06_20_07_15` + on/off regression tests
 `test_reversal_eaten_bos_marks_final_continuation_before_choch`, the latter
 asserting the staged mark is the only new event and the trend is unchanged).
 
-Left as-is (not pursued): the sibling **Gap #1** — the *deeper* first-fundo BOS
+Left as-is at the time: the sibling **Gap #1** — the *deeper* first-fundo BOS
 (ENA M30 ref 0.07908) the RAW detector *does* emit but `_reanchor_bos_close_break`
 drops, because within its active window (up to the next same-direction BOS) no
 candle closes below 0.07908 (the close-below lands at 07-13 03:00, already inside
 the next BOS's territory). Recovering it means loosening the conservative
-close-in-window rule; deferred (small residual, 0.07908 vs the reported 0.07954).
+close-in-window rule; deferred then, **resolved 2026-07-18** by the leg-launch
+rescue below.
 
 ### Base persistence 12 → 2 + confirmed-trend barrier (hysteresis, 2026-07-16)
 
@@ -1856,3 +1857,236 @@ pinning the pathology.
 - React frontend behavior divergence sidebar panel and chart overlay.
 - React frontend liquidity targets, retail trap, and market structure
   sidebar panels.
+
+### Leg-launch BOS rescue (`_RESCUE_LEG_LAUNCH_BOS`, 2026-07-18)
+
+Closes **Gap #1** of the reversal-eaten BOS investigation above.
+
+The **first BOS of a leg** reports the CHoCH-seeded launch level — the
+fundo/topo the reversal itself formed (see "First BOS of leg reference"). But
+`_reanchor_bos_close_break` confirms every BOS inside *its own* window, which
+ends at the **next same-direction BOS**. On a leg that **retests the CHoCH
+before breaking down**, the launch level's first confirming close can land a few
+candles *inside that successor's territory*: the launch BOS is dropped as
+"wick-only" and the chart promotes a shallow, late fundo to first-of-leg
+reference. The two roles the window plays were conflated — it is right for
+*re-timing*, too strict as a *validity gate*, since a leg does not end at its
+next continuation.
+
+Motivating case (**ENAUSDT M30**, the same bearish leg as Gap #3 above): the leg
+launches from the 0.07908 fundo the CHoCH formed (2026-07-12 00:30), price
+retests the CHoCH, and the first close through 0.07908 comes at 07-13 03:00 —
+three candles past the successor's stamp (07-13 01:30, ref 0.07954, a shallow
+fundo formed **22 hours after** the launch level). The user read the chart as
+"the BOS after the CHoCH should reference the fundo that formed and went back to
+test the CHoCH, not the later shallow one" — exactly the launch level.
+
+**Fix** (`_RESCUE_LEG_LAUNCH_BOS`, wired `True`; the pass takes
+`rescue_leg_launch`, default `False`): when a **leg-launch** BOS (no
+same-direction BOS between the flip that started the leg — a same-direction
+CHoCH or opposite-direction `CHOCH_FAILED` — and the event) finds no close in
+its own window, extend the search instead of dropping it. A close through the
+floor there confirms the break and re-times the BOS to it; the shallower
+same-direction continuations it passed over are **suppressed** (variant 1 of the
+two the user chose between): they are premature clutter next to the launch
+break, *and* their confirming close would otherwise re-kill the rescued mark in
+`_drop_pre_break_reference_bos`, whose leg reset the rescued BOS now owns. A leg
+that reverses without ever closing through still drops — the wick-only
+protection is untouched.
+
+**The bound came from measurement.** An unbounded search (to the leg's death:
+next opposite CHoCH / same-direction `CHOCH_FAILED`) over-reached badly on
+**AAVEUSDT D1**: a launch BOS whose floor (80.01) sat far beyond the leg
+(trading at 145) scanned **seven months** and suppressed the real bearish
+staircase it passed — 176.46 → 145.0 → 91.85 → 91.85 replaced by a single mark
+(−5/+2). So the extended search runs through the **next same-direction BOS's
+window only**: the launch break may confirm at most *one continuation late*. If
+the level has not closed through by the second continuation, it is no longer the
+leg's launch break. AAVE D1 then reduces to a clean −1/+1.
+
+Measured (BTC/ETH/SOL/AAVE/NEAR/ENA × 5m..1d, `limit=1200`,
+`confluence_filter=False`): **6/36 combos changed, 0 trend flips**, and every
+delta is a **1:1 swap** (+7/−7) of a shallow late reference for the deeper
+launch reference — never a net gain or loss of marks. AAVE 30m/1h (90.17 →
+91.05), AAVE 1d (106.75 → 114.73), NEAR 15m (1.97 → 1.976), ENA 15m (two swaps),
+ENA 30m (the motivating 0.07954 → 0.07908). Far narrower than the sibling
+eaten-BOS staging (23/36). The rescued reference is the more extreme level in
+every case, which is the point: the launch fundo/topo is structurally more
+significant than the shallow retrace pivot that displaced it.
+
+Tests: synthetic on/off + bound + bullish-mirror + leg-dies coverage in
+`test_dashboard_data.py`, plus fixture locks on `enausdt_30m_2026_06_20_07_15`
+(`test_run_internal_structure_rescues_ena_30m_leg_launch_bos` and its off-lock,
+which asserts the RAW detector emits the 0.07908 BOS and the pass is what
+decides its fate).
+
+### Superseded-continuation BOS staging (`stage_superseded_continuation_bos`, 2026-07-18)
+
+Sibling of the reversal-eaten staging above, found during the visual review of
+the leg-launch rescue branch. A BOS only *emits* once a confirming
+opposite-direction pullback pivot forms. In an **impulsive leg of consecutive
+same-side pivots**, the next advance overwrites the still-pending BOS before
+that pivot appears — and the reported floor (`prev_bull_bos_extreme` /
+`prev_bear_bos_extreme`) has meanwhile ratcheted to the new pivot. So only the
+**last** pending of such a run ever emits, the tops/bottoms that genuinely
+formed and were broken in between get no mark, and the surviving BOS references
+a later level than the leg actually broke first.
+
+The user framed the symptom precisely: "it works after a CHoCH, but not after a
+BOS." A CHoCH *seeds* the reported floor with the reversal's extreme, so the
+first BOS of a leg references it correctly (the leg-launch fix above); a
+*continuation* pending has no such seeding — superseded, its floor is simply
+lost.
+
+Motivating case (**NEARUSDT M15** 2026-07-14, pivots in UTC):
+
+```
+07:15  HIGH 2.0120   <- formed, then broken: deserves a BOS
+10:15  HIGH 1.9960   (lower high, trails active_high down)
+11:00  LOW  1.9670   (the pullback)
+12:30  HIGH 2.0400   <- advance; floor_at_advance = 2.0120
+15:30  HIGH 2.0660   <- next advance; NO low pivot in between
+17:00  LOW  2.0180   (confirms only the 15:30 pending)
+```
+
+The 12:30 pending (floor 2.0120, `reference_timestamp` 07:15) was superseded
+silently, so the leg's only continuation referenced 2.0400 with its line
+starting at 12:30. Staged, the leg reads BOS 2.0120 → BOS 2.0400.
+
+**Fix** (`stage_superseded_continuation_bos`, wired `True` via
+`_STAGE_SUPERSEDED_CONTINUATION_BOS`; default `False` in the detector): at both
+advance sites, before `pending_bos` is overwritten by a same-direction
+`_PendingBOS`, stage the outgoing one. Shares `stage_pending_bos` with
+`stage_eaten_bos` — same **close-through-the-floor** key (`floor_closed`), so a
+floor the leg only *wicked* stays unmarked, and the same dedup + re-anchor
+re-timing as every other staged mark. Additive-over-state-machine discipline:
+trend, staircase gate, and CHoCH promotion untouched.
+
+Measured (BTC/ETH/SOL/AAVE/NEAR/ENA × 5m..1d, `limit=1200`,
+`confluence_filter=False`): **9/36 combos changed, 0 trend flips, +13 marks**.
+Effectively additive — the one apparent removal (NEAR 5m) is the *same* BOS at
+the *same* timestamp whose reference moved 1.955 → 1.957, the documented
+same-timestamp arbitration in `_drop_pre_break_reference_bos` picking the
+earlier-formed reference. No leg loses a mark.
+
+Fixture `nearusdt_15m_2026_07_02_07_18` + on/off locks
+(`test_run_internal_structure_stages_near_15m_superseded_continuation`,
+`..._superseded_lost_without_staging`).
+
+### Chart timezone: local intraday, exchange time on D1/W1 (2026-07-18)
+
+Not a detector decision, but it belongs here because it twice corrupted a
+structure review. Lightweight Charts has no timezone support: it renders every
+`UTCTimestamp` in UTC. The chart therefore spoke UTC while the user read it as
+local time (UTC−3), so "the BOS at 05:15" was really 02:15 local, and "the fundo
+at 12/07 00:30" was 11/07 21:30. Both investigations above (ENA M30 Gap #1 and
+NEAR M15) opened with three hours of misalignment between what the user saw and
+what the data said — each cost a round trip to notice.
+
+**Fix** (`frontend/src/utils/chartTime.ts`): `toChartTime(iso)` shifts each
+timestamp by its own local UTC offset before handing it to the library — the
+library's documented workaround for displaying another timezone. Per-timestamp
+(not a single cached offset) so candles either side of a DST transition each get
+the right one; verified against `America/New_York` across the 2026-03-08
+transition (01:00 EST / 04:00 EDT).
+
+**Daily and weekly are exempt.** Their timestamp *is* the exchange day (00:00
+UTC); shifting would relabel the 14 Jul daily bar as "13 Jul 21:00". Those
+timeframes keep exchange time, like every other platform.
+
+Why the shift lives in the data rather than in `localization.timeFormatter` /
+`tickMarkFormatter`: formatting alone leaves the library placing tick marks on
+*UTC* boundaries, so the day-change tick would land at 21:00 local and the axis
+would change date mid-evening. Shifting the data puts day boundaries where the
+viewer expects them. The cost — chart times are no longer real epoch values — is
+contained: nothing converts back (`param.time` is only forwarded between the
+synced panes), and the helpers that compare event times to candle times are
+shift-invariant because every time flows through the one converter. The function
+is named `toChartTime`, not `toUtcTimestamp`, so that stays obvious.
+
+A toolbar chip next to the OHLC readout shows the active clock (`UTC-3`
+intraday, `UTC` on D1/W1) — the actual guard against a repeat, since the
+ambiguity, not the offset, is what cost the time.
+
+## First-pending pullback seed at the CHoCH origin (2026-07-18)
+
+**Flag**: `bos_pullback_seed_choch_origin` (wired `True` via
+`_BOS_PULLBACK_SEED_CHOCH_ORIGIN`).
+
+**The bug (ENAUSDT H4, 2026-06)**: the bullish leg launched by the re-fired
+weak CHoCH of 06-15 (ref 0.08599) advanced impulsively — the flip promoted an
+empty `pending_low`, so the first pending BOS snapshotted a `None` pullback
+ref. The existing `None`-inheritance only covers *continuations* (inherit the
+prior pending's ref); a first pending of a CHoCH-launched leg has no prior
+pending, so it could **never confirm**. With no emitted BOS, the whole
+reverse-CHoCH reference family was never built (no leg-origin promotion, no
+candidate), the displacement-success retirement consumed the CHoCH origin, and
+the bearish side ended up with **zero references**: the −22% drop from 0.0905
+to 0.070 printed only sweeps, the eventual CHoCH ▼ fired at the very low
+(0.07463, the trailing fallback after it re-bootstrapped) and instantly
+failed, and the trend sat bullish through the whole crash. (The BOS ▲ of
+06-17 only appeared on the chart because the reversal-eaten staging rescued
+it retroactively at the 06-30 CHoCH.)
+
+**The fix**: at each CHoCH, snapshot its origin (the fundo/topo the new leg
+launched from) into a persistent `bull_leg_launch_low`/`bear_leg_launch_high`
+that outlives the origin's retirement. When a first pending BOS would
+snapshot a `None` pullback ref (after the continuation inheritance also comes
+up empty), seed it with the launch pivot — the natural extension of the "leg
+keeps rising from the same low" rule. The pending then confirms at the first
+opposite pivot, emission runs, and the leg-origin/candidate machinery exists
+for the reversal. Cleared at trend flips, silent advance flips, and
+CHOCH_FAILED flips (those legs' launches are unknown).
+
+**Rejected first attempt**: `choch_candidate_fallback` (rank the unpromoted
+candidate in the counter-CHoCH reference chain) measured **0/36** — the
+candidate slot was empty too, since it is only set at BOS *emission*, which
+is exactly what never happened.
+
+**Measurement** (BTC/ETH/SOL/AAVE/NEAR/ENA × M5..D1, limit=1200): 2/36
+combos changed, 1 trend flip — ENA H4 itself (bullish → bearish: CHoCH ▼
+06-27 at the 0.07869 launch fundo + BOS ▼ 0.07463; the July recovery reads
+as a corrective rally that swept 0.086 and rejected, with a live-edge
+`CHoCH? ▲`). SOL H4: a 01-02 bullish BOS reclassified as an explicit CHoCH
+at the same candle/level (the seeded pending confirms before the silent
+advance flip) plus two descriptive-label ref changes; final trend unchanged.
+
+**Fixture**: `enausdt_4h_2026_04_20_07_10.json` +
+`test_pullback_seed_*` in `test_internal_structure.py`.
+
+## 2026-07-19 — Consolidation height: per-timeframe absolute cap
+
+**Status: committed.** `_CONSOLIDATION_MAX_HEIGHT_ABS` in `load_dashboard_data`:
+the range height cap is now `min(8 × mean TR%, abs_cap[timeframe])` with
+M1 1.5% / M5 2.5% / M15 4% / M30 5% / H1 7% / H4 14% / D1 40% / W1 60%.
+
+**The bug (HYPEUSDT H1, 2026-07-13..16)**: on a high-volatility asset the ATR
+unit degenerates — the same failure mode `choch_success_displacement_max_pct`
+guards. HYPE H1's 1.6%/candle mean TR authorized 12.8%-tall boxes, so a single
+rally-and-dump rotation (61.8 → 69 → dump, 11.7% tall) confirmed as a lateral
+"range" despite being tradeable swing structure, not consolidation. Four ~11%
+HYPE H1 boxes had the same shape.
+
+**Rejected first attempt (oscillation strictness)**: raising the alternating
+edge-touch requirement (3 → 5 for boxes taller than half the cap) changed
+32/35 combos and dropped 95 ranges — including the motivating ETH H1 July
+lock. Profiling every range showed **no shape metric separates the cases**:
+the HYPE rotation and the genuine ETH H1 July lock have identical profiles
+(frac-of-cap ~0.9, 3 edge touches, ~0.10 midline crossings per candle). The
+difference lives in the asset's volatility (what one "box height" means in
+tradeable terms), not in the box's oscillation shape — hence an absolute cap,
+not a stricter shape gate.
+
+**Measurement** (BTC/ETH/SOL/AAVE/NEAR/ENA/HYPE × 15m/30m/1h/4h/1d,
+limit=1200): 23/35 combos changed, −78/+43 ranges. BTC unchanged everywhere
+(its ATR cap stays binding); both motivating H1 July locks intact; HYPE H1's
+four ~11% rotations dropped while its genuine 4.9% box (07-08..11) survives.
+The dominant pattern is *re-tightening*, not loss: HYPE 4H's 23% box
+(06-17→07-13) re-cuts to a 12.1% core (07-02→07-13); volatile dailies' 50-90%
+"ranges" become ~38-40% boxes or split. `final_trend` untouched by
+construction (ranges only stage additive/provisional events).
+
+**Fixture impact**: `solusdt_4h_2025_11_06_2026_07_14` re-cuts its Feb-May
+16% boxes into three ≤14% ranges; `test_sol_4h_range_breakouts_stage_additive_events`
+re-pinned (staged continuation BOS now at 03-27 08:00, ref 85.0). ETH H1 lock
+test unchanged.

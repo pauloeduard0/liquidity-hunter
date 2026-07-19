@@ -778,6 +778,227 @@ def test_reanchor_fills_none_reference_from_opposite_polarity_origin() -> None:
     assert result.reference_timestamp == candles[2].timestamp
 
 
+def _event_at(
+    candles: list[Candle],
+    index: int,
+    event: StructureEvent,
+    direction: MarketDirection,
+    *,
+    reference_level: float,
+    price_level: float = 100.0,
+) -> MarketStructure:
+    return MarketStructure(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=candles[index].timestamp,
+        event=event,
+        direction=direction,
+        price_level=price_level,
+        reference_price_level=reference_level,
+        reference_timestamp=None,
+        scope=StructureScope.INTERNAL,
+    )
+
+
+def _leg_launch_series() -> list[Candle]:
+    # Bearish leg modeled on the ENA M30 case: the launch fundo (low 90.0)
+    # forms at candle 1, price retests the CHoCH, and the first close below
+    # 90.0 (candle 6, close 89.0) lands *after* the successor BOS's raw stamp
+    # (candle 5) -- inside its territory. Closes are high/low midpoints.
+    return make_series(
+        [100.0, 96.0, 98.0, 97.0, 95.0, 94.0, 90.0, 95.0, 99.0],
+        [95.0, 90.0, 94.0, 93.0, 91.0, 90.5, 88.0, 91.0, 95.0],
+    )
+
+
+def test_reanchor_rescues_leg_launch_bos_and_suppresses_passed_over_continuation() -> None:
+    # The leg-launch BOS (ref 90.0, the CHoCH-seeded fundo) finds no close in
+    # its own window (closes 93.0, 92.25 at candles 4-5); the first close below
+    # lands at candle 6 (89.0), inside the successor's territory. Rescued, it is
+    # re-timed to that close, its line starts at the fundo (candle 1), and the
+    # passed-over shallower continuation (ref 92.0) is suppressed.
+    candles = _leg_launch_series()
+    choch = _event_at(
+        candles, 2, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH,
+        reference_level=95.0,
+    )
+    launch = _event_at(
+        candles, 4, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH,
+        reference_level=90.0,
+    )
+    shallow = _event_at(
+        candles, 5, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH,
+        reference_level=92.0,
+    )
+    reversal = _event_at(
+        candles, 8, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH,
+        reference_level=94.0,
+    )
+
+    kept = _reanchor_bos_close_break(
+        [choch, launch, shallow, reversal], candles, rescue_leg_launch=True
+    )
+
+    bos = [e for e in kept if e.event is StructureEvent.BREAK_OF_STRUCTURE]
+    assert [e.reference_price_level for e in bos] == [90.0]
+    assert bos[0].timestamp == candles[6].timestamp
+    assert bos[0].reference_timestamp == candles[1].timestamp
+    assert choch in kept and reversal in kept
+
+
+def test_reanchor_rescue_off_drops_leg_launch_and_keeps_shallow_successor() -> None:
+    # Without the rescue (the pre-existing behavior), the launch BOS is dropped
+    # as wick-only and the shallow successor survives as first-of-leg.
+    candles = _leg_launch_series()
+    choch = _event_at(
+        candles, 2, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH,
+        reference_level=95.0,
+    )
+    launch = _event_at(
+        candles, 4, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH,
+        reference_level=90.0,
+    )
+    shallow = _event_at(
+        candles, 5, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH,
+        reference_level=92.0,
+    )
+
+    kept = _reanchor_bos_close_break([choch, launch, shallow], candles)
+
+    bos = [e for e in kept if e.event is StructureEvent.BREAK_OF_STRUCTURE]
+    assert [e.reference_price_level for e in bos] == [92.0]
+
+
+def test_reanchor_rescue_only_applies_to_the_leg_launch_bos() -> None:
+    # A mid-leg continuation (a same-direction BOS precedes it in the leg) gets
+    # no extended search: failing its own window still drops it, even though a
+    # qualifying close exists later.
+    candles = _leg_launch_series()
+    choch = _event_at(
+        candles, 2, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH,
+        reference_level=95.0,
+    )
+    first = _event_at(
+        candles, 3, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH,
+        reference_level=95.0,
+    )
+    target = _event_at(
+        candles, 4, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH,
+        reference_level=90.0,
+    )
+    successor = _event_at(
+        candles, 5, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH,
+        reference_level=92.0,
+    )
+
+    kept = _reanchor_bos_close_break(
+        [choch, first, target, successor], candles, rescue_leg_launch=True
+    )
+
+    assert 90.0 not in [
+        e.reference_price_level for e in kept if e.event is StructureEvent.BREAK_OF_STRUCTURE
+    ]
+
+
+def test_reanchor_rescue_still_drops_when_leg_dies_without_close_through() -> None:
+    # The leg reverses (opposite CHoCH at candle 6) before any close through the
+    # launch floor: the wick-only protection stands and the BOS is dropped.
+    candles = make_series(
+        [100.0, 96.0, 98.0, 97.0, 95.0, 94.0, 95.0, 99.0],
+        [95.0, 90.0, 94.0, 93.0, 91.0, 90.5, 91.0, 95.0],
+    )
+    choch = _event_at(
+        candles, 2, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH,
+        reference_level=95.0,
+    )
+    launch = _event_at(
+        candles, 4, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH,
+        reference_level=90.0,
+    )
+    reversal = _event_at(
+        candles, 6, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH,
+        reference_level=94.0,
+    )
+
+    kept = _reanchor_bos_close_break([choch, launch, reversal], candles, rescue_leg_launch=True)
+
+    assert [e.event for e in kept] == [
+        StructureEvent.CHANGE_OF_CHARACTER,
+        StructureEvent.CHANGE_OF_CHARACTER,
+    ]
+
+
+def test_reanchor_rescue_is_bounded_to_one_continuation() -> None:
+    # The AAVEUSDT D1 shape: a launch BOS whose floor (85.0) sits far beyond the
+    # leg. An unbounded search would scan until the leg died and suppress the
+    # real staircase it passed (the measured 176.46 -> 145.0 -> 91.85 loss); the
+    # bound stops at the *second* continuation, so the launch BOS is dropped as
+    # before and both continuations survive.
+    candles = make_series(
+        [100.0, 96.0, 98.0, 97.0, 95.0, 94.0, 93.0, 92.0, 91.0, 84.0],
+        [95.0, 90.0, 94.0, 93.0, 91.0, 90.5, 89.0, 88.0, 87.0, 82.0],
+    )
+    choch = _event_at(
+        candles, 2, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH,
+        reference_level=95.0,
+    )
+    launch = _event_at(
+        candles, 4, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH,
+        reference_level=85.0,
+    )
+    first_successor = _event_at(
+        candles, 5, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH,
+        reference_level=92.0,
+    )
+    second_successor = _event_at(
+        candles, 7, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BEARISH,
+        reference_level=90.0,
+    )
+
+    kept = _reanchor_bos_close_break(
+        [choch, launch, first_successor, second_successor], candles, rescue_leg_launch=True
+    )
+
+    # The close through 85.0 only comes at candle 9, past the second
+    # continuation -- too late to be the leg's launch break.
+    bos = [e for e in kept if e.event is StructureEvent.BREAK_OF_STRUCTURE]
+    assert [e.reference_price_level for e in bos] == [92.0, 90.0]
+
+
+def test_reanchor_rescues_bullish_leg_launch_bos() -> None:
+    # Bullish mirror: launch topo 110.0 at candle 1, first close above it at
+    # candle 6 (111.0), past the shallow successor's (ref 108.0) raw stamp.
+    candles = make_series(
+        [105.0, 110.0, 106.0, 107.0, 109.0, 109.5, 112.0, 109.0, 105.0],
+        [95.0, 104.0, 100.0, 101.0, 105.0, 106.0, 110.0, 105.0, 95.0],
+    )
+    choch = _event_at(
+        candles, 2, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH,
+        reference_level=105.0,
+    )
+    launch = _event_at(
+        candles, 4, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH,
+        reference_level=110.0,
+    )
+    shallow = _event_at(
+        candles, 5, StructureEvent.BREAK_OF_STRUCTURE, MarketDirection.BULLISH,
+        reference_level=108.0,
+    )
+    reversal = _event_at(
+        candles, 8, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH,
+        reference_level=106.0,
+    )
+
+    kept = _reanchor_bos_close_break(
+        [choch, launch, shallow, reversal], candles, rescue_leg_launch=True
+    )
+
+    bos = [e for e in kept if e.event is StructureEvent.BREAK_OF_STRUCTURE]
+    assert [e.reference_price_level for e in bos] == [110.0]
+    assert bos[0].timestamp == candles[6].timestamp
+    assert bos[0].reference_timestamp == candles[1].timestamp
+
+
 def test_drop_pre_break_reference_bos_keeps_unresolved_reference() -> None:
     # No reference_timestamp resolved: nothing to judge, keep the event.
     events = [
@@ -1636,18 +1857,15 @@ def test_btc_1h_july_range_lock_is_a_live_consolidation() -> None:
 def test_sol_4h_range_breakouts_stage_additive_events() -> None:
     """Real-data regression for phase-2 breakout staging (SOLUSDT 4h).
 
-    Three range breakouts the state machine never marked (no real
-    same-direction BOS/CHoCH within the dedup window): the March and May
-    bounces breaking their range tops against the standing bearish trend
-    (provisional CHoCH marks -- the additive contract keeps the trend
-    untouched) and the April continuation breaking a range floor (a staged
-    BOS at the defended boundary).
-
-    Both provisional CHoCH reversals are later contradicted by a real bearish
-    advance (the bounce failed), so ``_drop_superseded_provisional_choch``
-    removes the stale ``CHoCH?`` -- a provisional mark survives only at the live
-    edge, never once real structure has settled its fate. The staged
-    continuation BOS (non-provisional) stays.
+    With the per-timeframe absolute height cap (2026-07-19) the Feb-May
+    16%-tall boxes re-cut into three <= 14% ranges. The March box resolves
+    bearish at a boundary break the state machine never marked (no real
+    same-direction BOS/CHoCH within the dedup window), staging a continuation
+    BOS at the defended floor; the April box's bullish resolution against the
+    standing bearish trend stages a provisional ``CHoCH?`` that a later real
+    advance supersedes, so ``_drop_superseded_provisional_choch`` removes it
+    -- a provisional mark survives only at the live edge, never once real
+    structure has settled its fate. The staged marks never touch the trend.
     """
     import json
     from pathlib import Path
@@ -1681,15 +1899,15 @@ def test_sol_4h_range_breakouts_stage_additive_events() -> None:
 
     # The staged continuation BOS at the defended floor survives (non-provisional).
     assert any(
-        e.timestamp == datetime(2026, 4, 1, 20, tzinfo=UTC)
+        e.timestamp == datetime(2026, 3, 27, 8, tzinfo=UTC)
         and e.event is StructureEvent.BREAK_OF_STRUCTURE
         and not e.provisional
         for e in run.events
-    ), "missing staged continuation BOS at 2026-04-01 20:00"
-    # Both staged reversal CHoCH? were superseded by a later real advance, so the
-    # drop pass removes them -- no stale `CHoCH?` lingers in history.
+    ), "missing staged continuation BOS at 2026-03-27 08:00"
+    # Staged reversal CHoCH? superseded by a later real advance are removed by
+    # the drop pass -- no stale `CHoCH?` lingers in history.
     superseded_reversals = [
-        datetime(2026, 3, 15, 20, tzinfo=UTC),
+        datetime(2026, 4, 16, 16, tzinfo=UTC),
         datetime(2026, 5, 8, 16, tzinfo=UTC),
     ]
     for timestamp in superseded_reversals:
@@ -1893,3 +2111,189 @@ def test_mu_4h_rearm_off_crash_reads_as_sweeps_under_stuck_trend(
         for e in run.events
     )
     assert run.trend is MarketDirection.BULLISH
+
+
+# --- Leg-launch BOS rescue (_RESCUE_LEG_LAUNCH_BOS) --------------------------
+#
+# ENAUSDT M30, the structurally anchored production slice. The bearish leg
+# (bearish CHoCH 2026-07-11 22:00 -> bullish CHoCH 2026-07-14 04:00) launches
+# from the 0.07908 fundo the CHoCH formed. Price retests the CHoCH before
+# breaking down, so that launch level's first confirming close (07-13 03:00,
+# 0.0787) lands three candles past the *next* continuation's stamp (07-13
+# 01:30, ref 0.07954) -- outside the launch BOS's own re-anchor window. Without
+# the rescue the launch BOS is dropped as wick-only and the chart promotes the
+# shallow 0.07954 fundo (formed 22 hours later) to first-of-leg reference.
+
+
+def _load_ena_30m_launch_candles() -> list[Candle]:
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "enausdt_30m_2026_06_20_07_15.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="ENAUSDT",
+            timeframe=TimeFrame.M30,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def _ena_bearish_leg_bos(run: dashboard_data.InternalStructureRun) -> list[MarketStructure]:
+    # The bearish leg: bearish CHoCH 07-11 22:00 -> bullish CHoCH 07-14 04:00.
+    leg_start = datetime(2026, 7, 11, 22, tzinfo=UTC)
+    leg_end = datetime(2026, 7, 14, 4, tzinfo=UTC)
+    return [
+        e
+        for e in run.events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and not e.provisional
+        and leg_start < e.timestamp < leg_end
+    ]
+
+
+def test_run_internal_structure_rescues_ena_30m_leg_launch_bos() -> None:
+    provider = _FuturesLimitFakeProvider({TimeFrame.M30: _load_ena_30m_launch_candles()})
+
+    run = _run_internal_structure(provider, "ENAUSDT", TimeFrame.M30, 1200, False)
+
+    # The leg reads CHoCH -> BOS at the launch fundo -> BOS 0.07760 -> CHoCH:
+    # the launch BOS references 0.07908 (the CHoCH fundo, formed 07-12 00:30)
+    # and is timed at its first close through it, and the shallow 0.07954
+    # continuation it passed over is suppressed.
+    bos = _ena_bearish_leg_bos(run)
+    assert [e.reference_price_level for e in bos] == [
+        pytest.approx(0.07908),
+        pytest.approx(0.07760),
+    ]
+    launch = bos[0]
+    assert launch.timestamp == datetime(2026, 7, 13, 3, tzinfo=UTC)
+    assert launch.reference_timestamp == datetime(2026, 7, 12, 0, 30, tzinfo=UTC)
+
+
+def test_run_internal_structure_ena_30m_launch_bos_lost_without_rescue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Off-lock: the raw detector emits the launch BOS, but the re-anchor pass
+    # drops it and the shallow successor stands in as first-of-leg.
+    monkeypatch.setattr(dashboard_data, "_RESCUE_LEG_LAUNCH_BOS", False)
+    provider = _FuturesLimitFakeProvider({TimeFrame.M30: _load_ena_30m_launch_candles()})
+
+    run = _run_internal_structure(provider, "ENAUSDT", TimeFrame.M30, 1200, False)
+
+    raw = _build_internal_detector(TimeFrame.M30, confluence_filter=False).detect(
+        run.internal_candles
+    )
+    assert any(
+        e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.reference_price_level == pytest.approx(0.07908)
+        for e in raw
+    )
+    assert [e.reference_price_level for e in _ena_bearish_leg_bos(run)] == [
+        pytest.approx(0.07954),
+        pytest.approx(0.07760),
+    ]
+
+
+# --- Superseded-continuation BOS staging (_STAGE_SUPERSEDED_CONTINUATION_BOS) --
+#
+# NEARUSDT M15. A BOS only emits once a confirming opposite pullback pivot
+# forms. In the bullish leg of 2026-07-14 the pivots run
+# 07:15 HIGH 2.0120 -> 10:15 HIGH 1.9960 -> 11:00 LOW 1.9670 ->
+# 12:30 HIGH 2.0400 -> 15:30 HIGH 2.0660 -> 17:00 LOW 2.0180: no low pivot forms
+# between the 12:30 and 15:30 advances, so the 12:30 pending (floor 2.0120, the
+# topo that formed and was broken) is silently superseded and only the 15:30
+# advance emits -- referencing 2.0400, its line starting at 12:30 instead of the
+# 07:15 topo. Staged, the leg reads BOS 2.0120 then BOS 2.0400.
+
+
+def _load_near_15m_superseded_candles() -> list[Candle]:
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "nearusdt_15m_2026_07_02_07_18.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="NEARUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def _near_bullish_leg_bos(run: dashboard_data.InternalStructureRun) -> list[MarketStructure]:
+    leg_start = datetime(2026, 7, 14, 5, tzinfo=UTC)
+    leg_end = datetime(2026, 7, 14, 18, tzinfo=UTC)
+    return [
+        e
+        for e in run.events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BULLISH
+        and not e.provisional
+        and leg_start <= e.timestamp <= leg_end
+    ]
+
+
+def test_run_internal_structure_stages_near_15m_superseded_continuation() -> None:
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: _load_near_15m_superseded_candles()})
+
+    run = _run_internal_structure(provider, "NEARUSDT", TimeFrame.M15, 1200, False)
+
+    # The staged mark restores the staircase: the 2.0120 topo (formed 07:15) is
+    # referenced by its own BOS before the 2.0400 one.
+    bos = _near_bullish_leg_bos(run)
+    assert [e.reference_price_level for e in bos] == [
+        pytest.approx(1.9760),
+        pytest.approx(2.0120),
+        pytest.approx(2.0400),
+    ]
+    staged = bos[1]
+    assert staged.timestamp == datetime(2026, 7, 14, 12, 30, tzinfo=UTC)
+    assert staged.reference_timestamp == datetime(2026, 7, 14, 7, 15, tzinfo=UTC)
+
+
+def test_run_internal_structure_near_15m_superseded_lost_without_staging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Off-lock: the leg's only continuation references the later 2.0400 top --
+    # the 2.0120 topo that formed and broke has no mark at all.
+    monkeypatch.setattr(dashboard_data, "_STAGE_SUPERSEDED_CONTINUATION_BOS", False)
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: _load_near_15m_superseded_candles()})
+
+    run = _run_internal_structure(provider, "NEARUSDT", TimeFrame.M15, 1200, False)
+
+    assert [e.reference_price_level for e in _near_bullish_leg_bos(run)] == [
+        pytest.approx(1.9760),
+        pytest.approx(2.0400),
+    ]

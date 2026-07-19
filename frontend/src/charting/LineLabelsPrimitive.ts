@@ -25,13 +25,32 @@ export interface LineLabel {
   text: string
   /** Text color -- matches the line's color, mirroring the Streamlit/Plotly annotations. */
   color: string
+  /**
+   * Draw the label just *below* the line instead of above it
+   * (TradingView-style: bullish structure labels sit above their line,
+   * bearish ones below). Defaults to above.
+   */
+  below?: boolean
 }
 
-const FONT = '10px sans-serif'
+const FONT = '500 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
 const GAP_ABOVE_LINE = 2
 const EDGE_PADDING = 4
 const LINE_HEIGHT = 12
 const MAX_STACK = 30
+/** Step (px) between candidate positions when sliding a segment label along its line. */
+const DODGE_STEP = 10
+/** Assumed half-width (px) of a candle's wick when testing label/candle overlap. */
+const CANDLE_HALF_WIDTH = 2
+
+/** A candle projected into pane pixel space, used for label/candle dodging. */
+interface CandleRect {
+  x: number
+  /** y of the candle's high (smaller value -- canvas y grows downward). */
+  top: number
+  /** y of the candle's low. */
+  bottom: number
+}
 
 interface PositionedLabel {
   /** x coordinate when `align` is `'left'`/`'center'`, or `null` to anchor to the right edge of the pane (`align: 'right'`). */
@@ -40,13 +59,83 @@ interface PositionedLabel {
   text: string
   color: string
   align: 'left' | 'right' | 'center'
+  below: boolean
+  /**
+   * Visible pixel extent of the line segment this label belongs to. When set,
+   * the renderer slides the label along `[segLeft, segRight]` to the clearest
+   * spot instead of pinning it at `x` (see `bestSegmentX`).
+   */
+  segLeft?: number
+  segRight?: number
+}
+
+/**
+ * Slide a segment label along its line to the spot least covered by candles:
+ * a fully clear spot nearest the segment center wins; if nothing is clear,
+ * the least-covered spot nearest the segment *start* (the line's origin,
+ * where the reference formed -- usually open space before the break).
+ */
+function bestSegmentX(
+  segLeft: number,
+  segRight: number,
+  halfWidth: number,
+  rectTop: number,
+  rectBottom: number,
+  candles: CandleRect[],
+): number {
+  const lo = segLeft + halfWidth
+  const hi = segRight - halfWidth
+  const center = (segLeft + segRight) / 2
+  if (hi <= lo) return center
+
+  // Coverage (overlapping px of candle wicks) of the label rect centered at x.
+  const coverage = (x: number): number => {
+    const left = x - halfWidth - CANDLE_HALF_WIDTH
+    const right = x + halfWidth + CANDLE_HALF_WIDTH
+    // Candles arrive in ascending x -- binary-search the first that can reach
+    // the rect, then walk right until past it.
+    let loIdx = 0
+    let hiIdx = candles.length
+    while (loIdx < hiIdx) {
+      const mid = (loIdx + hiIdx) >> 1
+      if (candles[mid].x < left) loIdx = mid + 1
+      else hiIdx = mid
+    }
+    let covered = 0
+    for (let i = loIdx; i < candles.length && candles[i].x <= right; i++) {
+      const c = candles[i]
+      if (c.top < rectBottom && c.bottom > rectTop) covered += 2 * CANDLE_HALF_WIDTH
+    }
+    return covered
+  }
+
+  let bestClear: number | null = null // clear spot nearest the center
+  let bestCovered = center
+  let bestCoveredScore = Infinity
+  for (let x = lo; x <= hi + 0.001; x += DODGE_STEP) {
+    const cov = coverage(x)
+    if (cov === 0) {
+      if (bestClear === null || Math.abs(x - center) < Math.abs(bestClear - center)) {
+        bestClear = x
+      }
+    } else if (
+      cov < bestCoveredScore ||
+      (cov === bestCoveredScore && x < bestCovered)
+    ) {
+      bestCoveredScore = cov
+      bestCovered = x
+    }
+  }
+  return bestClear ?? bestCovered
 }
 
 class LineLabelsRenderer implements IPrimitivePaneRenderer {
   private readonly _labels: PositionedLabel[]
+  private readonly _candles: CandleRect[]
 
-  constructor(labels: PositionedLabel[]) {
+  constructor(labels: PositionedLabel[], candles: CandleRect[]) {
     this._labels = labels
+    this._candles = candles
   }
 
   draw(target: CanvasRenderingTarget2D): void {
@@ -61,20 +150,41 @@ class LineLabelsRenderer implements IPrimitivePaneRenderer {
       const placed: { left: number; right: number; top: number; bottom: number }[] = []
       for (const label of this._labels) {
         context.textAlign = label.align
-        const x = label.x ?? mediaSize.width - EDGE_PADDING
         const width = context.measureText(label.text).width + 4
+
+        // Segment labels dodge candles: slide along the visible line to the
+        // clearest spot rather than sitting at the fixed midpoint.
+        let x = label.x ?? mediaSize.width - EDGE_PADDING
+        if (label.segLeft !== undefined && label.segRight !== undefined) {
+          const rectBottom = label.below
+            ? label.y + GAP_ABOVE_LINE + LINE_HEIGHT
+            : label.y - GAP_ABOVE_LINE
+          x = bestSegmentX(
+            label.segLeft,
+            label.segRight,
+            width / 2 + 2,
+            rectBottom - LINE_HEIGHT,
+            rectBottom,
+            this._candles,
+          )
+        }
+
         const left =
           (label.align === 'left' ? x : label.align === 'center' ? x - width / 2 : x - width) - 2
         const right = left + width
 
-        let bottom = label.y - GAP_ABOVE_LINE
+        // `below` labels start just under the line and fan out downward on
+        // collision; above labels (the default) start just over it and fan up.
+        let bottom = label.below
+          ? label.y + GAP_ABOVE_LINE + LINE_HEIGHT
+          : label.y - GAP_ABOVE_LINE
         for (let i = 0; i < MAX_STACK; i++) {
           const top = bottom - LINE_HEIGHT
           const collides = placed.some(
             (p) => left < p.right && right > p.left && top < p.bottom && bottom > p.top,
           )
           if (!collides) break
-          bottom -= LINE_HEIGHT
+          bottom += label.below ? LINE_HEIGHT : -LINE_HEIGHT
         }
         placed.push({ left, right, top: bottom - LINE_HEIGHT, bottom })
 
@@ -148,13 +258,23 @@ class LineLabelsPaneView implements IPrimitivePaneView {
           text: label.text,
           color: label.color,
           align: 'center',
+          below: label.below ?? false,
+          segLeft: left,
+          segRight: right,
         })
         continue
       }
 
       const x = timeScale.timeToCoordinate(label.time)
       if (x !== null) {
-        positioned.push({ x, y, text: label.text, color: label.color, align: 'left' })
+        positioned.push({
+          x,
+          y,
+          text: label.text,
+          color: label.color,
+          align: 'left',
+          below: label.below ?? false,
+        })
         continue
       }
 
@@ -169,10 +289,24 @@ class LineLabelsPaneView implements IPrimitivePaneView {
         text: label.text,
         color: label.color,
         align: isBefore ? 'left' : 'right',
+        below: label.below ?? false,
       })
     }
 
-    return new LineLabelsRenderer(positioned)
+    // Project the candles into pixel space (ascending x, matching their time
+    // order) so segment labels can dodge them. Only candles that resolve to a
+    // coordinate near the visible pane matter.
+    const candleRects: CandleRect[] = []
+    for (const candle of this._source.candles) {
+      const x = timeScale.timeToCoordinate(candle.time)
+      if (x === null || x < -CANDLE_HALF_WIDTH || x > paneWidth + CANDLE_HALF_WIDTH) continue
+      const top = series.priceToCoordinate(candle.high)
+      const bottom = series.priceToCoordinate(candle.low)
+      if (top === null || bottom === null) continue
+      candleRects.push({ x, top, bottom })
+    }
+
+    return new LineLabelsRenderer(positioned, candleRects)
   }
 }
 
@@ -182,10 +316,18 @@ class LineLabelsPaneView implements IPrimitivePaneView {
  * (liquidity zones, structure events) along their own position instead of
  * stacking titles on the right price axis.
  */
+/** A candle's time and wick extent, fed to the label/candle dodge logic. */
+export interface LabelCandle {
+  time: Time
+  high: number
+  low: number
+}
+
 export class LineLabelsPrimitive implements ISeriesPrimitive<Time> {
   chart: IChartApi | null = null
   series: ISeriesApi<SeriesType> | null = null
   labels: LineLabel[] = []
+  candles: LabelCandle[] = []
   /**
    * Sibling chart used to resolve time -> x when this primitive's own chart has
    * its time axis hidden (which nulls its public time-scale coordinate API).
@@ -210,6 +352,12 @@ export class LineLabelsPrimitive implements ISeriesPrimitive<Time> {
 
   setLabels(labels: LineLabel[]): void {
     this.labels = labels
+    this._requestUpdate?.()
+  }
+
+  /** Candles (in time order) the segment labels should dodge. */
+  setCandles(candles: LabelCandle[]): void {
+    this.candles = candles
     this._requestUpdate?.()
   }
 

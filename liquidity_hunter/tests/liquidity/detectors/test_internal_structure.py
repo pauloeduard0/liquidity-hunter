@@ -4010,3 +4010,125 @@ def test_capped_threshold_credits_daily_reversal_as_fresh_choch() -> None:
     uncapped.detect(_load_aero_1d_candles())
     assert detector.final_trend is uncapped.final_trend
     assert detector.final_trend is MarketDirection.BULLISH
+
+
+# --- First-pending pullback seed (bos_pullback_seed_choch_origin) -----------
+#
+# ENAUSDT H4. The bullish leg launched by the (re-fired, weak) CHoCH of
+# 2026-06-15 advances impulsively: the flip promoted an empty pending_low, so
+# the first pending BOS snapshots a `None` pullback ref and can never confirm.
+# With no emission, the whole reverse-CHoCH reference family (leg origin,
+# candidate) is never built -- the -22% drop from 0.0905 to 0.070 prints only
+# sweeps, and the trend can only flip via the CHOCH_FAILED escape valve.
+# Seeding that first pending with the leg's launch pivot (the CHoCH origin,
+# the 0.07869 fundo) lets the BOS confirm at the first higher-low, so the
+# reversal fires as a real bearish CHoCH at the structural launch level.
+_ENA_4H_SEED_WINDOW_DATA = (
+    Path(__file__).parent / "data" / "enausdt_4h_2026_04_20_07_10.json"
+)
+
+
+def _load_ena_4h_seed_candles() -> list[Candle]:
+    rows = json.loads(_ENA_4H_SEED_WINDOW_DATA.read_text())
+    return [
+        Candle(
+            symbol="ENAUSDT",
+            timeframe=TimeFrame.H4,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _ena_4h_seed_detector(*, seed: bool) -> InternalStructureDetector:
+    # The full production H4 wiring; `bos_pullback_seed_choch_origin` is the
+    # toggle under test.
+    return InternalStructureDetector(
+        swing_lookback=5,
+        persistence_candles=2,
+        confluence_filter=False,
+        reanchor_mode="chain",
+        reanchor_chain_threshold=2,
+        reanchor_chain_establish_only=True,
+        reanchor_min_price_gap_pct=0.003,
+        stale_reanchor_candles=60,
+        stale_reanchor_displacement_atr=16.0,
+        stale_reanchor_displacement_candles=15,
+        impulse_bos_displacement_pct=0.015,
+        bos_pullback_max_wick_pct=0.4,
+        stage_wick_rejected_bos=True,
+        rollback_staircase_on_discard=True,
+        bos_leg_origin_choch_ref=True,
+        bos_leg_origin_release_gap_pct=0.04,
+        bos_leg_origin_release_gap_atr=3.0,
+        bos_leg_origin_require_close_break=True,
+        bos_floor_require_close_break=True,
+        choch_confirmed_trend_persistence_candles=4,
+        emit_provisional_bos=True,
+        emit_provisional_choch=True,
+        emit_provisional_choch_weak=True,
+        choch_origin_leg_extreme=True,
+        choch_weak_ref_fail_at_broken_level=True,
+        choch_pending_fail_at_broken_level=True,
+        choch_pending_fail_persistence_candles=6,
+        choch_fizzle_reclaim_candles=30,
+        choch_failed_fallback_suppress_candles=20,
+        choch_failed_rearm=True,
+        choch_failed_rearm_persistent=True,
+        choch_fail_live_edge=True,
+        stage_choch_failed_window_bos=True,
+        choch_success_displacement_atr=4.5,
+        choch_success_displacement_max_pct=0.20,
+        stage_reversal_eaten_bos=True,
+        stage_superseded_continuation_bos=True,
+        bos_pullback_seed_choch_origin=seed,
+    )
+
+
+def _ena_seed_bearish_chochs(events: list[MarketStructure]) -> list[MarketStructure]:
+    # Real bearish CHoCHs inside the drop window (2026-06-16 .. 07-01).
+    return [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BEARISH
+        and not e.provisional
+        and datetime(2026, 6, 16, tzinfo=UTC)
+        <= e.timestamp
+        <= datetime(2026, 7, 1, tzinfo=UTC)
+    ]
+
+
+def test_pullback_seed_off_drop_has_no_bearish_choch() -> None:
+    """Off, the unconfirmable pending BOS leaves the bearish side with zero
+    references: the whole drop prints no bearish CHoCH (the trend can only
+    flip through the CHOCH_FAILED escape valve)."""
+    detector = _ena_4h_seed_detector(seed=False)
+    events = detector.detect(_load_ena_4h_seed_candles())
+    assert _ena_seed_bearish_chochs(events) == []
+
+
+def test_pullback_seed_fires_bearish_choch_at_leg_launch_level() -> None:
+    """On, the seeded pending confirms at the first higher-low, the leg origin
+    becomes the bearish-CHoCH reference, and the reversal fires as a real
+    CHoCH at the 0.07869 launch fundo -- followed by a bearish BOS staircase."""
+    detector = _ena_4h_seed_detector(seed=True)
+    events = detector.detect(_load_ena_4h_seed_candles())
+    chochs = _ena_seed_bearish_chochs(events)
+    assert len(chochs) == 1
+    assert chochs[0].timestamp == datetime(2026, 6, 27, 16, tzinfo=UTC)
+    assert chochs[0].reference_price_level == pytest.approx(0.07869, abs=0.0002)
+    # The new bearish leg prints a real continuation BOS off the CHoCH.
+    assert any(
+        e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and e.timestamp == datetime(2026, 6, 30, 8, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(0.07463, abs=0.0002)
+        for e in events
+    )

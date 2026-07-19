@@ -4,14 +4,14 @@
  * the existing Streamlit dashboard.
  */
 
-export const DARK_BG = '#0a0d14'
+export const DARK_BG = '#131722'
 export const PANEL_BG = '#0f1319'
 export const GRID_COLOR = '#1a1f2e'
 export const FONT_COLOR = '#d1d4dc'
 export const ACCENT_COLOR = '#2962ff'
 
-export const CANDLE_UP_COLOR = '#26c6da'
-export const CANDLE_DOWN_COLOR = '#b8b8b8'
+export const CANDLE_UP_COLOR = '#9598a1'
+export const CANDLE_DOWN_COLOR = '#da4d4d'
 
 export const ZONE_COLORS: Record<string, string> = {
   equal_highs: '#ef553b',
@@ -39,7 +39,20 @@ export const STRUCTURE_EVENT_STYLES: Record<string, { label: string; color: stri
   break_of_structure: { label: 'BOS', color: '#26a69a' },
   change_of_character: { label: 'CHoCH', color: '#ffb74d' },
   choch_failed: { label: 'CHoCH ✕', color: '#9e9e9e' },
-  liquidity_sweep: { label: 'Sweep', color: '#ef5350' },
+  liquidity_sweep: { label: 'Sweep', color: '#8d6fc4' },
+}
+
+/**
+ * Direction colors for BOS/CHoCH lines and labels (TradingView-style): the
+ * color carries the direction, so those labels drop the ▲/▼ arrow. Neutral
+ * events (Sweep, CHoCH ✕) keep their own `STRUCTURE_EVENT_STYLES` color and
+ * arrow — red/green stays reserved for direction.
+ */
+export const STRUCTURE_DIRECTION_COLORS: Record<string, string> = {
+  bullish: '#2EE6B8',
+  // Lilac rather than red: the candles' down color (#da4d4d) is red, so
+  // bearish structure lines need a hue that doesn't blend into them.
+  bearish: '#ce93d8',
 }
 
 export const TREND_ICONS: Record<string, string> = {
@@ -48,10 +61,12 @@ export const TREND_ICONS: Record<string, string> = {
   neutral: '▬',
 }
 
-/** POI order block box colors — border and fill (TradingView style). */
+/** POI order block box colors — border and fill (TradingView style).
+ *  Kept deliberately faint: the zone is context behind the candles, so the
+ *  fill sits near ~7% alpha and the border is a translucent hairline. */
 export const POI_BOX_STYLES: Record<string, { border: string; fill: string }> = {
-  bullish: { border: '#2979ff', fill: '#2979ff2e' },   // vivid blue demand zone
-  bearish: { border: '#ef5350', fill: '#ef53502e' },   // red supply zone
+  bullish: { border: '#5b9cf699', fill: '#2979ff12' },  // soft blue demand zone
+  bearish: { border: '#ef535099', fill: '#ef535012' },  // soft red supply zone
 }
 
 /** Manipulation cycle accumulation box colors by status. */

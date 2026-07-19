@@ -40,6 +40,7 @@ import {
   RSI_LINE_COLOR,
   RSI_OVERBOUGHT_COLOR,
   RSI_OVERSOLD_COLOR,
+  STRUCTURE_DIRECTION_COLORS,
   STRUCTURE_EVENT_STYLES,
   TREND_ICONS,
   VOLUME_DOWN_COLOR,
@@ -47,6 +48,7 @@ import {
   ZONE_COLORS,
   ZONE_TYPE_LABELS,
 } from '../theme'
+import { setChartTimezoneMode, toChartTime } from '../utils/chartTime'
 
 const TOP_N_ZONES = 5
 const MAX_INTERNAL_SWEEPS = 3
@@ -182,10 +184,6 @@ function detectDivergences(
   return divergences
 }
 
-function toUtcTimestamp(isoTimestamp: string): UTCTimestamp {
-  return (Date.parse(isoTimestamp) / 1000) as UTCTimestamp
-}
-
 // Lightweight Charts defaults the candlestick series to `precision: 2,
 // minMove: 0.01`, so a low-priced pair (ETHBTC ~0.03, ENAUSDT sub-1) snaps to
 // 0.01 ticks and every intrabar move collapses into a handful of levels. Derive
@@ -235,7 +233,7 @@ function failedChochTime(
   { includeFizzle = true }: { includeFizzle?: boolean } = {},
 ): UTCTimestamp | null {
   if (choch.event !== 'change_of_character') return null
-  const chochTime = toUtcTimestamp(choch.timestamp)
+  const chochTime = toChartTime(choch.timestamp)
   const failedTimes = allEvents
     .filter(
       (e) =>
@@ -243,9 +241,9 @@ function failedChochTime(
         e.event === 'choch_failed' &&
         (includeFizzle || !e.provisional) &&
         e.direction === choch.direction &&
-        toUtcTimestamp(e.timestamp) > chochTime,
+        toChartTime(e.timestamp) > chochTime,
     )
-    .map((e) => toUtcTimestamp(e.timestamp))
+    .map((e) => toChartTime(e.timestamp))
   if (failedTimes.length === 0) return null
   const firstFailed = Math.min(...failedTimes) as UTCTimestamp
   // Pair the failure with its CHoCH: ignore it if a later same-direction CHoCH
@@ -255,8 +253,8 @@ function failedChochTime(
       e.scope === choch.scope &&
       e.event === 'change_of_character' &&
       e.direction === choch.direction &&
-      toUtcTimestamp(e.timestamp) > chochTime &&
-      toUtcTimestamp(e.timestamp) < firstFailed,
+      toChartTime(e.timestamp) > chochTime &&
+      toChartTime(e.timestamp) < firstFailed,
   )
   return interveningChoch ? null : firstFailed
 }
@@ -270,7 +268,7 @@ function structureLineEndTime(
   allEvents: MarketStructure[],
   lastCandleTime: UTCTimestamp,
 ): UTCTimestamp {
-  const eventTime = toUtcTimestamp(event.timestamp)
+  const eventTime = toChartTime(event.timestamp)
 
   if (event.event === 'change_of_character') {
     // A CHoCH line runs until the next real CHoCH supersedes it — of *either*
@@ -288,9 +286,9 @@ function structureLineEndTime(
           other.event === 'change_of_character' &&
           !other.provisional &&
           !isFailedChoch(other, allEvents) &&
-          toUtcTimestamp(other.timestamp) > eventTime,
+          toChartTime(other.timestamp) > eventTime,
       )
-      .map((other) => toUtcTimestamp(other.timestamp))
+      .map((other) => toChartTime(other.timestamp))
     // If this CHoCH itself failed, its line stops at the failure point.
     const ownFailure = failedChochTime(event, allEvents)
     if (ownFailure !== null) candidates.push(ownFailure)
@@ -314,9 +312,9 @@ function structureLineEndTime(
             (event.direction === 'bullish'
               ? other.reference_price_level < event.reference_price_level!
               : other.reference_price_level > event.reference_price_level!) &&
-            toUtcTimestamp(other.timestamp) > eventTime,
+            toChartTime(other.timestamp) > eventTime,
         )
-        .map((other) => toUtcTimestamp(other.timestamp))
+        .map((other) => toChartTime(other.timestamp))
       candidates.push(...rebasedAt)
     }
     return candidates.length > 0 ? (Math.min(...candidates) as UTCTimestamp) : lastCandleTime
@@ -328,7 +326,7 @@ function structureLineEndTime(
       (other) =>
         other.scope === event.scope &&
         !other.provisional &&
-        toUtcTimestamp(other.timestamp) > eventTime &&
+        toChartTime(other.timestamp) > eventTime &&
         ((other.direction === event.direction &&
           (other.event === 'break_of_structure' ||
             (other.event === 'change_of_character' && !isFailedChoch(other, allEvents)) ||
@@ -341,7 +339,7 @@ function structureLineEndTime(
             other.event === 'change_of_character' &&
             !isFailedChoch(other, allEvents))),
     )
-    .map((other) => toUtcTimestamp(other.timestamp))
+    .map((other) => toChartTime(other.timestamp))
 
   return supersededAt.length > 0 ? (Math.min(...supersededAt) as UTCTimestamp) : lastCandleTime
 }
@@ -352,7 +350,7 @@ function structureLineEndTime(
 // Price touching inside the zone does not retire it.
 function poiBoxEndTime(zone: POIZone, lastCandleTime: UTCTimestamp): UTCTimestamp {
   return zone.invalidated_at
-    ? toUtcTimestamp(zone.invalidated_at)
+    ? toChartTime(zone.invalidated_at)
     : ((lastCandleTime + 9_999_999) as UTCTimestamp)
 }
 
@@ -466,7 +464,7 @@ function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker
       const markerStyle = DIVERGENCE_MARKER_SHAPES[div.divergence_type] ?? DIVERGENCE_MARKER_SHAPES.exhaustion
       const dirIcon = div.direction === 'bullish' ? '▲' : '▼'
       return {
-        time: toUtcTimestamp(div.timestamp) as Time,
+        time: toChartTime(div.timestamp) as Time,
         position: markerStyle.position,
         shape: markerStyle.shape,
         color: style?.color ?? '#888888',
@@ -507,12 +505,12 @@ function buildManipulationBoxes(
         ? cycle.target_zone_price_high + buffer
         : cycle.target_zone_price_high
 
-    const x0 = toUtcTimestamp(cycle.accumulation_start)
+    const x0 = toChartTime(cycle.accumulation_start)
     const x1 = cycle.sweep_timestamp
-      ? toUtcTimestamp(cycle.sweep_timestamp)
+      ? toChartTime(cycle.sweep_timestamp)
       : cycle.phase === 'accumulation'
         ? ((lastCandleTime + 9_999_999) as UTCTimestamp)
-        : toUtcTimestamp(cycle.accumulation_end)
+        : toChartTime(cycle.accumulation_end)
 
     const dirIcon = cycle.direction === 'bullish' ? '▲' : '▼'
     const phaseLabel =
@@ -571,6 +569,12 @@ export function MainChart({
   showVolume = true,
   showRsiDivergence = false,
 }: MainChartProps) {
+  // Which clock this chart's times are drawn on -- local intraday, exchange
+  // (UTC) on the daily/weekly bars. Set during render, before the effects below
+  // convert anything through `toChartTime`; `App` remounts this component on
+  // every symbol/timeframe change, so the mode never outlives its data.
+  setChartTimezoneMode(data.timeframe)
+
   const wrapperRef = useRef<HTMLDivElement>(null)
   const mainContainerRef = useRef<HTMLDivElement>(null)
   const deltaContainerRef = useRef<HTMLDivElement>(null)
@@ -913,7 +917,7 @@ export function MainChart({
 
     series.setData(
       data.candles.map((candle) => ({
-        time: toUtcTimestamp(candle.timestamp),
+        time: toChartTime(candle.timestamp),
         open: candle.open,
         high: candle.high,
         low: candle.low,
@@ -928,7 +932,7 @@ export function MainChart({
       volumeSeries.setData(
         showVolume
           ? data.candles.map((candle) => ({
-              time: toUtcTimestamp(candle.timestamp),
+              time: toChartTime(candle.timestamp),
               value: candle.volume,
               color: candle.close >= candle.open ? VOLUME_UP_COLOR : VOLUME_DOWN_COLOR,
             }))
@@ -941,7 +945,7 @@ export function MainChart({
       data.candles.map((candle) => {
         const delta = 2 * candle.taker_buy_volume - candle.volume
         return {
-          time: toUtcTimestamp(candle.timestamp),
+          time: toChartTime(candle.timestamp),
           value: delta,
           color: candle.close >= candle.open ? CANDLE_UP_COLOR : CANDLE_DOWN_COLOR,
         }
@@ -953,7 +957,7 @@ export function MainChart({
     const closes = data.candles.map((c) => c.close)
     const rsiValues = computeRSI(closes, RSI_PERIOD)
     const rsiData = data.candles.map((candle, i) => {
-      const time = toUtcTimestamp(candle.timestamp)
+      const time = toChartTime(candle.timestamp)
       const v = rsiValues[i]
       return v !== null ? { time, value: v } : { time }
     })
@@ -991,8 +995,8 @@ export function MainChart({
         crosshairMarkerVisible: false,
       })
       divSeries.setData([
-        { time: toUtcTimestamp(data.candles[div.startIndex].timestamp), value: div.startRSI },
-        { time: toUtcTimestamp(data.candles[div.endIndex].timestamp), value: div.endRSI },
+        { time: toChartTime(data.candles[div.startIndex].timestamp), value: div.startRSI },
+        { time: toChartTime(data.candles[div.endIndex].timestamp), value: div.endRSI },
       ])
       rsiDivSeriesRef.current.push(divSeries)
     }
@@ -1002,8 +1006,8 @@ export function MainChart({
     }
     overlaySeriesRef.current = []
 
-    const lastCandleTime = toUtcTimestamp(data.candles[data.candles.length - 1].timestamp)
-    const firstCandleTime = toUtcTimestamp(data.candles[0].timestamp)
+    const lastCandleTime = toChartTime(data.candles[data.candles.length - 1].timestamp)
+    const firstCandleTime = toChartTime(data.candles[0].timestamp)
 
     const labels: LineLabel[] = []
 
@@ -1018,8 +1022,8 @@ export function MainChart({
       const endCandle = data.candles[div.endIndex]
       const startPrice = bearish ? startCandle.high : startCandle.low
       const endPrice = bearish ? endCandle.high : endCandle.low
-      const startTime = toUtcTimestamp(startCandle.timestamp)
-      const endTime = toUtcTimestamp(endCandle.timestamp)
+      const startTime = toChartTime(startCandle.timestamp)
+      const endTime = toChartTime(endCandle.timestamp)
 
       const divSeries = chart.addSeries(LineSeries, {
         color,
@@ -1049,7 +1053,7 @@ export function MainChart({
       const label = ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type
       const title = `${label} (${zone.strength.toFixed(2)}) · ${score.toFixed(0)}`
       const price = (zone.price_high + zone.price_low) / 2
-      const startTime = toUtcTimestamp(zone.formed_at)
+      const startTime = toChartTime(zone.formed_at)
 
       const zoneSeries = chart.addSeries(LineSeries, {
         color,
@@ -1070,15 +1074,15 @@ export function MainChart({
       const MAX_SWEPT_ZONES = 20
       const ttlCutoff =
         data.candles.length >= SWEPT_TTL_CANDLES
-          ? toUtcTimestamp(data.candles[data.candles.length - SWEPT_TTL_CANDLES].timestamp)
-          : toUtcTimestamp(data.candles[0].timestamp)
+          ? toChartTime(data.candles[data.candles.length - SWEPT_TTL_CANDLES].timestamp)
+          : toChartTime(data.candles[0].timestamp)
       const mitigatedZones = data.liquidity_zones
         .filter(
           (z) =>
             z.is_mitigated &&
             (z.zone_type === 'equal_highs' || z.zone_type === 'equal_lows') &&
             z.invalidated_at != null &&
-            toUtcTimestamp(z.invalidated_at) >= ttlCutoff,
+            toChartTime(z.invalidated_at) >= ttlCutoff,
         )
         .sort((a, b) => Date.parse(b.invalidated_at!) - Date.parse(a.invalidated_at!))
         .slice(0, MAX_SWEPT_ZONES)
@@ -1086,8 +1090,8 @@ export function MainChart({
         const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
         const label = ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type
         const price = (zone.price_high + zone.price_low) / 2
-        const startTime = toUtcTimestamp(zone.formed_at)
-        const endTime = zone.invalidated_at ? toUtcTimestamp(zone.invalidated_at) : lastCandleTime
+        const startTime = toChartTime(zone.formed_at)
+        const endTime = zone.invalidated_at ? toChartTime(zone.invalidated_at) : lastCandleTime
 
         const sweptSeries = chart.addSeries(LineSeries, {
           color: color + '4d',
@@ -1157,8 +1161,16 @@ export function MainChart({
       }
       const style = STRUCTURE_EVENT_STYLES[event.event]
       const oiSuffix = oiSuffixByEvent.get(`${event.timestamp}|${event.event}`)
-      const directionIcon = TREND_ICONS[event.direction] ?? ''
-      const startTime = toUtcTimestamp(event.timestamp)
+      // BOS/CHoCH are colored by direction (green bullish, red bearish), so
+      // their labels drop the ▲/▼ arrow — the color already says it. Neutral
+      // events (Sweep, CHoCH ✕) keep their own color and the arrow.
+      const directionColored =
+        event.event === 'break_of_structure' || event.event === 'change_of_character'
+      const baseColor =
+        (directionColored ? STRUCTURE_DIRECTION_COLORS[event.direction] : undefined) ??
+        style.color
+      const directionIcon = directionColored ? '' : (TREND_ICONS[event.direction] ?? '')
+      const startTime = toChartTime(event.timestamp)
       const linePrice =
         (event.event === 'change_of_character' ||
           event.event === 'choch_failed' ||
@@ -1181,7 +1193,7 @@ export function MainChart({
           event.event === 'break_of_structure' ||
           event.event === 'choch_failed') &&
         event.reference_timestamp != null
-          ? toUtcTimestamp(event.reference_timestamp)
+          ? toChartTime(event.reference_timestamp)
           : startTime
 
       // A CHoCH that broke a *weak* reference (a re-anchor/fallback level or a
@@ -1228,7 +1240,7 @@ export function MainChart({
             other.timestamp === event.reference_timestamp,
         )
       const dimmed = weakChoch || provisionalBos || provisionalChoch
-      const lineColor = dimmed ? `${style.color}99` : style.color
+      const lineColor = dimmed ? `${baseColor}99` : baseColor
       // A provisional mark against a weak reference (emit_provisional_choch_weak)
       // is both forming and weak: `?` (the stronger caveat -- it may repaint
       // entirely) leads, with `*` appended (`CHoCH?* ▲`).
@@ -1265,12 +1277,16 @@ export function MainChart({
       // sits at one end of the line, where the label would be buried in the
       // candles -- the middle of the drawn segment is the open gap. A
       // line-less fizzle marker anchors at the reclaim candle instead.
+      // TradingView-style placement: bullish labels sit above their line,
+      // bearish ones below, so the label always hangs on the side price broke
+      // *from* and stays out of the move that followed.
       labels.push({
         time: fizzleMarker ? startTime : lineStartTime,
         timeEnd: fizzleMarker ? startTime : endTime,
         price: linePrice,
         color: lineColor,
-        text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''} ${directionIcon}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}`,
+        below: event.direction === 'bearish',
+        text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''}${directionIcon ? ` ${directionIcon}` : ''}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}`,
       })
     }
 
@@ -1285,17 +1301,17 @@ export function MainChart({
         : []) {
         const style = POI_BOX_STYLES[zone.direction] ?? POI_BOX_STYLES.bearish
         const endTime = poiBoxEndTime(zone, lastCandleTime)
-        const dirIcon = zone.direction === 'bullish' ? '▲' : '▼'
+        // No direction arrow: the box color already encodes it.
         const kindLabel = POI_KIND_LABELS[zone.kind] ?? 'OB'
 
         poiBoxes.push({
-          x0: toUtcTimestamp(zone.ob_candle_timestamp),
+          x0: toChartTime(zone.ob_candle_timestamp),
           x1: endTime,
           priceLow: zone.price_low,
           priceHigh: zone.price_high,
           borderColor: style.border,
           fillColor: style.fill,
-          label: `${kindLabel} ${dirIcon}`,
+          label: kindLabel,
         })
       }
       poiBoxesPrimitiveRef.current?.setBoxes(poiBoxes)
@@ -1313,18 +1329,20 @@ export function MainChart({
     const rangeBoxes: POIBox[] = []
     for (const range of showConsolidationRanges ? (data.consolidation_ranges ?? []) : []) {
       const style = CONSOLIDATION_BOX_STYLES[range.status] ?? CONSOLIDATION_BOX_STYLES.active
+      // Label is just the resolution arrow (nothing while the range is live):
+      // the box itself already reads as "lateral", the RANGE text was noise.
       const resolvedIcon =
-        range.resolved_direction != null ? ` ${TREND_ICONS[range.resolved_direction] ?? ''}` : ''
+        range.resolved_direction != null ? (TREND_ICONS[range.resolved_direction] ?? '') : ''
       rangeBoxes.push({
-        x0: toUtcTimestamp(range.start_timestamp),
+        x0: toChartTime(range.start_timestamp),
         x1: range.end_timestamp
-          ? toUtcTimestamp(range.end_timestamp)
+          ? toChartTime(range.end_timestamp)
           : ((lastCandleTime + 9_999_999) as UTCTimestamp),
         priceLow: range.price_low,
         priceHigh: range.price_high,
         borderColor: style.border,
         fillColor: style.fill,
-        label: `▭ RANGE${resolvedIcon}`,
+        label: resolvedIcon,
       })
     }
     rangeBoxesPrimitiveRef.current?.setBoxes(rangeBoxes)
@@ -1356,9 +1374,9 @@ export function MainChart({
             data.current_price,
             liquidationLiveOnly,
           ).map((band) => ({
-            x0: toUtcTimestamp(band.start_time) as Time,
+            x0: toChartTime(band.start_time) as Time,
             x1: (band.end_time
-              ? toUtcTimestamp(band.end_time)
+              ? toChartTime(band.end_time)
               : ((lastCandleTime + 9_999_999) as UTCTimestamp)) as Time,
             priceLow: band.price_low,
             priceHigh: band.price_high,
@@ -1380,10 +1398,10 @@ export function MainChart({
       const color = captured ? '#26a69a' : '#ff9800'
       const sideWord = hunt.hunted_side === 'short' ? 'shorts' : 'longs'
       huntWindows.push({
-        x0: toUtcTimestamp(hunt.counter_structure_timestamp),
+        x0: toChartTime(hunt.counter_structure_timestamp),
         x1:
           captured && hunt.captured_at
-            ? toUtcTimestamp(hunt.captured_at)
+            ? toChartTime(hunt.captured_at)
             : ((lastCandleTime + 9_999_999) as UTCTimestamp),
         color,
         fillColor: color + '0d',
@@ -1393,6 +1411,18 @@ export function MainChart({
     huntWindowPrimitiveRef.current?.setWindows(huntWindows)
 
     labelsPrimitiveRef.current?.setLabels(labels)
+    // Feed the candles' wick extents to the labels primitive so segment
+    // labels (BOS/CHoCH/…) can slide along their line to a candle-free spot.
+    const labelCandles = data.candles.map((c) => ({
+      time: toChartTime(c.timestamp) as Time,
+      high: c.high,
+      low: c.low,
+    }))
+    labelsPrimitiveRef.current?.setCandles(labelCandles)
+    // Box labels (OB/MB, accumulation, range) dodge candles the same way.
+    poiBoxesPrimitiveRef.current?.setCandles(labelCandles)
+    manipBoxesPrimitiveRef.current?.setCandles(labelCandles)
+    rangeBoxesPrimitiveRef.current?.setCandles(labelCandles)
 
     if (!hasFittedRef.current) {
       chart.timeScale().fitContent()

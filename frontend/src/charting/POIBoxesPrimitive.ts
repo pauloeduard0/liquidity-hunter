@@ -9,6 +9,7 @@ import type {
   Time,
 } from 'lightweight-charts'
 import type { CanvasRenderingTarget2D } from 'fancy-canvas'
+import type { LabelCandle } from './LineLabelsPrimitive'
 
 export interface POIBox {
   x0: Time
@@ -32,11 +33,67 @@ interface ResolvedBox {
   label?: string
 }
 
+/** A candle projected into pane pixel space, used for label/candle dodging. */
+interface CandleRect {
+  x: number
+  /** y of the candle's high (smaller value -- canvas y grows downward). */
+  top: number
+  /** y of the candle's low. */
+  bottom: number
+}
+
+/** Step (px) between candidate positions when sliding a box label along its top edge. */
+const DODGE_STEP = 10
+/** Assumed half-width (px) of a candle's wick when testing label/candle overlap. */
+const CANDLE_HALF_WIDTH = 2
+
+/**
+ * Slide a box label along the top strip of its box to the spot least covered
+ * by candles: a fully clear spot nearest the box's left corner wins (the
+ * label's home position); if nothing is clear, the least-covered spot.
+ */
+function bestLabelX(
+  lo: number,
+  hi: number,
+  width: number,
+  rectTop: number,
+  rectBottom: number,
+  candles: CandleRect[],
+): number {
+  if (hi <= lo) return lo
+
+  const coverage = (x: number): number => {
+    const left = x - CANDLE_HALF_WIDTH
+    const right = x + width + CANDLE_HALF_WIDTH
+    let covered = 0
+    for (const c of candles) {
+      if (c.x >= left && c.x <= right && c.top < rectBottom && c.bottom > rectTop) {
+        covered += 2 * CANDLE_HALF_WIDTH
+      }
+    }
+    return covered
+  }
+
+  let bestCovered = lo
+  let bestCoveredScore = Infinity
+  for (let x = lo; x <= hi + 0.001; x += DODGE_STEP) {
+    const cov = coverage(x)
+    if (cov === 0) return x
+    if (cov < bestCoveredScore) {
+      bestCoveredScore = cov
+      bestCovered = x
+    }
+  }
+  return bestCovered
+}
+
 class POIBoxesRenderer implements IPrimitivePaneRenderer {
   private readonly _boxes: ResolvedBox[]
+  private readonly _candles: CandleRect[]
 
-  constructor(boxes: ResolvedBox[]) {
+  constructor(boxes: ResolvedBox[], candles: CandleRect[]) {
     this._boxes = boxes
+    this._candles = candles
   }
 
   draw(target: CanvasRenderingTarget2D): void {
@@ -49,23 +106,48 @@ class POIBoxesRenderer implements IPrimitivePaneRenderer {
 
         if (left >= right || top >= bottom) continue
 
-        // Filled background
+        const width = right - left
+        const height = bottom - top
+        const radius = Math.min(3, width / 2, height / 2)
+
+        // Soft filled background with rounded corners
+        context.beginPath()
+        context.roundRect(left, top, width, height, radius)
         context.fillStyle = box.fillColor
-        context.fillRect(left, top, right - left, bottom - top)
+        context.fill()
 
-        // Border drawn inside the fill
+        // Hairline border drawn on the same rounded path
+        context.beginPath()
+        context.roundRect(left + 0.5, top + 0.5, width - 1, height - 1, radius)
         context.strokeStyle = box.borderColor
-        context.lineWidth = 1.5
-        context.strokeRect(left + 0.75, top + 0.75, right - left - 1.5, bottom - top - 1.5)
+        context.lineWidth = 1
+        context.stroke()
 
-        // Small label in the top-left corner of the box
+        // Small label along the top edge of the box, sliding right from the
+        // corner to a candle-free spot when a candle sits under its home
+        // position (still inside the box).
         if (box.label) {
-          const PADDING = 4
-          context.font = '10px sans-serif'
+          const PADDING = 5
+          const LABEL_HEIGHT = 10
+          context.font =
+            '500 9px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
           context.textBaseline = 'top'
           context.textAlign = 'left'
-          context.fillStyle = box.borderColor
-          context.fillText(box.label, left + PADDING, top + PADDING)
+          const textWidth = context.measureText(box.label).width
+          const rectTop = top + PADDING
+          const x = bestLabelX(
+            left + PADDING,
+            right - PADDING - textWidth,
+            textWidth,
+            rectTop,
+            rectTop + LABEL_HEIGHT,
+            this._candles,
+          )
+          // Border colors carry alpha (#rrggbbaa); render the text a bit
+          // stronger than the hairline so it stays readable.
+          context.fillStyle =
+            box.borderColor.length === 9 ? box.borderColor.slice(0, 7) + 'cc' : box.borderColor
+          context.fillText(box.label, x, rectTop)
         }
       }
     })
@@ -128,7 +210,20 @@ class POIBoxesPaneView implements IPrimitivePaneView {
     }
 
     if (resolved.length === 0) return null
-    return new POIBoxesRenderer(resolved)
+
+    // Project the candles into pixel space so box labels can dodge them.
+    const paneWidth = timeScale.width()
+    const candleRects: CandleRect[] = []
+    for (const candle of this._source.candles) {
+      const x = timeScale.timeToCoordinate(candle.time)
+      if (x === null || x < -CANDLE_HALF_WIDTH || x > paneWidth + CANDLE_HALF_WIDTH) continue
+      const top = series.priceToCoordinate(candle.high)
+      const bottom = series.priceToCoordinate(candle.low)
+      if (top === null || bottom === null) continue
+      candleRects.push({ x, top, bottom })
+    }
+
+    return new POIBoxesRenderer(resolved, candleRects)
   }
 }
 
@@ -141,6 +236,7 @@ export class POIBoxesPrimitive implements ISeriesPrimitive<Time> {
   chart: IChartApi | null = null
   series: ISeriesApi<SeriesType> | null = null
   boxes: POIBox[] = []
+  candles: LabelCandle[] = []
 
   private readonly _paneViews: readonly IPrimitivePaneView[] = [new POIBoxesPaneView(this)]
   private _requestUpdate: (() => void) | null = null
@@ -159,6 +255,12 @@ export class POIBoxesPrimitive implements ISeriesPrimitive<Time> {
 
   setBoxes(boxes: POIBox[]): void {
     this.boxes = boxes
+    this._requestUpdate?.()
+  }
+
+  /** Candles (in time order) the box labels should dodge. */
+  setCandles(candles: LabelCandle[]): void {
+    this.candles = candles
     this._requestUpdate?.()
   }
 

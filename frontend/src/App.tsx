@@ -9,6 +9,7 @@ import { ManipulationCyclesPanel } from './components/ManipulationCyclesPanel'
 import { MultiTimeframePanel } from './components/MultiTimeframePanel'
 import { NarrativePanel } from './components/NarrativePanel'
 import type { DashboardData, MarketOverview, TimeFrame } from './types/dashboard'
+import { chartTimezoneLabel } from './utils/chartTime'
 import { formatPrice } from './utils/format'
 
 const REFRESH_INTERVAL_MS = 5_000
@@ -510,6 +511,7 @@ function App() {
                   <div className="flex items-center gap-2 text-[10px] text-[#3d4455]">
                     {(() => {
                       const d = chartData ?? data
+                      const tz = chartTimezoneLabel(d.timeframe)
                       const last = d.candles.at(-1)
                       return last ? (
                         <>
@@ -517,6 +519,16 @@ function App() {
                           <span>H <span className="font-mono text-[#26a69a]">{formatPrice(last.high, last.close)}</span></span>
                           <span>L <span className="font-mono text-[#ef5350]">{formatPrice(last.low, last.close)}</span></span>
                           <span>C <span className="font-mono text-[#9ca3b4]">{formatPrice(last.close, last.close)}</span></span>
+                          <span
+                            className="rounded bg-[#1a1f2e] px-1 py-0.5 font-mono text-[9px] text-[#5d6477]"
+                            title={
+                              tz === 'UTC'
+                                ? 'Chart times are exchange time (UTC)'
+                                : `Chart times are your local time (${tz})`
+                            }
+                          >
+                            {tz}
+                          </span>
                         </>
                       ) : null
                     })()}

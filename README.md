@@ -8,7 +8,40 @@ purely as **descriptive observations**.
 This project is **not** a trading system: it produces no buy/sell signals
 and contains no order execution, position management, or strategy logic.
 
-![Liquidity Hunter dashboard — SOLUSDT 1H with structure events, liquidity hunt state, and the multi-timeframe structure ladder](image.png)
+![Liquidity Hunter dashboard — SOLUSDT 1H with structure events, liquidity hunt state, and the multi-timeframe structure ladder](docs/screenshots/dashboard.png)
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/structure-detail.png" alt="Close-up of BOS / CHoCH / sweep structure lines with confirming-close anchoring (SOLUSDT 1H)" />
+      <p align="center"><sub>Close-confirmed BOS/CHoCH lines, drawn from the formed level to its break (SOL 1H)</sub></p>
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/order-blocks.png" alt="MSB-anchored order-block boxes overlaid on the chart (BTCUSDT 1H)" />
+      <p align="center"><sub>MSB-anchored order blocks — demand (blue) and supply (red), full-range boxes (BTC 1H)</sub></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/hunt-ladder.png" alt="Liquidity hunt KPI card and the multi-timeframe structure ladder (BTCUSDT 15M)" />
+      <p align="center"><sub>An active liquidity hunt (6/7 pools swept vs the 1H trend) and the M5→W1 structure ladder</sub></p>
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/consolidation-range.png" alt="Consolidation range boxes between structure advances (ETHUSDT 1H)" />
+      <p align="center"><sub>Consolidation ranges — the detector's silence made explicit (ETH 1H)</sub></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/zec-4h-structure.png" alt="A full bearish-to-bullish structural cycle with a re-fired CHoCH (ZECUSDT 4H)" />
+      <p align="center"><sub>A full reversal cycle: bearish staircase → CHoCH ↻ → bullish staircase (ZEC 4H)</sub></p>
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/btc-weekly.png" alt="Macro market structure across a full cycle, with a provisional live-edge BOS? mark (BTCUSDT 1W)" />
+      <p align="center"><sub>The same engine at macro scale: BTC weekly, 2022 bottom → 2026, with a live-edge <code>BOS?</code></sub></p>
+    </td>
+  </tr>
+</table>
 
 ## What it detects
 

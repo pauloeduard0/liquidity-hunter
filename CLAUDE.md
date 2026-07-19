@@ -488,7 +488,11 @@ re-exported from `liquidity_hunter.data`.
   never confirm — leaving a whole impulsive move with zero BOS. The leg keeps
   extending from the *same* opposite pivot, so a `None` snapshot inherits the
   prior pending BOS's pullback ref, and the continuation BOS still confirms at
-  the next opposite pivot.
+  the next opposite pivot. Only the **last** pending of such a run emits, though
+  — each advance overwrites the one before it, and the reported floor has
+  ratcheted meanwhile, so the tops/bottoms broken in between would go unmarked;
+  `stage_superseded_continuation_bos` stages the overwritten pendings
+  additively (see `docs/structure_decisions.md`).
 
   **CHoCH confirmation** is **persistence**-based: a single candle that pokes
   through a level and immediately reverts is a "false break"; a break that
@@ -868,7 +872,11 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `_detect_consolidations` post-pass inside `_run_internal_structure`:
   `detect_consolidation_ranges` over the *surviving* non-provisional
   BOS/CHoCH/`CHOCH_FAILED` boundaries, height cap
-  `_CONSOLIDATION_MAX_HEIGHT_ATR` = 8 × mean TR%, `_CONSOLIDATION_MIN_CANDLES`
+  min(`_CONSOLIDATION_MAX_HEIGHT_ATR` = 8 × mean TR%,
+  `_CONSOLIDATION_MAX_HEIGHT_ABS[timeframe]` — an absolute per-TF ceiling, e.g.
+  H1 7%, added 2026-07-19 because a high-vol asset's ATR unit degenerates and
+  let an 11.7% rally-and-dump rotation confirm as a "range" on HYPE H1),
+  `_CONSOLIDATION_MIN_CANDLES`
   = 60, resolve persistence 4 — calibrated 2026-07-14, see
   `docs/structure_decisions.md`) for one symbol/timeframe. Under
   `_CONSOLIDATION_STAGE_BREAKOUT_EVENTS` (default `True`), range breakouts
@@ -899,7 +907,16 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   (`reference_price_level`), within the window the BOS stays active (up to the
   next same-direction BOS or opposite-direction CHoCH); any BOS whose leg only
   *wicked* past that level (never closed) is **dropped** — a conservative
-  close-break confirmation matching the macro SMC cycle. The pass also sets each
+  close-break confirmation matching the macro SMC cycle. Under
+  `_RESCUE_LEG_LAUNCH_BOS` (wired `True`), a **leg-launch** BOS (the first of its
+  leg, referencing the CHoCH-seeded launch level) that finds no close in its own
+  window gets an extended search through the *next* same-direction BOS's window
+  before being dropped — a leg that retests the CHoCH can close through its
+  launch level a few candles into the successor's territory — and the shallower
+  continuations it passes over are suppressed, so the leg reads
+  `CHoCH → BOS at the launch fundo/topo → …`. The one-continuation bound is
+  load-bearing (unbounded, an AAVE D1 launch BOS scanned 7 months and ate the
+  real staircase); see `docs/structure_decisions.md`. The pass also sets each
   BOS's `reference_timestamp` to the candle that *formed* the broken level (the
   prior swing extreme, found by scanning back for a matching low/high), so the
   frontend can start the line at the level's origin. The same pass runs on the
@@ -1324,6 +1341,25 @@ selector.
   toggles visibility on plain click; Alt/Shift-click toggles a "live pools only"
   mode (`liquidationLiveOnly`, shown as `⊟ Liq •`).
 
+- **`frontend/src/utils/chartTime.ts`** — the chart's timezone (as of
+  2026-07-18). Lightweight Charts has no timezone support and renders every
+  `UTCTimestamp` in UTC, so a 15m candle printed at 21:30 in São Paulo labeled
+  00:30 the *next* day — a silent three-hour offset that twice sent a structure
+  review chasing the wrong candle. `toChartTime(iso)` (the single conversion
+  point for *every* chart time — candles, overlays, primitives, and the pure
+  helpers in `MainChart`; hence the name, the result is a chart coordinate, not
+  a real UTC timestamp) shifts each timestamp by **its own** local UTC offset, so
+  candles either side of a DST transition each get the right one. **Daily and
+  weekly are exempt** (`setChartTimezoneMode`): their timestamp *is* the exchange
+  day (00:00 UTC), and shifting would relabel the 14 Jul daily bar as
+  "13 Jul 21:00". The mode is module state because all chart times must share one
+  offset to stay mutually consistent (the helpers' time comparisons are
+  shift-invariant only while the shift is uniform); `MainChart` sets it during
+  render and `App` remounts the chart on every symbol/timeframe change.
+  `chartTimezoneLabel(timeframe)` feeds the toolbar chip next to the OHLC
+  readout (`UTC-3` intraday, `UTC` on D1/W1), so which clock the chart speaks is
+  never a guess.
+
 - **`frontend/src/types/dashboard.ts`** — TypeScript types mirroring the API
   schema; includes `POIZone`, `MarketStructure` (with
   `reference_timestamp`, `reference_structural`, `provisional`),
@@ -1444,7 +1480,19 @@ state in brief:
   impulse + wick-rejected + reversal-eaten BOS staging
   (`stage_reversal_eaten_bos`: the pending continuation a reversal's reclaim
   pivot discards without emitting is staged at its close-break, so the last
-  fundo/topo before a CHoCH keeps its BOS), leg-origin CHoCH reference family,
+  fundo/topo before a CHoCH keeps its BOS) + superseded-continuation staging
+  (`stage_superseded_continuation_bos`: the sibling case where the pending is
+  overwritten by the *next same-direction advance* — an impulsive run of
+  consecutive same-side pivots with no pullback pivot between — so each
+  top/bottom that formed and broke keeps a mark instead of only the run's last
+  one), first-pending pullback seed at the CHoCH origin
+  (`bos_pullback_seed_choch_origin`: the first pending BOS of a CHoCH-launched
+  leg often snapshots a `None` pullback ref — the flip promoted an empty
+  `pending_<side>` and the `None`-inheritance only covers continuations — so
+  it can never confirm and the reverse-CHoCH reference family is never built;
+  a persistent launch-pivot snapshot of the CHoCH origin seeds it, the ENAUSDT
+  H4 2026-06 case where a −22% drop printed only sweeps under a stuck bullish
+  trend), leg-origin CHoCH reference family,
   volatility-normalized release gap, new-cycle weak-ref barrier,
   confirmed-trend barrier (`choch_confirmed_trend_persistence_candles`,
   hysteresis: a trend is *pending* until an emitted BOS confirms it — cheap
