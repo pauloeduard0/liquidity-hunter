@@ -8,7 +8,7 @@ purely as **descriptive observations**.
 This project is **not** a trading system: it produces no buy/sell signals
 and contains no order execution, position management, or strategy logic.
 
-![Liquidity Hunter dashboard — SOLUSDT 1H with structure events, liquidity hunt state, and the multi-timeframe structure ladder](docs/screenshots/dashboard.png)
+![Liquidity Hunter dashboard — ETHUSDT 1D with the full macro structure cycle, order blocks, KPI row, and the multi-timeframe structure ladder](docs/screenshots/eth-dashboard.png)
 
 <table>
   <tr>
