@@ -262,6 +262,65 @@ def test_stale_invalidated_ob_does_not_count():
     assert ConfluenceFactor.ORDER_BLOCK not in result[0].factors
 
 
+def _choch(reference_ts: datetime) -> MarketStructure:
+    return MarketStructure(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=EVENT_TS,
+        event=StructureEvent.CHANGE_OF_CHARACTER,
+        direction=MarketDirection.BULLISH,
+        price_level=100.0,
+        reference_price_level=100.0,
+        reference_timestamp=reference_ts,
+        scope=StructureScope.INTERNAL,
+    )
+
+
+def test_choch_window_reaches_reversal_origin_evidence():
+    # VSA + sweep far below the confirmation (idx 9) — outside a BOS's tight
+    # window, but inside a CHoCH's origin-anchored window (reference at idx 8).
+    far_vsa = VolumeSpreadSignal(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=T0 + H1 * 9,
+        pattern=VSAPattern.DOWN_THRUST,
+        direction=MarketDirection.BULLISH,
+        price_level=99.0,
+        spread_ratio=1.5,
+        close_position=0.9,
+        volume_ratio=1.5,
+        volume_delta=3.0,
+        confidence=60.0,
+        description="thrust",
+    )
+    far_sweep = MarketStructure(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=T0 + H1 * 9,
+        event=StructureEvent.LIQUIDITY_SWEEP,
+        direction=MarketDirection.BEARISH,  # a bullish reversal sweeps the lows
+        price_level=98.0,
+        scope=StructureScope.INTERNAL,
+    )
+    data = _data(
+        internal_structure_events=[far_sweep, _choch(T0 + H1 * 8)],
+        volume_spread_signals=[far_vsa],
+    )
+    conf = StructureConfluenceEngine().build(data)[0]
+    assert conf.event_type == StructureEvent.CHANGE_OF_CHARACTER
+    assert ConfluenceFactor.VSA_VOLUME in conf.factors
+    assert ConfluenceFactor.LIQUIDITY_SWEEP in conf.factors
+
+    # The identical evidence must NOT reach a BOS's tight window.
+    bos_data = _data(
+        internal_structure_events=[far_sweep, _bos()],
+        volume_spread_signals=[far_vsa],
+    )
+    bos_conf = StructureConfluenceEngine().build(bos_data)[0]
+    assert ConfluenceFactor.VSA_VOLUME not in bos_conf.factors
+    assert ConfluenceFactor.LIQUIDITY_SWEEP not in bos_conf.factors
+
+
 def test_provisional_and_non_break_events_skipped():
     provisional = MarketStructure(
         symbol="BTCUSDT",
