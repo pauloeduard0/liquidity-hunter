@@ -26,6 +26,7 @@ from liquidity_hunter.core.domain import (
     MarketStructure,
     OIAnalysis,
     OpenInterestPoint,
+    StructureConfluence,
     StructureEvent,
     TimeFrame,
     VolumeSpreadSignal,
@@ -747,6 +748,10 @@ class DashboardData:
     # (see `_detect_consolidations`): where the structure detector was
     # *correctly* silent because price was ranging, made explicit.
     consolidation_ranges: list[ConsolidationRange] = field(default_factory=list)
+    # Per-event confluence tally for each confirmed BOS/CHoCH (VSA + OB + OI +
+    # volume delta + preceding sweep), from `StructureConfluenceEngine`. A
+    # descriptive confidence read on the structure, keyed to the event.
+    structure_confluence: list[StructureConfluence] = field(default_factory=list)
 
 
 def _structural_anchor_index(candles: list[Candle], visible_start: datetime) -> int:
@@ -2022,12 +2027,19 @@ def load_dashboard_data(
 
     from liquidity_hunter.app.liquidity_hunt import LiquidityHuntEngine
     from liquidity_hunter.app.narrative import NarrativeEngine
+    from liquidity_hunter.app.structure_confluence import StructureConfluenceEngine
 
-    # Both synthesizers read the fully assembled snapshot (they cross-reference
+    # These synthesizers read the fully assembled snapshot (they cross-reference
     # outputs from every layer), so they run last, at the composition point.
     narrative = NarrativeEngine().build(data) if compute_narrative else None
     liquidity_hunt = LiquidityHuntEngine(proximity_atr=_HUNT_PROXIMITY_ATR).build(data)
-    return replace(data, narrative=narrative, liquidity_hunt=liquidity_hunt)
+    structure_confluence = StructureConfluenceEngine().build(data)
+    return replace(
+        data,
+        narrative=narrative,
+        liquidity_hunt=liquidity_hunt,
+        structure_confluence=structure_confluence,
+    )
 
 
 # Shared pool for the independent network-bound units of a dashboard load

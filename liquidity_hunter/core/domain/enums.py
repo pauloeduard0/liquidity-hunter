@@ -213,6 +213,21 @@ class AnomalySeverity(str, Enum):
     HIGH = "high"
 
 
+class ConfluenceFactor(str, Enum):
+    """An independent observation that confirms a structural break.
+
+    Each factor is a distinct evidence layer agreeing with a BOS/CHoCH's
+    direction near the break — the basis for a descriptive *confluence* tally
+    (how many orthogonal reads support the structure), not a signal.
+    """
+
+    VSA_VOLUME = "vsa_volume"  # a VSA volume-spread signal confirms the break
+    ORDER_BLOCK = "order_block"  # the break launched from / reacted at an OB
+    OI_PARTICIPATION = "oi_participation"  # new money entered the break (OI)
+    VOLUME_DELTA = "volume_delta"  # net taker aggression aligned with the break
+    LIQUIDITY_SWEEP = "liquidity_sweep"  # a stop-hunt preceded the break
+
+
 class VSAPattern(str, Enum):
     """Volume-Spread-Analysis pattern read from a single candle's anatomy.
 

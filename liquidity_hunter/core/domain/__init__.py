@@ -11,6 +11,7 @@ from liquidity_hunter.core.domain.consolidation import ConsolidationRange
 from liquidity_hunter.core.domain.enums import (
     AnomalySeverity,
     BiasSource,
+    ConfluenceFactor,
     ConsolidationStatus,
     DivergenceType,
     LiquidityHuntPhase,
@@ -61,6 +62,7 @@ from liquidity_hunter.core.domain.oi_analysis import (
 from liquidity_hunter.core.domain.overview import MarketOverview, TimeframeOverview
 from liquidity_hunter.core.domain.poi_zone import POIZone
 from liquidity_hunter.core.domain.retail_bias import RetailBias
+from liquidity_hunter.core.domain.structure_confluence import StructureConfluence
 from liquidity_hunter.core.domain.volume_spread import VolumeSpreadSignal
 
 __all__ = [
@@ -68,6 +70,7 @@ __all__ = [
     "BehaviorDivergence",
     "BiasSource",
     "Candle",
+    "ConfluenceFactor",
     "ConsolidationRange",
     "ConsolidationStatus",
     "DivergenceType",
@@ -105,6 +108,7 @@ __all__ = [
     "POIZoneStatus",
     "RetailBias",
     "RetailPositioning",
+    "StructureConfluence",
     "StructureEvent",
     "StructureScope",
     "TimeFrame",

@@ -21,6 +21,7 @@ from liquidity_hunter.core.domain import (
     MarketNarrative,
     MarketStructure,
     OIAnalysis,
+    StructureConfluence,
     TimeFrame,
     VolumeSpreadSignal,
 )
@@ -56,3 +57,4 @@ class DashboardDataResponse(BaseModel):
     oi_analysis: OIAnalysis | None = None
     liquidity_hunt: LiquidityHuntState | None = None
     consolidation_ranges: list[ConsolidationRange] = []
+    structure_confluence: list[StructureConfluence] = []

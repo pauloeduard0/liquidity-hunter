@@ -1181,6 +1181,17 @@ export function MainChart({
       }
     }
 
+    // Structure-confluence badge per event (keyed by timestamp + type): how
+    // many orthogonal reads (VSA / OB / OI / volume delta / sweep) confirm the
+    // break. Shown as `✦N` for 2+ confirming factors — a single factor is too
+    // weak to flag.
+    const confluenceByEvent = new Map<string, number>()
+    for (const conf of data.structure_confluence ?? []) {
+      if (conf.factors.length >= 2) {
+        confluenceByEvent.set(`${conf.event_timestamp}|${conf.event_type}`, conf.factors.length)
+      }
+    }
+
     for (const event of structureEvents) {
       // A CHoCH that later failed is represented solely by its `CHoCH ✕`
       // marker (which spans the same origin->failure lifetime). Drawing the
@@ -1192,6 +1203,7 @@ export function MainChart({
       }
       const style = STRUCTURE_EVENT_STYLES[event.event]
       const oiSuffix = oiSuffixByEvent.get(`${event.timestamp}|${event.event}`)
+      const confluenceCount = confluenceByEvent.get(`${event.timestamp}|${event.event}`)
       // BOS/CHoCH are colored by direction (green bullish, red bearish), so
       // their labels drop the ▲/▼ arrow — the color already says it. Neutral
       // events (Sweep, CHoCH ✕) keep their own color and the arrow.
@@ -1317,7 +1329,7 @@ export function MainChart({
         price: linePrice,
         color: lineColor,
         below: event.direction === 'bearish',
-        text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''}${directionIcon ? ` ${directionIcon}` : ''}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}`,
+        text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''}${directionIcon ? ` ${directionIcon}` : ''}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}${confluenceCount ? ` ✦${confluenceCount}` : ''}`,
       })
     }
 

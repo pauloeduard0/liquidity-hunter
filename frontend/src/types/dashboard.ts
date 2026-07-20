@@ -188,6 +188,25 @@ export interface BehaviorDivergence {
   description: string
 }
 
+export type ConfluenceFactor =
+  | 'vsa_volume'
+  | 'order_block'
+  | 'oi_participation'
+  | 'volume_delta'
+  | 'liquidity_sweep'
+
+export interface StructureConfluence {
+  symbol: string
+  timeframe: TimeFrame
+  event_timestamp: string
+  event_type: StructureEvent
+  direction: MarketDirection
+  price_level: number
+  factors: ConfluenceFactor[]
+  score: number
+  description: string
+}
+
 export interface VolumeSpreadSignal {
   symbol: string
   timeframe: TimeFrame
@@ -411,4 +430,5 @@ export interface DashboardData {
   oi_analysis: OIAnalysis | null
   liquidity_hunt: LiquidityHuntState | null
   consolidation_ranges: ConsolidationRange[]
+  structure_confluence: StructureConfluence[]
 }
