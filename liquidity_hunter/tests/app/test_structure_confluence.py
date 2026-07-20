@@ -75,7 +75,7 @@ def _data(**overrides: object) -> DashboardData:
         "timeframe": TimeFrame.H1,
         "candles": candles,
         "current_price": 100.0,
-        "higher_timeframe_direction": MarketDirection.BULLISH,
+        "higher_timeframe_direction": MarketDirection.NEUTRAL,
         "liquidity_zones": [],
         "ranked_zones": [],
         "market_structure_events": [],
@@ -96,7 +96,7 @@ def test_no_evidence_scores_zero():
     # Only the break candle's own aligned volume delta fires by default.
     conf = result[0]
     assert conf.factors == [ConfluenceFactor.VOLUME_DELTA]
-    assert conf.score == 15.0
+    assert conf.score == 10.0
 
 
 def test_all_factors_present_scores_100():
@@ -152,6 +152,7 @@ def test_all_factors_present_scores_100():
         scope=StructureScope.INTERNAL,
     )
     data = _data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
         internal_structure_events=[sweep, _bos()],
         volume_spread_signals=[vsa],
         poi_zones=[ob],
@@ -160,6 +161,7 @@ def test_all_factors_present_scores_100():
     result = StructureConfluenceEngine().build(data)
     conf = next(c for c in result if c.event_type == StructureEvent.BREAK_OF_STRUCTURE)
     assert set(conf.factors) == {
+        ConfluenceFactor.HTF_ALIGNMENT,
         ConfluenceFactor.VSA_VOLUME,
         ConfluenceFactor.ORDER_BLOCK,
         ConfluenceFactor.OI_PARTICIPATION,
@@ -167,6 +169,23 @@ def test_all_factors_present_scores_100():
         ConfluenceFactor.LIQUIDITY_SWEEP,
     }
     assert conf.score == 100.0
+
+
+def test_htf_alignment_factor():
+    aligned = StructureConfluenceEngine().build(
+        _data(higher_timeframe_direction=MarketDirection.BULLISH)
+    )
+    assert ConfluenceFactor.HTF_ALIGNMENT in aligned[0].factors
+
+    opposed = StructureConfluenceEngine().build(
+        _data(higher_timeframe_direction=MarketDirection.BEARISH)  # BOS is bullish
+    )
+    assert ConfluenceFactor.HTF_ALIGNMENT not in opposed[0].factors
+
+    neutral = StructureConfluenceEngine().build(
+        _data(higher_timeframe_direction=MarketDirection.NEUTRAL)
+    )
+    assert ConfluenceFactor.HTF_ALIGNMENT not in neutral[0].factors
 
 
 def test_provisional_and_non_break_events_skipped():

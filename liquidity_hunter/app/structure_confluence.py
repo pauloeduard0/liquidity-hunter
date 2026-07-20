@@ -39,13 +39,16 @@ _QUALIFIED_EVENTS = frozenset(
     {StructureEvent.BREAK_OF_STRUCTURE, StructureEvent.CHANGE_OF_CHARACTER}
 )
 
-# Per-factor weight; present factors sum (capped at 100) into `score`.
+# Per-factor weight; present factors sum (capped at 100) into `score`. HTF
+# alignment carries the most weight — a break agreeing with the higher-timeframe
+# trend is the strongest single confidence read in SMC.
 _FACTOR_WEIGHTS: dict[ConfluenceFactor, float] = {
-    ConfluenceFactor.VSA_VOLUME: 25.0,
-    ConfluenceFactor.ORDER_BLOCK: 25.0,
-    ConfluenceFactor.OI_PARTICIPATION: 20.0,
-    ConfluenceFactor.VOLUME_DELTA: 15.0,
-    ConfluenceFactor.LIQUIDITY_SWEEP: 15.0,
+    ConfluenceFactor.HTF_ALIGNMENT: 25.0,
+    ConfluenceFactor.VSA_VOLUME: 20.0,
+    ConfluenceFactor.ORDER_BLOCK: 20.0,
+    ConfluenceFactor.OI_PARTICIPATION: 15.0,
+    ConfluenceFactor.VOLUME_DELTA: 10.0,
+    ConfluenceFactor.LIQUIDITY_SWEEP: 10.0,
 }
 
 # Evidence windows, in candles, around the break.
@@ -96,6 +99,13 @@ class StructureConfluenceEngine:
                 continue
 
             factors: list[ConfluenceFactor] = []
+
+            # Higher-timeframe alignment: the break agrees with the HTF trend.
+            if (
+                data.higher_timeframe_direction != MarketDirection.NEUTRAL
+                and ev.direction == data.higher_timeframe_direction
+            ):
+                factors.append(ConfluenceFactor.HTF_ALIGNMENT)
 
             # VSA volume signal aligned with the break, in its neighborhood.
             lo = ev_idx - _LOOKBACK

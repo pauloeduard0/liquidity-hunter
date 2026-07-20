@@ -221,6 +221,7 @@ class ConfluenceFactor(str, Enum):
     (how many orthogonal reads support the structure), not a signal.
     """
 
+    HTF_ALIGNMENT = "htf_alignment"  # the break agrees with the higher-TF trend
     VSA_VOLUME = "vsa_volume"  # a VSA volume-spread signal confirms the break
     ORDER_BLOCK = "order_block"  # the break launched from / reacted at an OB
     OI_PARTICIPATION = "oi_participation"  # new money entered the break (OI)
