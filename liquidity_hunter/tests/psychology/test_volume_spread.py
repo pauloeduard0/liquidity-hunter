@@ -134,6 +134,53 @@ def test_no_demand_detected():
     assert nd.direction == MarketDirection.BEARISH
 
 
+def test_dedup_collapses_a_run_of_same_pattern():
+    candles = _baseline(8)
+    # A run of 5 adjacent quiet low-volume narrow down-bars — all No Supply.
+    for i in range(8, 13):
+        candles.append(
+            _candle(i, 100.0, 100.3, 99.8, 99.9, volume=30.0, taker_buy_volume=15.0)
+        )
+    signals = _run(candles)
+    no_supply = [s for s in signals if s.pattern == VSAPattern.NO_SUPPLY]
+    # Clustered within the lookback window → collapsed, not one per candle.
+    assert len(no_supply) == 1
+
+
+def test_dedup_keeps_distinct_patterns_and_separated_clusters():
+    candles = _baseline(8)
+    # A climax, then well-separated (> window) so it survives on its own.
+    candles.append(
+        _candle(8, 100.0, 100.5, 92.0, 98.0, volume=400.0, taker_buy_volume=60.0)
+    )
+    for i in range(9, 20):
+        candles.append(_candle(i, 100.0, 101.0, 99.0, 100.0))
+    # A separate up-thrust far past the climax's dedup window.
+    candles.append(
+        _candle(20, 100.0, 104.0, 99.0, 99.2, volume=160.0, taker_buy_volume=50.0)
+    )
+    signals = _run(candles)
+    kinds = {s.pattern for s in signals}
+    assert VSAPattern.SELLING_CLIMAX in kinds
+    assert VSAPattern.UP_THRUST in kinds
+
+
+def test_dedup_keeps_highest_confidence_in_cluster():
+    candles = _baseline(8)
+    # Two adjacent selling climaxes; the second has more extreme volume.
+    candles.append(
+        _candle(8, 100.0, 100.5, 92.0, 98.0, volume=300.0, taker_buy_volume=60.0)
+    )
+    candles.append(
+        _candle(9, 98.0, 98.5, 90.0, 96.0, volume=600.0, taker_buy_volume=60.0)
+    )
+    signals = _run(candles)
+    climaxes = [s for s in signals if s.pattern == VSAPattern.SELLING_CLIMAX]
+    assert len(climaxes) == 1
+    # The kept one is the stronger (higher-volume) second candle.
+    assert climaxes[0].timestamp == _ts(9)
+
+
 def test_signal_fields_are_populated():
     candles = _baseline(8)
     candles.append(

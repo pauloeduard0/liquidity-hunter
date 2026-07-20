@@ -75,6 +75,7 @@ class VolumeSpreadAnalyzer:
         climax_volume_ratio: float = 2.0,
         thrust_volume_ratio: float = 1.2,
         wick_dominance: float = 1.5,
+        dedup_window: int | None = None,
     ) -> None:
         self._lookback_override = lookback
         self._narrow_spread = narrow_spread_ratio
@@ -83,6 +84,7 @@ class VolumeSpreadAnalyzer:
         self._climax_volume = climax_volume_ratio
         self._thrust_volume = thrust_volume_ratio
         self._wick_dominance = wick_dominance
+        self._dedup_window_override = dedup_window
 
     def analyze(
         self,
@@ -96,12 +98,19 @@ class VolumeSpreadAnalyzer:
         if len(candles) <= lookback:
             return []
 
-        results: list[VolumeSpreadSignal] = []
+        # (candle index, signal) so dedup can cluster by candle distance.
+        raw: list[tuple[int, VolumeSpreadSignal]] = []
         for i in range(lookback, len(candles)):
             signal = self._classify(candles, volume_deltas, i, lookback)
             if signal is not None:
-                results.append(signal)
-        return results
+                raw.append((i, signal))
+
+        window = (
+            self._dedup_window_override
+            if self._dedup_window_override is not None
+            else lookback
+        )
+        return _deduplicate(raw, window)
 
     # ------------------------------------------------------------------
     # Per-candle classification
@@ -277,6 +286,40 @@ _PATTERN_LABEL: dict[VSAPattern, str] = {
     VSAPattern.DOWN_THRUST: "Down Thrust (lower-wick rejection, close high, above-avg volume)",
     VSAPattern.UP_THRUST: "Up Thrust (upper-wick rejection, close low, above-avg volume)",
 }
+
+
+def _deduplicate(
+    raw: list[tuple[int, VolumeSpreadSignal]],
+    window: int,
+) -> list[VolumeSpreadSignal]:
+    """Collapse clustered signals of the same pattern.
+
+    A run of adjacent candles all reading the same pattern (e.g. a stretch of
+    quiet low-volume bars) would otherwise emit one marker per candle. Within
+    ``window`` candles of the last *kept* signal of a given pattern, only the
+    highest-confidence one survives; a signal farther than ``window`` from the
+    last kept one starts a fresh cluster.  Different patterns never suppress
+    each other.  Ties in confidence keep the earlier signal.
+    """
+    if window <= 0:
+        return [sig for _, sig in raw]
+
+    best_by_pattern: dict[VSAPattern, tuple[int, int]] = {}  # pattern -> (kept_idx, out_pos)
+    kept: list[tuple[int, VolumeSpreadSignal]] = []
+    for idx, sig in raw:
+        prev = best_by_pattern.get(sig.pattern)
+        if prev is not None and idx - prev[0] <= window:
+            # Same cluster: replace the kept signal only if strictly stronger.
+            kept_idx, out_pos = prev
+            if sig.confidence > kept[out_pos][1].confidence:
+                kept[out_pos] = (idx, sig)
+                best_by_pattern[sig.pattern] = (idx, out_pos)
+            continue
+        best_by_pattern[sig.pattern] = (idx, len(kept))
+        kept.append((idx, sig))
+
+    kept.sort(key=lambda pair: pair[0])
+    return [sig for _, sig in kept]
 
 
 def _describe(
