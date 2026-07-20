@@ -26,6 +26,7 @@ from liquidity_hunter.core.domain import (
     MarketStructure,
     OIAnalysis,
     OpenInterestPoint,
+    POIZoneStatus,
     StructureConfluence,
     StructureEvent,
     TimeFrame,
@@ -752,6 +753,11 @@ class DashboardData:
     # volume delta + preceding sweep), from `StructureConfluenceEngine`. A
     # descriptive confidence read on the structure, keyed to the event.
     structure_confluence: list[StructureConfluence] = field(default_factory=list)
+    # Active order blocks detected on the higher-timeframe series (the
+    # `_HIGHER_TIMEFRAME_MAP` pair), used by the confluence engine's
+    # `HTF_ORDER_BLOCK` factor. Empty for the top timeframe. Not rendered
+    # directly -- current-TF `poi_zones` still drive the chart boxes.
+    htf_poi_zones: list[POIZone] = field(default_factory=list)
 
 
 def _structural_anchor_index(candles: list[Candle], visible_start: datetime) -> int:
@@ -1910,6 +1916,7 @@ def load_dashboard_data(
     all_poi_zones = POIDetector().detect(internal_run.internal_candles)
     poi_zones = [z for z in all_poi_zones if visible_start <= z.created_at <= visible_end]
 
+    htf_poi_zones: list[POIZone] = []
     if htf_run_future is not None:
         # The higher-timeframe trend comes from the *internal* detector run on
         # the HTF series with that timeframe's own production wiring (params +
@@ -1924,7 +1931,17 @@ def load_dashboard_data(
         # State-machine trend, not the last event's direction: the latter flips
         # on a descriptive HL/LH pivot or a LIQUIDITY_SWEEP whose `direction`
         # is the pivot/wick side rather than the standing trend.
-        higher_timeframe_direction = htf_run_future.result().trend
+        htf_run = htf_run_future.result()
+        higher_timeframe_direction = htf_run.trend
+        # Order blocks on the higher-timeframe series (reusing the HTF candles
+        # already fetched for the trend -- no extra request), so the confluence
+        # engine can credit a break that reacts at an HTF OB. Same price scale
+        # (same symbol), so no conversion is needed. Kept ACTIVE-only.
+        htf_poi_zones = [
+            z
+            for z in POIDetector().detect(htf_run.internal_candles)
+            if z.status == POIZoneStatus.ACTIVE
+        ]
     else:
         # Top timeframe (no higher TF): degrade to the current series' own
         # internal trend, so downstream comparisons (the liquidity hunt's
@@ -2016,6 +2033,7 @@ def load_dashboard_data(
         internal_structure_events=internal_structure_events,
         retail_bias=retail_bias,
         poi_zones=poi_zones,
+        htf_poi_zones=htf_poi_zones,
         manipulation_cycles=manipulation_cycles,
         behavior_divergences=behavior_divergences,
         volume_spread_signals=volume_spread_signals,

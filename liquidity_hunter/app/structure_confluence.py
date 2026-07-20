@@ -39,16 +39,18 @@ _QUALIFIED_EVENTS = frozenset(
     {StructureEvent.BREAK_OF_STRUCTURE, StructureEvent.CHANGE_OF_CHARACTER}
 )
 
-# Per-factor weight; present factors sum (capped at 100) into `score`. HTF
-# alignment carries the most weight — a break agreeing with the higher-timeframe
-# trend is the strongest single confidence read in SMC.
+# Per-factor weight; present factors sum (capped at 100) into `score`. The two
+# cross-timeframe factors (HTF trend agreement + reaction at an HTF order block)
+# carry the most weight — higher-timeframe context is the strongest confidence
+# read in SMC.
 _FACTOR_WEIGHTS: dict[ConfluenceFactor, float] = {
-    ConfluenceFactor.HTF_ALIGNMENT: 25.0,
-    ConfluenceFactor.VSA_VOLUME: 20.0,
-    ConfluenceFactor.ORDER_BLOCK: 20.0,
-    ConfluenceFactor.OI_PARTICIPATION: 15.0,
-    ConfluenceFactor.VOLUME_DELTA: 10.0,
-    ConfluenceFactor.LIQUIDITY_SWEEP: 10.0,
+    ConfluenceFactor.HTF_ALIGNMENT: 20.0,
+    ConfluenceFactor.HTF_ORDER_BLOCK: 20.0,
+    ConfluenceFactor.VSA_VOLUME: 15.0,
+    ConfluenceFactor.ORDER_BLOCK: 15.0,
+    ConfluenceFactor.OI_PARTICIPATION: 12.0,
+    ConfluenceFactor.VOLUME_DELTA: 9.0,
+    ConfluenceFactor.LIQUIDITY_SWEEP: 9.0,
 }
 
 # Evidence windows, in candles, around the break.
@@ -56,6 +58,13 @@ _LOOKBACK = 5  # VSA / volume-delta evidence just before/at the break
 _LOOKAHEAD = 2  # ...allowing the confirming close a candle or two later
 _SWEEP_LOOKBACK = 10  # a stop-hunt sweep preceding the break
 _OB_PRICE_BUFFER = 0.001  # 0.1% tolerance for "the break came from this OB"
+
+# A recently-invalidated OB at the break level is a *breaker retest*: price
+# broke the zone, then returned to break structure at it again — still real
+# confluence, but counted at reduced weight. `_OB_INVALIDATION_LOOKBACK` bounds
+# "recently" (older invalidations are stale coincidental levels, not breakers).
+_OB_INVALIDATION_LOOKBACK = 50  # candles
+_BREAKER_RETEST_WEIGHT_FACTOR = 0.5
 
 
 class StructureConfluenceEngine:
@@ -88,8 +97,6 @@ class StructureConfluenceEngine:
             for qe in data.oi_analysis.qualified_events:
                 oi_participation[(qe.event_timestamp, qe.event_type)] = qe.participation
 
-        active_obs = [z for z in data.poi_zones if z.status == POIZoneStatus.ACTIVE]
-
         results: list[StructureConfluence] = []
         for ev in events:
             if ev.event not in _QUALIFIED_EVENTS or ev.provisional:
@@ -98,14 +105,15 @@ class StructureConfluenceEngine:
             if ev_idx is None:
                 continue
 
-            factors: list[ConfluenceFactor] = []
+            # (factor, weight multiplier) contributions for this event.
+            contribs: list[tuple[ConfluenceFactor, float]] = []
 
             # Higher-timeframe alignment: the break agrees with the HTF trend.
             if (
                 data.higher_timeframe_direction != MarketDirection.NEUTRAL
                 and ev.direction == data.higher_timeframe_direction
             ):
-                factors.append(ConfluenceFactor.HTF_ALIGNMENT)
+                contribs.append((ConfluenceFactor.HTF_ALIGNMENT, 1.0))
 
             # VSA volume signal aligned with the break, in its neighborhood.
             lo = ev_idx - _LOOKBACK
@@ -114,25 +122,36 @@ class StructureConfluenceEngine:
                 ev.direction in vsa_by_idx.get(j, ())
                 for j in range(lo, hi + 1)
             ):
-                factors.append(ConfluenceFactor.VSA_VOLUME)
+                contribs.append((ConfluenceFactor.VSA_VOLUME, 1.0))
 
-            # Order block the break launched from / reacted at.
-            if self._has_order_block(ev, active_obs):
-                factors.append(ConfluenceFactor.ORDER_BLOCK)
+            # Order block the break launched from / reacted at (current TF). An
+            # active OB counts full; a recently-invalidated one (breaker retest)
+            # at reduced weight.
+            ob_match = self._order_block_match(ev, data.poi_zones, ev_idx, idx_by_ts)
+            if ob_match == "active":
+                contribs.append((ConfluenceFactor.ORDER_BLOCK, 1.0))
+            elif ob_match == "retest":
+                contribs.append((ConfluenceFactor.ORDER_BLOCK, _BREAKER_RETEST_WEIGHT_FACTOR))
+
+            # A higher-timeframe order block the break reacted at (stronger).
+            # `htf_poi_zones` carries only ACTIVE zones, so no retest here.
+            if self._order_block_match(ev, data.htf_poi_zones, ev_idx, idx_by_ts) == "active":
+                contribs.append((ConfluenceFactor.HTF_ORDER_BLOCK, 1.0))
 
             # OI: new money entering the break.
             if oi_participation.get((ev.timestamp, ev.event)) == OIParticipation.NEW_MONEY:
-                factors.append(ConfluenceFactor.OI_PARTICIPATION)
+                contribs.append((ConfluenceFactor.OI_PARTICIPATION, 1.0))
 
             # Net taker aggression aligned with the break at the break candle.
             if self._volume_delta_aligned(ev.direction, vds[ev_idx], candles[ev_idx].volume):
-                factors.append(ConfluenceFactor.VOLUME_DELTA)
+                contribs.append((ConfluenceFactor.VOLUME_DELTA, 1.0))
 
             # A stop-hunt sweep shortly before the break.
             if any(ev_idx - _SWEEP_LOOKBACK <= s < ev_idx for s in sweep_idxs):
-                factors.append(ConfluenceFactor.LIQUIDITY_SWEEP)
+                contribs.append((ConfluenceFactor.LIQUIDITY_SWEEP, 1.0))
 
-            score = min(100.0, sum(_FACTOR_WEIGHTS[f] for f in factors))
+            factors = [f for f, _ in contribs]
+            score = min(100.0, sum(_FACTOR_WEIGHTS[f] * w for f, w in contribs))
             results.append(
                 StructureConfluence(
                     symbol=data.symbol,
@@ -149,17 +168,34 @@ class StructureConfluenceEngine:
         return results
 
     @staticmethod
-    def _has_order_block(ev: MarketStructure, active_obs: list[POIZone]) -> bool:
+    def _order_block_match(
+        ev: MarketStructure,
+        obs: list[POIZone],
+        ev_idx: int,
+        idx_by_ts: dict[datetime, int],
+    ) -> str | None:
+        """Classify the OB backing this break: ``"active"`` (an active OB whose
+        range holds the broken level), ``"retest"`` (a recently-invalidated OB
+        at that level — a breaker retest), or ``None``. Active wins over retest.
+        """
         level = ev.reference_price_level if ev.reference_price_level is not None else ev.price_level
-        for ob in active_obs:
+        found_retest = False
+        for ob in obs:
             if ob.direction != ev.direction:
                 continue
             if ob.created_at > ev.timestamp:
                 continue
             buffer = ob.price_high * _OB_PRICE_BUFFER
-            if ob.price_low - buffer <= level <= ob.price_high + buffer:
-                return True
-        return False
+            if not (ob.price_low - buffer <= level <= ob.price_high + buffer):
+                continue
+            if ob.status == POIZoneStatus.ACTIVE:
+                return "active"
+            if ob.invalidated_at is None:
+                continue
+            inv_idx = idx_by_ts.get(ob.invalidated_at)
+            if inv_idx is not None and ev_idx - _OB_INVALIDATION_LOOKBACK <= inv_idx < ev_idx:
+                found_retest = True
+        return "retest" if found_retest else None
 
     @staticmethod
     def _volume_delta_aligned(direction: MarketDirection, vd: float, volume: float) -> bool:

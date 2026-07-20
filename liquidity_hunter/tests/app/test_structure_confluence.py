@@ -96,7 +96,7 @@ def test_no_evidence_scores_zero():
     # Only the break candle's own aligned volume delta fires by default.
     conf = result[0]
     assert conf.factors == [ConfluenceFactor.VOLUME_DELTA]
-    assert conf.score == 10.0
+    assert conf.score == 9.0
 
 
 def test_all_factors_present_scores_100():
@@ -123,6 +123,17 @@ def test_all_factors_present_scores_100():
         price_high=101.0,
         created_at=T0 + H1 * (EVENT_IDX - 3),
         ob_candle_timestamp=T0 + H1 * (EVENT_IDX - 3),
+        status=POIZoneStatus.ACTIVE,
+    )
+    htf_ob = POIZone(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H4,
+        direction=MarketDirection.BULLISH,
+        kind=POIZoneKind.ORDER_BLOCK,
+        price_low=98.5,
+        price_high=101.5,
+        created_at=T0 + H1 * (EVENT_IDX - 8),
+        ob_candle_timestamp=T0 + H1 * (EVENT_IDX - 8),
         status=POIZoneStatus.ACTIVE,
     )
     oi = OIAnalysis(
@@ -156,12 +167,14 @@ def test_all_factors_present_scores_100():
         internal_structure_events=[sweep, _bos()],
         volume_spread_signals=[vsa],
         poi_zones=[ob],
+        htf_poi_zones=[htf_ob],
         oi_analysis=oi,
     )
     result = StructureConfluenceEngine().build(data)
     conf = next(c for c in result if c.event_type == StructureEvent.BREAK_OF_STRUCTURE)
     assert set(conf.factors) == {
         ConfluenceFactor.HTF_ALIGNMENT,
+        ConfluenceFactor.HTF_ORDER_BLOCK,
         ConfluenceFactor.VSA_VOLUME,
         ConfluenceFactor.ORDER_BLOCK,
         ConfluenceFactor.OI_PARTICIPATION,
@@ -186,6 +199,67 @@ def test_htf_alignment_factor():
         _data(higher_timeframe_direction=MarketDirection.NEUTRAL)
     )
     assert ConfluenceFactor.HTF_ALIGNMENT not in neutral[0].factors
+
+
+def test_htf_order_block_factor():
+    htf_ob = POIZone(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H4,
+        direction=MarketDirection.BULLISH,
+        kind=POIZoneKind.ORDER_BLOCK,
+        price_low=99.0,
+        price_high=101.0,
+        created_at=T0 + H1 * (EVENT_IDX - 8),
+        ob_candle_timestamp=T0 + H1 * (EVENT_IDX - 8),
+        status=POIZoneStatus.ACTIVE,
+    )
+    result = StructureConfluenceEngine().build(_data(htf_poi_zones=[htf_ob]))
+    assert ConfluenceFactor.HTF_ORDER_BLOCK in result[0].factors
+
+    # A bearish HTF OB must not confirm the bullish break.
+    bearish_htf_ob = htf_ob.model_copy(update={"direction": MarketDirection.BEARISH})
+    result2 = StructureConfluenceEngine().build(_data(htf_poi_zones=[bearish_htf_ob]))
+    assert ConfluenceFactor.HTF_ORDER_BLOCK not in result2[0].factors
+
+
+def test_recently_invalidated_ob_counts_as_breaker_retest():
+    # A bearish OB broken then retested: invalidated shortly before the break,
+    # its range still holding the reference level. Counts at reduced weight.
+    retest_ob = POIZone(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        direction=MarketDirection.BULLISH,
+        kind=POIZoneKind.BREAKER_BLOCK,
+        price_low=99.0,
+        price_high=101.0,
+        created_at=T0 + H1 * (EVENT_IDX - 6),
+        ob_candle_timestamp=T0 + H1 * (EVENT_IDX - 6),
+        status=POIZoneStatus.INVALIDATED,
+        invalidated_at=T0 + H1 * (EVENT_IDX - 3),
+    )
+    result = StructureConfluenceEngine().build(_data(poi_zones=[retest_ob]))
+    conf = result[0]
+    assert ConfluenceFactor.ORDER_BLOCK in conf.factors
+    # VOLUME_DELTA (9) + ORDER_BLOCK at half weight (15 * 0.5 = 7.5).
+    assert conf.score == 16.5
+
+
+def test_stale_invalidated_ob_does_not_count():
+    # Invalidated before the tracked candle window (not a recent breaker retest).
+    stale_ob = POIZone(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        direction=MarketDirection.BULLISH,
+        kind=POIZoneKind.BREAKER_BLOCK,
+        price_low=99.0,
+        price_high=101.0,
+        created_at=T0 - H1 * 10,
+        ob_candle_timestamp=T0 - H1 * 10,
+        status=POIZoneStatus.INVALIDATED,
+        invalidated_at=T0 - H1 * 5,  # before candles[0], not in idx_by_ts
+    )
+    result = StructureConfluenceEngine().build(_data(poi_zones=[stale_ob]))
+    assert ConfluenceFactor.ORDER_BLOCK not in result[0].factors
 
 
 def test_provisional_and_non_break_events_skipped():

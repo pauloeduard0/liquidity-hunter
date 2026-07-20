@@ -190,6 +190,7 @@ export interface BehaviorDivergence {
 
 export type ConfluenceFactor =
   | 'htf_alignment'
+  | 'htf_order_block'
   | 'vsa_volume'
   | 'order_block'
   | 'oi_participation'
