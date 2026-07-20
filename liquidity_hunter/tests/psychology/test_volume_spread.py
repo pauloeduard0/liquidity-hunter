@@ -51,8 +51,9 @@ def _baseline(n: int) -> list[Candle]:
 
 
 def _run(candles: list[Candle]) -> list:
+    # Gate disabled: these exercise pattern anatomy, not location.
     vd = volume_delta_series(candles)
-    return VolumeSpreadAnalyzer(lookback=7).analyze(candles, vd)
+    return VolumeSpreadAnalyzer(lookback=7, gate_extreme_lookback=0).analyze(candles, vd)
 
 
 def test_empty_and_short_series_return_nothing():
@@ -179,6 +180,39 @@ def test_dedup_keeps_highest_confidence_in_cluster():
     assert len(climaxes) == 1
     # The kept one is the stronger (higher-volume) second candle.
     assert climaxes[0].timestamp == _ts(9)
+
+
+def test_gate_suppresses_no_supply_away_from_a_local_low():
+    # A No Supply bar sitting above the trailing low (not a support test).
+    candles = _baseline(24)  # baseline lows are 99.0
+    candles.append(
+        _candle(24, 100.0, 100.3, 99.8, 99.9, volume=30.0, taker_buy_volume=15.0)
+    )
+    vd = volume_delta_series(candles)
+    gated = VolumeSpreadAnalyzer(lookback=7, gate_extreme_lookback=20).analyze(candles, vd)
+    assert not any(s.pattern == VSAPattern.NO_SUPPLY for s in gated)
+
+
+def test_gate_keeps_no_supply_at_a_fresh_local_low():
+    # Same quiet bar, but now it makes a fresh trailing low → a real test.
+    candles = _baseline(24)
+    candles.append(
+        _candle(24, 98.6, 98.7, 98.2, 98.3, volume=30.0, taker_buy_volume=15.0)
+    )
+    vd = volume_delta_series(candles)
+    gated = VolumeSpreadAnalyzer(lookback=7, gate_extreme_lookback=20).analyze(candles, vd)
+    assert any(s.pattern == VSAPattern.NO_SUPPLY for s in gated)
+
+
+def test_gate_never_suppresses_a_climax():
+    # Climax bypasses the location gate entirely (it is rare + self-evident).
+    candles = _baseline(24)
+    candles.append(
+        _candle(24, 100.0, 100.5, 92.0, 98.0, volume=400.0, taker_buy_volume=60.0)
+    )
+    vd = volume_delta_series(candles)
+    gated = VolumeSpreadAnalyzer(lookback=7, gate_extreme_lookback=20).analyze(candles, vd)
+    assert any(s.pattern == VSAPattern.SELLING_CLIMAX for s in gated)
 
 
 def test_signal_fields_are_populated():

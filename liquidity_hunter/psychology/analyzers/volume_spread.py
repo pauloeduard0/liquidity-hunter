@@ -28,6 +28,22 @@ from liquidity_hunter.core.domain import (
     VSAPattern,
 )
 
+# The two candle-anatomy families that, without a location filter, fire on
+# every quiet/rejection bar in the tape (measured ~89% of raw signals, ~214 per
+# 1000 candles). VSA reads these only at decision points, so they are gated to
+# a *fresh local extreme*: the bar must make (or tie) the lowest low of the
+# trailing window for a bullish pattern (a genuine support test) or the highest
+# high for a bearish one. Measured to cut the noisy families ~86%. Climaxes are
+# rare and self-evident, so they bypass the gate.
+_GATED_PATTERNS: frozenset[VSAPattern] = frozenset(
+    {
+        VSAPattern.NO_SUPPLY,
+        VSAPattern.DOWN_THRUST,
+        VSAPattern.NO_DEMAND,
+        VSAPattern.UP_THRUST,
+    }
+)
+
 # Trailing candles used to establish the "normal" spread/volume baseline each
 # candle is measured against.  Mirrors ``BehaviorDivergenceAnalyzer`` so the
 # two volume layers read the market on the same horizon.
@@ -76,6 +92,8 @@ class VolumeSpreadAnalyzer:
         thrust_volume_ratio: float = 1.2,
         wick_dominance: float = 1.5,
         dedup_window: int | None = None,
+        gate_extreme_lookback: int = 20,
+        gate_extreme_tolerance: float = 0.0005,
     ) -> None:
         self._lookback_override = lookback
         self._narrow_spread = narrow_spread_ratio
@@ -85,6 +103,8 @@ class VolumeSpreadAnalyzer:
         self._thrust_volume = thrust_volume_ratio
         self._wick_dominance = wick_dominance
         self._dedup_window_override = dedup_window
+        self._gate_lookback = gate_extreme_lookback
+        self._gate_tolerance = gate_extreme_tolerance
 
     def analyze(
         self,
@@ -156,6 +176,14 @@ class VolumeSpreadAnalyzer:
             pattern = self._match_quiet(is_up, spread_ratio, volume_ratio)
         if pattern is None:
             return None
+
+        # Context gate for the noisy families: the bar must be a fresh local
+        # extreme on the side it reads from (bullish patterns at the trailing
+        # low — a support test; bearish at the trailing high). Disabled when
+        # `gate_extreme_lookback == 0` (pattern-anatomy unit tests).
+        if self._gate_lookback > 0 and pattern in _GATED_PATTERNS:
+            if not self._at_local_extreme(candles, i, pattern):
+                return None
 
         direction = _PATTERN_DIRECTION[pattern]
         confidence = self._confidence(pattern, spread_ratio, volume_ratio, close_position)
@@ -240,6 +268,20 @@ class VolumeSpreadAnalyzer:
         if self._lookback_override is not None:
             return self._lookback_override
         return _TIMEFRAME_LOOKBACK.get(tf, 10)
+
+    def _at_local_extreme(
+        self, candles: list[Candle], i: int, pattern: VSAPattern
+    ) -> bool:
+        """Whether candle ``i`` makes (or ties) the trailing-window extreme it
+        reads from — the lowest low for a bullish pattern, the highest high for
+        a bearish one, within a small tolerance for near-ties."""
+        start = max(0, i - self._gate_lookback)
+        window = candles[start : i + 1]
+        if _PATTERN_DIRECTION[pattern] == MarketDirection.BULLISH:
+            floor = min(c.low for c in window)
+            return candles[i].low <= floor * (1 + self._gate_tolerance)
+        ceiling = max(c.high for c in window)
+        return candles[i].high >= ceiling * (1 - self._gate_tolerance)
 
     def _confidence(
         self,
