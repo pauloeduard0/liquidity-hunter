@@ -67,6 +67,7 @@ def _minimal_data(**overrides: object) -> DashboardData:
         "poi_zones": [],
         "manipulation_cycles": [],
         "behavior_divergences": [],
+        "volume_spread_signals": [],
     }
     defaults.update(overrides)
     return DashboardData(**defaults)  # type: ignore[arg-type]

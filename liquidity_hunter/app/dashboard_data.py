@@ -28,6 +28,7 @@ from liquidity_hunter.core.domain import (
     OpenInterestPoint,
     StructureEvent,
     TimeFrame,
+    VolumeSpreadSignal,
 )
 from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
 from liquidity_hunter.core.domain.poi_zone import POIZone
@@ -64,6 +65,7 @@ from liquidity_hunter.psychology import (
     OIRegimeAnalyzer,
     RetailBiasEstimate,
     RetailTrapAnalyzer,
+    VolumeSpreadAnalyzer,
 )
 from liquidity_hunter.scoring import (
     LiquidityHeatmapEngine,
@@ -729,6 +731,7 @@ class DashboardData:
     poi_zones: list[POIZone]
     manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
+    volume_spread_signals: list[VolumeSpreadSignal]
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
@@ -1948,6 +1951,11 @@ def load_dashboard_data(
         structure_events=all_structure,
     )
 
+    volume_spread_signals = VolumeSpreadAnalyzer().analyze(
+        candles=candles,
+        volume_deltas=vd,
+    )
+
     liquidity_heatmap = LiquidityHeatmapEngine().build(
         symbol=symbol,
         timeframe=timeframe,
@@ -2005,6 +2013,7 @@ def load_dashboard_data(
         poi_zones=poi_zones,
         manipulation_cycles=manipulation_cycles,
         behavior_divergences=behavior_divergences,
+        volume_spread_signals=volume_spread_signals,
         liquidity_heatmap=liquidity_heatmap,
         liquidation_map=liquidation_map,
         oi_analysis=oi_analysis,

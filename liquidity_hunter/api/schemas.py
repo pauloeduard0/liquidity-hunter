@@ -22,6 +22,7 @@ from liquidity_hunter.core.domain import (
     MarketStructure,
     OIAnalysis,
     TimeFrame,
+    VolumeSpreadSignal,
 )
 from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
 from liquidity_hunter.core.domain.poi_zone import POIZone
@@ -48,6 +49,7 @@ class DashboardDataResponse(BaseModel):
     poi_zones: list[POIZone]
     manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
+    volume_spread_signals: list[VolumeSpreadSignal] = []
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None

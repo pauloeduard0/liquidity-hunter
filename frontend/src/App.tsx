@@ -117,6 +117,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [manipChartVisible, setManipChartVisible] = useState(false)
   const [divChartVisible, setDivChartVisible] = useState(false)
+  const [vsaVisible, setVsaVisible] = useState(true)
   const [heatmapVisible, setHeatmapVisible] = useState(false)
   const [liquidationVisible, setLiquidationVisible] = useState(false)
   const [liquidationLiveOnly, setLiquidationLiveOnly] = useState(false)
@@ -473,6 +474,18 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setVsaVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        vsaVisible
+                          ? 'bg-[#e040fb22] text-[#e040fb]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle VSA volume-spread signals (climax / thrust / no-supply)"
+                    >
+                      ≈ VSA
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setHuntWindowVisible((v) => !v)}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         huntWindowVisible
@@ -539,7 +552,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showVsaMarkers={vsaVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} />
                 </div>
               </div>
 

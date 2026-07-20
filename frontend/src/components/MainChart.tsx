@@ -24,7 +24,7 @@ import {
   LiquidationBandsPrimitive,
   type LiquidationBandInput,
 } from '../charting/LiquidationBandsPrimitive'
-import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone } from '../types/dashboard'
+import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone, VolumeSpreadSignal } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -45,6 +45,7 @@ import {
   TREND_ICONS,
   VOLUME_DOWN_COLOR,
   VOLUME_UP_COLOR,
+  VSA_STYLES,
   ZONE_COLORS,
   ZONE_TYPE_LABELS,
 } from '../theme'
@@ -474,6 +475,23 @@ function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker
     })
 }
 
+function buildVsaMarkers(signals: VolumeSpreadSignal[]): SeriesMarker<Time>[] {
+  return [...signals]
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+    .map((sig) => {
+      const style = VSA_STYLES[sig.pattern]
+      const dirIcon = sig.direction === 'bullish' ? '▲' : '▼'
+      return {
+        time: toChartTime(sig.timestamp) as Time,
+        position: style?.position ?? 'aboveBar',
+        shape: sig.direction === 'bullish' ? 'arrowUp' : 'arrowDown',
+        color: style?.color ?? '#8a94a6',
+        text: `${style?.label ?? sig.pattern} ${dirIcon}`,
+        size: 1,
+      } as SeriesMarker<Time>
+    })
+}
+
 const MAX_MANIP_BOXES = 3
 const ZONE_PRICE_BUFFER_PCT = 0.003
 
@@ -539,6 +557,7 @@ interface MainChartProps {
   showConsolidationRanges?: boolean
   showManipulationBoxes?: boolean
   showDivergenceMarkers?: boolean
+  showVsaMarkers?: boolean
   showHeatmap?: boolean
   showLiquidationBands?: boolean
   liquidationLiveOnly?: boolean
@@ -557,6 +576,7 @@ export function MainChart({
   showConsolidationRanges = true,
   showManipulationBoxes = true,
   showDivergenceMarkers = true,
+  showVsaMarkers = true,
   showHeatmap = true,
   showLiquidationBands = true,
   liquidationLiveOnly = false,
@@ -941,13 +961,24 @@ export function MainChart({
     }
 
     // Volume delta histogram
+    // VSA tint per candle timestamp: a flagged candle's volume-delta bar is
+    // colored by what the pattern *means* (climax/thrust/quiet) rather than
+    // just its direction — the whole point of reading volume with price.
+    const vsaColorByTs = new Map<string, string>()
+    if (showVsaMarkers) {
+      for (const sig of data.volume_spread_signals ?? []) {
+        vsaColorByTs.set(sig.timestamp, VSA_STYLES[sig.pattern]?.color ?? '#8a94a6')
+      }
+    }
     deltaSeries.setData(
       data.candles.map((candle) => {
         const delta = 2 * candle.taker_buy_volume - candle.volume
+        const vsaColor = vsaColorByTs.get(candle.timestamp)
         return {
           time: toChartTime(candle.timestamp),
           value: delta,
-          color: candle.close >= candle.open ? CANDLE_UP_COLOR : CANDLE_DOWN_COLOR,
+          color:
+            vsaColor ?? (candle.close >= candle.open ? CANDLE_UP_COLOR : CANDLE_DOWN_COLOR),
         }
       }),
     )
@@ -1347,11 +1378,18 @@ export function MainChart({
     }
     rangeBoxesPrimitiveRef.current?.setBoxes(rangeBoxes)
 
-    // Behavior divergence markers
+    // Behavior divergence + VSA markers share one marker plugin (a series
+    // holds a single marker set), merged and re-sorted ascending by time.
     const divMarkers = showDivergenceMarkers
       ? buildDivergenceMarkers(data.behavior_divergences ?? [])
       : []
-    divergenceMarkersRef.current?.setMarkers(divMarkers)
+    const vsaMarkers = showVsaMarkers
+      ? buildVsaMarkers(data.volume_spread_signals ?? [])
+      : []
+    const mergedMarkers = [...divMarkers, ...vsaMarkers].sort(
+      (a, b) => (a.time as number) - (b.time as number),
+    )
+    divergenceMarkersRef.current?.setMarkers(mergedMarkers)
 
     // Liquidity heatmap strip
     const heatmapBands: HeatmapBand[] =
@@ -1431,7 +1469,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showVolume, showRsiDivergence])
+  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, showVsaMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showVolume, showRsiDivergence])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

@@ -12,6 +12,7 @@ from liquidity_hunter.psychology.analyzers import (
     ProjectedLevel,
     RetailBiasEstimator,
     RetailTrapAnalyzer,
+    VolumeSpreadAnalyzer,
 )
 from liquidity_hunter.psychology.models import RetailBiasEstimate
 
@@ -24,4 +25,5 @@ __all__ = [
     "RetailBiasEstimate",
     "RetailBiasEstimator",
     "RetailTrapAnalyzer",
+    "VolumeSpreadAnalyzer",
 ]

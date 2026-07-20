@@ -45,6 +45,14 @@ export type ManipulationCycleStatus = 'in_progress' | 'confirmed' | 'failed'
 
 export type DivergenceType = 'distribution' | 'accumulation' | 'exhaustion' | 'absorption'
 
+export type VSAPattern =
+  | 'no_supply'
+  | 'no_demand'
+  | 'selling_climax'
+  | 'buying_climax'
+  | 'down_thrust'
+  | 'up_thrust'
+
 export type NarrativeEventType =
   | 'consolidation'
   | 'distribution'
@@ -176,6 +184,21 @@ export interface BehaviorDivergence {
   nearest_zone_side: LiquiditySide | null
   nearest_zone_price_low: number | null
   nearest_zone_price_high: number | null
+  confidence: number
+  description: string
+}
+
+export interface VolumeSpreadSignal {
+  symbol: string
+  timeframe: TimeFrame
+  timestamp: string
+  pattern: VSAPattern
+  direction: MarketDirection
+  price_level: number
+  spread_ratio: number
+  close_position: number
+  volume_ratio: number
+  volume_delta: number
   confidence: number
   description: string
 }
@@ -381,6 +404,7 @@ export interface DashboardData {
   poi_zones: POIZone[]
   manipulation_cycles: ManipulationCycle[]
   behavior_divergences: BehaviorDivergence[]
+  volume_spread_signals: VolumeSpreadSignal[]
   liquidity_heatmap: LiquidityHeatmap | null
   liquidation_map: LeverageLiquidationMap | null
   narrative: MarketNarrative | null

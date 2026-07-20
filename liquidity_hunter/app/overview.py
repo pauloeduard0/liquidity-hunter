@@ -289,4 +289,5 @@ def _slim_dashboard_data(
         poi_zones=[],
         manipulation_cycles=[],
         behavior_divergences=[],
+        volume_spread_signals=[],
     )

@@ -211,3 +211,25 @@ class AnomalySeverity(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+class VSAPattern(str, Enum):
+    """Volume-Spread-Analysis pattern read from a single candle's anatomy.
+
+    Classic VSA ("effort vs result") patterns derived from the relationship
+    between a candle's spread (high-low range), the position of its close
+    within that range, its wick rejection, and its *raw* volume relative to
+    recent candles.  Each is an *observation* about who is (or is not) present
+    in the tape, not a trade recommendation.
+    """
+
+    NO_SUPPLY = "no_supply"  # narrow down-bar on low volume — sellers absent
+    NO_DEMAND = "no_demand"  # narrow up-bar on low volume — buyers absent
+    SELLING_CLIMAX = "selling_climax"  # wide down-bar, extreme volume, lower wick
+    BUYING_CLIMAX = "buying_climax"  # wide up-bar, extreme volume, upper wick
+    # Down thrust (video's bullish pin bar): lower-wick rejection, close high,
+    # above-average volume — demand overwhelmed supply at the low. Bullish.
+    DOWN_THRUST = "down_thrust"
+    # Up thrust (classic VSA): upper-wick rejection, close low, above-average
+    # volume — supply overwhelmed demand at the high. Bearish.
+    UP_THRUST = "up_thrust"

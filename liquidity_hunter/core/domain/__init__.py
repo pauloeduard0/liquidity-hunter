@@ -29,6 +29,7 @@ from liquidity_hunter.core.domain.enums import (
     StructureEvent,
     StructureScope,
     TimeFrame,
+    VSAPattern,
 )
 from liquidity_hunter.core.domain.futures import (
     FundingRate,
@@ -60,6 +61,7 @@ from liquidity_hunter.core.domain.oi_analysis import (
 from liquidity_hunter.core.domain.overview import MarketOverview, TimeframeOverview
 from liquidity_hunter.core.domain.poi_zone import POIZone
 from liquidity_hunter.core.domain.retail_bias import RetailBias
+from liquidity_hunter.core.domain.volume_spread import VolumeSpreadSignal
 
 __all__ = [
     "AnomalySeverity",
@@ -107,4 +109,6 @@ __all__ = [
     "StructureScope",
     "TimeFrame",
     "TimeframeOverview",
+    "VSAPattern",
+    "VolumeSpreadSignal",
 ]

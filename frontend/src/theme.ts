@@ -92,6 +92,25 @@ export const DIVERGENCE_STYLES: Record<string, { label: string; color: string; b
 }
 
 /**
+ * Volume-Spread-Analysis (VSA) pattern styles — the color a candle's volume
+ * bar is tinted with (and the label drawn above/below the candle) when the
+ * VSA analyzer flags it. Climax = high-energy alert (magenta), thrust =
+ * rejection (amber), no-supply/no-demand = quiet/low-energy (muted grey).
+ * `above`/`below` place the chart marker on the side the pattern reads from.
+ */
+export const VSA_STYLES: Record<
+  string,
+  { label: string; color: string; position: 'aboveBar' | 'belowBar' }
+> = {
+  selling_climax: { label: 'S.Climax', color: '#e040fb', position: 'belowBar' },
+  buying_climax: { label: 'B.Climax', color: '#e040fb', position: 'aboveBar' },
+  down_thrust: { label: 'D.Thrust', color: '#ffb74d', position: 'belowBar' },
+  up_thrust: { label: 'U.Thrust', color: '#ffb74d', position: 'aboveBar' },
+  no_supply: { label: 'NoSupply', color: '#8a94a6', position: 'belowBar' },
+  no_demand: { label: 'NoDemand', color: '#8a94a6', position: 'aboveBar' },
+}
+
+/**
  * Liquidity heatmap gradient stops, cold -> hot, used by the lateral strip on
  * the main chart. Each entry maps a normalized heat threshold (0-1) to an RGB
  * triple; the strip interpolates between adjacent stops per bucket.
