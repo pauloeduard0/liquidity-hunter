@@ -480,13 +480,14 @@ function buildVsaMarkers(signals: VolumeSpreadSignal[]): SeriesMarker<Time>[] {
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
     .map((sig) => {
       const style = VSA_STYLES[sig.pattern]
-      const dirIcon = sig.direction === 'bullish' ? '▲' : '▼'
       return {
         time: toChartTime(sig.timestamp) as Time,
         position: style?.position ?? 'aboveBar',
         shape: sig.direction === 'bullish' ? 'arrowUp' : 'arrowDown',
         color: style?.color ?? '#8a94a6',
-        text: `${style?.label ?? sig.pattern} ${dirIcon}`,
+        // Label-less: the arrow + its VSA colour identify the pattern; the
+        // text above the arrows was cluttering the chart.
+        text: '',
         size: 1,
       } as SeriesMarker<Time>
     })
