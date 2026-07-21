@@ -634,7 +634,8 @@ def test_history_lone_strong_signal_is_below_threshold() -> None:
 
 
 def test_history_confluence_closes_hunt_with_score_and_sources() -> None:
-    # Sweep (3) + VSA up-thrust (3) co-located = score 6 >= threshold.
+    # Sweep (3) + a strong VSA up-thrust (confidence 80 -> weight 4) co-located
+    # = score 7 >= threshold 6.
     events = [
         _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
         _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
@@ -648,7 +649,7 @@ def test_history_confluence_closes_hunt_with_score_and_sources() -> None:
     )
     history = LiquidityHuntEngine().build_history(data)
     assert len(history) == 1
-    assert history[0].capture_score == 6.0
+    assert history[0].capture_score == 7.0
     assert history[0].capture_sources == ["sweep", "vsa"]
 
 
@@ -735,6 +736,43 @@ def test_continuation_anchors_the_box_on_the_vsa_candle() -> None:
     continuation = LiquidityHuntEngine().build_continuation_history(data)
     assert len(continuation) == 1
     assert continuation[0].end_timestamp == T0 + H1 * 10  # the VSA candle, not i=8
+
+
+def test_continuation_strong_lone_vsa_floor_closes_alone() -> None:
+    # A strong floor down-thrust (confidence 82 -> weight 4) with no co-located
+    # sweep still reaches the continuation threshold on its own: the exhaustion
+    # candle is the floor signature (the ZEC 1h 2026-07-17 case).
+    events = [
+        _event(2, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        volume_spread_signals=[_vsa(10, VSAPattern.DOWN_THRUST, MarketDirection.BULLISH)],
+        candles=_candles(24),
+    )
+    continuation = LiquidityHuntEngine().build_continuation_history(data)
+    assert len(continuation) == 1
+    assert continuation[0].capture_score == 4.0
+    assert continuation[0].capture_sources == ["vsa"]
+
+
+def test_continuation_weak_lone_vsa_floor_is_below_threshold() -> None:
+    # A weak floor down-thrust (confidence 50 -> weight 3) alone stays below the
+    # threshold: without a partner it is not a grab, keeping the noise out.
+    events = [
+        _event(2, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    weak = _vsa(10, VSAPattern.DOWN_THRUST, MarketDirection.BULLISH).model_copy(
+        update={"confidence": 50.0}
+    )
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        volume_spread_signals=[weak],
+        candles=_candles(24),
+    )
+    assert LiquidityHuntEngine().build_continuation_history(data) == []
 
 
 def test_continuation_requires_vsa_on_the_floor() -> None:

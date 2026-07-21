@@ -84,6 +84,18 @@ _CAPTURE_THRESHOLD = 6.0
 _CONTINUATION_CAPTURE_THRESHOLD = 4.0
 _WEIGHT_SWEEP = 3.0
 _WEIGHT_VSA = 3.0
+# A *strong* floor VSA (a high-confidence down-thrust / selling-climax) is the
+# exhaustion candle at the pullback low on its own — the signature the user
+# reads directly off the chart. It weighs 4 so it reaches the continuation
+# threshold alone, without a co-located sweep/delta: a clean strong thrust
+# whose structural sweep printed many candles away (beyond the merge window) or
+# never fired was otherwise stuck at 3 and dropped (the ZEC 1h 2026-07-13/-17
+# floors, confidence 82/83). A *weak* floor VSA stays at 3 and still needs a
+# partner, so this does not reopen the lone-weak-signal noise threshold 4 shut.
+# The counter-trend hunt (threshold 6) is unaffected — 4 < 6, still needs a
+# pair.
+_WEIGHT_VSA_STRONG = 4.0
+_VSA_STRONG_CONFIDENCE = 70.0
 _WEIGHT_OI_FLUSH = 3.0
 _WEIGHT_ZONE = 2.0
 _WEIGHT_DELTA_MODIFIER = 1.0
@@ -581,7 +593,12 @@ class LiquidityHuntEngine:
         vsa_patterns = _VSA_SHORT_CAPTURE if hunted_short else _VSA_LONG_CAPTURE
         for vsa in data.volume_spread_signals:
             if vsa.pattern in vsa_patterns and start <= vsa.timestamp <= end:
-                signals.append((vsa.timestamp, _WEIGHT_VSA, "vsa"))
+                weight = (
+                    _WEIGHT_VSA_STRONG
+                    if vsa.confidence >= _VSA_STRONG_CONFIDENCE
+                    else _WEIGHT_VSA
+                )
+                signals.append((vsa.timestamp, weight, "vsa"))
 
         if data.oi_analysis is not None:
             for qualified in data.oi_analysis.qualified_events:
