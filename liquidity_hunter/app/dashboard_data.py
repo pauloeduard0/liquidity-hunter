@@ -1020,14 +1020,46 @@ def _reanchor_bos_close_break(
         # Anchor the line's *start* at the formed level's origin -- the candle
         # that made the prior swing extreme (low for bearish, high for bullish)
         # at this price -- so it runs from where the level formed to where it
-        # broke, rather than starting at the break. Falls back to the break when
-        # no exact match is found.
+        # broke, rather than starting at the break. When the level is a
+        # double-top/bottom (retested near the break), the *earliest* touch
+        # within the current leg is the structural swing that established it; a
+        # later retest is a shallow poke, not the origin. Bound the search to
+        # the current leg (after the previous same-direction BOS or the
+        # leg-starting CHoCH) and take the earliest matching candle, so the line
+        # anchors on the real swing top rather than the last touch before the
+        # break (SOL M30 2026-07-19 76.56 / 2026-07-20 78.37). Falls back to the
+        # break when no exact match is found.
+        leg_lower_bound = 0
+        for other in ordered:
+            if other.timestamp >= event.timestamp:
+                break
+            is_leg_boundary = (
+                other.event is StructureEvent.BREAK_OF_STRUCTURE
+                and other.direction is event.direction
+                and not other.provisional
+            ) or other.event in (
+                StructureEvent.CHANGE_OF_CHARACTER,
+                StructureEvent.CHOCH_FAILED,
+            )
+            if is_leg_boundary:
+                other_index = index_by_ts.get(other.timestamp)
+                if other_index is not None:
+                    leg_lower_bound = other_index
         reference_timestamp = event.reference_timestamp
-        for i in range(start_index, -1, -1):
+        for i in range(leg_lower_bound, start_index + 1):
             extreme = candles[i].low if bearish else candles[i].high
             if extreme == floor:
                 reference_timestamp = candles[i].timestamp
                 break
+        else:
+            # No match within the current leg -- the level formed before the
+            # leg started (a first-BOS CHoCH-seeded floor). Fall back to the
+            # full backward scan from the break for the most recent origin.
+            for i in range(start_index, -1, -1):
+                extreme = candles[i].low if bearish else candles[i].high
+                if extreme == floor:
+                    reference_timestamp = candles[i].timestamp
+                    break
         if reference_timestamp is None:
             # No exact same-side origin and the detector left no anchor -- the
             # first BOS of a leg reports the CHoCH-seeded floor, whose origin is

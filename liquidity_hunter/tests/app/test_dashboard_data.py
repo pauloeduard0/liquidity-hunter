@@ -2060,6 +2060,61 @@ def test_btcusdt_5m_strong_close_bos_passes_confluence() -> None:
     ), "strong-close continuation BOS at 66618 (13:45) is missing"
 
 
+def test_solusdt_30m_double_top_bos_anchors_at_original_swing() -> None:
+    """A continuation BOS line anchors on the swing that formed the level.
+
+    SOLUSDT 30m: two continuation BOS break levels that were double-topped --
+    76.56 (formed 2026-07-19 02:30, retested 07-19 23:30 just before the break)
+    and 78.37 (formed 2026-07-20 18:00, retested 07-21 05:00). The line-start
+    anchor (``reference_timestamp``) must resolve to the *original* swing top
+    within the leg, not the shallow retest immediately before the break, so the
+    line runs from the real structural high rather than starting mid-move.
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "solusdt_30m_2026_07_21_double_top_anchor.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    candles = [
+        Candle(
+            symbol="SOLUSDT",
+            timeframe=TimeFrame.M30,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=row[5],
+            taker_buy_volume=row[6],
+        )
+        for row in rows
+    ]
+    provider = _FuturesLimitFakeProvider({TimeFrame.M30: candles})
+
+    run = _run_internal_structure(provider, "SOLUSDT", TimeFrame.M30, 1200, True)
+
+    def anchor_for(reference: float) -> datetime | None:
+        for e in run.events:
+            if (
+                e.event is StructureEvent.BREAK_OF_STRUCTURE
+                and not e.provisional
+                and e.reference_price_level is not None
+                and e.reference_price_level == pytest.approx(reference)
+            ):
+                return e.reference_timestamp
+        return None
+
+    assert anchor_for(76.56) == datetime(2026, 7, 19, 2, 30, tzinfo=UTC)
+    assert anchor_for(78.37) == datetime(2026, 7, 20, 18, 0, tzinfo=UTC)
+
+
 def test_eth_1h_july_range_lock_is_a_live_consolidation() -> None:
     candles = _load_range_lock_candles("ethusdt_1h_2026_05_13_07_14.json", "ETHUSDT")
     provider = _FuturesLimitFakeProvider({TimeFrame.H1: candles})
