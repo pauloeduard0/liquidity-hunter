@@ -111,15 +111,18 @@ class StructureConfluenceEngine:
         # Structural flow (index-ordered BOS/CHoCH/CHOCH_FAILED) — used to bound
         # a CHoCH's forward evidence window at the next opposite/failing event.
         flow = sorted(
-            (idx_by_ts[e.timestamp], e)
-            for e in events
-            if e.timestamp in idx_by_ts
-            and e.event
-            in (
-                StructureEvent.BREAK_OF_STRUCTURE,
-                StructureEvent.CHANGE_OF_CHARACTER,
-                StructureEvent.CHOCH_FAILED,
-            )
+            (
+                (idx_by_ts[e.timestamp], e)
+                for e in events
+                if e.timestamp in idx_by_ts
+                and e.event
+                in (
+                    StructureEvent.BREAK_OF_STRUCTURE,
+                    StructureEvent.CHANGE_OF_CHARACTER,
+                    StructureEvent.CHOCH_FAILED,
+                )
+            ),
+            key=lambda pair: pair[0],
         )
         last_idx = len(candles) - 1
 
