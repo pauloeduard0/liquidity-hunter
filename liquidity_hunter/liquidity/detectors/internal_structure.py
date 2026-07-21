@@ -4263,12 +4263,30 @@ class InternalStructureDetector(MarketStructureDetector):
         real_bos = [e for e in events if e.event is StructureEvent.BREAK_OF_STRUCTURE]
 
         def duplicates_real(staged: MarketStructure) -> bool:
-            return any(
-                real.direction is staged.direction
-                and abs(real.price_level - staged.price_level)
-                <= abs(staged.price_level) * _STAGED_BOS_DEDUP_PCT
-                for real in real_bos
-            )
+            # A staged BOS duplicates a real one only when they mark the *same
+            # structural break*: the breaking pivot (`price_level`) AND the level
+            # it broke (`reference_price_level`, the staircase floor) both match.
+            # In an impulsive run the superseded pending's pivot can sit within
+            # the pivot tolerance of the later real BOS's pivot while its floor is
+            # a distinct, lower staircase step (ETHUSDT 5m: a superseded BOS with
+            # pivot 1927.96/floor 1917.92 vs the real BOS pivot 1931.00/floor
+            # 1927.96) -- those are two separate steps and must both survive.
+            for real in real_bos:
+                if real.direction is not staged.direction:
+                    continue
+                if abs(real.price_level - staged.price_level) > (
+                    abs(staged.price_level) * _STAGED_BOS_DEDUP_PCT
+                ):
+                    continue
+                if (
+                    real.reference_price_level is not None
+                    and staged.reference_price_level is not None
+                    and abs(real.reference_price_level - staged.reference_price_level)
+                    > abs(staged.reference_price_level) * _STAGED_BOS_DEDUP_PCT
+                ):
+                    continue
+                return True
+            return False
 
         # Accept each staged BOS unless it duplicates a real emitted BOS or an
         # already-accepted staged one at the *same* close-break candle (the impulse

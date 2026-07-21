@@ -358,6 +358,7 @@ def stage_breakout_events(
     existing_events: Sequence[MarketStructure],
     *,
     dedup_candles: int,
+    redundant_bos_atr: float = 3.0,
 ) -> list[MarketStructure]:
     """Stage additive structure events at consolidation-range breakouts.
 
@@ -385,9 +386,20 @@ def stage_breakout_events(
     caught the break itself). `reference_timestamp` is the first candle in
     the range that formed the broken boundary, so the drawn line spans the
     defended level.
+
+    A continuation breakout is also skipped when its boundary sits *just short*
+    of a still-standing same-direction real BOS extreme -- within
+    ``redundant_bos_atr`` x mean-TR of it, on the un-extended side, with no
+    opposite CHoCH having closed that BOS's line since. There the box top/bottom
+    is essentially the same level the real BOS already claimed, so a staged mark
+    would draw a weaker BOS line beneath the live real one (ETHUSDT 5m: a
+    1912.05 box top broken ~1.9 ATR under the live 1917.92 BOS). A boundary a
+    long way from any standing extreme (SOL 4h: a March floor ~9 ATR above a
+    stale Feb low) is a distinct level and still stages.
     """
     if not candles:
         return []
+    mean_tr = _mean_true_range(candles)
     index_by_timestamp = {candle.timestamp: index for index, candle in enumerate(candles)}
     direction_by_index: dict[int, MarketDirection] = {}
     for index, direction in advances:
@@ -395,6 +407,9 @@ def stage_breakout_events(
     advance_indices = sorted(direction_by_index)
 
     real_advance_indices: list[tuple[int, MarketDirection]] = []
+    # Real (non-provisional) BOS extremes, per direction, ordered by candle
+    # index -- the standing staircase a continuation breakout must extend.
+    real_bos_extremes: list[tuple[int, MarketDirection, float]] = []
     for event in existing_events:
         if event.provisional or event.event not in (
             StructureEvent.BREAK_OF_STRUCTURE,
@@ -404,6 +419,10 @@ def stage_breakout_events(
         event_index = index_by_timestamp.get(event.timestamp)
         if event_index is not None:
             real_advance_indices.append((event_index, event.direction))
+            if event.event is StructureEvent.BREAK_OF_STRUCTURE:
+                real_bos_extremes.append(
+                    (event_index, event.direction, event.price_level)
+                )
 
     staged: list[MarketStructure] = []
     for range_ in ranges:
@@ -450,6 +469,44 @@ def stage_breakout_events(
         )
         breakout = candles[end_index]
         is_continuation = range_.resolved_direction is segment_trend
+        # A continuation breakout must not plot a BOS *beneath a still-standing
+        # real same-direction BOS line*. If a real BOS in this direction made a
+        # more-extreme level than the broken boundary (box top below a prior
+        # swing high, box low above a prior swing low) and its line is still
+        # active at the breakout -- no opposite-direction real advance (a CHoCH)
+        # has terminated it since -- then the box only re-entered territory that
+        # BOS already claimed. Staging here would mark a structural continuation
+        # weaker than the real staircase drawn just beyond it (ETHUSDT 5m: a
+        # 1912.05 box top broken beneath the live 1917.92 BOS line). Leave the
+        # range box + resolution arrow; skip the phantom BOS -- the genuine
+        # continuation, once price clears that swing extreme, emits on its own.
+        # A prior-leg BOS whose line a reversal already closed does not gate the
+        # breakout (SOL 4h: a Feb bearish BOS at 67 predates a rally to 97 that
+        # flipped the trend, so the March box breaking down at 85 is a fresh
+        # bearish continuation, not a re-entry).
+        if is_continuation:
+            opposite = (
+                MarketDirection.BEARISH if bullish else MarketDirection.BULLISH
+            )
+            governed = False
+            for bos_index, direction, extreme in reversed(real_bos_extremes):
+                if direction is not range_.resolved_direction or bos_index >= end_index:
+                    continue
+                gap = extreme - boundary if bullish else boundary - extreme
+                # `extends`: boundary short of the BOS extreme, and close enough
+                # to be the same level (within the ATR band). A boundary well
+                # past the band is a distinct structural level -- stage it.
+                if not (0 < gap <= redundant_bos_atr * mean_tr):
+                    continue
+                line_closed = any(
+                    other_dir is opposite and bos_index < other_index < end_index
+                    for other_index, other_dir in real_advance_indices
+                )
+                if not line_closed:
+                    governed = True
+                break
+            if governed:
+                continue
         staged.append(
             MarketStructure(
                 symbol=range_.symbol,
@@ -469,6 +526,23 @@ def stage_breakout_events(
             )
         )
     return staged
+
+
+def _mean_true_range(candles: Sequence[Candle]) -> float:
+    """Mean true range over `candles` (absolute), the ATR band unit used to
+    judge whether a range boundary is redundant with a nearby BOS extreme."""
+    if len(candles) < 2:
+        return 0.0
+    total = 0.0
+    for index in range(1, len(candles)):
+        current = candles[index]
+        prev_close = candles[index - 1].close
+        total += max(
+            current.high - current.low,
+            abs(current.high - prev_close),
+            abs(current.low - prev_close),
+        )
+    return total / (len(candles) - 1)
 
 
 def _boundary_formed_at(

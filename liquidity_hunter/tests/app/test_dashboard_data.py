@@ -1839,13 +1839,14 @@ def test_btc_1h_july_range_lock_is_a_live_consolidation() -> None:
     live = [r for r in run.consolidation_ranges if r.status is ConsolidationStatus.ACTIVE]
     assert len(live) == 1
     r = live[0]
-    # One box for the whole lock -- from just after the 07-05 22:00 BOS (the
-    # last surviving advance of the July rally at base persistence 2) to the
-    # series end -- not split at the detector's dropped (wick-only) 07-10
-    # advance, since segment boundaries are the *surviving* chart events.
-    assert r.start_timestamp == datetime(2026, 7, 5, 23, tzinfo=UTC)
-    assert r.price_low == pytest.approx(61297.0)
-    assert r.price_high == pytest.approx(64691.9)
+    # One box for the whole lock -- from just after the 07-06 21:00 BOS (the
+    # last surviving advance of the July rally, a close-confirmed step to
+    # 64691.9 above the 63990.7 prior BOS top) to the series end -- not split at
+    # the detector's dropped (wick-only) 07-10 advance, since segment boundaries
+    # are the *surviving* chart events.
+    assert r.start_timestamp == datetime(2026, 7, 6, 22, tzinfo=UTC)
+    assert r.price_low == pytest.approx(61520.0)
+    assert r.price_high == pytest.approx(64680.0)
     # The June bottom basing resolved bullish into the July rally.
     assert any(
         rng.status is ConsolidationStatus.RESOLVED
@@ -1929,6 +1930,85 @@ def test_sol_4h_range_breakouts_stage_additive_events() -> None:
         ), f"superseded staged CHoCH? at {timestamp} should have been dropped"
     # The staged reversal marks never touch the state-machine trend.
     assert run.trend is MarketDirection.BULLISH
+
+
+def test_ethusdt_5m_range_breakout_below_live_bos_is_not_staged() -> None:
+    """A range-breakout BOS must not plot beneath a still-standing real BOS.
+
+    ETHUSDT 5m, 2026-07-20: a bullish BOS at 17:50 tops the leg at 1917.92, then
+    price consolidates 18:20 -> 00:35 in a box capped at 1912.05 (a lower high,
+    ~1.9 ATR under the swing high) and breaks the box top upward at 00:35 -- but
+    without ever clearing 1917.92, whose real BOS line is still live. Staging a
+    continuation BOS at 1912.05 there would draw a weaker mark beneath the real
+    staircase; the redundant-BOS ATR gate suppresses it. The genuine
+    continuation only emits at 04:00 (1931.00), above the prior top. The
+    consolidation box itself is untouched.
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "ethusdt_5m_2026_07_21_range_breakout.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    candles = [
+        Candle(
+            symbol="ETHUSDT",
+            timeframe=TimeFrame.M5,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=row[5],
+            taker_buy_volume=row[6],
+        )
+        for row in rows
+    ]
+    provider = _FuturesLimitFakeProvider({TimeFrame.M5: candles})
+
+    run = _run_internal_structure(provider, "ETHUSDT", TimeFrame.M5, 1200, True)
+
+    # No phantom continuation BOS at the box top (1912.05) on 2026-07-21 00:35.
+    assert not any(
+        e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.reference_price_level is not None
+        and abs(e.reference_price_level - 1912.05) < 0.5
+        for e in run.events
+    ), "range-breakout BOS at 1912.05 should be suppressed beneath the live 1917.92 BOS"
+    # The real staircase survives: the leg top at 17:50 and the true
+    # continuation at 04:00 above it.
+    assert any(
+        e.timestamp == datetime(2026, 7, 20, 17, 50, tzinfo=UTC)
+        and e.event is StructureEvent.BREAK_OF_STRUCTURE
+        for e in run.events
+    )
+    assert any(
+        e.timestamp == datetime(2026, 7, 21, 4, tzinfo=UTC)
+        and e.event is StructureEvent.BREAK_OF_STRUCTURE
+        for e in run.events
+    )
+    # The genuine continuation that breaks the 1917.92 top is recovered at its
+    # first close above it (03:00, referencing 1917.92) -- an impulsive run of
+    # two high pivots (1927.96, 1931.00) with no pullback between superseded this
+    # pending, and the staged-BOS dedup used to drop it against the later real
+    # BOS's nearby pivot despite their distinct staircase floors.
+    assert any(
+        e.timestamp == datetime(2026, 7, 21, 3, tzinfo=UTC)
+        and e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.reference_price_level == pytest.approx(1917.92)
+        for e in run.events
+    ), "recovered continuation BOS at 1917.92 (03:00) is missing"
+    # The consolidation box is still detected (only the phantom BOS was dropped).
+    assert any(
+        r.end_timestamp == datetime(2026, 7, 21, 0, 35, tzinfo=UTC)
+        for r in run.consolidation_ranges
+    )
 
 
 def test_eth_1h_july_range_lock_is_a_live_consolidation() -> None:
