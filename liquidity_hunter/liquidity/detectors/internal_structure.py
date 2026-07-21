@@ -784,6 +784,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_pending_fail_at_broken_level: bool = False,
         choch_pending_fail_persistence_candles: int | None = None,
         choch_fizzle_reclaim_candles: int | None = None,
+        choch_fizzle_reclaim_origin_buffer_atr: float | None = None,
         choch_failed_fallback_suppress_candles: int | None = None,
         choch_failed_rearm: bool = False,
         choch_failed_rearm_persistent: bool = False,
@@ -830,6 +831,13 @@ class InternalStructureDetector(MarketStructureDetector):
             )
         if choch_fizzle_reclaim_candles is not None and choch_fizzle_reclaim_candles < 1:
             raise ValueError("choch_fizzle_reclaim_candles must be at least 1")
+        if (
+            choch_fizzle_reclaim_origin_buffer_atr is not None
+            and choch_fizzle_reclaim_origin_buffer_atr < 0
+        ):
+            raise ValueError(
+                "choch_fizzle_reclaim_origin_buffer_atr must be non-negative"
+            )
         if (
             choch_failed_fallback_suppress_candles is not None
             and choch_failed_fallback_suppress_candles < 1
@@ -899,6 +907,9 @@ class InternalStructureDetector(MarketStructureDetector):
             choch_pending_fail_persistence_candles
         )
         self._choch_fizzle_reclaim_candles = choch_fizzle_reclaim_candles
+        self._choch_fizzle_reclaim_origin_buffer_atr = (
+            choch_fizzle_reclaim_origin_buffer_atr
+        )
         self._choch_failed_fallback_suppress_candles = choch_failed_fallback_suppress_candles
         self._choch_failed_rearm = choch_failed_rearm
         self._choch_failed_rearm_persistent = (
@@ -958,6 +969,7 @@ class InternalStructureDetector(MarketStructureDetector):
             or self._bos_leg_origin_min_pullback_atr is not None
             or self._stale_reanchor_displacement_atr is not None
             or self._choch_success_displacement_atr is not None
+            or self._choch_fizzle_reclaim_origin_buffer_atr is not None
         ) and len(candles) > 1:
             mean_tr_pct = fmean(
                 max(
@@ -1283,6 +1295,12 @@ class InternalStructureDetector(MarketStructureDetector):
         standing_choch_ref: Pivot | None = None
         standing_choch_index = -1
         standing_choch_dir: MarketDirection | None = None
+        # The extreme the standing CHoCH's leg launched from (the high a bearish
+        # drop fell from / the low a bullish rally rose from). Under
+        # `choch_fizzle_reclaim_origin_buffer_atr` the fizzle measures its
+        # reclaim against this far origin (plus a buffer) instead of the nearer
+        # broken level, so a routine retest of the broken level is not a fizzle.
+        standing_choch_origin: Pivot | None = None
         # The pre-CHoCH staircase floor of the trend that resumes if the current
         # provisional CHoCH *fails*. A CHoCH nulls the reversing trend's BOS
         # staircase (`last_bear_bos_low`/`last_bull_bos_high`) to seed the new
@@ -2308,6 +2326,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     # fizzle-mark (the resumed trend is not a fresh CHoCH).
                     standing_choch_ref = None
                     standing_choch_dir = None
+                    standing_choch_origin = None
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bullish_bos_origin = None
@@ -2427,6 +2446,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     standing_choch_ref = choch_high_ref
                     standing_choch_index = current_index
                     standing_choch_dir = MarketDirection.BULLISH
+                    standing_choch_origin = bull_choch_origin
                     bear_choch_origin = None
                     bear_choch_fail_ref = None
                     active_low = pending_low
@@ -3328,6 +3348,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     # fizzle-mark (the resumed trend is not a fresh CHoCH).
                     standing_choch_ref = None
                     standing_choch_dir = None
+                    standing_choch_origin = None
                     pending_bos = None
                     last_bullish_bos_price = None
                     last_bullish_bos_origin = None
@@ -3428,6 +3449,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     standing_choch_ref = choch_low_ref
                     standing_choch_index = current_index
                     standing_choch_dir = MarketDirection.BEARISH
+                    standing_choch_origin = bear_choch_origin
                     bull_choch_origin = None
                     bull_choch_fail_ref = None
                     active_high = pending_high
@@ -4135,10 +4157,37 @@ class InternalStructureDetector(MarketStructureDetector):
                 and standing_choch_dir is trend
             ):
                 bearish = standing_choch_dir is MarketDirection.BEARISH
-                # Bearish CHoCH fizzles on a sustained close back ABOVE the
-                # lower-high it broke; bullish on a close back BELOW its higher-low.
+                # The level a sustained reclaim must clear to count as a fizzle.
+                # By default it is the broken level itself (the lower-high a
+                # bearish CHoCH broke / the higher-high a bullish one broke) --
+                # but a routine retest of that level is a *common*, healthy
+                # pullback into the counter-zone, not a failed reversal, so the
+                # bare-level rule over-fires (a couple of closes a hair past it).
+                # Under `choch_fizzle_reclaim_origin_buffer_atr` the reclaim
+                # instead measures against the leg's *origin* (the far extreme
+                # the reversal launched from) offset by a volatility-scaled
+                # buffer: only price recovering essentially the whole move --
+                # not merely retesting the broken level -- fizzles the CHoCH.
+                # Falls back to the broken level when no origin is known
+                # (bootstrap) or the buffer feature is off.
+                reclaim_ref = standing_choch_ref.price
+                if (
+                    self._choch_fizzle_reclaim_origin_buffer_atr is not None
+                    and standing_choch_origin is not None
+                    and mean_tr_pct is not None
+                ):
+                    buffer_frac = (
+                        self._choch_fizzle_reclaim_origin_buffer_atr * mean_tr_pct
+                    )
+                    reclaim_ref = (
+                        standing_choch_origin.price * (1.0 + buffer_frac)
+                        if bearish
+                        else standing_choch_origin.price * (1.0 - buffer_frac)
+                    )
+                # Bearish CHoCH fizzles on a sustained close back ABOVE that
+                # level; bullish on a close back BELOW it.
                 reclaim_i = first_sustained_reclaim(
-                    standing_choch_ref.price, standing_choch_index, above=bearish
+                    reclaim_ref, standing_choch_index, above=bearish
                 )
                 if reclaim_i is not None:
                     fizzle_event = MarketStructure(

@@ -3096,9 +3096,56 @@ def test_choch_fizzle_ignores_reclaim_after_window() -> None:
     )
 
 
+def test_choch_fizzle_origin_buffer_suppresses_shallow_reclaim() -> None:
+    """The origin-buffer gate (`choch_fizzle_reclaim_origin_buffer_atr`) requires
+    the reclaim to recover the leg's *origin* (~82.3 here), not merely the broken
+    level (80.72). This SOL reclaim only tags the broken level -- a routine retest
+    of the counter-zone, not a fizzle -- so with the gate on no marker fires,
+    while the bare-level rule (gate off) marks it. This is the ZEC/BTC M5
+    over-fire fix on real data."""
+    candles = _load_sol_15m_fizzle_candles()
+
+    def build(buffer: float | None) -> InternalStructureDetector:
+        return InternalStructureDetector(
+            swing_lookback=5,
+            persistence_candles=12,
+            confluence_filter=False,
+            bos_leg_origin_choch_ref=True,
+            bos_leg_origin_require_close_break=True,
+            bos_floor_require_close_break=True,
+            choch_origin_leg_extreme=True,
+            choch_fizzle_reclaim_candles=30,
+            choch_fizzle_reclaim_origin_buffer_atr=buffer,
+        )
+
+    # Gate off: the bare-level rule fires the marker (the documented base case).
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED for e in build(None).detect(candles)
+    )
+    # Gate on: the shallow reclaim never recovers the 82.3 origin, so it is
+    # suppressed and the standing bearish CHoCH hangs, unfailed.
+    on = build(1.0).detect(candles)
+    assert not any(e.event is StructureEvent.CHOCH_FAILED for e in on)
+    # The standing bearish CHoCH itself is untouched by the gate.
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BEARISH
+        and e.reference_price_level == 80.72
+        for e in on
+    )
+
+
 def test_choch_fizzle_reclaim_candles_must_be_positive() -> None:
     with pytest.raises(ValueError, match="choch_fizzle_reclaim_candles must be at least 1"):
         InternalStructureDetector(choch_fizzle_reclaim_candles=0)
+
+
+def test_choch_fizzle_reclaim_origin_buffer_must_be_non_negative() -> None:
+    with pytest.raises(
+        ValueError,
+        match="choch_fizzle_reclaim_origin_buffer_atr must be non-negative",
+    ):
+        InternalStructureDetector(choch_fizzle_reclaim_origin_buffer_atr=-1.0)
 
 
 def test_final_trend_exposes_state_machine_trend() -> None:

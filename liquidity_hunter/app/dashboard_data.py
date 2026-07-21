@@ -418,6 +418,18 @@ _CHOCH_CONFIRMED_TREND_PERSISTENCE: int | None = 4
 # never touching the state machine.)
 _CHOCH_FIZZLE_RECLAIM_CANDLES: int | None = 30
 
+# Depth gate for the fast-fizzle marker
+# (`InternalStructureDetector.choch_fizzle_reclaim_origin_buffer_atr`).
+# Without it, the fizzle fires on a sustained close back past the level the
+# CHoCH *broke* -- but a retest of that broken level is a normal, common
+# pullback into the counter-zone, so the bare-level rule over-fires (e.g. a
+# couple of ZEC/BTC M5 closes a hair above the broken lower-high). With it,
+# the reclaim must instead recover the leg's *origin* (the far extreme the
+# reversal launched from) plus N x the series' mean true-range% -- so only a
+# near-full retracement of the whole move, not a routine retest, marks the
+# CHoCH fizzled. The marker stays additive/provisional either way.
+_CHOCH_FIZZLE_RECLAIM_ORIGIN_BUFFER_ATR: float | None = 1.0
+
 # Pending-CHoCH invalidation at the broken level, structural references too
 # (`InternalStructureDetector.choch_pending_fail_at_broken_level` +
 # `choch_pending_fail_persistence_candles`): the pending half of the
@@ -1474,6 +1486,7 @@ def _build_internal_detector(
         # reclaimed. A later reclaim is genuine follow-through (leg-origin exit
         # governs). See _CHOCH_FIZZLE_RECLAIM_CANDLES.
         choch_fizzle_reclaim_candles=_CHOCH_FIZZLE_RECLAIM_CANDLES,
+        choch_fizzle_reclaim_origin_buffer_atr=_CHOCH_FIZZLE_RECLAIM_ORIGIN_BUFFER_ATR,
         # A failed-CHoCH flip arms no origin, so the fallback suppression above
         # lapses at the failure -- keep the cold-start fallback off for a
         # window so a bounce can't immediately re-flip the trend (the BTC H1

@@ -1528,7 +1528,11 @@ state in brief:
   relentless one-way move that never forms a swing pivot cannot leave a
   long-since-invalidated CHoCH holding the wrong trend at the live edge),
   shallow-pullback promotion, close-confirmed structural floor, provisional
-  live-edge BOS/CHoCH marks, fast-fizzle marker, failed-CHoCH whipsaw fixes,
+  live-edge BOS/CHoCH marks, fast-fizzle marker (with the origin-buffer gate
+  `choch_fizzle_reclaim_origin_buffer_atr` = 1.0: the fizzle reclaim must
+  recover the leg *origin* ± N×mean-TR%, not merely retest the broken level —
+  a routine pullback into the counter-zone no longer paints a `CHoCH✕`; the
+  ZEC H1 / BTC M5 over-fire), failed-CHoCH whipsaw fixes,
   displacement release, weak-ref failure at the broken level, staircase
   rollback on a discarded phantom advance, displacement-success
   CHoCH-origin retirement (an impulsive reversal that emitted no BOS is not

@@ -1249,6 +1249,15 @@ def test_run_internal_structure_drops_eth_1h_resumed_fizzle(
     # than the pending-fail persistence, so the composition drop it exercises
     # here needs the flag off to stay reproducible on this fixture.
     monkeypatch.setattr(dashboard_data, "_CHOCH_PENDING_FAIL_AT_BROKEN_LEVEL", False)
+    # The origin-buffer gate (`choch_fizzle_reclaim_origin_buffer_atr`) would
+    # otherwise suppress this fizzle at the source -- the 1583 reclaim only
+    # half-retraces the rally (down to ~1556, the leg launched from ~1510) -- but
+    # this test exercises the *composition* drop (`_drop_resumed_fizzle_markers`),
+    # which needs a raw marker to exist. Disable the gate so the raw detector
+    # still emits it (production catches this window via the real pending-fail).
+    monkeypatch.setattr(
+        dashboard_data, "_CHOCH_FIZZLE_RECLAIM_ORIGIN_BUFFER_ATR", None
+    )
     candles = _load_eth_1h_fizzle_candles()
     provider = _FuturesLimitFakeProvider({TimeFrame.H1: candles})
 
@@ -1764,10 +1773,13 @@ def test_sol_m15_resumed_fizzle_cancelled_by_new_extreme() -> None:
     assert run.trend is MarketDirection.BEARISH
 
 
-def test_sol_m15_fizzle_marker_still_shows_before_resumption() -> None:
-    # Truncated right after the reclaim (before the crash): the marker is
-    # honest live-edge information and still shows; the resumption close two
-    # hours later is what repaints it away (see the batch test above).
+def test_sol_m15_shallow_reclaim_does_not_fizzle_at_live_edge() -> None:
+    # Truncated right after the reclaim (before the crash). The reclaim only
+    # tags the broken level (77.21 -> ~77.42, +0.27%), nowhere near recovering
+    # the leg's origin (~78-79). Under the origin-buffer gate
+    # (`choch_fizzle_reclaim_origin_buffer_atr`) a retest of the broken level is
+    # a routine pullback into the counter-zone, not a fizzle, so no marker fires
+    # even at the live edge -- the bearish CHoCH stands.
     candles = [
         c
         for c in _load_sol_m15_fizzle_cancel_candles()
@@ -1777,11 +1789,9 @@ def test_sol_m15_fizzle_marker_still_shows_before_resumption() -> None:
 
     run = _run_internal_structure(provider, "SOLUSDT", TimeFrame.M15, 1200, False)
 
-    assert any(
+    assert not any(
         e.event is StructureEvent.CHOCH_FAILED
-        and e.provisional
-        and e.direction is MarketDirection.BEARISH
-        and e.timestamp == datetime(2026, 7, 16, 5, 30, tzinfo=UTC)
+        and e.timestamp > datetime(2026, 7, 16, tzinfo=UTC)
         for e in run.events
     )
     assert run.trend is MarketDirection.BEARISH

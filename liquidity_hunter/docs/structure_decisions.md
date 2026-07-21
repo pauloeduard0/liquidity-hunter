@@ -2090,3 +2090,58 @@ construction (ranges only stage additive/provisional events).
 16% boxes into three ≤14% ranges; `test_sol_4h_range_breakouts_stage_additive_events`
 re-pinned (staged continuation BOS now at 03-27 08:00, ref 85.0). ETH H1 lock
 test unchanged.
+
+## 2026-07-20 — Fizzle marker origin-buffer gate (`choch_fizzle_reclaim_origin_buffer_atr`)
+
+The **fast-fizzle marker** (above) fired on a sustained `persistence_candles`
+close-reclaim of the level the CHoCH *broke* (`standing_choch_ref`). But a
+retest of the broken level is a **normal, common** pullback into the
+counter-zone, not a failed reversal — so at base persistence 2 the bare-level
+rule over-fires: a couple of closes a hair past the broken level paint a
+provisional `CHoCH✕` on a move that is merely retracing. Observed live
+2026-07-20 on **ZEC H1** (bearish CHoCH broke 549.51, reclaim closed 556.07 /
+550.56 — +0.19% over the level — while the leg launched from ~568) and **BTC
+M5** ("a few candles closing above but very close to the CHoCH"). The very
+**first fixture** that motivated the marker, SOL M15 80.72, is itself this
+pattern: the reclaim tagged 80.72 but never cleared the 82.3 leg origin.
+
+**Gate** (`InternalStructureDetector.choch_fizzle_reclaim_origin_buffer_atr`,
+constructor default `None` = off; wired **`1.0`** in `load_dashboard_data` via
+`_CHOCH_FIZZLE_RECLAIM_ORIGIN_BUFFER_ATR`). When set, the fizzle reclaim is
+measured against the leg's **origin** — the far extreme the reversal launched
+from, captured into `standing_choch_origin` at each CHoCH emission
+(`bear_choch_origin` for a bearish CHoCH, `bull_choch_origin` for a bullish
+one, the same leg-extreme the `choch_origin_leg_extreme` machinery computes) —
+offset by `N × mean_tr_pct` (the series' mean true-range%, the same
+volatility unit the other `_atr` knobs use). A bearish CHoCH fizzles only on a
+sustained close above `origin × (1 + buffer)`; a bullish one below
+`origin × (1 - buffer)`. So only price recovering essentially the **whole
+move** — not a routine retest of the broken level — marks the CHoCH fizzled.
+Falls back to the broken level (prior behavior) when no origin is known
+(bootstrap) or the gate is off. This combines the two candidate fixes — a
+depth *buffer* and measuring at the *origin* — into one parameter.
+
+The marker stays **additive/provisional** exactly as before (the state-machine
+trend never flips; replay consumers skip it). Genuine reversals that truly fail
+are still caught in production by the separate
+`choch_pending_fail_at_broken_level` mechanism (a real sustained reclaim of the
+broken level emits a non-provisional `CHOCH_FAILED`) — untouched here — so this
+gate only trims the *additive live-edge clutter*, never a real structural
+failure. ETH 1H's 1583 reclaim (a half-retrace of a rally that launched from
+~1510, down only to ~1556) correctly no longer fizzles, and in production still
+fails via pending-fail.
+
+**Measurement** (BTC/ETH/SOL/ZEC × 5m/15m/1h/4h, limit=1200, live 2026-07-20):
+provisional fizzle markers **2 → 0** — the only two on the board were the ZEC
+H1 and BTC M5 over-fires above; buffer 1.0 removes both, nothing else affected.
+
+**Test impact**: `test_sol_m15_fizzle_marker_still_shows_before_resumption`
+rewritten as `test_sol_m15_shallow_reclaim_does_not_fizzle_at_live_edge` (the
+premise inverts — the shallow reclaim no longer marks even at the live edge);
+`test_run_internal_structure_drops_eth_1h_resumed_fizzle` monkeypatches the
+gate off so its raw fixture still emits a marker for the
+`_drop_resumed_fizzle_markers` composition pass to drop (production catches
+that window via pending-fail); new
+`test_choch_fizzle_origin_buffer_suppresses_shallow_reclaim` (SOL fixture: gate
+off fires, gate on suppresses, standing CHoCH untouched) and a non-negative
+validation test. The detector-level base tests (gate off) are unchanged.
