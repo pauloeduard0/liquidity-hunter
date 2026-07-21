@@ -349,6 +349,21 @@ export interface LiquidityHuntState {
   description: string
 }
 
+/** A concluded counter-trend hunt from earlier in the window (history, not the
+ *  live snapshot). The larger trend resumed at `end_timestamp`, consuming the
+ *  counter-trend entrants that opened the leg at `start_timestamp`. */
+export interface LiquidityHuntEpisode {
+  hunted_side: RetailPositioning
+  correction_direction: MarketDirection
+  start_timestamp: string
+  end_timestamp: string
+  /** Weighted capture evidence that closed the hunt (sweep / VSA / OI flush /
+   *  zone / delta). A hunt is recorded only at/above the capture threshold. */
+  capture_score: number
+  capture_sources: string[]
+  description: string
+}
+
 export type ConsolidationStatus = 'active' | 'resolved'
 
 /** A confirmed lateral consolidation: a stretch with no structure advance where
@@ -431,6 +446,7 @@ export interface DashboardData {
   narrative: MarketNarrative | null
   oi_analysis: OIAnalysis | null
   liquidity_hunt: LiquidityHuntState | null
+  liquidity_hunt_history: LiquidityHuntEpisode[]
   consolidation_ranges: ConsolidationRange[]
   structure_confluence: StructureConfluence[]
 }

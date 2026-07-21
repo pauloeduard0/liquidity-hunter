@@ -24,6 +24,8 @@ from liquidity_hunter.core.domain import (
     StructureEvent,
     StructureScope,
     TimeFrame,
+    VolumeSpreadSignal,
+    VSAPattern,
 )
 from liquidity_hunter.psychology import RetailBiasEstimate
 
@@ -518,3 +520,187 @@ def test_atr_proximity_falls_back_to_fixed_pct_on_short_series() -> None:
     )
     state = LiquidityHuntEngine(proximity_atr=2.0).build(data)
     assert state.targets_total == 0
+
+
+# ----------------------------------------------------------------------
+# build_history — concluded past hunts
+# ----------------------------------------------------------------------
+
+
+def test_history_empty_when_htf_not_directional() -> None:
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.NEUTRAL,
+        internal_structure_events=[_bearish_choch(5)],
+    )
+    assert LiquidityHuntEngine().build_history(data) == []
+
+
+def _candles(n: int) -> list[Candle]:
+    return [_candle(i) for i in range(n)]
+
+
+def test_history_episode_ends_at_the_grab_not_the_reflip() -> None:
+    # Bullish HTF. A bearish CHoCH opens a counter-trend leg; a capture-side
+    # (bullish) up-sweep + a co-located VSA up-thrust grab the shorts
+    # (confluence, score 6); a bullish CHoCH resumes the trend much later. The
+    # hunt must end at the grab, not drag to the re-flip.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        volume_spread_signals=[_vsa(8, VSAPattern.UP_THRUST, MarketDirection.BEARISH)],
+        candles=_candles(24),
+    )
+    history = LiquidityHuntEngine().build_history(data)
+    assert len(history) == 1
+    episode = history[0]
+    assert episode.hunted_side == RetailPositioning.SHORT
+    assert episode.correction_direction == MarketDirection.BEARISH
+    assert episode.start_timestamp == events[0].timestamp
+    assert episode.end_timestamp == events[1].timestamp  # the sweep, not the re-flip
+
+
+def test_history_multiple_grabs_in_one_leg_are_separate_hunts() -> None:
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+        _event(14, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        volume_spread_signals=[
+            _vsa(8, VSAPattern.UP_THRUST, MarketDirection.BEARISH),
+            _vsa(14, VSAPattern.UP_THRUST, MarketDirection.BEARISH),
+        ],
+        candles=_candles(24),
+    )
+    history = LiquidityHuntEngine().build_history(data)
+    assert [(e.start_timestamp, e.end_timestamp) for e in history] == [
+        (events[0].timestamp, events[1].timestamp),
+        (events[1].timestamp, events[2].timestamp),
+    ]
+
+
+def test_history_skips_counter_trend_leg_without_capture() -> None:
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(12, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        candles=_candles(16),
+    )
+    assert LiquidityHuntEngine().build_history(data) == []
+
+
+def _vsa(i: int, pattern: VSAPattern, direction: MarketDirection) -> VolumeSpreadSignal:
+    return VolumeSpreadSignal(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=T0 + H1 * i,
+        pattern=pattern,
+        direction=direction,
+        price_level=100.0,
+        spread_ratio=2.0,
+        close_position=0.2,
+        volume_ratio=2.5,
+        volume_delta=50.0,
+        confidence=80.0,
+        description="VSA.",
+    )
+
+
+def test_history_lone_strong_signal_is_below_threshold() -> None:
+    # A single sweep (weight 3) no longer reaches the capture threshold (5):
+    # a real turning point needs confluence.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        candles=_candles(24),
+    )
+    assert LiquidityHuntEngine().build_history(data) == []
+
+
+def test_history_confluence_closes_hunt_with_score_and_sources() -> None:
+    # Sweep (3) + VSA up-thrust (3) co-located = score 6 >= threshold.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        volume_spread_signals=[_vsa(8, VSAPattern.UP_THRUST, MarketDirection.BEARISH)],
+        candles=_candles(24),
+    )
+    history = LiquidityHuntEngine().build_history(data)
+    assert len(history) == 1
+    assert history[0].capture_score == 6.0
+    assert history[0].capture_sources == ["sweep", "vsa"]
+
+
+def test_history_sweep_plus_zone_is_below_threshold() -> None:
+    # A sweep (3) grabbing an equal-highs pool (2) = score 5, below the
+    # two-strong-signal threshold (6): still not a captured turning point.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        liquidity_zones=[_eqh_zone(103.0, mitigated_at=T0 + H1 * 8)],
+        candles=_candles(24),
+    )
+    assert LiquidityHuntEngine().build_history(data) == []
+
+
+def test_history_wrong_side_vsa_does_not_count() -> None:
+    # For hunted shorts the grab rejects the high (UP_THRUST/BUYING_CLIMAX). A
+    # DOWN_THRUST (low-side rejection) is not a shorts-capture, so a sweep +
+    # down-thrust stays at 3 (below threshold).
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        volume_spread_signals=[_vsa(8, VSAPattern.DOWN_THRUST, MarketDirection.BULLISH)],
+        candles=_candles(24),
+    )
+    assert LiquidityHuntEngine().build_history(data) == []
+
+
+def test_history_includes_past_grab_of_still_open_leg() -> None:
+    # A grab already happened inside the current (open) counter-trend leg: it is
+    # a completed hunt; only the tail after it is the live state.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        volume_spread_signals=[_vsa(8, VSAPattern.UP_THRUST, MarketDirection.BEARISH)],
+        candles=_candles(16),
+    )
+    history = LiquidityHuntEngine().build_history(data)
+    assert len(history) == 1
+    assert history[0].start_timestamp == events[0].timestamp
+    assert history[0].end_timestamp == events[1].timestamp

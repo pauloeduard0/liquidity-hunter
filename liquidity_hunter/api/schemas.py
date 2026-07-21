@@ -7,13 +7,14 @@ it serializable to JSON. The nested domain types (`Candle`, `LiquidityZone`,
 `DomainModel`s and serialize as-is.
 """
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from liquidity_hunter.core.domain import (
     Candle,
     ConsolidationRange,
     LeverageLiquidationMap,
     LiquidityHeatmap,
+    LiquidityHuntEpisode,
     LiquidityHuntState,
     LiquidityZone,
     ManipulationCycle,
@@ -56,5 +57,6 @@ class DashboardDataResponse(BaseModel):
     narrative: MarketNarrative | None = None
     oi_analysis: OIAnalysis | None = None
     liquidity_hunt: LiquidityHuntState | None = None
+    liquidity_hunt_history: list[LiquidityHuntEpisode] = Field(default_factory=list)
     consolidation_ranges: list[ConsolidationRange] = []
     structure_confluence: list[StructureConfluence] = []

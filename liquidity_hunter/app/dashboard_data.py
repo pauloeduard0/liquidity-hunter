@@ -17,6 +17,7 @@ from liquidity_hunter.core.domain import (
     FundingRate,
     LeverageLiquidationMap,
     LiquidityHeatmap,
+    LiquidityHuntEpisode,
     LiquidityHuntState,
     LiquidityZone,
     LongShortRatio,
@@ -751,6 +752,10 @@ class DashboardData:
     narrative: MarketNarrative | None = None
     oi_analysis: OIAnalysis | None = None
     liquidity_hunt: LiquidityHuntState | None = None
+    # Concluded counter-trend hunts earlier in the visible window (the live
+    # `liquidity_hunt` covers only the current leg). Lets the chart mark where
+    # prior hunts completed.
+    liquidity_hunt_history: list[LiquidityHuntEpisode] = field(default_factory=list)
     # The anchor timeframe `higher_timeframe_direction` was measured on (the
     # `_HIGHER_TIMEFRAME_MAP` pair; None for the top timeframe, whose direction
     # falls back to the current series' own internal trend). Exposed so the
@@ -2063,12 +2068,15 @@ def load_dashboard_data(
     # These synthesizers read the fully assembled snapshot (they cross-reference
     # outputs from every layer), so they run last, at the composition point.
     narrative = NarrativeEngine().build(data) if compute_narrative else None
-    liquidity_hunt = LiquidityHuntEngine(proximity_atr=_HUNT_PROXIMITY_ATR).build(data)
+    hunt_engine = LiquidityHuntEngine(proximity_atr=_HUNT_PROXIMITY_ATR)
+    liquidity_hunt = hunt_engine.build(data)
+    liquidity_hunt_history = hunt_engine.build_history(data)
     structure_confluence = StructureConfluenceEngine().build(data)
     return replace(
         data,
         narrative=narrative,
         liquidity_hunt=liquidity_hunt,
+        liquidity_hunt_history=liquidity_hunt_history,
         structure_confluence=structure_confluence,
     )
 

@@ -19,6 +19,7 @@ it states who the liquidity is and when it was captured, never what to do.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from statistics import fmean
 from typing import TYPE_CHECKING
 
@@ -32,8 +33,10 @@ from liquidity_hunter.core.domain.enums import (
     OIRegime,
     RetailPositioning,
     StructureEvent,
+    VSAPattern,
 )
 from liquidity_hunter.core.domain.liquidity_hunt import (
+    LiquidityHuntEpisode,
     LiquidityHuntState,
     LiquidityHuntTarget,
 )
@@ -51,6 +54,41 @@ if TYPE_CHECKING:
 # pool, so they are clustered within this fraction of price (mirroring the
 # estimator's own entry clustering) and the strongest band represents each.
 _BAND_CLUSTER_PCT = 0.004
+
+# Capture-side grabs closer than this many candles are one sweep cluster, so a
+# single liquidity grab closes one hunt (not several near-identical ones).
+_GRAB_MERGE_CANDLES = 3
+
+# Weighted capture composition (confirmed with the user 2026-07-20): a grab
+# closes a hunt when co-located evidence reaches _CAPTURE_THRESHOLD. Flat
+# weights (not confidence-scaled); VSA is already gated by its own analyzer, so
+# its mere presence on the grab side is the signal.
+#
+# Threshold 6 (raised 3 -> 5 -> 6 on 2026-07-20): a lone strong signal (a
+# single sweep / VSA / OI flush = 3) is not a capture — internal sweeps are
+# frequent, so lone-signal grabs over-fired; a strong signal plus only the pool
+# it swept (3 + zone 2 = 5) was still too many. A real turning point requires
+# *two strong signals* in confluence (sweep + VSA, sweep + OI flush, or
+# VSA + OI = 6). Tunable — the user is visually backtesting these.
+_CAPTURE_THRESHOLD = 6.0
+_WEIGHT_SWEEP = 3.0
+_WEIGHT_VSA = 3.0
+_WEIGHT_OI_FLUSH = 3.0
+_WEIGHT_ZONE = 2.0
+_WEIGHT_DELTA_MODIFIER = 1.0
+# Net taker aggression must exceed this fraction of the candle's volume to count
+# as a directional confirmation (|2*taker_buy - volume| / volume).
+_DELTA_MODIFIER_MIN_RATIO = 0.1
+
+# VSA capture patterns mapped by the *grab side* (the wick the sweep rejects),
+# which is the mirror of VSA's own implied `direction`. A hunted-short capture
+# is an up-sweep rejecting the high; a hunted-long capture rejects the low.
+_VSA_SHORT_CAPTURE: frozenset[VSAPattern] = frozenset(
+    {VSAPattern.UP_THRUST, VSAPattern.BUYING_CLIMAX}
+)
+_VSA_LONG_CAPTURE: frozenset[VSAPattern] = frozenset(
+    {VSAPattern.DOWN_THRUST, VSAPattern.SELLING_CLIMAX}
+)
 
 
 class LiquidityHuntEngine:
@@ -177,6 +215,247 @@ class LiquidityHuntEngine:
                 last_flush=last_flush,
             ),
         )
+
+    # ------------------------------------------------------------------
+    # Historical (concluded) hunts
+    # ------------------------------------------------------------------
+
+    def build_history(self, data: DashboardData) -> list[LiquidityHuntEpisode]:
+        """Reconstruct every *past* counter-trend hunt, anchored to its grab.
+
+        A hunt is the **near-term** move that clears the counter-trend
+        entrants' liquidity so price can flow on: within a counter-trend leg
+        (structure opposed the higher-timeframe trend), each capture-side
+        liquidity grab — an up-sweep of the shorts' stops for hunted shorts,
+        a down-sweep for hunted longs (plus hunted-side equal-level zones
+        swept) — **closes one hunt at that grab**. The episode therefore runs
+        from the leg flip (or the previous grab) to the grab itself, not all
+        the way to the eventual trend reversal, so a single leg can hold
+        several short consecutive hunts (the SOL "captured, then a new
+        shorts-hunted opens" case). Grabs inside the *current* open leg are
+        included as long as they already happened; the still-open tail after
+        the last grab is the live :class:`LiquidityHuntState`, not history.
+        """
+        htf = data.higher_timeframe_direction
+        directional = (MarketDirection.BULLISH, MarketDirection.BEARISH)
+        if htf not in directional:
+            return []
+
+        segments = self._trend_segments(data.internal_structure_events)
+        now = data.candles[-1].timestamp if data.candles else None
+        merge_gap = self._grab_merge_gap(data.candles)
+
+        episodes: list[LiquidityHuntEpisode] = []
+        for idx, (direction, start) in enumerate(segments):
+            # Leg spans until the next flip, or the live edge for the open leg.
+            end = segments[idx + 1][1] if idx + 1 < len(segments) else now
+            if end is None:
+                continue
+            if direction is htf or direction not in directional:
+                continue  # aligned leg, not a hunt
+            hunted_short = htf is MarketDirection.BULLISH
+            hunted_side = (
+                RetailPositioning.SHORT if hunted_short else RetailPositioning.LONG
+            )
+            capture_direction = (
+                MarketDirection.BULLISH if hunted_short else MarketDirection.BEARISH
+            )
+            grabs = self._capture_grabs(
+                data, hunted_short, capture_direction, start, end, merge_gap
+            )
+            side_word = "shorts" if hunted_short else "longs"
+            sub_start = start
+            for grab_ts, score, sources in grabs:
+                episodes.append(
+                    LiquidityHuntEpisode(
+                        hunted_side=hunted_side,
+                        correction_direction=direction,
+                        start_timestamp=sub_start,
+                        end_timestamp=grab_ts,
+                        capture_score=score,
+                        capture_sources=sources,
+                        description=(
+                            f"Completed hunt: a {direction.value} move against "
+                            f"the {htf.value} higher-timeframe trend swept "
+                            f"{side_word} liquidity "
+                            f"({', '.join(sources)}; score {score:.0f}), "
+                            f"freeing the near-term move."
+                        ),
+                    )
+                )
+                sub_start = grab_ts
+        return episodes
+
+    @staticmethod
+    def _trend_segments(
+        events: list[MarketStructure],
+    ) -> list[tuple[MarketDirection, datetime]]:
+        """Segment the event replay into (trend direction, flip timestamp) legs.
+
+        Same replay rules as :meth:`_current_trend` (BOS/CHoCH set the trend,
+        ``CHOCH_FAILED`` reverts it, provisional/descriptive events ignored),
+        but returns one entry per trend leg instead of only the final state.
+        """
+        segments: list[tuple[MarketDirection, datetime]] = []
+        trend: MarketDirection | None = None
+        for event in sorted(events, key=lambda e: e.timestamp):
+            if event.provisional:
+                continue
+            if event.event in (
+                StructureEvent.BREAK_OF_STRUCTURE,
+                StructureEvent.CHANGE_OF_CHARACTER,
+            ):
+                new_trend = event.direction
+            elif event.event is StructureEvent.CHOCH_FAILED:
+                new_trend = (
+                    MarketDirection.BEARISH
+                    if event.direction is MarketDirection.BULLISH
+                    else MarketDirection.BULLISH
+                )
+            else:
+                continue
+            if new_trend is not trend:
+                segments.append((new_trend, event.timestamp))
+            trend = new_trend
+        return segments
+
+    def _capture_grabs(
+        self,
+        data: DashboardData,
+        hunted_short: bool,
+        capture_direction: MarketDirection,
+        start: datetime,
+        end: datetime,
+        merge_gap: timedelta | None,
+    ) -> list[tuple[datetime, float, list[str]]]:
+        """Weighted capture grabs inside ``[start, end]`` as (ts, score, sources).
+
+        Each capture-side signal — a ``LIQUIDITY_SWEEP`` (weight
+        ``_WEIGHT_SWEEP``), a VSA climax/thrust on the grab side
+        (``_WEIGHT_VSA``), an OI ``FLUSH`` (``_WEIGHT_OI_FLUSH``), or a
+        hunted-side equal-level zone swept (``_WEIGHT_ZONE``) — is collected
+        with its timestamp. Signals within ``merge_gap`` are one cluster (a
+        single grab moment); a source type counts once per cluster, and a
+        volume-delta confirmation in the capture direction adds
+        ``_WEIGHT_DELTA_MODIFIER``. A cluster whose score reaches
+        ``_CAPTURE_THRESHOLD`` is a grab, anchored at its first signal (the
+        hunt ends at the first touch). Below threshold, no grab.
+        """
+        signals = self._collect_capture_signals(
+            data, hunted_short, capture_direction, start, end
+        )
+        signals.sort(key=lambda s: s[0])
+
+        clusters: list[list[tuple[datetime, float, str]]] = []
+        for signal in signals:
+            if (
+                clusters
+                and merge_gap is not None
+                and signal[0] - clusters[-1][-1][0] <= merge_gap
+            ):
+                clusters[-1].append(signal)
+            else:
+                clusters.append([signal])
+
+        grabs: list[tuple[datetime, float, list[str]]] = []
+        for cluster in clusters:
+            # A source type counts once per cluster (two sweeps close together
+            # are still one grab, not double weight).
+            by_source: dict[str, float] = {}
+            for _ts, weight, source in cluster:
+                by_source[source] = max(by_source.get(source, 0.0), weight)
+            first_ts, last_ts = cluster[0][0], cluster[-1][0]
+            if self._delta_confirms(data, capture_direction, first_ts, last_ts):
+                by_source["delta"] = _WEIGHT_DELTA_MODIFIER
+            score = sum(by_source.values())
+            if score >= _CAPTURE_THRESHOLD:
+                grabs.append((first_ts, score, sorted(by_source)))
+        return grabs
+
+    def _collect_capture_signals(
+        self,
+        data: DashboardData,
+        hunted_short: bool,
+        capture_direction: MarketDirection,
+        start: datetime,
+        end: datetime,
+    ) -> list[tuple[datetime, float, str]]:
+        """All weighted capture-side signals inside ``[start, end]``."""
+        signals: list[tuple[datetime, float, str]] = []
+        for event in data.internal_structure_events:
+            if (
+                event.event is StructureEvent.LIQUIDITY_SWEEP
+                and event.direction is capture_direction
+                and start <= event.timestamp <= end
+            ):
+                signals.append((event.timestamp, _WEIGHT_SWEEP, "sweep"))
+
+        zone_type = (
+            LiquidityZoneType.EQUAL_HIGHS
+            if hunted_short
+            else LiquidityZoneType.EQUAL_LOWS
+        )
+        for zone in data.liquidity_zones:
+            if (
+                zone.zone_type is zone_type
+                and zone.is_mitigated
+                and zone.invalidated_at is not None
+                and start <= zone.invalidated_at <= end
+            ):
+                signals.append((zone.invalidated_at, _WEIGHT_ZONE, "zone"))
+
+        # VSA maps by the *grab side*, not by VSA's implied direction (which is
+        # the mirror): a hunted-short capture is an up-sweep rejecting the high
+        # (UP_THRUST / BUYING_CLIMAX), a hunted-long capture rejects the low.
+        vsa_patterns = _VSA_SHORT_CAPTURE if hunted_short else _VSA_LONG_CAPTURE
+        for vsa in data.volume_spread_signals:
+            if vsa.pattern in vsa_patterns and start <= vsa.timestamp <= end:
+                signals.append((vsa.timestamp, _WEIGHT_VSA, "vsa"))
+
+        if data.oi_analysis is not None:
+            for qualified in data.oi_analysis.qualified_events:
+                if (
+                    qualified.participation is OIParticipation.FLUSH
+                    and qualified.direction is capture_direction
+                    and start <= qualified.event_timestamp <= end
+                ):
+                    signals.append(
+                        (qualified.event_timestamp, _WEIGHT_OI_FLUSH, "oi_flush")
+                    )
+        return signals
+
+    @staticmethod
+    def _delta_confirms(
+        data: DashboardData,
+        capture_direction: MarketDirection,
+        first_ts: datetime,
+        last_ts: datetime,
+    ) -> bool:
+        """Whether a candle in the cluster shows net taker aggression in the
+        capture direction (volume delta beyond ``_DELTA_MODIFIER_MIN_RATIO`` of
+        its volume) — confirming *who* won the grab candle."""
+        want_positive = capture_direction is MarketDirection.BULLISH
+        for candle in data.candles:
+            if candle.timestamp < first_ts or candle.timestamp > last_ts:
+                continue
+            if candle.volume <= 0:
+                continue
+            delta = 2 * candle.taker_buy_volume - candle.volume
+            if abs(delta) / candle.volume < _DELTA_MODIFIER_MIN_RATIO:
+                continue
+            if (delta > 0) is want_positive:
+                return True
+        return False
+
+    @staticmethod
+    def _grab_merge_gap(candles: list[Candle]) -> timedelta | None:
+        """A few candles' worth of time — grabs within it are one sweep cluster."""
+        if len(candles) < 2:
+            return None
+        spacing = candles[-1].timestamp - candles[-2].timestamp
+        if spacing <= timedelta(0):
+            return None
+        return spacing * _GRAB_MERGE_CANDLES
 
     # ------------------------------------------------------------------
     # Current-timeframe structural trend

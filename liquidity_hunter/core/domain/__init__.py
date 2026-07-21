@@ -43,6 +43,7 @@ from liquidity_hunter.core.domain.liquidation import (
 )
 from liquidity_hunter.core.domain.liquidity_heatmap import HeatmapBucket, LiquidityHeatmap
 from liquidity_hunter.core.domain.liquidity_hunt import (
+    LiquidityHuntEpisode,
     LiquidityHuntState,
     LiquidityHuntTarget,
 )
@@ -79,6 +80,7 @@ __all__ = [
     "LeverageLiquidationMap",
     "LiquidationBand",
     "LiquidityHeatmap",
+    "LiquidityHuntEpisode",
     "LiquidityHuntPhase",
     "LiquidityHuntState",
     "LiquidityHuntTarget",

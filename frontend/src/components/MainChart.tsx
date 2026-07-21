@@ -1443,12 +1443,43 @@ export function MainChart({
     // once the mapped pools were captured and OI stopped unwinding.
     const hunt = data.liquidity_hunt
     const huntWindows: HuntWindow[] = []
+    const history = data.liquidity_hunt_history ?? []
+    if (showHuntWindow) {
+      // Concluded hunts earlier in the window: dim green shaded bands with a ✓,
+      // each ending at the liquidity grab that closed it (short, near-term).
+      for (const episode of history) {
+        const sideWord = episode.hunted_side === 'short' ? 'shorts' : 'longs'
+        // Source initials + score, so the visual backtest shows what closed the
+        // hunt (e.g. "✓ shorts hunted [S+V 6]" = sweep + VSA).
+        const tag = episode.capture_sources
+          .map((s) => s[0]?.toUpperCase() ?? '')
+          .join('+')
+        huntWindows.push({
+          x0: toChartTime(episode.start_timestamp),
+          x1: toChartTime(episode.end_timestamp),
+          color: '#26a69a',
+          fillColor: '#26a69a0d',
+          label: `✓ ${sideWord} hunted [${tag} ${episode.capture_score.toFixed(0)}]`,
+        })
+      }
+    }
     if (showHuntWindow && hunt && hunt.phase !== 'none' && hunt.counter_structure_timestamp) {
       const captured = hunt.phase === 'captured'
       const color = captured ? '#26a69a' : '#ff9800'
       const sideWord = hunt.hunted_side === 'short' ? 'shorts' : 'longs'
+      // The live window is the *pending* grab only: start it at the last grab
+      // already captured in this leg (the latest history episode ending at or
+      // after the flip), not the original flip — so it stays near-term and
+      // doesn't overlap the green completed hunts.
+      const flip = hunt.counter_structure_timestamp
+      const lastGrab = history
+        .filter((e) => e.end_timestamp >= flip)
+        .reduce<string | null>(
+          (acc, e) => (acc === null || e.end_timestamp > acc ? e.end_timestamp : acc),
+          null,
+        )
       huntWindows.push({
-        x0: toChartTime(hunt.counter_structure_timestamp),
+        x0: toChartTime(lastGrab ?? flip),
         x1:
           captured && hunt.captured_at
             ? toChartTime(hunt.captured_at)

@@ -37,6 +37,31 @@ class LiquidityHuntTarget(DomainModel):
     captured_at: datetime | None = None
 
 
+class LiquidityHuntEpisode(DomainModel):
+    """A *concluded* counter-trend hunt from earlier in the visible window.
+
+    Where :class:`LiquidityHuntState` describes only the live snapshot, an
+    episode is a past counter-trend leg (structure ran against the
+    higher-timeframe trend) that has since resolved — the larger trend resumed
+    and consumed the counter-trend entrants. ``start_timestamp`` is the
+    counter-trend flip that opened the leg; ``end_timestamp`` is the event that
+    realigned structure with the higher timeframe (the capture). Descriptive
+    history only, so the chart can mark where prior hunts completed.
+    """
+
+    hunted_side: RetailPositioning
+    correction_direction: MarketDirection
+    start_timestamp: datetime
+    end_timestamp: datetime
+    # Weighted evidence that closed the hunt at ``end_timestamp`` (sweep / VSA
+    # climax-thrust / OI flush / zone mitigation, plus a volume-delta modifier);
+    # ``capture_sources`` names the contributing components. A hunt is recorded
+    # only when the score reaches the capture threshold.
+    capture_score: float = Field(default=0.0, ge=0.0)
+    capture_sources: list[str] = Field(default_factory=list)
+    description: str
+
+
 class LiquidityHuntState(DomainModel):
     """Who is the resting liquidity right now, and how far its capture went.
 
