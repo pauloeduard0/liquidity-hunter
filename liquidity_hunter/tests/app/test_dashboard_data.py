@@ -2221,6 +2221,70 @@ def test_run_internal_structure_ena_30m_launch_bos_lost_without_rescue(
     ]
 
 
+# --- First BOS references the leg's true swept fundo (_BOS_FIRST_FLOOR_LEG_EXTREME) -
+#
+# ETHBTC 1D. Bearish CHoCH confirms 2025-10-20 against the 0.036064 HL (formed
+# 08-20). The reversal's real fundo is 0.03214 (10-10, swept earlier as price
+# dove and retraced), but the lookback-delayed confirming pivot is only the
+# shallow 0.0348 higher-low (10-22). `bos_first_floor_leg_extreme` seeds the
+# first BOS of the leg with the deeper `pending_low` (0.03214), so it references
+# that swept fundo -- not the shallow confirming pivot -- and confirms on the
+# (late) close through it (2026-01-30). Off, the first BOS reports 0.0348.
+
+
+def _load_ethbtc_1d_candles() -> list[Candle]:
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "ethbtc_1d_2023_2026.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="ETHBTC",
+            timeframe=TimeFrame.D1,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=row[5],
+            taker_buy_volume=row[6],
+        )
+        for row in rows
+    ]
+
+
+def test_run_internal_structure_ethbtc_1d_first_bos_at_leg_fundo() -> None:
+    provider = _FuturesLimitFakeProvider({TimeFrame.D1: _load_ethbtc_1d_candles()})
+
+    run = _run_internal_structure(provider, "ETHBTC", TimeFrame.D1, 1200, False)
+
+    leg_start = datetime(2025, 10, 20, tzinfo=UTC)
+    leg_end = datetime(2026, 2, 15, tzinfo=UTC)
+    bos = [
+        e
+        for e in run.events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and not e.provisional
+        and leg_start < e.timestamp < leg_end
+    ]
+    # The first BOS of the leg references the swept fundo (0.03194, the 10-10 low
+    # in this spot fixture), not the shallow ~0.0348 confirming pivot, and is
+    # timed at its first close through that level (2026-01-31).
+    first = bos[0]
+    assert first.reference_price_level == pytest.approx(0.03194)
+    assert first.reference_timestamp == datetime(2025, 10, 10, tzinfo=UTC)
+    assert first.timestamp == datetime(2026, 1, 31, tzinfo=UTC)
+
+
 # --- Superseded-continuation BOS staging (_STAGE_SUPERSEDED_CONTINUATION_BOS) --
 #
 # NEARUSDT M15. A BOS only emits once a confirming opposite pullback pivot

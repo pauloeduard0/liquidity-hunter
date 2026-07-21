@@ -780,6 +780,7 @@ class InternalStructureDetector(MarketStructureDetector):
         emit_provisional_choch: bool = False,
         emit_provisional_choch_weak: bool = False,
         choch_origin_leg_extreme: bool = False,
+        bos_first_floor_leg_extreme: bool = False,
         choch_weak_ref_fail_at_broken_level: bool = False,
         choch_pending_fail_at_broken_level: bool = False,
         choch_pending_fail_persistence_candles: int | None = None,
@@ -901,6 +902,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._emit_provisional_choch = emit_provisional_choch
         self._emit_provisional_choch_weak = emit_provisional_choch_weak
         self._choch_origin_leg_extreme = choch_origin_leg_extreme
+        self._bos_first_floor_leg_extreme = bos_first_floor_leg_extreme
         self._choch_weak_ref_fail_at_broken_level = choch_weak_ref_fail_at_broken_level
         self._choch_pending_fail_at_broken_level = choch_pending_fail_at_broken_level
         self._choch_pending_fail_persistence_candles = (
@@ -2494,6 +2496,11 @@ class InternalStructureDetector(MarketStructureDetector):
                     # rather than the trailing `active_high` that ratchets down to a
                     # shallow lower-high during the pullback.
                     prev_bull_bos_extreme = price
+                    # Mirror of the bearish case (`bos_first_floor_leg_extreme`):
+                    # raise the seed to the leg's true topo -- the reversal may
+                    # have peaked at a higher-high pivot before the confirming one.
+                    if self._bos_first_floor_leg_extreme and pending_high is not None:
+                        prev_bull_bos_extreme = max(price, pending_high.price)
                     prev_bear_bos_extreme = None
                     # This bullish CHoCH ends the bearish leg; a bearish pending
                     # BOS whose floor already closed-broke is a real continuation
@@ -3498,7 +3505,16 @@ class InternalStructureDetector(MarketStructureDetector):
                     # close-break re-anchor, confirms only on a close below it --
                     # rather than the trailing `active_low` that ratchets up to a
                     # shallow higher-low during the pullback.
+                    # Under `bos_first_floor_leg_extreme`, deepen the seed to the
+                    # leg's true fundo: the reversal that confirmed the CHoCH may
+                    # have bottomed at a lower-low pivot *before* the (lookback-
+                    # delayed) confirming pivot -- that deeper swept low is the real
+                    # BOS zone (it is respected once the CHoCH confirms), not the
+                    # shallow confirming pivot. `pending_low` carries that
+                    # accumulated leg extreme.
                     prev_bear_bos_extreme = price
+                    if self._bos_first_floor_leg_extreme and pending_low is not None:
+                        prev_bear_bos_extreme = min(price, pending_low.price)
                     prev_bull_bos_extreme = None
                     # Mirror: this bearish CHoCH ends the bullish leg; stage a
                     # bullish pending BOS whose floor already closed-broke before

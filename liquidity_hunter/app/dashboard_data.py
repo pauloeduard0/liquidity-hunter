@@ -1557,6 +1557,16 @@ def _build_internal_detector(
         # limit=1200): CHOCH_FAILED drops ~33% (63 -> 42), converting whipsaw
         # CHoCH/fail pairs into sweeps or holding CHoCHs.
         choch_origin_leg_extreme=True,
+        # The first BOS of a leg references the reversal's *true* swept fundo/topo
+        # (the deepest low / highest high the confirmed CHoCH launched from, held
+        # in `pending_low`/`pending_high`), not the lookback-delayed confirming
+        # pivot which can be a shallow higher-low / lower-high. ETHBTC 1D 2025-10:
+        # CHoCH v confirmed on the 0.0348 pivot (10-22), but the reversal's real
+        # fundo was 0.03214 (10-10, swept earlier) -- the first BOS now references
+        # that and confirms on the (late) close through it. When no deeper pending
+        # extreme exists (e.g. the ENA 30m leg-launch lock, pending_low None), the
+        # seed is unchanged, so this only *deepens* a shallow confirming pivot.
+        bos_first_floor_leg_extreme=True,
         # A weak-referenced CHoCH also fails on a sustained close back through
         # the level it broke (its only reversal evidence), not just the far
         # leg origin -- the BTC D1 -30% crash with the trend stuck bullish.
