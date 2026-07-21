@@ -71,6 +71,17 @@ _GRAB_MERGE_CANDLES = 3
 # *two strong signals* in confluence (sweep + VSA, sweep + OI flush, or
 # VSA + OI = 6). Tunable — the user is visually backtesting these.
 _CAPTURE_THRESHOLD = 6.0
+# Aligned trend-continuation grabs use a *lower* threshold than the
+# counter-trend hunt: a continuation pullback is a common, lower-bar event
+# (not the rare turning point the hunt marks). At threshold 6 (two strong
+# signals) ordinary correction floors were skipped and the episode stretched to
+# the next deep floor that qualified, reading as a capture "up high" where the
+# trend had already run on. Threshold 4 (raised 3 -> 4 on 2026-07-21 — a lone
+# strong signal at 3 was too noisy given how frequent internal sweeps are):
+# a strong floor signal *plus a confirmation* — a down-sweep with net selling
+# delta (3 + 1), a down-sweep on a swept EQL pool (3 + 2), or a
+# climax/thrust + sweep — registers the grab; a lone sweep does not. Tunable.
+_CONTINUATION_CAPTURE_THRESHOLD = 4.0
 _WEIGHT_SWEEP = 3.0
 _WEIGHT_VSA = 3.0
 _WEIGHT_OI_FLUSH = 3.0
@@ -286,6 +297,92 @@ class LiquidityHuntEngine:
                 sub_start = grab_ts
         return episodes
 
+    def build_continuation_history(
+        self, data: DashboardData
+    ) -> list[LiquidityHuntEpisode]:
+        """Reconstruct every *aligned* trend-continuation liquidity grab.
+
+        This is the sibling of :meth:`build_history`, for the opposite regime:
+        a leg **aligned** with the higher-timeframe trend. There is no crowd
+        trapped on the wrong side of the HTF here — instead the classic
+        continuation pattern plays out inside the leg: price pulls back
+        *against* the trend, sweeps the internal liquidity that pullback
+        rests on (a down-sweep of the lows in a bull leg, an up-sweep of the
+        highs in a bear leg), then resumes with the trend. Each such grab is a
+        short episode ``[sub_start, grab]``.
+
+        Deliberately kept a **separate** stream from the counter-trend hunt
+        (different regime, different meaning, drawn in its own colour): a
+        continuation grab is "where the trend caught its breath", not the
+        turning-point read the counter-trend hunt gives. Because the grab is a
+        counter-leg sweep, it reuses :meth:`_capture_grabs` with the sweep
+        direction *opposite* the leg (the pullback direction) — the very same
+        relationship that method already encodes.
+        """
+        htf = data.higher_timeframe_direction
+        directional = (MarketDirection.BULLISH, MarketDirection.BEARISH)
+        if htf not in directional:
+            return []
+
+        segments = self._trend_segments(data.internal_structure_events)
+        now = data.candles[-1].timestamp if data.candles else None
+        merge_gap = self._grab_merge_gap(data.candles)
+
+        episodes: list[LiquidityHuntEpisode] = []
+        for idx, (direction, start) in enumerate(segments):
+            end = segments[idx + 1][1] if idx + 1 < len(segments) else now
+            if end is None:
+                continue
+            if direction is not htf:
+                continue  # only aligned legs; counter-trend legs are build_history
+
+            # The grab is the pullback sweep *against* the leg that then
+            # resumes with it: a bull leg's grab is a down-sweep of the lows,
+            # a bear leg's grab an up-sweep of the highs. So the grab side is
+            # the opposite of the trend, and hunted_side follows the usual
+            # rule (a bullish continuation hunts the shorts the pullback lured).
+            grab_up = direction is MarketDirection.BEARISH
+            capture_direction = (
+                MarketDirection.BULLISH if grab_up else MarketDirection.BEARISH
+            )
+            hunted_side = (
+                RetailPositioning.SHORT
+                if direction is MarketDirection.BULLISH
+                else RetailPositioning.LONG
+            )
+            grabs = self._capture_grabs(
+                data,
+                grab_up,
+                capture_direction,
+                start,
+                end,
+                merge_gap,
+                threshold=_CONTINUATION_CAPTURE_THRESHOLD,
+                require_vsa=True,
+            )
+            trapped = "shorts" if direction is MarketDirection.BULLISH else "longs"
+            sub_start = start
+            for grab_ts, score, sources in grabs:
+                episodes.append(
+                    LiquidityHuntEpisode(
+                        hunted_side=hunted_side,
+                        correction_direction=direction,
+                        start_timestamp=sub_start,
+                        end_timestamp=grab_ts,
+                        capture_score=score,
+                        capture_sources=sources,
+                        description=(
+                            f"Continuation grab: a {direction.value} leg aligned "
+                            f"with the {htf.value} higher-timeframe trend pulled "
+                            f"back, swept internal liquidity "
+                            f"({', '.join(sources)}; score {score:.0f}) trapping "
+                            f"{trapped}, then resumed."
+                        ),
+                    )
+                )
+                sub_start = grab_ts
+        return episodes
+
     @staticmethod
     def _trend_segments(
         events: list[MarketStructure],
@@ -327,6 +424,8 @@ class LiquidityHuntEngine:
         start: datetime,
         end: datetime,
         merge_gap: timedelta | None,
+        threshold: float = _CAPTURE_THRESHOLD,
+        require_vsa: bool = False,
     ) -> list[tuple[datetime, float, list[str]]]:
         """Weighted capture grabs inside ``[start, end]`` as (ts, score, sources).
 
@@ -337,9 +436,17 @@ class LiquidityHuntEngine:
         with its timestamp. Signals within ``merge_gap`` are one cluster (a
         single grab moment); a source type counts once per cluster, and a
         volume-delta confirmation in the capture direction adds
-        ``_WEIGHT_DELTA_MODIFIER``. A cluster whose score reaches
-        ``_CAPTURE_THRESHOLD`` is a grab, anchored at its first signal (the
-        hunt ends at the first touch). Below threshold, no grab.
+        ``_WEIGHT_DELTA_MODIFIER``. A cluster whose score reaches ``threshold``
+        (``_CAPTURE_THRESHOLD`` for the counter-trend hunt,
+        ``_CONTINUATION_CAPTURE_THRESHOLD`` for the aligned continuation grab)
+        is a grab, anchored at its first signal (the hunt ends at the first
+        touch). Below threshold, no grab.
+
+        When ``require_vsa`` is set, a cluster without a grab-side VSA
+        climax/thrust is rejected regardless of score: a genuine continuation
+        pullback floor always prints an exhaustion candle (a down-thrust /
+        selling-climax at the low of a bull pullback), so its absence means the
+        cluster is not that floor.
         """
         signals = self._collect_capture_signals(
             data, hunted_short, capture_direction, start, end
@@ -364,11 +471,13 @@ class LiquidityHuntEngine:
             by_source: dict[str, float] = {}
             for _ts, weight, source in cluster:
                 by_source[source] = max(by_source.get(source, 0.0), weight)
+            if require_vsa and "vsa" not in by_source:
+                continue  # no exhaustion candle at the floor -> not the grab
             first_ts, last_ts = cluster[0][0], cluster[-1][0]
             if self._delta_confirms(data, capture_direction, first_ts, last_ts):
                 by_source["delta"] = _WEIGHT_DELTA_MODIFIER
             score = sum(by_source.values())
-            if score >= _CAPTURE_THRESHOLD:
+            if score >= threshold:
                 grabs.append((first_ts, score, sorted(by_source)))
         return grabs
 

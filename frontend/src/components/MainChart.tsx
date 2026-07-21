@@ -567,6 +567,7 @@ interface MainChartProps {
   showEqlZones?: boolean
   showIndicators?: boolean
   showHuntWindow?: boolean
+  showContinuationWindow?: boolean
   showVolume?: boolean
   showRsiDivergence?: boolean
 }
@@ -586,6 +587,7 @@ export function MainChart({
   showEqlZones = true,
   showIndicators = true,
   showHuntWindow = false,
+  showContinuationWindow = false,
   showVolume = true,
   showRsiDivergence = false,
 }: MainChartProps) {
@@ -1449,17 +1451,14 @@ export function MainChart({
       // each ending at the liquidity grab that closed it (short, near-term).
       for (const episode of history) {
         const sideWord = episode.hunted_side === 'short' ? 'shorts' : 'longs'
-        // Source initials + score, so the visual backtest shows what closed the
-        // hunt (e.g. "✓ shorts hunted [S+V 6]" = sweep + VSA).
-        const tag = episode.capture_sources
-          .map((s) => s[0]?.toUpperCase() ?? '')
-          .join('+')
+        // What closed the hunt (sources + score) stays in the hover title; the
+        // on-chart label is kept clean.
         huntWindows.push({
           x0: toChartTime(episode.start_timestamp),
           x1: toChartTime(episode.end_timestamp),
           color: '#26a69a',
           fillColor: '#26a69a0d',
-          label: `✓ ${sideWord} hunted [${tag} ${episode.capture_score.toFixed(0)}]`,
+          label: `✓ ${sideWord} hunted`,
         })
       }
     }
@@ -1489,6 +1488,24 @@ export function MainChart({
         label: captured ? `✓ ${sideWord} captured` : `⚡ hunting ${sideWord}`,
       })
     }
+    // Aligned trend-continuation grabs: a separate regime (a leg with the HTF
+    // that pulled back, swept internal liquidity, then resumed). Drawn in blue
+    // and toggled independently so it never blends with the counter-trend hunt.
+    if (showContinuationWindow) {
+      const continuation = data.liquidity_continuation_history ?? []
+      for (const episode of continuation) {
+        const arrow = episode.correction_direction === 'bullish' ? '↗' : '↘'
+        const dirWord =
+          episode.correction_direction === 'bullish' ? 'bull' : 'bear'
+        huntWindows.push({
+          x0: toChartTime(episode.start_timestamp),
+          x1: toChartTime(episode.end_timestamp),
+          color: '#42a5f5',
+          fillColor: '#42a5f50d',
+          label: `${arrow} ${dirWord} continuation`,
+        })
+      }
+    }
     huntWindowPrimitiveRef.current?.setWindows(huntWindows)
 
     labelsPrimitiveRef.current?.setLabels(labels)
@@ -1512,7 +1529,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, showVsaMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showVolume, showRsiDivergence])
+  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, showVsaMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

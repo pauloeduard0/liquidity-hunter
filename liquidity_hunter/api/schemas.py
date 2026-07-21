@@ -58,5 +58,8 @@ class DashboardDataResponse(BaseModel):
     oi_analysis: OIAnalysis | None = None
     liquidity_hunt: LiquidityHuntState | None = None
     liquidity_hunt_history: list[LiquidityHuntEpisode] = Field(default_factory=list)
+    liquidity_continuation_history: list[LiquidityHuntEpisode] = Field(
+        default_factory=list
+    )
     consolidation_ranges: list[ConsolidationRange] = []
     structure_confluence: list[StructureConfluence] = []

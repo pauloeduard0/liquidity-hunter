@@ -123,6 +123,7 @@ function App() {
   const [liquidationLiveOnly, setLiquidationLiveOnly] = useState(false)
   const [sweptZonesVisible, setSweptZonesVisible] = useState(false)
   const [huntWindowVisible, setHuntWindowVisible] = useState(false)
+  const [continuationWindowVisible, setContinuationWindowVisible] = useState(false)
   // On by default: a confirmed range is the "why is the chart silent here"
   // answer, the whole point of detecting it.
   const [rangeBoxesVisible, setRangeBoxesVisible] = useState(true)
@@ -498,6 +499,18 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setContinuationWindowVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        continuationWindowVisible
+                          ? 'bg-[#42a5f522] text-[#42a5f5]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle aligned trend-continuation liquidity grabs (pullback swept internal liquidity, then resumed)"
+                    >
+                      ↗ Cont
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setRsiDivVisible((v) => !v)}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         rsiDivVisible
@@ -552,7 +565,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showVsaMarkers={vsaVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showVsaMarkers={vsaVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} />
                 </div>
               </div>
 

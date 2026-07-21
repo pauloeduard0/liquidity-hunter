@@ -756,6 +756,14 @@ class DashboardData:
     # `liquidity_hunt` covers only the current leg). Lets the chart mark where
     # prior hunts completed.
     liquidity_hunt_history: list[LiquidityHuntEpisode] = field(default_factory=list)
+    # Concluded *aligned* trend-continuation liquidity grabs (a leg in line
+    # with the HTF pulled back, swept internal liquidity, then resumed). A
+    # separate stream from `liquidity_hunt_history` — a different regime with
+    # its own meaning, drawn in its own colour, never mixed with the
+    # counter-trend hunt.
+    liquidity_continuation_history: list[LiquidityHuntEpisode] = field(
+        default_factory=list
+    )
     # The anchor timeframe `higher_timeframe_direction` was measured on (the
     # `_HIGHER_TIMEFRAME_MAP` pair; None for the top timeframe, whose direction
     # falls back to the current series' own internal trend). Exposed so the
@@ -2071,12 +2079,14 @@ def load_dashboard_data(
     hunt_engine = LiquidityHuntEngine(proximity_atr=_HUNT_PROXIMITY_ATR)
     liquidity_hunt = hunt_engine.build(data)
     liquidity_hunt_history = hunt_engine.build_history(data)
+    liquidity_continuation_history = hunt_engine.build_continuation_history(data)
     structure_confluence = StructureConfluenceEngine().build(data)
     return replace(
         data,
         narrative=narrative,
         liquidity_hunt=liquidity_hunt,
         liquidity_hunt_history=liquidity_hunt_history,
+        liquidity_continuation_history=liquidity_continuation_history,
         structure_confluence=structure_confluence,
     )
 

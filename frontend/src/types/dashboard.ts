@@ -447,6 +447,7 @@ export interface DashboardData {
   oi_analysis: OIAnalysis | null
   liquidity_hunt: LiquidityHuntState | null
   liquidity_hunt_history: LiquidityHuntEpisode[]
+  liquidity_continuation_history: LiquidityHuntEpisode[]
   consolidation_ranges: ConsolidationRange[]
   structure_confluence: StructureConfluence[]
 }
