@@ -2497,10 +2497,16 @@ class InternalStructureDetector(MarketStructureDetector):
                     # shallow lower-high during the pullback.
                     prev_bull_bos_extreme = price
                     # Mirror of the bearish case (`bos_first_floor_leg_extreme`):
-                    # raise the seed to the leg's true topo -- the reversal may
-                    # have peaked at a higher-high pivot before the confirming one.
-                    if self._bos_first_floor_leg_extreme and pending_high is not None:
-                        prev_bull_bos_extreme = max(price, pending_high.price)
+                    # raise the seed to the leg's true topo, taking the highest of
+                    # the accumulated `pending_high` and the trailing `active_high`
+                    # (the reversal may have peaked at a higher-high pivot before
+                    # the lookback-delayed confirming pivot).
+                    if self._bos_first_floor_leg_extreme:
+                        for _cand in (pending_high, active_high):
+                            if _cand is not None:
+                                prev_bull_bos_extreme = max(
+                                    prev_bull_bos_extreme, _cand.price
+                                )
                     prev_bear_bos_extreme = None
                     # This bullish CHoCH ends the bearish leg; a bearish pending
                     # BOS whose floor already closed-broke is a real continuation
@@ -3513,8 +3519,17 @@ class InternalStructureDetector(MarketStructureDetector):
                     # shallow confirming pivot. `pending_low` carries that
                     # accumulated leg extreme.
                     prev_bear_bos_extreme = price
-                    if self._bos_first_floor_leg_extreme and pending_low is not None:
-                        prev_bear_bos_extreme = min(price, pending_low.price)
+                    if self._bos_first_floor_leg_extreme:
+                        # The leg's true fundo may sit in either the accumulated
+                        # `pending_low` (ETHBTC 1D 2025-10) or the trailing
+                        # `active_low` (ETHUSDT 1D 2025-10, where the 10-10 sweep
+                        # low landed in `active_low` and `pending_low` held an
+                        # earlier, shallower low) -- take the deepest of the two.
+                        for _cand in (pending_low, active_low):
+                            if _cand is not None:
+                                prev_bear_bos_extreme = min(
+                                    prev_bear_bos_extreme, _cand.price
+                                )
                     prev_bull_bos_extreme = None
                     # Mirror: this bearish CHoCH ends the bullish leg; stage a
                     # bullish pending BOS whose floor already closed-broke before

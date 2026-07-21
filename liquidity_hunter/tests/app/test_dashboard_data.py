@@ -2285,6 +2285,64 @@ def test_run_internal_structure_ethbtc_1d_first_bos_at_leg_fundo() -> None:
     assert first.timestamp == datetime(2026, 1, 31, tzinfo=UTC)
 
 
+def _load_ethusdt_1d_candles() -> list[Candle]:
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "ethusdt_1d_2023_2026.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="ETHUSDT",
+            timeframe=TimeFrame.D1,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=row[5],
+            taker_buy_volume=row[6],
+        )
+        for row in rows
+    ]
+
+
+def test_run_internal_structure_ethusdt_1d_first_bos_at_leg_fundo() -> None:
+    # Sibling of the ETHBTC 1D case, but the leg's true fundo sits in the
+    # trailing `active_low` (the 10-10 sweep to 3400), not `pending_low` (which
+    # held the shallower 3822 from 09-25). The first BOS must still reference the
+    # 3400 fundo (formed 10-10) rather than the 3671 confirming pivot -- and here
+    # price closes through 3400 quickly (11-04), so the leg keeps its later
+    # continuations (3055, 2620, ...).
+    provider = _FuturesLimitFakeProvider({TimeFrame.D1: _load_ethusdt_1d_candles()})
+
+    run = _run_internal_structure(provider, "ETHUSDT", TimeFrame.D1, 1200, False)
+
+    leg_start = datetime(2025, 10, 15, tzinfo=UTC)
+    leg_end = datetime(2025, 12, 1, tzinfo=UTC)
+    bos = [
+        e
+        for e in run.events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and not e.provisional
+        and leg_start < e.timestamp < leg_end
+    ]
+    first = bos[0]
+    assert first.reference_price_level == pytest.approx(3400.0)
+    assert first.reference_timestamp == datetime(2025, 10, 10, tzinfo=UTC)
+    assert first.timestamp == datetime(2025, 11, 4, tzinfo=UTC)
+    # The continuation survives (close through 3400 came early).
+    assert bos[1].reference_price_level == pytest.approx(3055.0)
+
+
 # --- Superseded-continuation BOS staging (_STAGE_SUPERSEDED_CONTINUATION_BOS) --
 #
 # NEARUSDT M15. A BOS only emits once a confirming opposite pullback pivot
