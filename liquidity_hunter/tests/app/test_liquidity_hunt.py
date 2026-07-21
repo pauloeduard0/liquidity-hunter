@@ -687,6 +687,73 @@ def test_history_wrong_side_vsa_does_not_count() -> None:
     assert LiquidityHuntEngine().build_history(data) == []
 
 
+def test_continuation_absorbs_failed_choch_excursion() -> None:
+    # Bullish HTF, aligned bull leg. A bearish CHoCH opens a counter-trend
+    # excursion that then *fails* (CHOCH_FAILED reverts the trend): a deep
+    # continuation pullback, not a reversal. Its floor prints a down-sweep +
+    # a DOWN_THRUST exhaustion candle. The continuation stream must absorb the
+    # excursion and register the grab there; the hunt stream must not claim it.
+    events = [
+        _event(2, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        _event(8, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(10, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BEARISH),
+        _event(12, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        volume_spread_signals=[_vsa(10, VSAPattern.DOWN_THRUST, MarketDirection.BULLISH)],
+        candles=_candles(24),
+    )
+    engine = LiquidityHuntEngine()
+    # The failed excursion is a continuation pullback, not a hunt.
+    assert engine.build_history(data) == []
+    continuation = engine.build_continuation_history(data)
+    assert len(continuation) == 1
+    episode = continuation[0]
+    assert episode.correction_direction == MarketDirection.BULLISH
+    assert episode.hunted_side == RetailPositioning.SHORT
+    assert episode.end_timestamp == events[2].timestamp  # the grab floor
+    assert "sweep" in episode.capture_sources
+    assert "vsa" in episode.capture_sources
+
+
+def test_continuation_anchors_the_box_on_the_vsa_candle() -> None:
+    # Bull continuation floor: a down-sweep (i=8) and its VSA down-thrust
+    # exhaustion candle (i=10) are within one cluster. The grab must anchor on
+    # the VSA candle (the exhaustion the user sees), not the earlier sweep.
+    events = [
+        _event(2, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BEARISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        volume_spread_signals=[_vsa(10, VSAPattern.DOWN_THRUST, MarketDirection.BULLISH)],
+        candles=_candles(24),
+    )
+    continuation = LiquidityHuntEngine().build_continuation_history(data)
+    assert len(continuation) == 1
+    assert continuation[0].end_timestamp == T0 + H1 * 10  # the VSA candle, not i=8
+
+
+def test_continuation_requires_vsa_on_the_floor() -> None:
+    # Same failed-excursion shape, but no VSA exhaustion candle: without the
+    # mandatory climax/thrust the continuation grab does not register.
+    events = [
+        _event(2, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        _event(8, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(10, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BEARISH),
+        _event(12, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        candles=_candles(24),
+    )
+    assert LiquidityHuntEngine().build_continuation_history(data) == []
+
+
 def test_history_includes_past_grab_of_still_open_leg() -> None:
     # A grab already happened inside the current (open) counter-trend leg: it is
     # a completed hunt; only the tail after it is the live state.

@@ -257,13 +257,20 @@ class LiquidityHuntEngine:
         merge_gap = self._grab_merge_gap(data.candles)
 
         episodes: list[LiquidityHuntEpisode] = []
-        for idx, (direction, start) in enumerate(segments):
+        for idx, (direction, start, _event) in enumerate(segments):
             # Leg spans until the next flip, or the live edge for the open leg.
             end = segments[idx + 1][1] if idx + 1 < len(segments) else now
+            next_event = segments[idx + 1][2] if idx + 1 < len(segments) else None
             if end is None:
                 continue
             if direction is htf or direction not in directional:
                 continue  # aligned leg, not a hunt
+            if next_event is StructureEvent.CHOCH_FAILED:
+                # A counter excursion that failed is a deep continuation
+                # pullback, not a hunt — it belongs to the continuation stream
+                # (build_continuation_history absorbs it), so each excursion is
+                # covered by exactly one layer.
+                continue
             hunted_short = htf is MarketDirection.BULLISH
             hunted_side = (
                 RetailPositioning.SHORT if hunted_short else RetailPositioning.LONG
@@ -324,32 +331,33 @@ class LiquidityHuntEngine:
         if htf not in directional:
             return []
 
-        segments = self._trend_segments(data.internal_structure_events)
         now = data.candles[-1].timestamp if data.candles else None
+        if now is None:
+            return []
+        segments = self._trend_segments(data.internal_structure_events)
         merge_gap = self._grab_merge_gap(data.candles)
 
-        episodes: list[LiquidityHuntEpisode] = []
-        for idx, (direction, start) in enumerate(segments):
-            end = segments[idx + 1][1] if idx + 1 < len(segments) else now
-            if end is None:
-                continue
-            if direction is not htf:
-                continue  # only aligned legs; counter-trend legs are build_history
+        # The grab is the pullback sweep *against* the aligned leg that then
+        # resumes with it: a bull leg's grab is a down-sweep of the lows, a bear
+        # leg's an up-sweep of the highs. So the grab side is the opposite of
+        # the trend, and hunted_side follows the usual rule (a bullish
+        # continuation hunts the shorts the pullback lured).
+        grab_up = htf is MarketDirection.BEARISH
+        capture_direction = (
+            MarketDirection.BULLISH if grab_up else MarketDirection.BEARISH
+        )
+        hunted_side = (
+            RetailPositioning.SHORT
+            if htf is MarketDirection.BULLISH
+            else RetailPositioning.LONG
+        )
+        trapped = "shorts" if htf is MarketDirection.BULLISH else "longs"
 
-            # The grab is the pullback sweep *against* the leg that then
-            # resumes with it: a bull leg's grab is a down-sweep of the lows,
-            # a bear leg's grab an up-sweep of the highs. So the grab side is
-            # the opposite of the trend, and hunted_side follows the usual
-            # rule (a bullish continuation hunts the shorts the pullback lured).
-            grab_up = direction is MarketDirection.BEARISH
-            capture_direction = (
-                MarketDirection.BULLISH if grab_up else MarketDirection.BEARISH
-            )
-            hunted_side = (
-                RetailPositioning.SHORT
-                if direction is MarketDirection.BULLISH
-                else RetailPositioning.LONG
-            )
+        episodes: list[LiquidityHuntEpisode] = []
+        # Aligned legs run *through* failed-CHoCH excursions, so a CHoCH that
+        # fizzled mid-trend (leaving VSA on its floor) is still scanned for its
+        # continuation grab instead of falling into a vacuum between streams.
+        for start, end in self._continuation_legs(segments, htf, now):
             grabs = self._capture_grabs(
                 data,
                 grab_up,
@@ -360,19 +368,18 @@ class LiquidityHuntEngine:
                 threshold=_CONTINUATION_CAPTURE_THRESHOLD,
                 require_vsa=True,
             )
-            trapped = "shorts" if direction is MarketDirection.BULLISH else "longs"
             sub_start = start
             for grab_ts, score, sources in grabs:
                 episodes.append(
                     LiquidityHuntEpisode(
                         hunted_side=hunted_side,
-                        correction_direction=direction,
+                        correction_direction=htf,
                         start_timestamp=sub_start,
                         end_timestamp=grab_ts,
                         capture_score=score,
                         capture_sources=sources,
                         description=(
-                            f"Continuation grab: a {direction.value} leg aligned "
+                            f"Continuation grab: a {htf.value} leg aligned "
                             f"with the {htf.value} higher-timeframe trend pulled "
                             f"back, swept internal liquidity "
                             f"({', '.join(sources)}; score {score:.0f}) trapping "
@@ -386,14 +393,18 @@ class LiquidityHuntEngine:
     @staticmethod
     def _trend_segments(
         events: list[MarketStructure],
-    ) -> list[tuple[MarketDirection, datetime]]:
-        """Segment the event replay into (trend direction, flip timestamp) legs.
+    ) -> list[tuple[MarketDirection, datetime, StructureEvent]]:
+        """Segment the event replay into (trend, flip timestamp, flip event) legs.
 
         Same replay rules as :meth:`_current_trend` (BOS/CHoCH set the trend,
         ``CHOCH_FAILED`` reverts it, provisional/descriptive events ignored),
         but returns one entry per trend leg instead of only the final state.
+        The flip event that *started* each leg is carried so a caller can tell a
+        counter-trend excursion reverted by a ``CHOCH_FAILED`` (a failed
+        excursion, absorbed into the surrounding aligned continuation leg) from
+        one reverted by a fresh aligned BOS/CHoCH (a real reversal-and-back).
         """
-        segments: list[tuple[MarketDirection, datetime]] = []
+        segments: list[tuple[MarketDirection, datetime, StructureEvent]] = []
         trend: MarketDirection | None = None
         for event in sorted(events, key=lambda e: e.timestamp):
             if event.provisional:
@@ -412,9 +423,46 @@ class LiquidityHuntEngine:
             else:
                 continue
             if new_trend is not trend:
-                segments.append((new_trend, event.timestamp))
+                segments.append((new_trend, event.timestamp, event.event))
             trend = new_trend
         return segments
+
+    @staticmethod
+    def _continuation_legs(
+        segments: list[tuple[MarketDirection, datetime, StructureEvent]],
+        htf: MarketDirection,
+        now: datetime,
+    ) -> list[tuple[datetime, datetime]]:
+        """Aligned-trend legs, absorbing counter-trend excursions that *failed*.
+
+        A CHoCH against an aligned trend that is later reverted by a
+        ``CHOCH_FAILED`` (before it confirmed a BOS) is not a real reversal — it
+        is a deep continuation pullback that printed a CHoCH and reclaimed. Its
+        floor (a sweep plus a VSA exhaustion candle) is a continuation grab, so
+        the aligned leg is treated as running straight through the excursion.
+        A counter excursion that instead *confirmed* (reverted by a fresh
+        aligned BOS/CHoCH, not a failure) is a real hunt and breaks the aligned
+        leg, as does an unresolved counter excursion still open at the live edge.
+        """
+        legs: list[tuple[datetime, datetime]] = []
+        leg_start: datetime | None = None
+        n = len(segments)
+        for idx, (direction, start, _event) in enumerate(segments):
+            if direction is htf:
+                if leg_start is None:
+                    leg_start = start
+                continue
+            # Counter-trend excursion: absorbed only if the leg it flips back
+            # into is opened by a CHOCH_FAILED (i.e. this CHoCH failed).
+            next_event = segments[idx + 1][2] if idx + 1 < n else None
+            if next_event is StructureEvent.CHOCH_FAILED:
+                continue  # failed excursion -> keep the aligned leg running
+            if leg_start is not None:
+                legs.append((leg_start, start))
+                leg_start = None
+        if leg_start is not None:
+            legs.append((leg_start, now))
+        return legs
 
     def _capture_grabs(
         self,
@@ -439,14 +487,17 @@ class LiquidityHuntEngine:
         ``_WEIGHT_DELTA_MODIFIER``. A cluster whose score reaches ``threshold``
         (``_CAPTURE_THRESHOLD`` for the counter-trend hunt,
         ``_CONTINUATION_CAPTURE_THRESHOLD`` for the aligned continuation grab)
-        is a grab, anchored at its first signal (the hunt ends at the first
-        touch). Below threshold, no grab.
+        is a grab. It is anchored at its first signal (the hunt ends at the
+        first touch), except when ``require_vsa`` is set, where it anchors at
+        the VSA candle (see below). Below threshold, no grab.
 
         When ``require_vsa`` is set, a cluster without a grab-side VSA
         climax/thrust is rejected regardless of score: a genuine continuation
         pullback floor always prints an exhaustion candle (a down-thrust /
         selling-climax at the low of a bull pullback), so its absence means the
-        cluster is not that floor.
+        cluster is not that floor. The grab is then anchored at that VSA candle
+        (not the cluster's first signal), so the drawn box ends exactly on the
+        exhaustion marker rather than a few candles before it.
         """
         signals = self._collect_capture_signals(
             data, hunted_short, capture_direction, start, end
@@ -477,8 +528,19 @@ class LiquidityHuntEngine:
             if self._delta_confirms(data, capture_direction, first_ts, last_ts):
                 by_source["delta"] = _WEIGHT_DELTA_MODIFIER
             score = sum(by_source.values())
-            if score >= threshold:
-                grabs.append((first_ts, score, sorted(by_source)))
+            if score < threshold:
+                continue
+            # Anchor: normally the first touch of the cluster. When VSA is the
+            # mandatory floor signature (continuation grabs), anchor at the VSA
+            # exhaustion candle instead of the structural sweep that usually
+            # opens the cluster, so the drawn box ends exactly on the
+            # thrust/climax marker the user sees, not a few candles before it.
+            anchor = first_ts
+            if require_vsa:
+                vsa_stamps = [ts for ts, _w, source in cluster if source == "vsa"]
+                if vsa_stamps:
+                    anchor = min(vsa_stamps)
+            grabs.append((anchor, score, sorted(by_source)))
         return grabs
 
     def _collect_capture_signals(
