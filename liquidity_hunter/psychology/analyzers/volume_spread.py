@@ -28,19 +28,24 @@ from liquidity_hunter.core.domain import (
     VSAPattern,
 )
 
-# The two candle-anatomy families that, without a location filter, fire on
-# every quiet/rejection bar in the tape (measured ~89% of raw signals, ~214 per
-# 1000 candles). VSA reads these only at decision points, so they are gated to
-# a *fresh local extreme*: the bar must make (or tie) the lowest low of the
-# trailing window for a bullish pattern (a genuine support test) or the highest
-# high for a bearish one. Measured to cut the noisy families ~86%. Climaxes are
-# rare and self-evident, so they bypass the gate.
+# The candle-anatomy families that, without a location filter, would fire away
+# from a decision point. The quiet/rejection families (No Supply/Demand,
+# Thrusts) are the noisy ones (measured ~89% of raw signals, ~214 per 1000
+# candles). VSA reads these only at decision points, so every gated pattern is
+# tied to a *fresh local extreme*: the bar must make (or tie) the lowest low of
+# the trailing window for a bullish pattern (a genuine support test) or the
+# highest high for a bearish one. Measured to cut the noisy families ~86%.
+# Climaxes are rare and, being wide extreme-volume bars, almost always already
+# make the extreme, so the gate is near-free insurance for them — it only drops
+# the occasional climax that prints mid-leg rather than at a top/bottom.
 _GATED_PATTERNS: frozenset[VSAPattern] = frozenset(
     {
         VSAPattern.NO_SUPPLY,
         VSAPattern.DOWN_THRUST,
         VSAPattern.NO_DEMAND,
         VSAPattern.UP_THRUST,
+        VSAPattern.SELLING_CLIMAX,
+        VSAPattern.BUYING_CLIMAX,
     }
 )
 
