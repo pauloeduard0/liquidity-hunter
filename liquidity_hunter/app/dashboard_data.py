@@ -669,6 +669,19 @@ _RESCUE_LEG_LAUNCH_BOS = True
 # instead of the 07:15 topo. Staged, the leg reads BOS 2.0120 then BOS 2.0400.
 _STAGE_SUPERSEDED_CONTINUATION_BOS = True
 
+# Strong-close override for the LuxAlgo BOS confluence filter
+# (`InternalStructureDetector.bos_confluence_strong_close_frac`). The pure
+# shadow-balance test rejects a clean momentum breakout that closes at its
+# extreme after an early counter-dip (a bullish close at the high leaves almost
+# no upper shadow, so the dip's larger lower shadow fails the test), silently
+# dropping a real BOS -- the BTC 5m 2026-07-21 13:45 continuation at 66618. A
+# candle whose close lands in the top/bottom fraction of its own range closed
+# decisively regardless of shadow shape, so it also passes; a genuine rejection
+# wick (close back inside) still fails both. 0.8 = close in the extreme 20% (the
+# BTC 13:45 candle closes at 97% of its range, well past this); measured 0 trend
+# flips across BTC/ETH/SOL/AAVE x M5..D1, purely additive BOS marks.
+_BOS_CONFLUENCE_STRONG_CLOSE_FRAC = 0.8
+
 # Seed a first pending BOS's pullback ref with the CHoCH origin the leg
 # launched from (`bos_pullback_seed_choch_origin`): the first advance of a
 # CHoCH-launched leg often snapshots a `None` pullback ref (the flip promoted
@@ -1477,6 +1490,11 @@ def _build_internal_detector(
         # provisional marks confirm, ~7-candle median lead; the repaints cluster
         # on counter-trend pushes into chop, so it reads as an honest "forming".
         emit_provisional_bos=True,
+        # Strong-close override for the BOS confluence filter (see the constant):
+        # a decisive close at the candle's extreme passes even when the
+        # shadow-balance test would reject it (a momentum breakout closing at its
+        # high after an early dip). Keeps rejection-wick filtering intact.
+        bos_confluence_strong_close_frac=_BOS_CONFLUENCE_STRONG_CLOSE_FRAC,
         # Provisional (live-edge) CHoCH: mirror of the provisional BOS for the
         # reversal. When a *structural* opposite-side CHoCH reference has been
         # closed-broken in a sustained way (persistence consecutive closes beyond)

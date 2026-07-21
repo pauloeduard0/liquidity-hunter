@@ -779,6 +779,7 @@ class InternalStructureDetector(MarketStructureDetector):
         emit_provisional_bos: bool = False,
         emit_provisional_choch: bool = False,
         emit_provisional_choch_weak: bool = False,
+        bos_confluence_strong_close_frac: float | None = None,
         choch_origin_leg_extreme: bool = False,
         bos_first_floor_leg_extreme: bool = False,
         choch_weak_ref_fail_at_broken_level: bool = False,
@@ -901,6 +902,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._emit_provisional_bos = emit_provisional_bos
         self._emit_provisional_choch = emit_provisional_choch
         self._emit_provisional_choch_weak = emit_provisional_choch_weak
+        self._bos_confluence_strong_close_frac = bos_confluence_strong_close_frac
         self._choch_origin_leg_extreme = choch_origin_leg_extreme
         self._bos_first_floor_leg_extreme = bos_first_floor_leg_extreme
         self._choch_weak_ref_fail_at_broken_level = choch_weak_ref_fail_at_broken_level
@@ -2773,7 +2775,9 @@ class InternalStructureDetector(MarketStructureDetector):
                                 last_bullish_bos_price = None
                                 last_bullish_bos_origin = None
                             if not self._confluence_filter or bos_confluence(
-                                candles[close_idx], bullish=True
+                                candles[close_idx],
+                                bullish=True,
+                                strong_close_frac=self._bos_confluence_strong_close_frac,
                             ):
                                 # A wick-only poke of the prior BOS high is not a
                                 # close-confirmed break, so the leg origin it carries
@@ -3790,7 +3794,9 @@ class InternalStructureDetector(MarketStructureDetector):
                                 last_bearish_bos_price = None
                                 last_bearish_bos_origin = None
                             if not self._confluence_filter or bos_confluence(
-                                candles[close_idx], bullish=False
+                                candles[close_idx],
+                                bullish=False,
+                                strong_close_frac=self._bos_confluence_strong_close_frac,
                             ):
                                 # Mirror of the bullish case: a wick-only poke of
                                 # the prior BOS low is not a close-confirmed break,

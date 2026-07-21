@@ -2011,6 +2011,55 @@ def test_ethusdt_5m_range_breakout_below_live_bos_is_not_staged() -> None:
     )
 
 
+def test_btcusdt_5m_strong_close_bos_passes_confluence() -> None:
+    """A momentum breakout that closes at its extreme still emits a BOS.
+
+    BTCUSDT 5m, 2026-07-21 13:45: the continuation that breaks the 66618 top
+    closes at 66627 (97% of its 66311-66636 range) after an early dip -- a
+    decisive bullish close, but the pure LuxAlgo shadow-balance filter rejects
+    it (upper shadow 9.1 < lower shadow 24.8), silently dropping the BOS and
+    leaving the staircase to only mark a much higher level. The strong-close
+    override (bos_confluence_strong_close_frac) lets a close in the extreme 20%
+    of its range pass, so the BOS emits at the level price actually broke.
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "btcusdt_5m_2026_07_21_strong_close_bos.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    candles = [
+        Candle(
+            symbol="BTCUSDT",
+            timeframe=TimeFrame.M5,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=row[5],
+            taker_buy_volume=row[6],
+        )
+        for row in rows
+    ]
+    provider = _FuturesLimitFakeProvider({TimeFrame.M5: candles})
+
+    run = _run_internal_structure(provider, "BTCUSDT", TimeFrame.M5, 1200, True)
+
+    assert any(
+        e.timestamp == datetime(2026, 7, 21, 13, 45, tzinfo=UTC)
+        and e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.reference_price_level == pytest.approx(66618.0)
+        for e in run.events
+    ), "strong-close continuation BOS at 66618 (13:45) is missing"
+
+
 def test_eth_1h_july_range_lock_is_a_live_consolidation() -> None:
     candles = _load_range_lock_candles("ethusdt_1h_2026_05_13_07_14.json", "ETHUSDT")
     provider = _FuturesLimitFakeProvider({TimeFrame.H1: candles})

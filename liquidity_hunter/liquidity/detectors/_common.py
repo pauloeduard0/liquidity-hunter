@@ -202,7 +202,9 @@ def resolve_break_origin_timestamp(
     return None
 
 
-def bos_confluence(candle: Candle, *, bullish: bool) -> bool:
+def bos_confluence(
+    candle: Candle, *, bullish: bool, strong_close_frac: float | None = None
+) -> bool:
     """LuxAlgo-style confluence filter for internal BOS candles.
 
     For a bullish BOS the breaking candle must have a larger upper shadow
@@ -215,12 +217,37 @@ def bos_confluence(candle: Candle, *, bullish: bool) -> bool:
     lower_shadow = min(close, open) - low
     bullish: upper_shadow > lower_shadow
     bearish: upper_shadow < lower_shadow
+
+    The shadow-balance test is meant to reject *rejection* candles (a wick past
+    the level that closes back the other way), but it also rejects a clean
+    momentum candle that *closes at its extreme* after an early counter-dip: a
+    bullish close at the high leaves almost no upper shadow, so a larger lower
+    shadow (the dip) fails the test even though the close is decisively strong
+    (BTC 5m 2026-07-21 13:45: O 66336 / L 66311 / C 66627 / H 66636 -- close at
+    97% of range, upper 9.1 < lower 24.8). When ``strong_close_frac`` is set, a
+    candle also passes if its close sits in the top (bullish) / bottom (bearish)
+    ``strong_close_frac`` of its own high-low range -- a decisive close overrides
+    the shadow shape, while a genuine rejection wick (close back inside) still
+    fails both tests. ``None`` keeps the pure LuxAlgo behaviour.
     """
     upper_shadow = candle.high - max(candle.close, candle.open)
     lower_shadow = min(candle.close, candle.open) - candle.low
     if bullish:
-        return upper_shadow > lower_shadow
-    return upper_shadow < lower_shadow
+        if upper_shadow > lower_shadow:
+            return True
+    elif upper_shadow < lower_shadow:
+        return True
+    if strong_close_frac is not None:
+        span = candle.high - candle.low
+        if span <= 0:
+            return False
+        close_pos = (candle.close - candle.low) / span
+        return (
+            close_pos >= strong_close_frac
+            if bullish
+            else close_pos <= 1 - strong_close_frac
+        )
+    return False
 
 
 def find_fvg(
