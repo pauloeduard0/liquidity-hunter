@@ -4016,10 +4016,22 @@ class InternalStructureDetector(MarketStructureDetector):
             # provisional; the first break of a leg is the CHoCH itself, whose
             # seed level would otherwise draw a redundant BOS on the CHoCH line.
             if floor is not None and floor > 0 and floor_from_bos:
+                # A continuation cannot break the floor before the floor exists.
+                # The floor value ratchets over the leg, so scanning the whole
+                # tail for the first close beyond the *final* floor can back-date
+                # the break to a candle that closed past that price a day before
+                # the swing that set it formed (ZEC H1: floor 533.06 formed
+                # 07-21 10:00, but an old 07-20 04:00 close sat below it, drawing
+                # a stale "BOS?" for a day while price had actually recovered).
+                # Bound the break to candles after the floor's origin.
+                floor_origin_ts = resolve_break_origin_timestamp(
+                    candles, len(candles) - 1, floor, bearish=bearish
+                )
                 broke = [
                     c
                     for c in tail
-                    if (c.close < floor if bearish else c.close > floor)
+                    if (floor_origin_ts is None or c.timestamp > floor_origin_ts)
+                    and (c.close < floor if bearish else c.close > floor)
                 ]
                 if broke:
                     extreme = (

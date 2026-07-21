@@ -2115,6 +2115,57 @@ def test_solusdt_30m_double_top_bos_anchors_at_original_swing() -> None:
     assert anchor_for(78.37) == datetime(2026, 7, 20, 18, 0, tzinfo=UTC)
 
 
+def test_zecusdt_1h_provisional_bos_not_backdated_before_floor() -> None:
+    """A provisional continuation BOS cannot predate the floor it breaks.
+
+    ZECUSDT 1h: after the 2026-07-19 21:00 bearish CHoCH the staircase floor
+    ratchets down to 533.06, a low that only forms on 2026-07-21 10:00. An old
+    2026-07-20 04:00 candle happened to close below 533.06 a day before that
+    swing existed, so scanning the whole leg for the first close beyond the
+    *final* floor back-dated a provisional BOS to 07-20 and left a stale "BOS?"
+    for a day while price had actually recovered toward the CHoCH reference.
+    The break must fall after the floor's origin, so no provisional BOS emits.
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "zecusdt_1h_2026_07_21_stale_provisional_bos.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    candles = [
+        Candle(
+            symbol="ZECUSDT",
+            timeframe=TimeFrame.H1,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=row[5],
+            taker_buy_volume=row[6],
+        )
+        for row in rows
+    ]
+    provider = _FuturesLimitFakeProvider({TimeFrame.H1: candles})
+
+    run = _run_internal_structure(provider, "ZECUSDT", TimeFrame.H1, 1200, True)
+
+    stale = [
+        e
+        for e in run.events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.provisional
+        and e.reference_price_level == pytest.approx(533.06)
+    ]
+    assert not stale, "stale back-dated provisional BOS at 533.06 should not emit"
+
+
 def test_eth_1h_july_range_lock_is_a_live_consolidation() -> None:
     candles = _load_range_lock_candles("ethusdt_1h_2026_05_13_07_14.json", "ETHUSDT")
     provider = _FuturesLimitFakeProvider({TimeFrame.H1: candles})
