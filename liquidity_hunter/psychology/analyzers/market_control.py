@@ -162,7 +162,7 @@ class MarketControlAnalyzer:
         cvd_ratio = max(-1.0, min(1.0, cvd_ratio))
 
         regime = self._regime_for(cvd_ratio, oi_change)
-        control_score = self._control_score(cvd_ratio, oi_change, regime)
+        control_score = self._control_score(cvd_ratio, oi_change)
         controller = self._controller_for(regime, control_score)
         return _Reading(cvd_change, cvd_ratio, oi_change, regime, control_score, controller)
 
@@ -175,10 +175,13 @@ class MarketControlAnalyzer:
             return OIRegime.LONG_BUILDUP if oi_change > 0 else OIRegime.SHORT_COVERING
         return OIRegime.SHORT_BUILDUP if oi_change > 0 else OIRegime.LONG_LIQUIDATION
 
-    def _control_score(self, cvd_ratio: float, oi_change: float, regime: OIRegime) -> float:
-        if regime is OIRegime.FLAT:
-            return 0.0
-        # Base conviction from aggression magnitude, saturating at 4x the floor.
+    def _control_score(self, cvd_ratio: float, oi_change: float) -> float:
+        # Continuous conviction from aggression magnitude, saturating at 4x the
+        # floor. Deliberately *not* zeroed below the regime floor: the oscillator
+        # should always reflect the live aggression (no dead zone / visual
+        # vacuum) — the floor only governs whether a *side is credited*
+        # (`_controller_for`), coloring a weak bar dim/balanced instead of
+        # blanking it.
         base = min(1.0, abs(cvd_ratio) / (4 * self._min_cvd_ratio))
         if oi_change >= self._min_oi_change:
             factor = _OI_CONFIRM_FACTOR

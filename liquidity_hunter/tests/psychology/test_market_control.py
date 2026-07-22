@@ -94,15 +94,25 @@ def test_oi_confirmed_control_beats_diverging_conviction() -> None:
     assert diverging.fade_warning is False  # covering is not conviction-backed control
 
 
-def test_flat_when_aggression_below_floor() -> None:
-    # tbv 0.52 -> delta +0.04 -> ratio 0.04 < 0.06 floor
+def test_below_floor_is_flat_balanced_but_score_stays_continuous() -> None:
+    # tbv 0.52 -> delta +0.04 -> ratio 0.04 < 0.06 floor: no side credited, but
+    # the oscillator still reflects the (weak) aggression rather than zeroing.
     candles = _candles([0.52] * 5)
     state = _analyzer().analyze(candles, _oi(candles, [1000, 1010, 1020, 1030, 1040]))
 
     assert state is not None
     assert state.regime is OIRegime.FLAT
     assert state.controller is MarketControlSide.BALANCED
-    assert state.control_score == 0.0
+    assert 0.0 < state.control_score < 100.0  # continuous, not a dead zone
+
+
+def test_zero_aggression_scores_zero() -> None:
+    # tbv 0.5 -> delta 0 -> ratio 0: genuinely no aggression, bar collapses.
+    candles = _candles([0.5] * 5)
+    state = _analyzer().analyze(candles, _oi(candles, [1000, 1010, 1020, 1030, 1040]))
+
+    assert state is not None
+    assert state.control_score == pytest.approx(0.0)
 
 
 def test_series_has_one_point_per_covered_candle() -> None:
