@@ -371,7 +371,11 @@ def test_all_pools_captured_and_oi_calm_is_captured() -> None:
     assert state.targets_captured == state.targets_total == 1
 
 
-def test_all_pools_captured_but_oi_still_unwinding_is_not_captured() -> None:
+def test_all_pools_captured_stay_captured_even_with_oi_unwinding() -> None:
+    # A live, per-poll OI regime must not un-capture a structurally finished
+    # hunt: once every mapped pool is swept on closed candles the phase is
+    # CAPTURED and stays there, with the still-unwinding OI kept as residual
+    # evidence in the description (the CAPTURED <-> HUNT flicker fix).
     data = _minimal_data(
         higher_timeframe_direction=MarketDirection.BULLISH,
         internal_structure_events=[_bearish_choch()],
@@ -379,7 +383,43 @@ def test_all_pools_captured_but_oi_still_unwinding_is_not_captured() -> None:
         oi_analysis=_oi(regime=OIRegime.SHORT_COVERING),
     )
     state = LiquidityHuntEngine().build(data)
-    assert state.phase is LiquidityHuntPhase.HUNT_IN_PROGRESS
+    assert state.phase is LiquidityHuntPhase.CAPTURED
+    assert state.oi_unwinding is True
+    assert "residual" in state.description
+
+
+def test_pool_swept_on_the_forming_candle_stays_pending() -> None:
+    # The last candle is still forming; a sweep landing on it must not mark the
+    # pool captured yet (the phase would flip CAPTURED then back when the live
+    # wick retraces). It stays HUNT_IN_PROGRESS until that candle closes.
+    forming_ts = CHOCH_TS + H1 * 4
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=[_bearish_choch()],
+        # candles run up to the forming candle, whose sweep is not yet closed.
+        candles=[_candle(i) for i in (11, 12, 13, 14)],
+        liquidity_zones=[_eqh_zone(101.0, mitigated_at=forming_ts)],
+    )
+    state = LiquidityHuntEngine().build(data)
+    # Not captured: the sweep on the forming candle is not yet confirmed, so the
+    # pool stays in play (an intact target) rather than flipping to CAPTURED.
+    assert state.phase is not LiquidityHuntPhase.CAPTURED
+    assert state.targets_captured == 0
+    assert state.targets_total == 1
+
+
+def test_pool_swept_on_a_closed_candle_is_captured() -> None:
+    # Same setup, but the sweep landed on a candle that has since closed (an
+    # earlier candle than the forming one): now it counts as a capture.
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=[_bearish_choch()],
+        candles=[_candle(i) for i in (11, 12, 13, 14)],
+        liquidity_zones=[_eqh_zone(101.0, mitigated_at=T0 + H1 * 13)],
+    )
+    state = LiquidityHuntEngine().build(data)
+    assert state.phase is LiquidityHuntPhase.CAPTURED
+    assert state.targets_captured == state.targets_total == 1
 
 
 def test_no_mapped_pools_is_never_captured() -> None:
@@ -564,6 +604,51 @@ def test_history_episode_ends_at_the_grab_not_the_reflip() -> None:
     assert episode.end_timestamp == events[1].timestamp  # the sweep, not the re-flip
 
 
+def test_history_in_leg_grab_without_vsa_is_not_a_hunt() -> None:
+    # Bullish HTF, counter-trend bearish leg. An in-leg up-sweep runs through a
+    # swept equal-highs pool (sweep 3 + zone 2 + net-buy delta 1 = 6) but no VSA
+    # exhaustion candle prints on the grab side. VSA is now mandatory for an
+    # in-leg hunt grab (only the realignment flip-back is exempt), so this
+    # cluster is rejected — the leg does not open the hunt without exhaustion.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    swept_eqh = LiquidityZone(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        zone_type=LiquidityZoneType.EQUAL_HIGHS,
+        side=LiquiditySide.BUY_SIDE,
+        price_low=101.6,
+        price_high=102.0,
+        formed_at=T0 + H1 * 6,
+        strength=1.0,
+        is_mitigated=True,
+        invalidated_at=T0 + H1 * 8,
+    )
+    # Net-taker buying on the sweep candle (the delta modifier), still no VSA.
+    candles = _candles(24)
+    candles[8] = Candle(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=T0 + H1 * 8,
+        open=100.0,
+        high=101.0,
+        low=99.0,
+        close=100.0,
+        volume=10.0,
+        taker_buy_volume=8.0,
+    )
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        liquidity_zones=[swept_eqh],
+        candles=candles,
+    )
+    assert LiquidityHuntEngine().build_history(data) == []
+
+
 def test_history_multiple_grabs_in_one_leg_are_separate_hunts() -> None:
     events = [
         _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
@@ -717,6 +802,108 @@ def test_continuation_absorbs_failed_choch_excursion() -> None:
     assert episode.end_timestamp == events[2].timestamp  # the grab floor
     assert "sweep" in episode.capture_sources
     assert "vsa" in episode.capture_sources
+
+
+def test_history_realignment_choch_closes_the_hunt_with_a_swept_zone() -> None:
+    # NEAR 30m: bearish HTF. A bullish CHoCH opens a counter-trend leg (hunting
+    # longs). No lone signal reaches the grab threshold inside it, but the leg
+    # ends on a genuine bearish CHoCH that breaks structure back down *through*
+    # a swept equal-lows pool (the longs' stops) — the realignment grab. That
+    # confirmed break (weight 4) plus the swept zone (2) plus the net-sell delta
+    # on the breaking candle (1) reaches the capture threshold (7), closing the
+    # hunt, which must land in history ending at the flip.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+    ]
+    swept_eql = LiquidityZone(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        zone_type=LiquidityZoneType.EQUAL_LOWS,
+        side=LiquiditySide.SELL_SIDE,
+        price_low=98.0,
+        price_high=98.4,
+        formed_at=T0 + H1 * 6,
+        strength=1.0,
+        is_mitigated=True,
+        invalidated_at=T0 + H1 * 20,
+    )
+    # The realignment break candle (index 20) closes with heavy net-taker
+    # selling — the delta confirmation the real NEAR grab carried.
+    candles = _candles(24)
+    candles[20] = Candle(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=T0 + H1 * 20,
+        open=100.0,
+        high=101.0,
+        low=99.0,
+        close=100.0,
+        volume=10.0,
+        taker_buy_volume=2.0,
+    )
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BEARISH,
+        internal_structure_events=events,
+        liquidity_zones=[swept_eql],
+        candles=candles,
+    )
+    history = LiquidityHuntEngine().build_history(data)
+    assert len(history) == 1
+    episode = history[0]
+    assert episode.hunted_side == RetailPositioning.LONG
+    assert episode.start_timestamp == events[0].timestamp
+    assert episode.end_timestamp == events[1].timestamp  # the realignment flip
+    assert "realignment" in episode.capture_sources
+    assert "zone" in episode.capture_sources
+    assert "delta" in episode.capture_sources
+
+
+def test_history_bare_realignment_flip_alone_is_not_a_hunt() -> None:
+    # A counter-trend leg that reverts on a bare CHoCH with no co-located
+    # confluence (no swept zone / VSA / delta) is not marked: the realignment
+    # weight (4) alone is below the grab threshold (7), so a leg that simply
+    # flipped back without visibly running liquidity stays out of history.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BEARISH,
+        internal_structure_events=events,
+        candles=_candles(24),
+    )
+    assert LiquidityHuntEngine().build_history(data) == []
+
+
+def test_history_keeps_completed_hunt_inside_a_failed_excursion() -> None:
+    # NEAR 30m: bearish HTF. A bullish CHoCH opens a counter-trend excursion
+    # (hunting longs); inside it price dips and *down*-sweeps the longs (a
+    # completed capture-side grab, score 6 with a co-located DOWN_THRUST), then
+    # the bullish CHoCH fails to recover and reverts (CHOCH_FAILED). The
+    # completed long-hunt must survive in history — it is a *down*-sweep, which
+    # the continuation stream (up-sweep floors) can never claim.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BEARISH),
+        _event(14, StructureEvent.CHOCH_FAILED, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BEARISH,
+        internal_structure_events=events,
+        volume_spread_signals=[_vsa(8, VSAPattern.DOWN_THRUST, MarketDirection.BULLISH)],
+        candles=_candles(24),
+    )
+    engine = LiquidityHuntEngine()
+    history = engine.build_history(data)
+    assert len(history) == 1
+    episode = history[0]
+    assert episode.hunted_side == RetailPositioning.LONG
+    assert episode.correction_direction == MarketDirection.BULLISH
+    assert episode.start_timestamp == events[0].timestamp
+    assert episode.end_timestamp == events[1].timestamp  # the down-sweep grab
+    # The continuation stream (up-sweep floors) never claims this down-sweep.
+    assert engine.build_continuation_history(data) == []
 
 
 def test_continuation_anchors_the_box_on_the_vsa_candle() -> None:

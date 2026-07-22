@@ -64,13 +64,19 @@ _GRAB_MERGE_CANDLES = 3
 # weights (not confidence-scaled); VSA is already gated by its own analyzer, so
 # its mere presence on the grab side is the signal.
 #
-# Threshold 6 (raised 3 -> 5 -> 6 on 2026-07-20): a lone strong signal (a
-# single sweep / VSA / OI flush = 3) is not a capture — internal sweeps are
-# frequent, so lone-signal grabs over-fired; a strong signal plus only the pool
-# it swept (3 + zone 2 = 5) was still too many. A real turning point requires
-# *two strong signals* in confluence (sweep + VSA, sweep + OI flush, or
-# VSA + OI = 6). Tunable — the user is visually backtesting these.
-_CAPTURE_THRESHOLD = 6.0
+# Threshold 7 (raised 3 -> 5 -> 6 -> 7; 6 -> 7 on 2026-07-22): a lone strong
+# signal (a single sweep / VSA / OI flush = 3) is not a capture — internal
+# sweeps are frequent, so lone-signal grabs over-fired; a strong signal plus
+# only the pool it swept (3 + zone 2 = 5) was still too many. At 6 a bare
+# strong *pair* (realignment + zone, sweep + VSA) already fired, and once the
+# realignment flip-back became a grab (_WEIGHT_REALIGNMENT, 2026-07-21) the
+# counter-trend hunt started activating too often. Threshold 7 demands a strong
+# pair *plus a confirmation* — realignment(4)+zone(2)+delta(1),
+# sweep(3)+VSA(3)+delta(1), or a stronger pair like realignment(4)+VSA(3) —
+# so only the sharpest, most confluent turning points are marked. The real
+# NEAR 30m capture (realignment+zone+delta = 7) still qualifies. Tunable — the
+# user is visually backtesting these.
+_CAPTURE_THRESHOLD = 7.0
 # Aligned trend-continuation grabs use a *lower* threshold than the
 # counter-trend hunt: a continuation pullback is a common, lower-bar event
 # (not the rare turning point the hunt marks). At threshold 6 (two strong
@@ -98,6 +104,20 @@ _WEIGHT_VSA_STRONG = 4.0
 _VSA_STRONG_CONFIDENCE = 70.0
 _WEIGHT_OI_FLUSH = 3.0
 _WEIGHT_ZONE = 2.0
+# A counter-trend leg's *terminating* realignment break — a confirmed
+# capture-direction BOS/CHoCH that flips structure back toward the HTF trend —
+# is itself the grab that runs the counter-trend entrants: price broke decisively
+# through their stops (the NEAR 30m bearish CHoCH that swept the longs who bought
+# the counter-trend bounce, "validated at that moment" the user reads it). It
+# weighs more than an unsustained LIQUIDITY_SWEEP (which by definition did not
+# hold) but, like a lone sweep, is not a hunt on its own — it needs a co-located
+# confluence (a swept stop zone, a VSA climax/thrust, or a delta confirmation) to
+# reach the capture threshold, so a bare flip with no other evidence is still
+# skipped (a counter leg that reverted without visibly running liquidity is not
+# marked, keeping test_history_skips_counter_trend_leg_without_capture green). A
+# CHOCH_FAILED reversion is excluded — that excursion is a failed pullback owned
+# by the continuation layer (see build_history).
+_WEIGHT_REALIGNMENT = 4.0
 _WEIGHT_DELTA_MODIFIER = 1.0
 # Net taker aggression must exceed this fraction of the candle's volume to count
 # as a directional confirmation (|2*taker_buy - volume| / volume).
@@ -188,9 +208,23 @@ class LiquidityHuntEngine:
         )
 
         proximity = self._effective_proximity(data.candles)
+        # Confirm captures on *closed* candles only. The provider returns the
+        # still-forming candle as the last element, and its wick repaints every
+        # poll; a pool grabbed only by that live wick would flip the phase to
+        # CAPTURED and then back when the wick retraces (and re-anchor
+        # captured_at elsewhere). Anything captured strictly after the last
+        # closed candle stays pending — an intact pool — until its candle
+        # closes, so the reported phase moves one way per closed candle.
+        confirm_cutoff = (
+            data.candles[-2].timestamp if len(data.candles) >= 2 else None
+        )
         targets = [
-            *self._zone_targets(data, hunted_short, flip_timestamp, proximity),
-            *self._band_targets(data, hunted_short, flip_timestamp, proximity),
+            *self._zone_targets(
+                data, hunted_short, flip_timestamp, proximity, confirm_cutoff
+            ),
+            *self._band_targets(
+                data, hunted_short, flip_timestamp, proximity, confirm_cutoff
+            ),
         ]
         targets.sort(key=lambda t: abs(t.price_level - data.current_price))
         captured = [t for t in targets if t.captured]
@@ -199,11 +233,18 @@ class LiquidityHuntEngine:
         swept_since_flip = self._swept_since(
             data.internal_structure_events, capture_direction, flip_timestamp
         )
+        # OI regime is a live, per-poll reading that oscillates between polls; it
+        # is retained as *evidence* (the field + description) but no longer gates
+        # the CAPTURED phase. Once every mapped pool is captured on closed
+        # candles the hunt is concluded — a flickering OI regime must not
+        # un-capture a structurally finished hunt (the CAPTURED <-> HUNT churn
+        # the user saw live). It still keeps a not-yet-captured leg in
+        # HUNT_IN_PROGRESS below.
         oi_unwinding = self._oi_unwinding(data, hunted_short)
 
         all_captured = bool(targets) and len(captured) == len(targets)
         captured_at: datetime | None = None
-        if all_captured and not oi_unwinding:
+        if all_captured:
             phase = LiquidityHuntPhase.CAPTURED
             captured_at = max(
                 (t.captured_at for t in captured if t.captured_at is not None),
@@ -258,6 +299,13 @@ class LiquidityHuntEngine:
         shorts-hunted opens" case). Grabs inside the *current* open leg are
         included as long as they already happened; the still-open tail after
         the last grab is the live :class:`LiquidityHuntState`, not history.
+
+        A counter excursion later reverted by a ``CHOCH_FAILED`` is kept if a
+        capture-side grab already completed inside it (the liquidity was taken
+        regardless of the later re-interpretation — the NEAR 30m case); only a
+        failed excursion with *no* completed grab is dropped here, owned by
+        :meth:`build_continuation_history` instead (which scans the opposite,
+        pullback-direction sweep, so the two layers never double-count a grab).
         """
         htf = data.higher_timeframe_direction
         directional = (MarketDirection.BULLISH, MarketDirection.BEARISH)
@@ -277,12 +325,6 @@ class LiquidityHuntEngine:
                 continue
             if direction is htf or direction not in directional:
                 continue  # aligned leg, not a hunt
-            if next_event is StructureEvent.CHOCH_FAILED:
-                # A counter excursion that failed is a deep continuation
-                # pullback, not a hunt — it belongs to the continuation stream
-                # (build_continuation_history absorbs it), so each excursion is
-                # covered by exactly one layer.
-                continue
             hunted_short = htf is MarketDirection.BULLISH
             hunted_side = (
                 RetailPositioning.SHORT if hunted_short else RetailPositioning.LONG
@@ -290,9 +332,45 @@ class LiquidityHuntEngine:
             capture_direction = (
                 MarketDirection.BULLISH if hunted_short else MarketDirection.BEARISH
             )
-            grabs = self._capture_grabs(
-                data, hunted_short, capture_direction, start, end, merge_gap
+            # A genuine reverting BOS/CHoCH that ends this counter-trend leg is
+            # the realignment grab (the capture-direction break that ran the
+            # entrants); pass it so it can close the leg's final hunt. Not the
+            # open live leg (no next flip) and not a CHOCH_FAILED (rule below).
+            realignment_ts = (
+                end
+                if (
+                    idx + 1 < len(segments)
+                    and next_event
+                    in (
+                        StructureEvent.BREAK_OF_STRUCTURE,
+                        StructureEvent.CHANGE_OF_CHARACTER,
+                    )
+                )
+                else None
             )
+            grabs = self._capture_grabs(
+                data,
+                hunted_short,
+                capture_direction,
+                start,
+                end,
+                merge_gap,
+                require_vsa=True,
+                realignment_ts=realignment_ts,
+            )
+            if next_event is StructureEvent.CHOCH_FAILED and not grabs:
+                # A failed counter excursion with *no* completed capture-side
+                # grab is a deep continuation pullback, not a hunt — the
+                # continuation stream owns it (build_continuation_history scans
+                # its floor's *pullback*-direction sweep, the opposite side of
+                # this method). But a capture-side hunt grab that already
+                # completed inside the excursion genuinely took that liquidity
+                # at that moment, so it stays in history even though the
+                # excursion later reverted — the NEAR 30m case: a bullish CHoCH
+                # swept longs on a dip, did not recover, then failed. The two
+                # layers stay disjoint by direction (the hunt grab a down-sweep,
+                # the continuation grab an up-sweep), so no double coverage.
+                continue
             side_word = "shorts" if hunted_short else "longs"
             sub_start = start
             for grab_ts, score, sources in grabs:
@@ -486,6 +564,7 @@ class LiquidityHuntEngine:
         merge_gap: timedelta | None,
         threshold: float = _CAPTURE_THRESHOLD,
         require_vsa: bool = False,
+        realignment_ts: datetime | None = None,
     ) -> list[tuple[datetime, float, list[str]]]:
         """Weighted capture grabs inside ``[start, end]`` as (ts, score, sources).
 
@@ -504,16 +583,25 @@ class LiquidityHuntEngine:
         the VSA candle (see below). Below threshold, no grab.
 
         When ``require_vsa`` is set, a cluster without a grab-side VSA
-        climax/thrust is rejected regardless of score: a genuine continuation
-        pullback floor always prints an exhaustion candle (a down-thrust /
-        selling-climax at the low of a bull pullback), so its absence means the
-        cluster is not that floor. The grab is then anchored at that VSA candle
-        (not the cluster's first signal), so the drawn box ends exactly on the
-        exhaustion marker rather than a few candles before it.
+        climax/thrust is rejected regardless of score: a genuine capture floor
+        always prints an exhaustion candle (a down-thrust / selling-climax at
+        the low of a bull pullback), so its absence means the cluster is not
+        that floor. Both the counter-trend hunt and the aligned continuation
+        require this now. The one exemption is a cluster carrying the
+        ``realignment`` flip-back grab: a confirmed capture-direction break that
+        ran the entrants' stops is self-sufficient as the grab and needs no
+        co-located VSA (the NEAR 30m realignment case). When VSA is present it
+        anchors the grab at that VSA candle (not the cluster's first signal), so
+        the drawn box ends exactly on the exhaustion marker rather than a few
+        candles before it.
         """
         signals = self._collect_capture_signals(
             data, hunted_short, capture_direction, start, end
         )
+        if realignment_ts is not None:
+            # The confirmed break that flipped the leg back to the HTF trend is
+            # itself a strong capture-side grab (see _WEIGHT_REALIGNMENT).
+            signals.append((realignment_ts, _WEIGHT_REALIGNMENT, "realignment"))
         signals.sort(key=lambda s: s[0])
 
         clusters: list[list[tuple[datetime, float, str]]] = []
@@ -534,8 +622,13 @@ class LiquidityHuntEngine:
             by_source: dict[str, float] = {}
             for _ts, weight, source in cluster:
                 by_source[source] = max(by_source.get(source, 0.0), weight)
-            if require_vsa and "vsa" not in by_source:
-                continue  # no exhaustion candle at the floor -> not the grab
+            if require_vsa and "vsa" not in by_source and "realignment" not in by_source:
+                # No exhaustion candle at the floor -> not the grab. The
+                # realignment flip-back is exempt: a confirmed capture-direction
+                # break that ran the entrants' stops is itself the grab and does
+                # not need a co-located VSA climax (the NEAR 30m case). CONT
+                # never carries a realignment source, so its gate is unchanged.
+                continue
             first_ts, last_ts = cluster[0][0], cluster[-1][0]
             if self._delta_confirms(data, capture_direction, first_ts, last_ts):
                 by_source["delta"] = _WEIGHT_DELTA_MODIFIER
@@ -695,6 +788,7 @@ class LiquidityHuntEngine:
         hunted_short: bool,
         flip_timestamp: datetime,
         proximity: float,
+        confirm_cutoff: datetime | None,
     ) -> list[LiquidityHuntTarget]:
         """Equal highs/lows within proximity — the classic clustered-stop pools."""
         price = data.current_price
@@ -714,13 +808,19 @@ class LiquidityHuntEngine:
                 # captures of *its* liquidity; older sweeps are history.
                 if zone.invalidated_at is None or zone.invalidated_at < flip_timestamp:
                     continue
+                # Confirmed only once the sweeping candle has closed; a sweep on
+                # the still-forming candle keeps the pool in play (uncaptured)
+                # until it closes, so the phase does not repaint.
+                confirmed = (
+                    confirm_cutoff is None or zone.invalidated_at <= confirm_cutoff
+                )
                 targets.append(
                     LiquidityHuntTarget(
                         kind=LiquidityHuntTargetKind.EQUAL_LEVEL,
                         label=label,
                         price_level=mid,
-                        captured=True,
-                        captured_at=zone.invalidated_at,
+                        captured=confirmed,
+                        captured_at=zone.invalidated_at if confirmed else None,
                     )
                 )
             else:
@@ -742,6 +842,7 @@ class LiquidityHuntEngine:
         hunted_short: bool,
         flip_timestamp: datetime,
         proximity: float,
+        confirm_cutoff: datetime | None,
     ) -> list[LiquidityHuntTarget]:
         """Nearby leveraged-liquidation bands on the hunted side.
 
@@ -784,7 +885,14 @@ class LiquidityHuntEngine:
             live = [c for c in group if c[1].end_time is None]
             pool = live if live else group
             mid, band = max(pool, key=lambda c: c[1].intensity)
-            is_captured = not live
+            # Captured only when no member is still live *and* the consuming
+            # candle has closed; a hit on the forming candle stays pending until
+            # it closes, so the phase does not flicker on a live wick.
+            hit_confirmed = (
+                band.end_time is not None
+                and (confirm_cutoff is None or band.end_time <= confirm_cutoff)
+            )
+            is_captured = not live and hit_confirmed
             targets.append(
                 LiquidityHuntTarget(
                     kind=LiquidityHuntTargetKind.LIQUIDATION_BAND,
@@ -867,7 +975,12 @@ class LiquidityHuntEngine:
             f"trend: {side_word} entering it are the resting liquidity."
         )
         if phase is LiquidityHuntPhase.CAPTURED:
-            oi_note = " Open interest no longer unwinding." if total else ""
+            if not total:
+                oi_note = ""
+            elif oi_unwinding:
+                oi_note = f" Open interest still {regime_word} (residual)."
+            else:
+                oi_note = " Open interest no longer unwinding."
             return (
                 f"{base} All {total} mapped {pool_side} pool(s) nearby were "
                 f"captured during this leg.{oi_note}"
