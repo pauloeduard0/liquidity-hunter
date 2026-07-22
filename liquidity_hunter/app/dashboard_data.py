@@ -22,6 +22,7 @@ from liquidity_hunter.core.domain import (
     LiquidityZone,
     LongShortRatio,
     ManipulationCycle,
+    MarketControlState,
     MarketDirection,
     MarketNarrative,
     MarketStructure,
@@ -65,6 +66,7 @@ from liquidity_hunter.psychology import (
     BehaviorDivergenceAnalyzer,
     LeverageLiquidationEstimator,
     ManipulationCycleDetector,
+    MarketControlAnalyzer,
     OIRegimeAnalyzer,
     RetailBiasEstimate,
     RetailTrapAnalyzer,
@@ -764,6 +766,9 @@ class DashboardData:
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
     oi_analysis: OIAnalysis | None = None
+    # Who is in control right now, from CVD aggression × open interest. `None`
+    # for spot-only symbols (no OI). See `MarketControlAnalyzer`.
+    market_control: MarketControlState | None = None
     liquidity_hunt: LiquidityHuntState | None = None
     # Concluded counter-trend hunts earlier in the visible window (the live
     # `liquidity_hunt` covers only the current leg). Lets the chart mark where
@@ -2088,6 +2093,7 @@ def load_dashboard_data(
     if futures_state is None:
         liquidation_map = None
         oi_analysis = None
+        market_control = None
     else:
         open_interest, funding, long_short = futures_state
         liquidation_map = LeverageLiquidationEstimator().estimate(
@@ -2108,6 +2114,13 @@ def load_dashboard_data(
             candles=candles,
             open_interest=open_interest,
             structure_events=internal_structure_events,
+        )
+        # Who is in control right now: CVD aggression crossed with the same OI
+        # series. A conviction-backed side (new money behind the aggression)
+        # flags an entry against it as high-risk.
+        market_control = MarketControlAnalyzer().analyze(
+            candles=candles,
+            open_interest=open_interest,
         )
 
     data = DashboardData(
@@ -2130,6 +2143,7 @@ def load_dashboard_data(
         liquidity_heatmap=liquidity_heatmap,
         liquidation_map=liquidation_map,
         oi_analysis=oi_analysis,
+        market_control=market_control,
         consolidation_ranges=internal_run.consolidation_ranges,
     )
 

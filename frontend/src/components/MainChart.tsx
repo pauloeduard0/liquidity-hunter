@@ -12,6 +12,7 @@ import {
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type SeriesMarker,
+  type SeriesType,
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts'
@@ -64,22 +65,43 @@ const OI_PARTICIPATION_SUFFIX: Record<OIParticipation, string> = {
   flat: '',
 }
 
-const MAIN_CHART_RATIO = 0.68
 const DELTA_CHART_RATIO = 0.16
+const RSI_CHART_RATIO = 0.16
+const CONTROL_CHART_RATIO = 0.14
 const MIN_TOTAL_HEIGHT = 500
 const PRICE_SCALE_MIN_WIDTH = 110
 
-// Split the available height across the three panes. When the indicator panes
-// (volume delta + RSI) are minimized, the main candlestick pane takes the whole
-// height and the others collapse to 0.
-function paneHeights(totalHeight: number, showIndicators: boolean) {
-  if (!showIndicators) {
-    return { mainHeight: totalHeight, deltaHeight: 0, rsiHeight: 0 }
+// Colors for the control oscillator (CVD × OI): buyers green, sellers red,
+// balanced (aggression unwinding / flat, no conviction-backed control) dim.
+const CONTROL_BUYERS_COLOR = '#26a69a'
+const CONTROL_SELLERS_COLOR = '#ef5350'
+const CONTROL_BALANCED_COLOR = '#4a5163'
+
+// Split the available height across the panes. The volume-delta + RSI panes are
+// one group (`showIndicators`); the control oscillator toggles *independently*
+// (`showControl`). Each hidden pane collapses to 0 and the main candlestick
+// pane absorbs the freed height, so opening only the control pane shows only it.
+function paneHeights(totalHeight: number, showIndicators: boolean, showControl: boolean) {
+  const deltaHeight = showIndicators ? Math.round(totalHeight * DELTA_CHART_RATIO) : 0
+  const rsiHeight = showIndicators ? Math.round(totalHeight * RSI_CHART_RATIO) : 0
+  const controlHeight = showControl ? Math.round(totalHeight * CONTROL_CHART_RATIO) : 0
+  const mainHeight = totalHeight - deltaHeight - rsiHeight - controlHeight
+  return { mainHeight, deltaHeight, controlHeight, rsiHeight }
+}
+
+// Which pane carries the visible time axis. RSI carries it whenever the
+// indicator group is open (the long-standing, well-tested path — labels fall
+// back to it). Otherwise the *main* pane keeps its own axis, even when the
+// control oscillator is open below it: the control pane never carries the axis,
+// so the BOS/CHoCH label primitive always resolves time->x from a live,
+// perfectly-synced scale (the main's own when visible, else RSI) and never from
+// the control pane — which was desyncing labels on a timeframe switch.
+function axisVisibility(showIndicators: boolean) {
+  return {
+    main: !showIndicators,
+    control: false,
+    rsi: showIndicators,
   }
-  const mainHeight = Math.round(totalHeight * MAIN_CHART_RATIO)
-  const deltaHeight = Math.round(totalHeight * DELTA_CHART_RATIO)
-  const rsiHeight = totalHeight - mainHeight - deltaHeight
-  return { mainHeight, deltaHeight, rsiHeight }
 }
 
 const RSI_PERIOD = 14
@@ -571,6 +593,7 @@ interface MainChartProps {
   showContinuationWindow?: boolean
   showVolume?: boolean
   showRsiDivergence?: boolean
+  showControlOscillator?: boolean
 }
 
 export function MainChart({
@@ -591,6 +614,7 @@ export function MainChart({
   showContinuationWindow = false,
   showVolume = true,
   showRsiDivergence = false,
+  showControlOscillator = false,
 }: MainChartProps) {
   // Which clock this chart's times are drawn on -- local intraday, exchange
   // (UTC) on the daily/weekly bars. Set during render, before the effects below
@@ -601,13 +625,16 @@ export function MainChart({
   const wrapperRef = useRef<HTMLDivElement>(null)
   const mainContainerRef = useRef<HTMLDivElement>(null)
   const deltaContainerRef = useRef<HTMLDivElement>(null)
+  const controlContainerRef = useRef<HTMLDivElement>(null)
   const rsiContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const deltaChartRef = useRef<IChartApi | null>(null)
+  const controlChartRef = useRef<IChartApi | null>(null)
   const rsiChartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   const deltaSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const controlSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   const rsiSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const overlaySeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const rsiOverlaySeriesRef = useRef<ISeriesApi<'Line'>[]>([])
@@ -625,17 +652,25 @@ export function MainChart({
   // Read by the ResizeObserver (created once) so it recomputes pane heights
   // against the current minimize state. Kept in sync by the effect below.
   const showIndicatorsRef = useRef(showIndicators)
+  const showControlRef = useRef(showControlOscillator)
 
   useEffect(() => {
     const wrapper = wrapperRef.current
     const mainContainer = mainContainerRef.current
     const deltaContainer = deltaContainerRef.current
+    const controlContainer = controlContainerRef.current
     const rsiContainer = rsiContainerRef.current
-    if (!wrapper || !mainContainer || !deltaContainer || !rsiContainer) return
+    if (!wrapper || !mainContainer || !deltaContainer || !controlContainer || !rsiContainer) return
 
     const totalHeight = Math.max(wrapper.clientHeight, MIN_TOTAL_HEIGHT)
     const indicatorsOpen = showIndicatorsRef.current
-    const { mainHeight, deltaHeight, rsiHeight } = paneHeights(totalHeight, indicatorsOpen)
+    const controlOpen = showControlRef.current
+    const { mainHeight, deltaHeight, controlHeight, rsiHeight } = paneHeights(
+      totalHeight,
+      indicatorsOpen,
+      controlOpen,
+    )
+    const av = axisVisibility(indicatorsOpen)
 
     const chartOptions = {
       layout: {
@@ -655,9 +690,10 @@ export function MainChart({
       ...chartOptions,
       width: mainContainer.clientWidth,
       height: mainHeight,
-      // The RSI pane normally carries the visible time axis; when the indicator
-      // panes are minimized the main pane shows it instead.
-      timeScale: { ...chartOptions.timeScale, visible: !indicatorsOpen },
+      // The bottom-most visible pane carries the time axis (see axisVisibility):
+      // RSI when the indicator group is open, the control pane when only it is
+      // open, else the main pane itself.
+      timeScale: { ...chartOptions.timeScale, visible: av.main },
       rightPriceScale: { minimumWidth: PRICE_SCALE_MIN_WIDTH },
     })
     chartRef.current = chart
@@ -671,10 +707,20 @@ export function MainChart({
     })
     deltaChartRef.current = deltaChart
 
+    const controlChart = createChart(controlContainer, {
+      ...chartOptions,
+      width: controlContainer.clientWidth,
+      height: controlHeight,
+      timeScale: { ...chartOptions.timeScale, visible: av.control },
+      rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, minimumWidth: PRICE_SCALE_MIN_WIDTH },
+    })
+    controlChartRef.current = controlChart
+
     const rsiChart = createChart(rsiContainer, {
       ...chartOptions,
       width: rsiContainer.clientWidth,
       height: rsiHeight,
+      timeScale: { ...chartOptions.timeScale, visible: av.rsi },
       rightPriceScale: { scaleMargins: { top: 0.05, bottom: 0.05 }, minimumWidth: PRICE_SCALE_MIN_WIDTH },
     })
     rsiChartRef.current = rsiChart
@@ -709,6 +755,13 @@ export function MainChart({
     })
     deltaSeriesRef.current = deltaSeries
 
+    const controlSeries = controlChart.addSeries(HistogramSeries, {
+      priceLineVisible: false,
+      lastValueVisible: false,
+      base: 0,
+    })
+    controlSeriesRef.current = controlSeries
+
     const rsiSeries = rsiChart.addSeries(LineSeries, {
       color: RSI_LINE_COLOR,
       lineWidth: 2,
@@ -740,10 +793,12 @@ export function MainChart({
     rsiOverlaySeriesRef.current.push(rsiOversold)
 
     const labelsPrimitive = new LineLabelsPrimitive()
-    // When the indicator panes are open the main pane hides its time axis
-    // (the RSI pane carries it), which nulls the main chart's time-scale
-    // coordinate API. The RSI chart shares the synced, equal-width time scale,
-    // so the labels primitive falls back to it for time -> x in that state.
+    // When the main pane hides its time axis (another pane carries it), the main
+    // chart's time-scale coordinate API returns null. The other charts share the
+    // synced, equal-width time scale, so the labels primitive falls back to
+    // whichever pane currently holds the visible axis. The main pane keeps its
+    // own axis unless the RSI pane carries it, so the fallback is always RSI
+    // (only consulted while the main axis is hidden — the indicator-group case).
     labelsPrimitive.fallbackChart = rsiChart
     series.attachPrimitive(labelsPrimitive)
     labelsPrimitiveRef.current = labelsPrimitive
@@ -776,64 +831,67 @@ export function MainChart({
     const divergenceMarkers = createSeriesMarkers(series)
     divergenceMarkersRef.current = divergenceMarkers
 
-    // Sync time scales across all three charts
-    const charts = [chart, deltaChart, rsiChart]
+    // Sync time scales across the *currently visible* panes only. A collapsed
+    // pane (display:none, zero width) has a degenerate time scale: writing a
+    // range to it — or letting it broadcast one — corrupts the shared range and,
+    // because it sits before the control pane in the loop, stops the control
+    // pane from ever receiving the update (the "control only follows zoom when
+    // vol/rsi is also on" bug). So a hidden pane neither sends nor receives.
+    const charts = [chart, deltaChart, controlChart, rsiChart]
+    const isPaneActive = (c: IChartApi) =>
+      c === chart ||
+      (showIndicatorsRef.current && (c === deltaChart || c === rsiChart)) ||
+      (showControlRef.current && c === controlChart)
     for (const src of charts) {
       src.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-        if (isSyncingRef.current || !range) return
+        if (isSyncingRef.current || !range || !isPaneActive(src)) return
         isSyncingRef.current = true
         for (const dst of charts) {
-          if (dst !== src) dst.timeScale().setVisibleLogicalRange(range)
+          if (dst !== src && isPaneActive(dst)) dst.timeScale().setVisibleLogicalRange(range)
         }
         isSyncingRef.current = false
       })
     }
 
-    // Sync crosshairs
-    chart.subscribeCrosshairMove((param) => {
-      if (isSyncingRef.current) return
-      isSyncingRef.current = true
-      if (param.time) {
-        deltaChart.setCrosshairPosition(0, param.time, deltaSeries)
-        rsiChart.setCrosshairPosition(NaN, param.time, rsiSeries)
-      } else {
-        deltaChart.clearCrosshairPosition()
-        rsiChart.clearCrosshairPosition()
-      }
-      isSyncingRef.current = false
-    })
-
-    deltaChart.subscribeCrosshairMove((param) => {
-      if (isSyncingRef.current) return
-      isSyncingRef.current = true
-      if (param.time) {
-        chart.setCrosshairPosition(NaN, param.time, series)
-        rsiChart.setCrosshairPosition(NaN, param.time, rsiSeries)
-      } else {
-        chart.clearCrosshairPosition()
-        rsiChart.clearCrosshairPosition()
-      }
-      isSyncingRef.current = false
-    })
-
-    rsiChart.subscribeCrosshairMove((param) => {
-      if (isSyncingRef.current) return
-      isSyncingRef.current = true
-      if (param.time) {
-        chart.setCrosshairPosition(NaN, param.time, series)
-        deltaChart.setCrosshairPosition(0, param.time, deltaSeries)
-      } else {
-        chart.clearCrosshairPosition()
-        deltaChart.clearCrosshairPosition()
-      }
-      isSyncingRef.current = false
-    })
+    // Sync crosshairs. Each pane maps a hovered time onto the others — but only
+    // the *active* ones: calling setCrosshairPosition on a collapsed (display:
+    // none, zero-width) pane can throw, and if it does the old code left
+    // `isSyncingRef` stuck `true`, silently killing the logical-range (zoom)
+    // sync afterwards — the "control pane only follows zoom when vol/rsi is also
+    // on" bug (vol/rsi visible → no hidden pane touched → no throw). A
+    // try/finally guarantees the guard is always released.
+    const crosshairPanes: { chart: IChartApi; series: ISeriesApi<SeriesType> }[] = [
+      { chart, series },
+      { chart: deltaChart, series: deltaSeries },
+      { chart: controlChart, series: controlSeries },
+      { chart: rsiChart, series: rsiSeries },
+    ]
+    for (const src of crosshairPanes) {
+      src.chart.subscribeCrosshairMove((param) => {
+        if (isSyncingRef.current || !isPaneActive(src.chart)) return
+        isSyncingRef.current = true
+        try {
+          for (const dst of crosshairPanes) {
+            if (dst.chart === src.chart || !isPaneActive(dst.chart)) continue
+            if (param.time) dst.chart.setCrosshairPosition(NaN, param.time, dst.series)
+            else dst.chart.clearCrosshairPosition()
+          }
+        } finally {
+          isSyncingRef.current = false
+        }
+      })
+    }
 
     const ro = new ResizeObserver(() => {
       const h = Math.max(wrapper.clientHeight, MIN_TOTAL_HEIGHT)
-      const { mainHeight: mh, deltaHeight: dh, rsiHeight: rh } = paneHeights(h, showIndicatorsRef.current)
+      const { mainHeight: mh, deltaHeight: dh, controlHeight: ch, rsiHeight: rh } = paneHeights(
+        h,
+        showIndicatorsRef.current,
+        showControlRef.current,
+      )
       chart.applyOptions({ width: mainContainer.clientWidth, height: mh })
       deltaChart.applyOptions({ width: deltaContainer.clientWidth, height: dh })
+      controlChart.applyOptions({ width: controlContainer.clientWidth, height: ch })
       rsiChart.applyOptions({ width: rsiContainer.clientWidth, height: rh })
     })
     ro.observe(wrapper)
@@ -842,13 +900,16 @@ export function MainChart({
       ro.disconnect()
       chart.remove()
       deltaChart.remove()
+      controlChart.remove()
       rsiChart.remove()
       chartRef.current = null
       deltaChartRef.current = null
+      controlChartRef.current = null
       rsiChartRef.current = null
       seriesRef.current = null
       volumeSeriesRef.current = null
       deltaSeriesRef.current = null
+      controlSeriesRef.current = null
       rsiSeriesRef.current = null
       overlaySeriesRef.current = []
       rsiOverlaySeriesRef.current = []
@@ -870,37 +931,60 @@ export function MainChart({
     const wrapper = wrapperRef.current
     const chart = chartRef.current
     const deltaChart = deltaChartRef.current
+    const controlChart = controlChartRef.current
     const rsiChart = rsiChartRef.current
     const mainContainer = mainContainerRef.current
     const deltaContainer = deltaContainerRef.current
+    const controlContainer = controlContainerRef.current
     const rsiContainer = rsiContainerRef.current
     showIndicatorsRef.current = showIndicators
-    if (!wrapper || !chart || !deltaChart || !rsiChart || !mainContainer || !deltaContainer || !rsiContainer) return
+    showControlRef.current = showControlOscillator
+    if (
+      !wrapper || !chart || !deltaChart || !controlChart || !rsiChart ||
+      !mainContainer || !deltaContainer || !controlContainer || !rsiContainer
+    )
+      return
 
     const h = Math.max(wrapper.clientHeight, MIN_TOTAL_HEIGHT)
-    const { mainHeight, deltaHeight, rsiHeight } = paneHeights(h, showIndicators)
+    const { mainHeight, deltaHeight, controlHeight, rsiHeight } = paneHeights(
+      h,
+      showIndicators,
+      showControlOscillator,
+    )
+    const av = axisVisibility(showIndicators)
 
-    // While the panes are closed their containers are display:none (zero
-    // width), so the delta/RSI charts never track the main chart's time scale
-    // (and their one-shot fitContent ran at zero width). Reopening them would
-    // otherwise reveal a stale, desynced range -- and resizing them from zero
-    // width can echo that bad range back onto the main chart. Suppress the sync
-    // feedback across the resize, then drive both panes from the main chart's
-    // current range.
+    // While a pane is closed its container is display:none (zero width), so it
+    // never tracks the main chart's time scale (and its one-shot fitContent ran
+    // at zero width). Reopening it would otherwise reveal a stale, desynced
+    // range -- and resizing from zero width can echo that bad range back onto
+    // the main chart. Suppress the sync feedback across the resize, then drive
+    // every reopened pane from the main chart's current range.
     isSyncingRef.current = true
     chart.applyOptions({
       width: mainContainer.clientWidth,
       height: mainHeight,
-      timeScale: { visible: !showIndicators },
+      timeScale: { visible: av.main },
     })
     deltaChart.applyOptions({ width: deltaContainer.clientWidth, height: deltaHeight })
-    rsiChart.applyOptions({ width: rsiContainer.clientWidth, height: rsiHeight })
+    controlChart.applyOptions({
+      width: controlContainer.clientWidth,
+      height: controlHeight,
+      timeScale: { visible: av.control },
+    })
+    rsiChart.applyOptions({
+      width: rsiContainer.clientWidth,
+      height: rsiHeight,
+      timeScale: { visible: av.rsi },
+    })
 
-    if (showIndicators) {
-      const range = chart.timeScale().getVisibleLogicalRange()
-      if (range) {
+    const range = chart.timeScale().getVisibleLogicalRange()
+    if (range) {
+      if (showIndicators) {
         deltaChart.timeScale().setVisibleLogicalRange(range)
         rsiChart.timeScale().setVisibleLogicalRange(range)
+      }
+      if (showControlOscillator) {
+        controlChart.timeScale().setVisibleLogicalRange(range)
       }
     }
     // Release the guard after this frame's layout (and any resize-triggered
@@ -908,7 +992,7 @@ export function MainChart({
     requestAnimationFrame(() => {
       isSyncingRef.current = false
     })
-  }, [showIndicators])
+  }, [showIndicators, showControlOscillator])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -985,6 +1069,34 @@ export function MainChart({
         }
       }),
     )
+
+    // Control oscillator (CVD aggression × OI): signed conviction per candle,
+    // colored by who is credited with control (buyers green / sellers red /
+    // balanced dim). A single histogram doubles as "who + how strongly".
+    const controlSeries = controlSeriesRef.current
+    if (controlSeries) {
+      const controlColor: Record<string, string> = {
+        buyers: CONTROL_BUYERS_COLOR,
+        sellers: CONTROL_SELLERS_COLOR,
+        balanced: CONTROL_BALANCED_COLOR,
+      }
+      // Index the sparse control readings by candle timestamp, then emit an
+      // entry for *every* candle -- a real bar where there's a reading, a
+      // whitespace `{ time }` otherwise -- so bar indices match the main/delta
+      // charts and the logical-range sync stays aligned (same fix as RSI).
+      const controlByTs = new Map(
+        (data.market_control?.series ?? []).map((p) => [p.timestamp, p]),
+      )
+      controlSeries.setData(
+        data.candles.map((candle) => {
+          const time = toChartTime(candle.timestamp)
+          const p = controlByTs.get(candle.timestamp)
+          return p
+            ? { time, value: p.control_score, color: controlColor[p.controller] ?? CONTROL_BALANCED_COLOR }
+            : { time }
+        }),
+      )
+    }
 
     // RSI — include whitespace entries for the bootstrap period so bar indices
     // match the main/delta charts and the logical-range sync stays aligned.
@@ -1526,6 +1638,7 @@ export function MainChart({
     if (!hasFittedRef.current) {
       chart.timeScale().fitContent()
       deltaChart.timeScale().fitContent()
+      controlChartRef.current?.timeScale().fitContent()
       rsiChart.timeScale().fitContent()
       hasFittedRef.current = true
     }
@@ -1540,6 +1653,16 @@ export function MainChart({
           Volume Delta
         </span>
         <div ref={deltaContainerRef} className="w-full" />
+      </div>
+      <div
+        className={`relative w-full border-t border-[#1e222d] ${
+          showControlOscillator ? '' : 'hidden'
+        }`}
+      >
+        <span className="pointer-events-none absolute left-2 top-1 z-10 text-xs text-[#8a8f9c]">
+          Control (CVD×OI)
+        </span>
+        <div ref={controlContainerRef} className="w-full" />
       </div>
       <div className={`relative w-full border-t border-[#1e222d] ${showIndicators ? '' : 'hidden'}`}>
         <span className="pointer-events-none absolute left-2 top-1 z-10 text-xs text-[#8a8f9c]">

@@ -1,5 +1,6 @@
 """Volume delta: per-candle taker buy/sell aggression imbalance."""
 
+import itertools
 from collections.abc import Sequence
 
 from liquidity_hunter.core.domain import Candle
@@ -19,3 +20,16 @@ def volume_delta(candle: Candle) -> float:
 def volume_delta_series(candles: Sequence[Candle]) -> list[float]:
     """`volume_delta` for each candle in `candles`, in the same order."""
     return [volume_delta(candle) for candle in candles]
+
+
+def cumulative_volume_delta(candles: Sequence[Candle]) -> list[float]:
+    """Running sum of `volume_delta` over `candles` (the CVD series).
+
+    Cumulative Volume Delta tracks the *accumulated* net taker aggression: a
+    rising CVD means buyers have been the aggressors over the run, a falling
+    CVD means sellers. It is 1:1 aligned with `candles`; the first element is
+    the first candle's own delta. Divergences between the CVD slope and price
+    reveal who is actually initiating (hitting bid/ask) versus who is merely
+    moving price passively.
+    """
+    return list(itertools.accumulate(volume_delta(candle) for candle in candles))

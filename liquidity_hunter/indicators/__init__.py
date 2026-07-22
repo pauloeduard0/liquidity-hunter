@@ -5,9 +5,14 @@ volume profiles) consumed by `liquidity`, `psychology`, and `scoring`.
 Depends only on `core` and `data`.
 """
 
-from liquidity_hunter.indicators.volume_delta import volume_delta, volume_delta_series
+from liquidity_hunter.indicators.volume_delta import (
+    cumulative_volume_delta,
+    volume_delta,
+    volume_delta_series,
+)
 
 __all__ = [
+    "cumulative_volume_delta",
     "volume_delta",
     "volume_delta_series",
 ]

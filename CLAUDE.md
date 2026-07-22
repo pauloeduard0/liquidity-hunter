@@ -347,7 +347,9 @@ re-exported from `liquidity_hunter.data`.
   computes `2 * taker_buy_volume - volume` (net taker buy/sell aggression
   for that candle, ranging from `-volume` to `+volume`);
   `volume_delta_series(candles) -> list[float]` applies it across a series,
-  1:1 aligned with `candles`. Both are re-exported from
+  1:1 aligned with `candles`. `cumulative_volume_delta(candles) -> list[float]`
+  is the running sum (the **CVD** series): rising = buyers have been the
+  aggressors over the run, falling = sellers. All three are re-exported from
   `liquidity_hunter.indicators`.
 
 ### Liquidity layer (`liquidity_hunter/liquidity`)
@@ -823,7 +825,31 @@ documented in `liquidity_hunter/docs/psychology.md`.
   `NEW_MONEY`/`COVERING`/`FLAT`. Events outside OI coverage are skipped, not
   guessed. OI alignment is by bisect (latest sample at/before each timestamp).
 
-All seven are re-exported from `liquidity_hunter.psychology`.
+- **`psychology/analyzers/market_control.py`** — `MarketControlAnalyzer`:
+  answers *who is in control of the tape right now?* by crossing **CVD
+  aggression** (net taker delta over a per-TF window, normalized by window
+  volume) with **open interest** — the classic futures matrix, but on the
+  *aggression* axis instead of price, so a move that ticks up on no real buying
+  isn't mistaken for buyer control. `analyze(candles, open_interest) ->
+  MarketControlState | None` (`None` for spot/no-OI). It reuses `OIRegime` as
+  the quadrant label (buy-agg+OI↑ = `LONG_BUILDUP`, sell-agg+OI↑ =
+  `SHORT_BUILDUP`, buy-agg+OI↓ = `SHORT_COVERING`, sell-agg+OI↓ =
+  `LONG_LIQUIDATION`). `controller` (`MarketControlSide`:
+  `BUYERS`/`SELLERS`/`BALANCED`) credits a side **only in the OI-rising
+  quadrants** (fresh money behind the aggression); covering/liquidation are
+  position-closing → `BALANCED`. `control_score` is the signed conviction
+  oscillator in `[-100, 100]` (sign = aggressor side, magnitude = conviction:
+  amplified when OI confirms, attenuated when it diverges); `fade_warning` is
+  `True` exactly when a side is credited — the high-risk "don't enter against
+  the controller" flag. Same `_TIMEFRAME_WINDOW` as `OIRegimeAnalyzer` so the
+  two axes are measured over one horizon. Besides the current-window snapshot
+  it also emits a **rolling `series`** (`list[MarketControlPoint]`:
+  `timestamp`, `control_score`, `controller` per candle with OI coverage) for
+  the chart oscillator. `MarketControlState`/`MarketControlPoint` live in
+  `core/domain/market_control.py`, the `MarketControlSide` enum in
+  `core/domain/enums.py`.
+
+All eight are re-exported from `liquidity_hunter.psychology`.
 
 ### Scoring layer (`liquidity_hunter/scoring`)
 
@@ -864,7 +890,9 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `liquidity_heatmap` (`LiquidityHeatmap | None`),
   `liquidation_map` (`LeverageLiquidationMap | None`),
   `narrative` (`MarketNarrative | None`), `oi_analysis`
-  (`OIAnalysis | None`), `liquidity_hunt` (`LiquidityHuntState | None`),
+  (`OIAnalysis | None`), `market_control` (`MarketControlState | None` — who
+  controls the tape from CVD×OI, `None` for spot; see `MarketControlAnalyzer`),
+  `liquidity_hunt` (`LiquidityHuntState | None`),
   `higher_timeframe` (`TimeFrame | None` — the `_HIGHER_TIMEFRAME_MAP` anchor
   pair `higher_timeframe_direction` was measured on, `None` for the top
   timeframe; lets the frontend label readings "vs 4H" instead of a generic
@@ -1228,6 +1256,17 @@ selector.
   (`CANDLE_UP_COLOR`/`CANDLE_DOWN_COLOR`), computed as
   `2 * taker_buy_volume - volume` per candle.
 
+  **Control oscillator pane** (CVD×OI): a 4th synced pane (order: main, delta,
+  control, rsi — RSI stays the bottom pane carrying the time axis) drawing
+  `data.market_control.series` as a signed histogram (`control_score`,
+  -100..100), colored by `controller` (buyers green / sellers red / balanced
+  dim) — "who is in control and how strongly" in one bar. It carves its slice
+  out of the main pane (`CONTROL_CHART_RATIO`) and participates in the
+  logical-range time sync but not crosshair sync. Toggled by the `⚑ Control`
+  toolbar button (`showControlOscillator` prop, default **off**); turning it on
+  also opens the indicator panes (it lives in that group, hidden when they're
+  minimized).
+
   **RSI pane**: RSI(14) line with 70/30 reference lines and regular
   divergence detection (bullish: price LL + RSI HL below 50; bearish:
   price HH + RSI LH above 50). Divergence lines drawn as colored
@@ -1384,9 +1423,15 @@ selector.
 
 - **Liquidity Hunt KPI card** (frontend, as of 2026-07-06): the KPI row reads
   left-to-right as a story ending in the hunt "conclusion" card — the
-  **Price card was removed** to keep the grid at `md:grid-cols-5` (price
-  remains visible in the chart toolbar OHLC): Retail Bias, Dominant
-  Liquidity, HTF Trend, OI Regime, **Liquidity Hunt**. `huntCardProps` in
+  **Price card was removed** (price remains visible in the chart toolbar
+  OHLC). The grid is `md:grid-cols-6` (`LoadingSkeleton` matches): Retail
+  Bias, Dominant Liquidity, HTF Trend, OI Regime, **Who's in Control**,
+  **Liquidity Hunt**. The **Who's in Control** card (`controlCardProps`, from
+  `data.market_control`) is the CVD×OI read: `buyers` → `▲ Buyers` (green,
+  badge `⚠ DON'T FADE`), `sellers` → `▼ Sellers` (red, `⚠ DON'T FADE`),
+  `balanced` → `◆ Balanced` (amber `⚠ UNWIND` when covering/liquidation, else
+  slate); sub-line `CVD ±x% · OI ±y% · conviction N`, full `description` on
+  hover. `huntCardProps` in
   `KpiRow.tsx` maps `data.liquidity_hunt.phase` to presentation:
   `none` → `◆ —` / "structure aligned with HTF"; `counter_trend` →
   `Shorts = liquidity` (red, badge `⚠ INTACT`); `hunt_in_progress` →

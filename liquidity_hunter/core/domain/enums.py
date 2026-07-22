@@ -168,6 +168,22 @@ class OIParticipation(str, Enum):
     FLAT = "flat"  # no meaningful OI change
 
 
+class MarketControlSide(str, Enum):
+    """Which side is initiating the tape with conviction, from CVD × OI.
+
+    Combines taker aggression (Cumulative Volume Delta slope) with open
+    interest to read *who is in control right now*. Control is only asserted
+    when fresh positions back the aggression (OI rising = new money); when OI
+    is falling the aggression is position-closing (covering/liquidation), so
+    no side is credited with conviction-backed control (``BALANCED``). An
+    observation about participation, not a signal.
+    """
+
+    BUYERS = "buyers"  # buy aggression + OI rising: new longs, buyers in control
+    SELLERS = "sellers"  # sell aggression + OI rising: new shorts, sellers in control
+    BALANCED = "balanced"  # no conviction-backed control (flat, or aggression is unwinding)
+
+
 class LiquidityHuntPhase(str, Enum):
     """Progress of a counter-trend liquidity hunt.
 

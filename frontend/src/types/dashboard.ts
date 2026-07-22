@@ -75,6 +75,39 @@ export type OIRegime =
 
 export type OIParticipation = 'new_money' | 'covering' | 'flush' | 'flat'
 
+export type MarketControlSide = 'buyers' | 'sellers' | 'balanced'
+
+/** One candle's control reading for the chart oscillator (mirror of
+ *  `core.domain.MarketControlPoint`). `control_score` is signed [-100, 100]. */
+export interface MarketControlPoint {
+  timestamp: string
+  control_score: number
+  controller: MarketControlSide
+}
+
+/** Who is in control of the tape right now, from CVD aggression × open interest
+ *  (mirror of `core.domain.MarketControlState`). `control_score` is the signed
+ *  conviction oscillator in [-100, 100]: sign = aggressor side (positive =
+ *  buyers), magnitude = conviction (amplified when OI confirms, attenuated when
+ *  it diverges). `fade_warning` is true when new money backs the aggression —
+ *  an entry against the controller is the high-risk trade this reading flags. */
+export interface MarketControlState {
+  symbol: string
+  timeframe: TimeFrame
+  timestamp: string
+  controller: MarketControlSide
+  regime: OIRegime
+  cvd_change: number
+  cvd_change_ratio: number
+  oi_change_pct: number
+  conviction: number
+  control_score: number
+  fade_warning: boolean
+  window_candles: number
+  description: string
+  series: MarketControlPoint[]
+}
+
 export interface Candle {
   symbol: string
   timeframe: TimeFrame
@@ -445,6 +478,7 @@ export interface DashboardData {
   liquidation_map: LeverageLiquidationMap | null
   narrative: MarketNarrative | null
   oi_analysis: OIAnalysis | null
+  market_control: MarketControlState | null
   liquidity_hunt: LiquidityHuntState | null
   liquidity_hunt_history: LiquidityHuntEpisode[]
   liquidity_continuation_history: LiquidityHuntEpisode[]

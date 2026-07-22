@@ -18,6 +18,7 @@ from liquidity_hunter.core.domain import (
     LiquidityHuntState,
     LiquidityZone,
     ManipulationCycle,
+    MarketControlState,
     MarketDirection,
     MarketNarrative,
     MarketStructure,
@@ -56,6 +57,7 @@ class DashboardDataResponse(BaseModel):
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
     oi_analysis: OIAnalysis | None = None
+    market_control: MarketControlState | None = None
     liquidity_hunt: LiquidityHuntState | None = None
     liquidity_hunt_history: list[LiquidityHuntEpisode] = Field(default_factory=list)
     liquidity_continuation_history: list[LiquidityHuntEpisode] = Field(

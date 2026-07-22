@@ -1,4 +1,9 @@
-import type { DashboardData, LiquidityHuntState, OIRegime } from '../types/dashboard'
+import type {
+  DashboardData,
+  LiquidityHuntState,
+  MarketControlState,
+  OIRegime,
+} from '../types/dashboard'
 import type { MarketDirection, RetailPositioning } from '../types/dashboard'
 import { formatPrice } from '../utils/format'
 
@@ -80,6 +85,51 @@ function huntCardProps(
     badge: { text: '⚠ INTACT', color: '#ef5350' },
     sub: pools + oiCtx + vsAnchor,
     title: hunt.description,
+  }
+}
+
+// "Who is in control?" — CVD aggression crossed with open interest. The strong
+// reading is a conviction-backed side (new money behind the aggression): the
+// card turns solid green/red with a "⚠ DON'T FADE" badge, because entering
+// against a side that is opening fresh positions is the high-risk trade. When
+// the aggression is only position-closing (covering/liquidation) the card reads
+// balanced/amber — exhaustion, not control.
+function controlCardProps(control: MarketControlState | null): Omit<KpiCardProps, 'label'> {
+  if (!control) {
+    return { value: '◆ —', sub: 'no futures OI data' }
+  }
+  const oiCtx = `CVD ${fmtPct(control.cvd_change_ratio)} · OI ${fmtPct(control.oi_change_pct)}`
+  if (control.controller === 'buyers') {
+    return {
+      value: '▲ Buyers',
+      accent: '#26a69a',
+      badge: { text: '⚠ DON’T FADE', color: '#26a69a' },
+      sub: `${oiCtx} · conviction ${control.conviction.toFixed(0)}`,
+      title: control.description,
+    }
+  }
+  if (control.controller === 'sellers') {
+    return {
+      value: '▼ Sellers',
+      accent: '#ef5350',
+      badge: { text: '⚠ DON’T FADE', color: '#ef5350' },
+      sub: `${oiCtx} · conviction ${control.conviction.toFixed(0)}`,
+      title: control.description,
+    }
+  }
+  // Balanced: distinguish exhaustion (aggression unwinding) from truly flat.
+  const exhausting =
+    control.regime === 'short_covering'
+      ? 'shorts covering'
+      : control.regime === 'long_liquidation'
+        ? 'longs liquidating'
+        : null
+  return {
+    value: '◆ Balanced',
+    accent: exhausting ? '#ff9800' : '#8a8f9c',
+    badge: exhausting ? { text: '⚠ UNWIND', color: '#ff9800' } : undefined,
+    sub: exhausting ? `${exhausting} · ${oiCtx}` : oiCtx,
+    title: control.description,
   }
 }
 
@@ -196,7 +246,7 @@ export function KpiRow({ data }: KpiRowProps) {
   // liquidity sits, which way the higher timeframe leans, who is behind the
   // move (OI) — and the hunt card concludes it.
   return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
       <KpiCard
         label="Retail Bias"
         value={`${bias.dominant_side.toUpperCase()} ${bias.confidence.toFixed(0)}%`}
@@ -222,6 +272,10 @@ export function KpiRow({ data }: KpiRowProps) {
         accent={oiCfg?.color}
         badge={oiBadge}
         sub={oiSub}
+      />
+      <KpiCard
+        label="Who's in Control"
+        {...controlCardProps(data.market_control ?? null)}
       />
       <KpiCard
         label="Liquidity Hunt"

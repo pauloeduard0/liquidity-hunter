@@ -9,6 +9,7 @@ from liquidity_hunter.psychology.analyzers.leverage_liquidation import (
     ProjectedLevel,
 )
 from liquidity_hunter.psychology.analyzers.manipulation_cycle import ManipulationCycleDetector
+from liquidity_hunter.psychology.analyzers.market_control import MarketControlAnalyzer
 from liquidity_hunter.psychology.analyzers.oi_regime import OIRegimeAnalyzer
 from liquidity_hunter.psychology.analyzers.retail_trap import RetailTrapAnalyzer
 from liquidity_hunter.psychology.analyzers.volume_spread import VolumeSpreadAnalyzer
@@ -17,6 +18,7 @@ __all__ = [
     "BehaviorDivergenceAnalyzer",
     "LeverageLiquidationEstimator",
     "ManipulationCycleDetector",
+    "MarketControlAnalyzer",
     "OIRegimeAnalyzer",
     "ProjectedLevel",
     "RetailBiasEstimator",

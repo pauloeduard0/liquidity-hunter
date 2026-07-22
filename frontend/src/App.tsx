@@ -57,8 +57,8 @@ function LoadingSkeleton() {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       {/* KPI skeleton */}
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-        {Array.from({ length: 5 }).map((_, i) => (
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
+        {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="skeleton h-[76px]" />
         ))}
       </div>
@@ -132,6 +132,7 @@ function App() {
   const [eqlVisible, setEqlVisible] = useState(false)
   const [volumeVisible, setVolumeVisible] = useState(true)
   const [rsiDivVisible, setRsiDivVisible] = useState(false)
+  const [controlOscVisible, setControlOscVisible] = useState(false)
   const [indicatorsVisible, setIndicatorsVisible] = useState(false)
   const [, setTick] = useState(0)
 
@@ -523,6 +524,18 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setControlOscVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        controlOscVisible
+                          ? 'bg-[#26a69a22] text-[#26a69a]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle the control oscillator pane (CVD aggression × OI — who is in control, and how strongly)"
+                    >
+                      ⚑ Control
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setIndicatorsVisible((v) => !v)}
                       className={`ml-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         indicatorsVisible
@@ -565,7 +578,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showVsaMarkers={vsaVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showVsaMarkers={vsaVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showControlOscillator={controlOscVisible} />
                 </div>
               </div>
 
