@@ -237,9 +237,10 @@ and `validate_assignment=True`. New entities should follow this pattern.
   `captured_at`; list capped at 8, counts in `targets_captured`/`targets_total`
   cover the full set), `correction_direction`, `counter_structure_timestamp`
   (the trend-flip event), `oi_unwinding`, `last_flush_timestamp`, `captured_at`,
-  `description`. `CAPTURED` requires **all** mapped pools consumed *and* OI no
-  longer unwinding against the hunted side — conservative by design (and never
-  reached with zero mapped pools: absence of pools is not evidence of capture).
+  `description`. `CAPTURED` requires **all** mapped pools consumed (confirmed on
+  closed candles; `oi_unwinding` is descriptive evidence, not a gate) —
+  conservative by design (and never reached with zero mapped pools: absence of
+  pools is not evidence of capture).
 - **`MarketNarrative`** — synthesized institutional narrative for a
   symbol/timeframe snapshot, defined in `core/domain/narrative.py`. Fields:
   `symbol`, `timeframe`, `timestamp`, `phase` (`ManipulationPhase | None`),
@@ -1081,10 +1082,16 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
     capture-side `LIQUIDITY_SWEEP` since the flip; `oi_unwinding` =
     `current_regime` is `SHORT_COVERING` (hunted shorts) /
     `LONG_LIQUIDATION` (hunted longs).
-  - **Phase**: `CAPTURED` only when all mapped pools are captured **and**
-    not `oi_unwinding` (`captured_at` = last capture); any capture / flush /
-    sweep / unwinding → `HUNT_IN_PROGRESS`; else `COUNTER_TREND`. With zero
-    mapped pools the state never reaches `CAPTURED` (conservative).
+  - **Phase**: `CAPTURED` when all mapped pools are captured (`captured_at` =
+    last capture); any capture / flush / sweep / unwinding →
+    `HUNT_IN_PROGRESS`; else `COUNTER_TREND`. With zero mapped pools the state
+    never reaches `CAPTURED` (conservative). Captures are confirmed on **closed
+    candles only** (a pool swept by the still-forming last candle stays pending
+    until it closes), and `oi_unwinding` is **evidence only** — it no longer
+    gates `CAPTURED`, so a live OI regime flickering between polls can't
+    un-capture a structurally finished hunt (fixed 2026-07-21; the
+    CAPTURED ⇄ HUNT_IN_PROGRESS churn seen live). It still keeps a
+    not-yet-captured leg in `HUNT_IN_PROGRESS`.
 
 - **`app/overview.py`** — multi-timeframe structural overview (the sidebar
   "Structure Ladder", as of 2026-07-11). Split in two stages so the API can

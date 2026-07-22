@@ -77,18 +77,27 @@ do construtor, todos calibráveis):
 
 ### Filtro de extremo local (o "gate")
 
-Duas famílias (`NO_SUPPLY`/`NO_DEMAND` e `DOWN_THRUST`/`UP_THRUST`) disparam em
-quase toda barra quieta/rejeição da fita (medido ~89% dos sinais crus, ~214 por
-1000 candles). Sem filtro, poluem o gráfico. Elas são **restritas a um extremo
-local fresco** (`_GATED_PATTERNS`):
+As famílias quietas/rejeição (`NO_SUPPLY`/`NO_DEMAND` e `DOWN_THRUST`/`UP_THRUST`)
+disparam em quase toda barra quieta/rejeição da fita (medido ~89% dos sinais
+crus, ~214 por 1000 candles). Sem filtro, poluem o gráfico. **Todos os seis
+padrões** (`_GATED_PATTERNS`, os climaxes incluídos desde 2026-07-21) são
+**restritos a um extremo local fresco**:
 
 - padrão **bullish** só vale se o candle faz (ou empata) a **mínima** da janela
   `gate_extreme_lookback` (default 20) — um teste de suporte genuíno;
 - padrão **bearish** só vale no topo da janela.
 
-`gate_extreme_tolerance` (default 0.0005) é a folga do empate. **Climax não
-passa pelo gate** — é raro e auto-evidente. Medido: corta as famílias ruidosas
-~86% (densidade final ~54 por 1000 candles).
+`gate_extreme_tolerance` (default 0.0005) é a folga do empate. O climax passa
+pelo gate como **rede de segurança quase-grátis** (barra larga de volume extremo
+quase sempre já faz o próprio extremo; só barra o climax raro que aparece no
+meio da perna). Medido: corta as famílias ruidosas ~86% (densidade ~54 por 1000
+candles).
+
+> **Nota (gate de pivô confirmado — testado e descartado 2026-07-21):** um gate
+> *centrado* (`gate_pivot_lookforward`, exigir que o candle siga sendo o extremo
+> por N barras **depois** dele = pivô de swing) foi medido (−13% a −30% conforme
+> N) mas na revisão visual derrubava fundos/topos importantes junto com o ruído,
+> sem ganho que compensasse. Ficou só o gate *trailing* acima.
 
 ### Deduplicação
 
