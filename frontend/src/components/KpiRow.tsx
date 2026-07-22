@@ -61,12 +61,23 @@ function huntCardProps(
     ? `${hunt.targets_captured}/${hunt.targets_total} pools swept`
     : 'no pools mapped nearby'
   const oiCtx = hunt.oi_unwinding ? ' · OI unwinding' : ''
+  // Grab quality from CVD-aggression x OI: flag an exhaustion grab (stops run
+  // on no new money) as reversal-prone; note a genuine break otherwise.
+  const qualityCtx =
+    hunt.capture_quality === 'exhaustion_grab'
+      ? ' · ⚠ exhaustion grab'
+      : hunt.capture_quality === 'genuine_break'
+        ? ' · new money'
+        : ''
   if (hunt.phase === 'captured') {
+    const exhausted = hunt.capture_quality === 'exhaustion_grab'
     return {
       value: `${side} captured`,
-      accent: '#26a69a',
-      badge: { text: '✓ CLEARED', color: '#26a69a' },
-      sub: `${pools}${hunt.captured_at ? ` · ${fmtWhen(hunt.captured_at)}` : ''}${vsAnchor}`,
+      accent: exhausted ? '#ff9800' : '#26a69a',
+      badge: exhausted
+        ? { text: '⚠ EXHAUSTION', color: '#ff9800' }
+        : { text: '✓ CLEARED', color: '#26a69a' },
+      sub: `${pools}${hunt.captured_at ? ` · ${fmtWhen(hunt.captured_at)}` : ''}${qualityCtx}${vsAnchor}`,
       title: hunt.description,
     }
   }
@@ -75,7 +86,7 @@ function huntCardProps(
       value: `Hunting ${side.toLowerCase()}`,
       accent: '#ff9800',
       badge: { text: '⚡ ACTIVE', color: '#ff9800' },
-      sub: pools + oiCtx + vsAnchor,
+      sub: pools + oiCtx + qualityCtx + vsAnchor,
       title: hunt.description,
     }
   }

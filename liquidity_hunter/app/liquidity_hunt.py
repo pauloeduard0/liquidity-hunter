@@ -24,10 +24,12 @@ from statistics import fmean
 from typing import TYPE_CHECKING
 
 from liquidity_hunter.core.domain.enums import (
+    HuntCaptureQuality,
     LiquidityHuntPhase,
     LiquidityHuntTargetKind,
     LiquiditySide,
     LiquidityZoneType,
+    MarketControlSide,
     MarketDirection,
     OIParticipation,
     OIRegime,
@@ -255,6 +257,8 @@ class LiquidityHuntEngine:
         else:
             phase = LiquidityHuntPhase.COUNTER_TREND
 
+        capture_quality = self._capture_quality(data, capture_direction)
+
         return LiquidityHuntState(
             symbol=data.symbol,
             timeframe=data.timeframe,
@@ -268,6 +272,7 @@ class LiquidityHuntEngine:
             oi_unwinding=oi_unwinding,
             last_flush_timestamp=last_flush,
             captured_at=captured_at,
+            capture_quality=capture_quality,
             description=self._describe(
                 phase=phase,
                 hunted_short=hunted_short,
@@ -277,6 +282,7 @@ class LiquidityHuntEngine:
                 total=len(targets),
                 oi_unwinding=oi_unwinding,
                 last_flush=last_flush,
+                capture_quality=capture_quality,
             ),
         )
 
@@ -382,6 +388,9 @@ class LiquidityHuntEngine:
                         end_timestamp=grab_ts,
                         capture_score=score,
                         capture_sources=sources,
+                        capture_quality=self._episode_quality(
+                            data, capture_direction, grab_ts
+                        ),
                         description=(
                             f"Completed hunt: a {direction.value} move against "
                             f"the {htf.value} higher-timeframe trend swept "
@@ -468,6 +477,9 @@ class LiquidityHuntEngine:
                         end_timestamp=grab_ts,
                         capture_score=score,
                         capture_sources=sources,
+                        capture_quality=self._episode_quality(
+                            data, capture_direction, grab_ts
+                        ),
                         description=(
                             f"Continuation grab: a {htf.value} leg aligned "
                             f"with the {htf.value} higher-timeframe trend pulled "
@@ -952,6 +964,69 @@ class LiquidityHuntEngine:
         expected = OIRegime.SHORT_COVERING if hunted_short else OIRegime.LONG_LIQUIDATION
         return regime.regime is expected
 
+    @staticmethod
+    def _quality_for_controller(
+        controller: MarketControlSide | None, capture_direction: MarketDirection
+    ) -> HuntCaptureQuality:
+        """Map a credited controller to a grab quality against the capture side.
+
+        Fresh money on the capture side (buyers backing an upward short-hunt /
+        sellers backing a downward long-hunt) is a genuine break that cleared
+        liquidity along the way; anything else (short-covering / balanced / no
+        reading) means the grab ran the stops on no new money — an exhausting,
+        reversal-prone move. ``None`` controller → ``UNKNOWN``.
+        """
+        if controller is None:
+            return HuntCaptureQuality.UNKNOWN
+        backing = (
+            MarketControlSide.BUYERS
+            if capture_direction is MarketDirection.BULLISH
+            else MarketControlSide.SELLERS
+        )
+        return (
+            HuntCaptureQuality.GENUINE_BREAK
+            if controller is backing
+            else HuntCaptureQuality.EXHAUSTION_GRAB
+        )
+
+    @classmethod
+    def _capture_quality(
+        cls, data: DashboardData, capture_direction: MarketDirection
+    ) -> HuntCaptureQuality:
+        """Quality of the *live* grab, from the current ``MarketControlState``.
+
+        Degrades to ``UNKNOWN`` on spot / no OI (the ladder's slim snapshot has
+        no ``market_control``).
+        """
+        control = data.market_control
+        controller = control.controller if control is not None else None
+        return cls._quality_for_controller(controller, capture_direction)
+
+    @classmethod
+    def _episode_quality(
+        cls,
+        data: DashboardData,
+        capture_direction: MarketDirection,
+        grab_ts: datetime,
+    ) -> HuntCaptureQuality:
+        """Quality of a *past* grab, from the control series at the grab candle.
+
+        Unlike the live reading, a historical episode is qualified by the
+        ``MarketControlPoint`` at (or the last before) its grab timestamp — the
+        control reading *at the moment the liquidity was taken*, not the current
+        snapshot. ``UNKNOWN`` when the series does not cover the grab.
+        """
+        control = data.market_control
+        if control is None or not control.series:
+            return HuntCaptureQuality.UNKNOWN
+        controller: MarketControlSide | None = None
+        for point in control.series:
+            if point.timestamp <= grab_ts:
+                controller = point.controller
+            else:
+                break
+        return cls._quality_for_controller(controller, capture_direction)
+
     # ------------------------------------------------------------------
     # Description
     # ------------------------------------------------------------------
@@ -966,10 +1041,23 @@ class LiquidityHuntEngine:
         total: int,
         oi_unwinding: bool,
         last_flush: datetime | None,
+        capture_quality: HuntCaptureQuality,
     ) -> str:
         side_word = "shorts" if hunted_short else "longs"
         pool_side = "buy-side" if hunted_short else "sell-side"
         regime_word = "short covering" if hunted_short else "long liquidation"
+        # The grab's fuel, from CVD-aggression x OI: an exhaustion grab (stops
+        # run on no new money) is reversal-prone, a genuine break has fresh
+        # money behind the move.
+        if capture_quality is HuntCaptureQuality.EXHAUSTION_GRAB:
+            quality_note = (
+                f" Grab on no new money ({side_word} run without fresh flow) — "
+                f"reversal-prone."
+            )
+        elif capture_quality is HuntCaptureQuality.GENUINE_BREAK:
+            quality_note = " Grab backed by fresh money — genuine break, not exhaustion."
+        else:
+            quality_note = ""
         base = (
             f"{trend.value.capitalize()} move against a {htf.value} higher-timeframe "
             f"trend: {side_word} entering it are the resting liquidity."
@@ -983,7 +1071,7 @@ class LiquidityHuntEngine:
                 oi_note = " Open interest no longer unwinding."
             return (
                 f"{base} All {total} mapped {pool_side} pool(s) nearby were "
-                f"captured during this leg.{oi_note}"
+                f"captured during this leg.{oi_note}{quality_note}"
             )
         parts = [base]
         if total:
@@ -994,4 +1082,6 @@ class LiquidityHuntEngine:
             parts.append(f"Leveraged {side_word} flushed at {last_flush:%Y-%m-%d %H:%M}.")
         if oi_unwinding:
             parts.append(f"OI regime still {regime_word} — {side_word} still being consumed.")
+        if quality_note:
+            parts.append(quality_note.strip())
         return " ".join(parts)

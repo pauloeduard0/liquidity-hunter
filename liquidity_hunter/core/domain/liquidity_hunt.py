@@ -14,6 +14,7 @@ from pydantic import Field
 
 from liquidity_hunter.core.domain.base import DomainModel
 from liquidity_hunter.core.domain.enums import (
+    HuntCaptureQuality,
     LiquidityHuntPhase,
     LiquidityHuntTargetKind,
     MarketDirection,
@@ -59,6 +60,11 @@ class LiquidityHuntEpisode(DomainModel):
     # only when the score reaches the capture threshold.
     capture_score: float = Field(default=0.0, ge=0.0)
     capture_sources: list[str] = Field(default_factory=list)
+    # Quality of the grab from CVD-aggression x OI at the grab candle: an
+    # ``EXHAUSTION_GRAB`` ran the stops on no new money (reversal-prone), a
+    # ``GENUINE_BREAK`` had fresh money behind the capture direction;
+    # ``UNKNOWN`` when the market-control series does not cover the grab.
+    capture_quality: HuntCaptureQuality = HuntCaptureQuality.UNKNOWN
     description: str
 
 
@@ -87,4 +93,10 @@ class LiquidityHuntState(DomainModel):
     oi_unwinding: bool = False
     last_flush_timestamp: datetime | None = None
     captured_at: datetime | None = None
+    # Quality of the grab from CVD-aggression x OI (``MarketControlState``):
+    # a ``GENUINE_BREAK`` capture is backed by fresh money taking the capture
+    # side, an ``EXHAUSTION_GRAB`` runs the stops on no new money (short
+    # covering / stop-hunting) and is reversal-prone; ``UNKNOWN`` when no
+    # market-control reading is available (spot / no OI). Descriptive.
+    capture_quality: HuntCaptureQuality = HuntCaptureQuality.UNKNOWN
     description: str

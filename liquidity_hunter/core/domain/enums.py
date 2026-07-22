@@ -207,6 +207,22 @@ class LiquidityHuntTargetKind(str, Enum):
     LIQUIDATION_BAND = "liquidation_band"  # projected leveraged-liquidation band
 
 
+class HuntCaptureQuality(str, Enum):
+    """Quality of a liquidity-hunt capture, from CVD-aggression x OI control.
+
+    Cross-references the hunt's capture direction with the current
+    ``MarketControlState``: was the grab backed by *fresh money* taking the
+    capture side (a genuine break that also cleared liquidity), or by no new
+    money — pure short-covering / stop-hunting on an exhausting move, which
+    often precedes a reversal back the other way? An observation about the
+    grab's fuel, not a signal.
+    """
+
+    UNKNOWN = "unknown"  # no market-control reading (spot / no OI coverage)
+    GENUINE_BREAK = "genuine_break"  # new money backs the capture direction
+    EXHAUSTION_GRAB = "exhaustion_grab"  # grab with no new money — reversal-prone
+
+
 class NarrativeEventType(str, Enum):
     """Classification of a narrative timeline event."""
 

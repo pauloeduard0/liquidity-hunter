@@ -352,6 +352,11 @@ export interface OIQualifiedEvent {
 
 export type LiquidityHuntPhase = 'none' | 'counter_trend' | 'hunt_in_progress' | 'captured'
 
+/** Quality of a hunt grab from CVD-aggression x OI: a genuine break has fresh
+ *  money behind the capture direction, an exhaustion grab runs the stops on no
+ *  new money (reversal-prone); unknown when no market-control reading exists. */
+export type HuntCaptureQuality = 'unknown' | 'genuine_break' | 'exhaustion_grab'
+
 export type LiquidityHuntTargetKind = 'equal_level' | 'liquidation_band'
 
 export interface LiquidityHuntTarget {
@@ -379,6 +384,7 @@ export interface LiquidityHuntState {
   oi_unwinding: boolean
   last_flush_timestamp: string | null
   captured_at: string | null
+  capture_quality: HuntCaptureQuality
   description: string
 }
 
@@ -394,6 +400,10 @@ export interface LiquidityHuntEpisode {
    *  zone / delta). A hunt is recorded only at/above the capture threshold. */
   capture_score: number
   capture_sources: string[]
+  /** Grab quality from CVD-aggression x OI at the grab candle: an exhaustion
+   *  grab ran the stops on no new money (reversal-prone), a genuine break had
+   *  fresh money behind the capture direction. */
+  capture_quality: HuntCaptureQuality
   description: string
 }
 

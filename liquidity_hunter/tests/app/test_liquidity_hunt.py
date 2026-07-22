@@ -6,6 +6,7 @@ from liquidity_hunter.app.dashboard_data import DashboardData
 from liquidity_hunter.app.liquidity_hunt import LiquidityHuntEngine
 from liquidity_hunter.core.domain import (
     Candle,
+    HuntCaptureQuality,
     LeverageLiquidationMap,
     LiquidationBand,
     LiquidityHuntPhase,
@@ -13,6 +14,9 @@ from liquidity_hunter.core.domain import (
     LiquiditySide,
     LiquidityZone,
     LiquidityZoneType,
+    MarketControlPoint,
+    MarketControlSide,
+    MarketControlState,
     MarketDirection,
     MarketStructure,
     OIAnalysis,
@@ -996,3 +1000,135 @@ def test_history_includes_past_grab_of_still_open_leg() -> None:
     assert len(history) == 1
     assert history[0].start_timestamp == events[0].timestamp
     assert history[0].end_timestamp == events[1].timestamp
+
+
+# ── Capture quality (CVD-aggression x OI) ───────────────────────────
+
+
+def _control(controller: MarketControlSide) -> MarketControlState:
+    regime = (
+        OIRegime.LONG_BUILDUP
+        if controller is MarketControlSide.BUYERS
+        else OIRegime.SHORT_BUILDUP
+        if controller is MarketControlSide.SELLERS
+        else OIRegime.FLAT
+    )
+    return MarketControlState(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=T0 + H1 * 10,
+        controller=controller,
+        regime=regime,
+        cvd_change=1.0,
+        cvd_change_ratio=0.3,
+        oi_change_pct=0.01,
+        conviction=40.0,
+        control_score=40.0 if controller is not MarketControlSide.SELLERS else -40.0,
+        fade_warning=controller is not MarketControlSide.BALANCED,
+        window_candles=5,
+        description="",
+    )
+
+
+def test_capture_quality_unknown_without_market_control() -> None:
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=[_bearish_choch()],
+        liquidity_zones=[_eqh_zone(101.0)],
+    )
+    state = LiquidityHuntEngine().build(data)
+    assert state.capture_quality is HuntCaptureQuality.UNKNOWN
+
+
+def test_upward_grab_with_no_new_money_is_exhaustion() -> None:
+    # Hunted shorts -> capture direction bullish. Control shows no buyers in
+    # control (short covering / balanced): the up move ran the stops on no
+    # fresh money -> exhaustion grab, reversal-prone.
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=[_bearish_choch()],
+        liquidity_zones=[_eqh_zone(101.0)],
+        market_control=_control(MarketControlSide.BALANCED),
+    )
+    state = LiquidityHuntEngine().build(data)
+    assert state.capture_quality is HuntCaptureQuality.EXHAUSTION_GRAB
+
+
+def test_upward_grab_with_buyers_in_control_is_genuine_break() -> None:
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=[_bearish_choch()],
+        liquidity_zones=[_eqh_zone(101.0)],
+        market_control=_control(MarketControlSide.BUYERS),
+    )
+    state = LiquidityHuntEngine().build(data)
+    assert state.capture_quality is HuntCaptureQuality.GENUINE_BREAK
+
+
+def _control_series(
+    points: list[tuple[int, MarketControlSide]],
+) -> MarketControlState:
+    series = [
+        MarketControlPoint(
+            timestamp=T0 + H1 * i,
+            control_score=40.0 if side is MarketControlSide.BUYERS else -40.0,
+            controller=side,
+        )
+        for i, side in points
+    ]
+    return MarketControlState(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=series[-1].timestamp,
+        controller=series[-1].controller,
+        regime=OIRegime.FLAT,
+        cvd_change=1.0,
+        cvd_change_ratio=0.3,
+        oi_change_pct=0.01,
+        conviction=40.0,
+        control_score=series[-1].control_score,
+        fade_warning=series[-1].controller is not MarketControlSide.BALANCED,
+        window_candles=5,
+        description="",
+        series=series,
+    )
+
+
+def test_history_episode_quality_exhaustion_when_no_new_money_at_grab() -> None:
+    # Up-grab of shorts at candle 8; the control series shows no buyers in
+    # control there -> exhaustion grab (reversal-prone).
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        volume_spread_signals=[_vsa(8, VSAPattern.UP_THRUST, MarketDirection.BEARISH)],
+        candles=_candles(16),
+        market_control=_control_series(
+            [(7, MarketControlSide.BALANCED), (8, MarketControlSide.BALANCED)]
+        ),
+    )
+    history = LiquidityHuntEngine().build_history(data)
+    assert len(history) == 1
+    assert history[0].capture_quality is HuntCaptureQuality.EXHAUSTION_GRAB
+
+
+def test_history_episode_quality_genuine_when_buyers_control_the_up_grab() -> None:
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        volume_spread_signals=[_vsa(8, VSAPattern.UP_THRUST, MarketDirection.BEARISH)],
+        candles=_candles(16),
+        market_control=_control_series(
+            [(7, MarketControlSide.BALANCED), (8, MarketControlSide.BUYERS)]
+        ),
+    )
+    history = LiquidityHuntEngine().build_history(data)
+    assert len(history) == 1
+    assert history[0].capture_quality is HuntCaptureQuality.GENUINE_BREAK

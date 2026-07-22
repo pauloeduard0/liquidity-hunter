@@ -1564,20 +1564,27 @@ export function MainChart({
       // each ending at the liquidity grab that closed it (short, near-term).
       for (const episode of history) {
         const sideWord = episode.hunted_side === 'short' ? 'shorts' : 'longs'
-        // What closed the hunt (sources + score) stays in the hover title; the
-        // on-chart label is kept clean.
+        // Exhaustion grab (stops run on no new money at the grab candle — CVD×OI)
+        // is reversal-prone: purple with a ⚠; a genuine break stays green ✓. What
+        // closed the hunt (sources + score) stays in the hover title.
+        const exhaustion = episode.capture_quality === 'exhaustion_grab'
+        const color = exhaustion ? '#ab47bc' : '#26a69a'
         huntWindows.push({
           x0: toChartTime(episode.start_timestamp),
           x1: toChartTime(episode.end_timestamp),
-          color: '#26a69a',
-          fillColor: '#26a69a0d',
-          label: `✓ ${sideWord} hunted`,
+          color,
+          fillColor: color + '0d',
+          label: exhaustion ? `⚠ ${sideWord} hunted (exhaustion)` : `✓ ${sideWord} hunted`,
         })
       }
     }
     if (showHuntWindow && hunt && hunt.phase !== 'none' && hunt.counter_structure_timestamp) {
       const captured = hunt.phase === 'captured'
-      const color = captured ? '#26a69a' : '#ff9800'
+      // An exhaustion-grab capture (stops run on no new money — CVD×OI) is
+      // reversal-prone: shade it purple with a distinct label instead of the
+      // green "cleared" of a genuine break.
+      const exhaustion = captured && hunt.capture_quality === 'exhaustion_grab'
+      const color = exhaustion ? '#ab47bc' : captured ? '#26a69a' : '#ff9800'
       const sideWord = hunt.hunted_side === 'short' ? 'shorts' : 'longs'
       // The live window is the *pending* grab only: start it at the last grab
       // already captured in this leg (the latest history episode ending at or
@@ -1598,7 +1605,11 @@ export function MainChart({
             : ((lastCandleTime + 9_999_999) as UTCTimestamp),
         color,
         fillColor: color + '0d',
-        label: captured ? `✓ ${sideWord} captured` : `⚡ hunting ${sideWord}`,
+        label: exhaustion
+          ? `⚠ ${sideWord} captured (exhaustion)`
+          : captured
+            ? `✓ ${sideWord} captured`
+            : `⚡ hunting ${sideWord}`,
       })
     }
     // Aligned trend-continuation grabs: a separate regime (a leg with the HTF
