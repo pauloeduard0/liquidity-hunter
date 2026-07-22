@@ -777,6 +777,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_weak_ref_persistence_candles: int | None = None,
         choch_confirmed_trend_persistence_candles: int | None = None,
         emit_provisional_bos: bool = False,
+        emit_provisional_first_bos: bool = False,
         emit_provisional_choch: bool = False,
         emit_provisional_choch_weak: bool = False,
         bos_confluence_strong_close_frac: float | None = None,
@@ -900,6 +901,7 @@ class InternalStructureDetector(MarketStructureDetector):
             choch_confirmed_trend_persistence_candles
         )
         self._emit_provisional_bos = emit_provisional_bos
+        self._emit_provisional_first_bos = emit_provisional_first_bos
         self._emit_provisional_choch = emit_provisional_choch
         self._emit_provisional_choch_weak = emit_provisional_choch_weak
         self._bos_confluence_strong_close_frac = bos_confluence_strong_close_frac
@@ -2505,7 +2507,15 @@ class InternalStructureDetector(MarketStructureDetector):
                     # the lookback-delayed confirming pivot).
                     if self._bos_first_floor_leg_extreme:
                         for _cand in (pending_high, active_high):
-                            if _cand is not None:
+                            # Mirror of the bearish bound: only highs that formed
+                            # within this bullish leg (after it launched from
+                            # `bull_choch_origin`) count -- a `pending_high` carried
+                            # across a prior bearish cycle is stale, not the leg's
+                            # topo.
+                            if _cand is not None and (
+                                bull_choch_origin is None
+                                or _cand.timestamp >= bull_choch_origin.timestamp
+                            ):
                                 prev_bull_bos_extreme = max(
                                     prev_bull_bos_extreme, _cand.price
                                 )
@@ -3530,7 +3540,16 @@ class InternalStructureDetector(MarketStructureDetector):
                         # low landed in `active_low` and `pending_low` held an
                         # earlier, shallower low) -- take the deepest of the two.
                         for _cand in (pending_low, active_low):
-                            if _cand is not None:
+                            # Only lows that formed *within* this bearish leg (after
+                            # it launched from `bear_choch_origin`) count -- a
+                            # `pending_low` carried across a prior opposite cycle is
+                            # stale, not the leg's fundo (NEAR M30: a 07-17 low of
+                            # 1.891 dragged across a whole bullish cycle into a
+                            # 07-21 bearish CHoCH whose real fundo was 1.914).
+                            if _cand is not None and (
+                                bear_choch_origin is None
+                                or _cand.timestamp >= bear_choch_origin.timestamp
+                            ):
                                 prev_bear_bos_extreme = min(
                                     prev_bear_bos_extreme, _cand.price
                                 )
@@ -4001,7 +4020,7 @@ class InternalStructureDetector(MarketStructureDetector):
         # marks only.
         prov_event: MarketStructure | None = None
         if (
-            self._emit_provisional_bos
+            (self._emit_provisional_bos or self._emit_provisional_first_bos)
             and trend is not MarketDirection.NEUTRAL
             # A live-edge failure just flipped the trend without the failure
             # block's staircase/floor bookkeeping (see above), so the floor
@@ -4061,6 +4080,82 @@ class InternalStructureDetector(MarketStructureDetector):
                         scope=StructureScope.INTERNAL,
                         provisional=True,
                     )
+
+            # EXPERIMENT (`emit_provisional_first_bos`): the FIRST BOS of a leg.
+            # Its break advanced the state machine (a `pending_bos` stands) but has
+            # not emitted because its confirming pullback pivot has not formed yet
+            # (the swing-lookback lag at the live edge). The continuation path above
+            # skips it (`floor_from_bos` is `False` for a first break, and the
+            # ratcheted floor has moved past the level). Surface that standing
+            # pending BOS as a provisional mark instead, drawn at its recorded
+            # fundo/topo (`pending_bos.floor`, the CHoCH-seeded reversal extreme --
+            # distinct from the CHoCH gate, so no overdraw), timed at the first
+            # close beyond that level. NEAR M30 2026-07-22: fundo 1.914 closed-broke
+            # but the confirming high after the 1.863 low hasn't formed.
+            last_choch = next(
+                (
+                    e
+                    for e in reversed(events)
+                    if e.event is StructureEvent.CHANGE_OF_CHARACTER and not e.provisional
+                ),
+                None,
+            )
+            leg_has_confirmed_bos = any(
+                e.event is StructureEvent.BREAK_OF_STRUCTURE
+                and not e.provisional
+                and e.direction is trend
+                and (last_choch is None or e.timestamp >= last_choch.timestamp)
+                for e in events
+            )
+            if (
+                prov_event is None
+                and self._emit_provisional_first_bos
+                and not leg_has_confirmed_bos
+                and last_choch is not None
+                and last_choch.direction is trend
+                and pending_bos is not None
+                and pending_bos.direction is trend
+            ):
+                # Anchor at the pending BOS's own recorded floor -- the exact level
+                # the confirmed BOS will report when its pullback pivot forms, so
+                # the provisional never "jumps" on confirmation. (With the leg-bound
+                # fix to `bos_first_floor_leg_extreme`, that floor no longer drags to
+                # a stale pre-CHoCH low; NEAR M30 it is the 1.914 CHoCH fundo.)
+                level = (
+                    pending_bos.floor
+                    if pending_bos.floor is not None
+                    else pending_bos.ref_price
+                )
+                if level is not None and level > 0:
+                    origin_ts = resolve_break_origin_timestamp(
+                        candles, len(candles) - 1, level, bearish=bearish
+                    )
+                    broke = [
+                        c
+                        for c in tail
+                        if (origin_ts is None or c.timestamp > origin_ts)
+                        and (c.close < level if bearish else c.close > level)
+                    ]
+                    if broke:
+                        extreme = (
+                            min(c.low for c in broke) if bearish else max(c.high for c in broke)
+                        )
+                        break_index = index_by_timestamp[broke[0].timestamp]
+                        reference_timestamp = resolve_break_origin_timestamp(
+                            candles, break_index, level, bearish=bearish
+                        )
+                        prov_event = MarketStructure(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            timestamp=broke[0].timestamp,
+                            event=StructureEvent.BREAK_OF_STRUCTURE,
+                            direction=trend,
+                            price_level=extreme,
+                            reference_price_level=level,
+                            reference_timestamp=reference_timestamp,
+                            scope=StructureScope.INTERNAL,
+                            provisional=True,
+                        )
 
         # Provisional live-edge CHoCH (only under `emit_provisional_choch`). Mirror
         # of the provisional BOS for the *reversal*: since the last confirmed
@@ -4266,8 +4361,42 @@ class InternalStructureDetector(MarketStructureDetector):
 
         self.final_trend = trend
 
+        def prov_bos_duplicates_confirmed(
+            prov: MarketStructure, confirmed: list[MarketStructure]
+        ) -> bool:
+            # A provisional first-BOS marks the same break a confirmed BOS may
+            # already cover -- most often a *staged* BOS (impulse / superseded /
+            # reversal-eaten) merged after the provisional section, so the
+            # `leg_has_confirmed_bos` guard (which scans `events` mid-detect) could
+            # not see it yet. Drop the dimmed mark when a real BOS of the same
+            # direction shares its break (pivot `price_level` AND floor
+            # `reference_price_level`), so the chart never shows a `BOS?` on top of
+            # a confirmed `BOS` (NEAR M30 2026-07-22: staged BOS at 03:30/1.914).
+            for real in confirmed:
+                if (
+                    real.event is not StructureEvent.BREAK_OF_STRUCTURE
+                    or real.provisional
+                    or real.direction is not prov.direction
+                ):
+                    continue
+                if abs(real.price_level - prov.price_level) > (
+                    abs(prov.price_level) * _STAGED_BOS_DEDUP_PCT
+                ):
+                    continue
+                if (
+                    real.reference_price_level is not None
+                    and prov.reference_price_level is not None
+                    and abs(real.reference_price_level - prov.reference_price_level)
+                    > abs(prov.reference_price_level) * _STAGED_BOS_DEDUP_PCT
+                ):
+                    continue
+                return True
+            return False
+
         if not staged_bos:
-            if prov_event is not None:
+            if prov_event is not None and not prov_bos_duplicates_confirmed(
+                prov_event, events
+            ):
                 events.append(prov_event)
             if prov_choch_event is not None:
                 events.append(prov_choch_event)
@@ -4325,7 +4454,9 @@ class InternalStructureDetector(MarketStructureDetector):
             accepted.append(staged)
 
         merged = [*events, *accepted]
-        if prov_event is not None:
+        if prov_event is not None and not prov_bos_duplicates_confirmed(
+            prov_event, merged
+        ):
             merged.append(prov_event)
         if prov_choch_event is not None:
             merged.append(prov_choch_event)

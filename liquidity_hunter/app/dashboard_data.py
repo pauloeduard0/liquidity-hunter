@@ -1522,6 +1522,10 @@ def _build_internal_detector(
         # provisional marks confirm, ~7-candle median lead; the repaints cluster
         # on counter-trend pushes into chop, so it reads as an honest "forming".
         emit_provisional_bos=True,
+        # EXPERIMENT: also emit a provisional BOS on the *first* break of a leg,
+        # drawn at the reported fundo/topo (distinct from the CHoCH gate) so it
+        # does not overdraw the CHoCH line. Under review on NEAR M30.
+        emit_provisional_first_bos=True,
         # Strong-close override for the BOS confluence filter (see the constant):
         # a decisive close at the candle's extreme passes even when the
         # shadow-balance test would reject it (a momentum breakout closing at its
