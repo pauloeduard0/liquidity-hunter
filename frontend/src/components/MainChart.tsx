@@ -19,6 +19,7 @@ import {
 
 import { LineLabelsPrimitive, type LineLabel } from '../charting/LineLabelsPrimitive'
 import { HuntWindowPrimitive, type HuntWindow } from '../charting/HuntWindowPrimitive'
+import { DivergenceArcPrimitive, type DivergenceArc } from '../charting/DivergenceArcPrimitive'
 import { POIBoxesPrimitive, type POIBox } from '../charting/POIBoxesPrimitive'
 import { HeatmapStripPrimitive, type HeatmapBand } from '../charting/HeatmapStripPrimitive'
 import {
@@ -387,9 +388,12 @@ const POI_KIND_LABELS: Record<string, string> = {
 const DIVERGENCE_MARKER_SHAPES: Record<string, { shape: 'circle' | 'square' | 'arrowUp' | 'arrowDown'; position: 'aboveBar' | 'belowBar' }> = {
   distribution: { shape: 'arrowDown', position: 'aboveBar' },
   accumulation: { shape: 'arrowUp', position: 'belowBar' },
-  exhaustion: { shape: 'circle', position: 'aboveBar' },
-  absorption: { shape: 'square', position: 'belowBar' },
 }
+
+// Exhaustion / absorption divergences are drawn as curved arcs (via
+// DivergenceArcPrimitive) rather than markers — a dome above price for a
+// bearish top exhaustion, a bowl below for a bullish exhaustion/absorption.
+const DIVERGENCE_ARC_TYPES = new Set(['exhaustion', 'absorption'])
 
 // Chart-only declutter for liquidation bands: the API returns the full set
 // (including far/old liquidations, kept for the backtest), but the chart shows
@@ -481,10 +485,11 @@ function selectVisiblePoiZones(
 
 function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker<Time>[] {
   return [...divergences]
+    .filter((div) => !DIVERGENCE_ARC_TYPES.has(div.divergence_type))
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
     .map((div) => {
       const style = DIVERGENCE_STYLES[div.divergence_type]
-      const markerStyle = DIVERGENCE_MARKER_SHAPES[div.divergence_type] ?? DIVERGENCE_MARKER_SHAPES.exhaustion
+      const markerStyle = DIVERGENCE_MARKER_SHAPES[div.divergence_type] ?? DIVERGENCE_MARKER_SHAPES.distribution
       const dirIcon = div.direction === 'bullish' ? '▲' : '▼'
       return {
         time: toChartTime(div.timestamp) as Time,
@@ -494,6 +499,46 @@ function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker
         text: `${style?.label ?? div.divergence_type} ${dirIcon}`,
         size: 1.5,
       } as SeriesMarker<Time>
+    })
+}
+
+// Exhaustion/absorption arcs: dome above price for a bearish (top) reading,
+// bowl below for a bullish one (bottom exhaustion / absorption).
+function buildDivergenceArcs(
+  divergences: BehaviorDivergence[],
+  candles: DashboardData['candles'],
+): DivergenceArc[] {
+  // Anchor each arc to the candle's extreme (high above / low below) rather
+  // than its close, so the curve clears the wick with a little breathing room.
+  const byTime = new Map(candles.map((c) => [c.timestamp, c]))
+  return [...divergences]
+    .filter((div) => DIVERGENCE_ARC_TYPES.has(div.divergence_type))
+    .map((div) => {
+      // Which side the arc hugs depends on the type's direction semantics:
+      // exhaustion.direction is the fading trend (bullish → top exhausting →
+      // dome above); absorption.direction is the net flow (bullish → buyers
+      // absorbing at support → bowl below). So they map oppositely.
+      const bullish = div.direction === 'bullish'
+      const side: DivergenceArc['side'] =
+        div.divergence_type === 'exhaustion'
+          ? bullish
+            ? 'above'
+            : 'below'
+          : bullish
+            ? 'below'
+            : 'above'
+      const candle = byTime.get(div.timestamp)
+      const price = candle
+        ? side === 'above'
+          ? candle.high
+          : candle.low
+        : div.price_level
+      return {
+        time: toChartTime(div.timestamp) as Time,
+        price,
+        side,
+        color: DIVERGENCE_STYLES[div.divergence_type]?.color ?? '#888888',
+      }
     })
 }
 
@@ -647,6 +692,7 @@ export function MainChart({
   const heatmapPrimitiveRef = useRef<HeatmapStripPrimitive | null>(null)
   const liquidationBandsPrimitiveRef = useRef<LiquidationBandsPrimitive | null>(null)
   const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
+  const divergenceArcsPrimitiveRef = useRef<DivergenceArcPrimitive | null>(null)
   const hasFittedRef = useRef(false)
   const isSyncingRef = useRef(false)
   // Read by the ResizeObserver (created once) so it recomputes pane heights
@@ -828,6 +874,10 @@ export function MainChart({
     series.attachPrimitive(liquidationBandsPrimitive)
     liquidationBandsPrimitiveRef.current = liquidationBandsPrimitive
 
+    const divergenceArcsPrimitive = new DivergenceArcPrimitive()
+    series.attachPrimitive(divergenceArcsPrimitive)
+    divergenceArcsPrimitiveRef.current = divergenceArcsPrimitive
+
     const divergenceMarkers = createSeriesMarkers(series)
     divergenceMarkersRef.current = divergenceMarkers
 
@@ -921,6 +971,7 @@ export function MainChart({
       heatmapPrimitiveRef.current = null
       liquidationBandsPrimitiveRef.current = null
       divergenceMarkersRef.current = null
+      divergenceArcsPrimitiveRef.current = null
       hasFittedRef.current = false
     }
   }, [])
@@ -1517,6 +1568,11 @@ export function MainChart({
       (a, b) => (a.time as number) - (b.time as number),
     )
     divergenceMarkersRef.current?.setMarkers(mergedMarkers)
+
+    // Exhaustion/absorption divergences render as curved arcs, not markers.
+    divergenceArcsPrimitiveRef.current?.setArcs(
+      showDivergenceMarkers ? buildDivergenceArcs(data.behavior_divergences ?? [], data.candles) : [],
+    )
 
     // Liquidity heatmap strip
     const heatmapBands: HeatmapBand[] =
