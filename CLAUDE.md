@@ -1252,6 +1252,31 @@ selector.
   the stale-line problem is solved by the staged breakout event that ends
   them at the range's resolution instead.
 
+  **Behavior divergence markers + arcs**: `distribution`/`accumulation`
+  divergences draw arrow markers (`buildDivergenceMarkers`,
+  `DIVERGENCE_MARKER_SHAPES`), but `exhaustion`/`absorption` (`DIVERGENCE_ARC_TYPES`)
+  are drawn as **curved arcs** instead (`buildDivergenceArcs` →
+  `DivergenceArcPrimitive`): a dome above the candle **high** for a top reading,
+  a bowl below the candle **low** for a bottom one. The side is resolved per
+  type — `exhaustion.direction` is the fading trend (bullish → top → dome
+  above), `absorption.direction` is the net flow (bullish → buyers absorbing at
+  support → bowl below), so the two map oppositely. Arc width tracks
+  `barSpacing` (`ARC_HALF_BARS = 4` candles each side, clamped 20–90px) so it
+  scales with zoom; `GAP`/`ARCH` are fractions of the width. Both marker groups
+  toggle with `showDivergenceMarkers` (the arcs ignore `showVsaMarkers`).
+
+  **VSA-confluence reinforcement**: a frontend-only cross of the two volume
+  layers — VSA (single-candle anatomy) and behavior divergence (window flow)
+  read the same reversal at different time resolutions, so they rarely coincide
+  on the exact candle but often within a few bars. When a **same-side** VSA
+  reversal pattern (`VSA_PATTERN_SIDE`: climax/thrust/no-supply-demand →
+  above/below) sits within `CONFLUENCE_WINDOW_BARS = 3` candles of a divergence
+  arc, the arc is flagged `strong` and drawn **reinforced** (thicker stroke,
+  translucent halo, a `✦` badge at the apex). Neither base layer is modified —
+  the badge surfaces the rare strong agreements while each layer's own noise
+  recedes. Computed from `data.volume_spread_signals` regardless of the VSA
+  marker toggle.
+
   **Volume delta pane**: histogram bars colored by candle direction
   (`CANDLE_UP_COLOR`/`CANDLE_DOWN_COLOR`), computed as
   `2 * taker_buy_volume - volume` per candle.
@@ -1625,6 +1650,5 @@ state in brief:
   per-TF signed sub-scores from OB/Sweep/EQL/VOL/RSI-div/Hunt with exposed
   components; requires porting RSI(14) + divergence detection (today
   frontend-only, `MainChart.tsx`) into `indicators/`.
-- React frontend behavior divergence sidebar panel and chart overlay.
 - React frontend liquidity targets, retail trap, and market structure
   sidebar panels.
