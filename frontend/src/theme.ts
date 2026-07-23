@@ -14,8 +14,10 @@ export const CANDLE_UP_COLOR = '#9598a1'
 export const CANDLE_DOWN_COLOR = '#da4d4d'
 
 export const ZONE_COLORS: Record<string, string> = {
-  equal_highs: '#ef553b',
-  equal_lows: '#636efa',
+  // Liquidity pools use a pink/cyan pair, deliberately clear of the OB boxes'
+  // red/blue (POI_BOX_STYLES) so the two layers never read as the same thing.
+  equal_highs: '#ff6fb5',  // pink — buy-side pool above price
+  equal_lows: '#28c9e6',   // cyan — sell-side pool below price
   swing_high: '#ffa15a',
   swing_low: '#19d3f3',
   order_block: '#ab63fa',
@@ -39,7 +41,7 @@ export const STRUCTURE_EVENT_STYLES: Record<string, { label: string; color: stri
   break_of_structure: { label: 'BOS', color: '#26a69a' },
   change_of_character: { label: 'CHoCH', color: '#ffb74d' },
   choch_failed: { label: 'CHoCH ✕', color: '#9e9e9e' },
-  liquidity_sweep: { label: 'Sweep', color: '#8d6fc4' },
+  liquidity_sweep: { label: 'Sweep', color: '#e8ebf2' },  // soft white — a momentary stop-grab, not a reference level
 }
 
 /**

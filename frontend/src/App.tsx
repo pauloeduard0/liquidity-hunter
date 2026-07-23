@@ -116,8 +116,11 @@ function App() {
   const [overview, setOverview] = useState<MarketOverview | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [manipChartVisible, setManipChartVisible] = useState(false)
-  const [divChartVisible, setDivChartVisible] = useState(false)
-  const [vsaVisible, setVsaVisible] = useState(true)
+  const [divChartVisible, setDivChartVisible] = useState(true)
+  // VSA has three states cycled by clicking: 'recent' (only the last N candles,
+  // the default — recent context without clutter), 'full' (whole history), and
+  // 'off'. Order: recent -> full -> off -> recent.
+  const [vsaMode, setVsaMode] = useState<'off' | 'recent' | 'full'>('recent')
   const [heatmapVisible, setHeatmapVisible] = useState(false)
   const [liquidationVisible, setLiquidationVisible] = useState(false)
   const [liquidationLiveOnly, setLiquidationLiveOnly] = useState(false)
@@ -127,12 +130,12 @@ function App() {
   // On by default: a confirmed range is the "why is the chart silent here"
   // answer, the whole point of detecting it.
   const [rangeBoxesVisible, setRangeBoxesVisible] = useState(true)
-  const [obVisible, setObVisible] = useState(false)
-  const [sweepVisible, setSweepVisible] = useState(false)
-  const [eqlVisible, setEqlVisible] = useState(false)
+  const [obVisible, setObVisible] = useState(true)
+  const [sweepVisible, setSweepVisible] = useState(true)
+  const [eqlVisible, setEqlVisible] = useState(true)
   const [volumeVisible, setVolumeVisible] = useState(true)
   const [rsiDivVisible, setRsiDivVisible] = useState(false)
-  const [controlOscVisible, setControlOscVisible] = useState(false)
+  const [controlOscVisible, setControlOscVisible] = useState(true)
   const [indicatorsVisible, setIndicatorsVisible] = useState(false)
   const [, setTick] = useState(0)
 
@@ -476,15 +479,19 @@ function App() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setVsaVisible((v) => !v)}
+                      onClick={() =>
+                        setVsaMode((m) =>
+                          m === 'recent' ? 'full' : m === 'full' ? 'off' : 'recent',
+                        )
+                      }
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        vsaVisible
+                        vsaMode !== 'off'
                           ? 'bg-[#e040fb22] text-[#e040fb]'
                           : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
                       }`}
-                      title="Toggle VSA volume-spread signals (climax / thrust / no-supply)"
+                      title="VSA volume-spread signals — click to cycle: recent (last candles) → full history → off"
                     >
-                      ≈ VSA
+                      ≈ VSA{vsaMode === 'recent' ? ' ·' : vsaMode === 'full' ? ' ⁝' : ''}
                     </button>
                     <button
                       type="button"
@@ -578,7 +585,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} showVsaMarkers={vsaVisible} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showControlOscillator={controlOscVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showControlOscillator={controlOscVisible} />
                 </div>
               </div>
 

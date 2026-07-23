@@ -26,6 +26,7 @@ import {
   LiquidationBandsPrimitive,
   type LiquidationBandInput,
 } from '../charting/LiquidationBandsPrimitive'
+import { EqlZonesPrimitive, type EqlZoneInput } from '../charting/EqlZonesPrimitive'
 import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone, VolumeSpreadSignal } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
@@ -55,6 +56,13 @@ import { setChartTimezoneMode, toChartTime } from '../utils/chartTime'
 
 const TOP_N_ZONES = 5
 const MAX_INTERNAL_SWEEPS = 3
+// A sweep is a momentary stop-grab at a wick, not a standing reference: draw
+// it as a short segment anchored at the sweep candle rather than a line that
+// runs to the next event / chart edge.
+const SWEEP_LINE_CANDLES = 6
+// VSA 'recent' mode shows only signals within the last N candles — recent
+// context without cluttering the whole history.
+const VSA_RECENT_CANDLES = 120
 
 // Suffix appended to a structure event label when the OI analysis qualified
 // it: ⊕ new money behind the break, ⊖ break driven by position unwinding,
@@ -660,7 +668,7 @@ interface MainChartProps {
   showConsolidationRanges?: boolean
   showManipulationBoxes?: boolean
   showDivergenceMarkers?: boolean
-  showVsaMarkers?: boolean
+  vsaMode?: 'off' | 'recent' | 'full'
   showHeatmap?: boolean
   showLiquidationBands?: boolean
   liquidationLiveOnly?: boolean
@@ -681,7 +689,7 @@ export function MainChart({
   showConsolidationRanges = true,
   showManipulationBoxes = true,
   showDivergenceMarkers = true,
-  showVsaMarkers = true,
+  vsaMode = 'recent',
   showHeatmap = true,
   showLiquidationBands = true,
   liquidationLiveOnly = false,
@@ -726,6 +734,7 @@ export function MainChart({
   const rangeBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const heatmapPrimitiveRef = useRef<HeatmapStripPrimitive | null>(null)
   const liquidationBandsPrimitiveRef = useRef<LiquidationBandsPrimitive | null>(null)
+  const eqlZonesPrimitiveRef = useRef<EqlZonesPrimitive | null>(null)
   const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const divergenceArcsPrimitiveRef = useRef<DivergenceArcPrimitive | null>(null)
   const hasFittedRef = useRef(false)
@@ -908,6 +917,10 @@ export function MainChart({
     const liquidationBandsPrimitive = new LiquidationBandsPrimitive()
     series.attachPrimitive(liquidationBandsPrimitive)
     liquidationBandsPrimitiveRef.current = liquidationBandsPrimitive
+
+    const eqlZonesPrimitive = new EqlZonesPrimitive()
+    series.attachPrimitive(eqlZonesPrimitive)
+    eqlZonesPrimitiveRef.current = eqlZonesPrimitive
 
     const divergenceArcsPrimitive = new DivergenceArcPrimitive()
     series.attachPrimitive(divergenceArcsPrimitive)
@@ -1137,11 +1150,23 @@ export function MainChart({
     // VSA tint per candle timestamp: a flagged candle's volume-delta bar is
     // colored by what the pattern *means* (climax/thrust/quiet) rather than
     // just its direction — the whole point of reading volume with price.
+    // VSA signals honoring the three-state mode: 'off' → none, 'recent' → only
+    // the last VSA_RECENT_CANDLES bars, 'full' → whole history.
+    const allVsaSignals = data.volume_spread_signals ?? []
+    const vsaRecentCutoff =
+      data.candles.length > VSA_RECENT_CANDLES
+        ? Date.parse(data.candles[data.candles.length - VSA_RECENT_CANDLES].timestamp)
+        : Number.NEGATIVE_INFINITY
+    const vsaSignals =
+      vsaMode === 'off'
+        ? []
+        : vsaMode === 'full'
+          ? allVsaSignals
+          : allVsaSignals.filter((s) => Date.parse(s.timestamp) >= vsaRecentCutoff)
+
     const vsaColorByTs = new Map<string, string>()
-    if (showVsaMarkers) {
-      for (const sig of data.volume_spread_signals ?? []) {
-        vsaColorByTs.set(sig.timestamp, VSA_STYLES[sig.pattern]?.color ?? '#8a94a6')
-      }
+    for (const sig of vsaSignals) {
+      vsaColorByTs.set(sig.timestamp, VSA_STYLES[sig.pattern]?.color ?? '#8a94a6')
     }
     deltaSeries.setData(
       data.candles.map((candle) => {
@@ -1279,26 +1304,43 @@ export function MainChart({
       })
     }
 
-    for (const scored of showEqlZones ? data.ranked_zones.slice(0, TOP_N_ZONES) : []) {
+    const eqlZones: EqlZoneInput[] = []
+    // Only equal-level pools are drawn; standalone swing highs/lows are single
+    // pivots (weaker resting liquidity) that just clutter the chart — they still
+    // feed scoring/heatmap etc. on the backend, only the render drops them.
+    const poolZones = showEqlZones
+      ? data.ranked_zones
+          .filter(
+            (s) => s.zone.zone_type === 'equal_highs' || s.zone.zone_type === 'equal_lows',
+          )
+          .slice(0, TOP_N_ZONES)
+      : []
+    for (const scored of poolZones) {
       const { zone, score } = scored
       const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
       const label = ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type
-      const title = `${label} (${zone.strength.toFixed(2)}) · ${score.toFixed(0)}`
-      const price = (zone.price_high + zone.price_low) / 2
+      // Strength (touch count) as filled dots: 3+ touches ●●●, 2 touches ●●.
+      const dotCount = Math.max(2, Math.min(3, Math.round(zone.strength * 3)))
+      const dots = '●'.repeat(dotCount)
+      const title = `${label} · ${dots} · ${score.toFixed(0)}`
       const startTime = toChartTime(zone.formed_at)
 
-      const zoneSeries = chart.addSeries(LineSeries, {
+      eqlZones.push({
+        x0: startTime as Time,
+        x1: (lastCandleTime + 9_999_999) as UTCTimestamp as Time,
+        priceLow: zone.price_low,
+        priceHigh: zone.price_high,
         color,
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        lastValueVisible: false,
-        priceLineVisible: false,
-        crosshairMarkerVisible: false,
+        strength: zone.strength,
+        swept: zone.is_mitigated,
       })
-      zoneSeries.setData(lineFrom(startTime, lastCandleTime, price, firstCandleTime))
-      overlaySeriesRef.current.push(zoneSeries)
-      labels.push({ time: startTime, price, color, text: title })
+      // Keep the label outside the band: EQH above its upper edge, EQL below
+      // its lower edge — never inside the box, where it hides candles.
+      const isEql = zone.zone_type === 'equal_lows'
+      const labelPrice = isEql ? zone.price_low : zone.price_high
+      labels.push({ time: startTime, price: labelPrice, color, text: title, below: isEql })
     }
+    eqlZonesPrimitiveRef.current?.setZones(eqlZones)
 
     // Swept (mitigated) zones
     if (showSweptZones && data.timeframe !== '5m') {
@@ -1427,10 +1469,20 @@ export function MainChart({
       // level: its line spans only the CHoCH's own lifetime (the broken level's
       // origin -> the failure candle) and never runs forward into later price
       // action the way a BOS/CHoCH reference line does.
-      const endTime =
-        event.event === 'choch_failed'
-          ? startTime
-          : structureLineEndTime(event, scopeEvents, lastCandleTime)
+      let endTime: UTCTimestamp
+      if (event.event === 'choch_failed') {
+        endTime = startTime
+      } else if (event.event === 'liquidity_sweep') {
+        // Short segment: from the sweep wick out a few candles, not to the edge.
+        const idx = data.candles.findIndex((c) => c.timestamp === event.timestamp)
+        const endIdx =
+          idx >= 0
+            ? Math.min(idx + SWEEP_LINE_CANDLES, data.candles.length - 1)
+            : data.candles.length - 1
+        endTime = toChartTime(data.candles[endIdx].timestamp)
+      } else {
+        endTime = structureLineEndTime(event, scopeEvents, lastCandleTime)
+      }
 
       const lineStartTime =
         (event.event === 'change_of_character' ||
@@ -1505,10 +1557,15 @@ export function MainChart({
           event.event === 'choch_failed')
 
       if (!fizzleMarker) {
+        const isSweep = event.event === 'liquidity_sweep'
         const structureSeries = chart.addSeries(LineSeries, {
           color: lineColor,
-          lineWidth: 1,
-          lineStyle: dimmed ? LineStyle.SparseDotted : LineStyle.Dashed,
+          lineWidth: isSweep ? 2 : 1,
+          lineStyle: isSweep
+            ? LineStyle.Dotted
+            : dimmed
+              ? LineStyle.SparseDotted
+              : LineStyle.Dashed,
           lastValueVisible: false,
           priceLineVisible: false,
           crosshairMarkerVisible: false,
@@ -1596,9 +1653,7 @@ export function MainChart({
     const divMarkers = showDivergenceMarkers
       ? buildDivergenceMarkers(data.behavior_divergences ?? [])
       : []
-    const vsaMarkers = showVsaMarkers
-      ? buildVsaMarkers(data.volume_spread_signals ?? [])
-      : []
+    const vsaMarkers = buildVsaMarkers(vsaSignals)
     const mergedMarkers = [...divMarkers, ...vsaMarkers].sort(
       (a, b) => (a.time as number) - (b.time as number),
     )
@@ -1751,7 +1806,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, showVsaMarkers, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence])
+  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">
