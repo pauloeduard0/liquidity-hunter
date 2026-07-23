@@ -20,6 +20,11 @@ export interface DivergenceArc {
   side: 'above' | 'below'
   /** Arc stroke color. */
   color: string
+  /**
+   * VSA-confluence reinforcement: a nearby same-side VSA reversal pattern
+   * agrees with this divergence. Drawn thicker/brighter with a ✦ badge.
+   */
+  strong?: boolean
 }
 
 interface ResolvedArc {
@@ -27,6 +32,7 @@ interface ResolvedArc {
   y: number | null
   side: 'above' | 'below'
   color: string
+  strong: boolean
 }
 
 // Arc geometry, expressed in candle widths so it tracks the chart zoom.
@@ -63,15 +69,37 @@ class DivergenceArcRenderer implements IPrimitivePaneRenderer {
         // Quadratic bezier: control point pulled 2×arch past the base so the
         // apex sits arch beyond it (dome above / bowl below).
         const ctrlY = baseY + dir * 2 * arch
+        const apexY = baseY + dir * arch // curve peak (t = 0.5)
 
-        context.strokeStyle = arc.color
-        context.lineWidth = 2.5
         context.lineJoin = 'round'
         context.lineCap = 'round'
+
+        // A confluent arc gets a soft translucent halo behind the main stroke
+        // so it reads as "reinforced" without a different shape.
+        if (arc.strong) {
+          context.strokeStyle = arc.color + '33'
+          context.lineWidth = 7
+          context.beginPath()
+          context.moveTo(left, baseY)
+          context.quadraticCurveTo(arc.cx, ctrlY, right, baseY)
+          context.stroke()
+        }
+
+        context.strokeStyle = arc.color
+        context.lineWidth = arc.strong ? 3.5 : 2.5
         context.beginPath()
         context.moveTo(left, baseY)
         context.quadraticCurveTo(arc.cx, ctrlY, right, baseY)
         context.stroke()
+
+        // ✦ confluence badge just past the apex.
+        if (arc.strong) {
+          context.fillStyle = arc.color
+          context.font = 'bold 12px sans-serif'
+          context.textAlign = 'center'
+          context.textBaseline = arc.side === 'above' ? 'bottom' : 'top'
+          context.fillText('✦', arc.cx, apexY + dir * 4)
+        }
       }
     })
   }
@@ -98,6 +126,7 @@ class DivergenceArcPaneView implements IPrimitivePaneView {
       y: series.priceToCoordinate(arc.price),
       side: arc.side,
       color: arc.color,
+      strong: arc.strong ?? false,
     }))
     return new DivergenceArcRenderer(resolved, timeScale.options().barSpacing)
   }

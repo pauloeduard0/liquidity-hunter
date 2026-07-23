@@ -502,15 +502,45 @@ function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker
     })
 }
 
+// Which extreme a VSA reversal pattern reads at — the top (above price) or the
+// bottom (below). Lets a VSA signal be matched to a same-side divergence arc.
+const VSA_PATTERN_SIDE: Record<string, 'above' | 'below'> = {
+  buying_climax: 'above',
+  up_thrust: 'above',
+  no_demand: 'above',
+  selling_climax: 'below',
+  down_thrust: 'below',
+  no_supply: 'below',
+}
+
+// VSA (single-candle anatomy) and behavior divergence (window flow) measure the
+// same reversal at different time resolutions, so they rarely land on the exact
+// same candle but often within a few bars. When a same-side VSA reversal sits
+// within this many candles of a divergence, the two confirm each other and the
+// arc is drawn reinforced (✦). Neither base layer is modified.
+const CONFLUENCE_WINDOW_BARS = 3
+
 // Exhaustion/absorption arcs: dome above price for a bearish (top) reading,
-// bowl below for a bullish one (bottom exhaustion / absorption).
+// bowl below for a bullish one (bottom exhaustion / absorption). A same-side
+// VSA reversal within CONFLUENCE_WINDOW_BARS marks the arc as `strong`.
 function buildDivergenceArcs(
   divergences: BehaviorDivergence[],
+  vsaSignals: VolumeSpreadSignal[],
   candles: DashboardData['candles'],
 ): DivergenceArc[] {
   // Anchor each arc to the candle's extreme (high above / low below) rather
   // than its close, so the curve clears the wick with a little breathing room.
   const byTime = new Map(candles.map((c) => [c.timestamp, c]))
+  const indexByTime = new Map(candles.map((c, i) => [c.timestamp, i]))
+
+  // Bucket VSA reversal signals by side, as candle indices, for proximity match.
+  const vsaIndicesBySide: Record<'above' | 'below', number[]> = { above: [], below: [] }
+  for (const sig of vsaSignals) {
+    const side = VSA_PATTERN_SIDE[sig.pattern]
+    const idx = indexByTime.get(sig.timestamp)
+    if (side !== undefined && idx !== undefined) vsaIndicesBySide[side].push(idx)
+  }
+
   return [...divergences]
     .filter((div) => DIVERGENCE_ARC_TYPES.has(div.divergence_type))
     .map((div) => {
@@ -533,11 +563,16 @@ function buildDivergenceArcs(
           ? candle.high
           : candle.low
         : div.price_level
+      const divIdx = indexByTime.get(div.timestamp)
+      const strong =
+        divIdx !== undefined &&
+        vsaIndicesBySide[side].some((i) => Math.abs(i - divIdx) <= CONFLUENCE_WINDOW_BARS)
       return {
         time: toChartTime(div.timestamp) as Time,
         price,
         side,
         color: DIVERGENCE_STYLES[div.divergence_type]?.color ?? '#888888',
+        strong,
       }
     })
 }
@@ -1571,7 +1606,13 @@ export function MainChart({
 
     // Exhaustion/absorption divergences render as curved arcs, not markers.
     divergenceArcsPrimitiveRef.current?.setArcs(
-      showDivergenceMarkers ? buildDivergenceArcs(data.behavior_divergences ?? [], data.candles) : [],
+      showDivergenceMarkers
+        ? buildDivergenceArcs(
+            data.behavior_divergences ?? [],
+            data.volume_spread_signals ?? [],
+            data.candles,
+          )
+        : [],
     )
 
     // Liquidity heatmap strip
