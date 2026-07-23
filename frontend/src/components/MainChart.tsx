@@ -1336,9 +1336,20 @@ export function MainChart({
       })
       // Keep the label outside the band: EQH above its upper edge, EQL below
       // its lower edge — never inside the box, where it hides candles.
+      // Span the label across the pool (formation -> right edge) as a segment
+      // label so it centers on the visible portion and dodges candles instead
+      // of pinning at the formation candle, where VSA markers cluster and
+      // crowd the read.
       const isEql = zone.zone_type === 'equal_lows'
       const labelPrice = isEql ? zone.price_low : zone.price_high
-      labels.push({ time: startTime, price: labelPrice, color, text: title, below: isEql })
+      labels.push({
+        time: startTime,
+        timeEnd: (lastCandleTime + 9_999_999) as UTCTimestamp as Time,
+        price: labelPrice,
+        color,
+        text: title,
+        below: isEql,
+      })
     }
     eqlZonesPrimitiveRef.current?.setZones(eqlZones)
 
@@ -1581,12 +1592,22 @@ export function MainChart({
       // TradingView-style placement: bullish labels sit above their line,
       // bearish ones below, so the label always hangs on the side price broke
       // *from* and stays out of the move that followed.
+      //
+      // A sweep is the exception: its line sits at the wick *extreme*
+      // (`price_level`), which is exactly where VSA arrow markers anchor
+      // (reversal patterns pin to the bar's high/low). Hanging the sweep label
+      // on the wick-tip side stacks it on the VSA arrow. Flip it to the inside
+      // (toward the candle body) so the two layers read apart.
+      const labelBelow =
+        event.event === 'liquidity_sweep'
+          ? event.direction === 'bullish'
+          : event.direction === 'bearish'
       labels.push({
         time: fizzleMarker ? startTime : lineStartTime,
         timeEnd: fizzleMarker ? startTime : endTime,
         price: linePrice,
         color: lineColor,
-        below: event.direction === 'bearish',
+        below: labelBelow,
         text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''}${directionIcon ? ` ${directionIcon}` : ''}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}${confluenceCount ? ` ✦${confluenceCount}` : ''}`,
       })
     }
