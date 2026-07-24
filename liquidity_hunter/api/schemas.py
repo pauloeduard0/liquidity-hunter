@@ -24,6 +24,7 @@ from liquidity_hunter.core.domain import (
     MarketStructure,
     OIAnalysis,
     StructureConfluence,
+    SupertrendPoint,
     TimeFrame,
     VolumeSpreadSignal,
 )
@@ -53,6 +54,7 @@ class DashboardDataResponse(BaseModel):
     manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
     volume_spread_signals: list[VolumeSpreadSignal] = []
+    supertrend: list[SupertrendPoint] = []
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None

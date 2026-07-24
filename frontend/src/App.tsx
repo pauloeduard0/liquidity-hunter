@@ -135,6 +135,7 @@ function App() {
   const [eqlVisible, setEqlVisible] = useState(true)
   const [volumeVisible, setVolumeVisible] = useState(true)
   const [rsiDivVisible, setRsiDivVisible] = useState(false)
+  const [supertrendVisible, setSupertrendVisible] = useState(false)
   const [controlOscVisible, setControlOscVisible] = useState(true)
   const [indicatorsVisible, setIndicatorsVisible] = useState(false)
   const [, setTick] = useState(0)
@@ -531,6 +532,18 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setSupertrendVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        supertrendVisible
+                          ? 'bg-[#26a69a22] text-[#26a69a]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle the Supertrend band (ATR-trailing trend envelope, flip markers on the turn)"
+                    >
+                      ⌁ ST
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setControlOscVisible((v) => !v)}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         controlOscVisible
@@ -585,7 +598,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showControlOscillator={controlOscVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} showControlOscillator={controlOscVisible} />
                 </div>
               </div>
 

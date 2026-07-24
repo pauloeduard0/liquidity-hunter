@@ -351,6 +351,23 @@ re-exported from `liquidity_hunter.data`.
   is the running sum (the **CVD** series): rising = buyers have been the
   aggressors over the run, falling = sellers. All three are re-exported from
   `liquidity_hunter.indicators`.
+- **`indicators/supertrend.py`** — `supertrend(candles, *, periods=10,
+  multiplier=3.0, change_atr=True) -> list[SupertrendPoint]`, a faithful port
+  of the classic TradingView "Supertrend" Pine study: bands at
+  `hl2 ± multiplier × ATR`, each ratcheting only in the trend's direction
+  (the floor rises while the previous close held above it, the ceiling falls
+  while it held below), and a trend flip when a close crosses the *previous*
+  candle's opposing band. `change_atr` picks Wilder's ATR (Pine's `atr()`,
+  the default) over the simple mean of true range (`sma(tr, n)`) — the
+  script's "Change ATR Calculation Method?" input. The result starts at the
+  first candle with a defined ATR (index `periods - 1`), so it is shorter than
+  `candles`; each `SupertrendPoint` (`core/domain/supertrend.py`) carries
+  `timestamp`, `value` (the *active* band — floor while `BULLISH`, ceiling
+  while `BEARISH`), `direction`, `flip` (the turn candle), and both raw bands.
+  `true_range_series` is exposed alongside it. Descriptive only: a
+  volatility-scaled trend envelope, never a buy/sell instruction — the Pine
+  script's Buy/Sell labels are not rendered at all.
+  Re-exported from `liquidity_hunter.indicators`.
 
 ### Liquidity layer (`liquidity_hunter/liquidity`)
 
@@ -1276,6 +1293,14 @@ selector.
   the badge surfaces the rare strong agreements while each layer's own noise
   recedes. Computed from `data.volume_spread_signals` regardless of the VSA
   marker toggle.
+
+  **Supertrend band**: `data.supertrend` is drawn on the main pane as one
+  `LineSeries` per same-trend run (green floor while bullish, red ceiling while
+  bearish, a break at each flip mirroring Pine's `plot.style_linebr`). Lines
+  only — the flip reads from the break between runs, so it carries no marker.
+  Toggled by the `⌁ ST`
+  toolbar button in `App.tsx` (`showSupertrend` prop, default **off**);
+  colors/width live in `theme.ts` (`SUPERTREND_*`).
 
   **Volume delta pane**: histogram bars colored by candle direction
   (`CANDLE_UP_COLOR`/`CANDLE_DOWN_COLOR`), computed as

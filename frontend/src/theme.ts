@@ -176,3 +176,10 @@ export const RSI_OVERBOUGHT_COLOR = '#26c6da66'
 export const RSI_OVERSOLD_COLOR = '#b8b8b866'
 export const RSI_DIV_BULLISH_COLOR = '#26a69a'
 export const RSI_DIV_BEARISH_COLOR = '#ef5350'
+
+// Supertrend (ATR-banded trailing trend): the band takes the colour of the
+// trend it is trailing -- a floor under price while bullish, a ceiling above
+// it while bearish. Flip markers reuse the same pair.
+export const SUPERTREND_UP_COLOR = '#26a69a'
+export const SUPERTREND_DOWN_COLOR = '#ef5350'
+export const SUPERTREND_LINE_WIDTH = 2

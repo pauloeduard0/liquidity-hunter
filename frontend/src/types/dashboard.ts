@@ -470,6 +470,18 @@ export interface MarketOverview {
   entries: TimeframeOverview[]
 }
 
+/** One candle's Supertrend reading (ATR-banded trailing trend). */
+export interface SupertrendPoint {
+  timestamp: string
+  /** The active band: the floor while bullish, the ceiling while bearish. */
+  value: number
+  direction: MarketDirection
+  /** True on the candle where the trend flipped sides. */
+  flip: boolean
+  upper_band: number
+  lower_band: number
+}
+
 export interface DashboardData {
   symbol: string
   timeframe: TimeFrame
@@ -487,6 +499,7 @@ export interface DashboardData {
   manipulation_cycles: ManipulationCycle[]
   behavior_divergences: BehaviorDivergence[]
   volume_spread_signals: VolumeSpreadSignal[]
+  supertrend: SupertrendPoint[]
   liquidity_heatmap: LiquidityHeatmap | null
   liquidation_map: LeverageLiquidationMap | null
   narrative: MarketNarrative | null

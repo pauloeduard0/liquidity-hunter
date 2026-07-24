@@ -31,6 +31,7 @@ from liquidity_hunter.core.domain import (
     POIZoneStatus,
     StructureConfluence,
     StructureEvent,
+    SupertrendPoint,
     TimeFrame,
     VolumeSpreadSignal,
 )
@@ -45,7 +46,7 @@ from liquidity_hunter.data import (
     OHLCVProvider,
 )
 from liquidity_hunter.data.exceptions import DataProviderError
-from liquidity_hunter.indicators import volume_delta_series
+from liquidity_hunter.indicators import supertrend, volume_delta_series
 from liquidity_hunter.liquidity import (
     EqualHighDetector,
     EqualLowDetector,
@@ -762,6 +763,9 @@ class DashboardData:
     manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
     volume_spread_signals: list[VolumeSpreadSignal]
+    # ATR-banded trailing trend readings over the visible window (Supertrend),
+    # one per candle from the first defined ATR onward.
+    supertrend: list[SupertrendPoint] = field(default_factory=list)
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
@@ -2087,6 +2091,11 @@ def load_dashboard_data(
         volume_deltas=vd,
     )
 
+    # ATR-banded trailing trend over the visible window (the classic
+    # Supertrend study). Descriptive: a volatility-scaled trend envelope, not a
+    # signal -- `flip` marks where the band changed sides.
+    supertrend_points = supertrend(candles)
+
     liquidity_heatmap = LiquidityHeatmapEngine().build(
         symbol=symbol,
         timeframe=timeframe,
@@ -2155,6 +2164,7 @@ def load_dashboard_data(
         manipulation_cycles=manipulation_cycles,
         behavior_divergences=behavior_divergences,
         volume_spread_signals=volume_spread_signals,
+        supertrend=supertrend_points,
         liquidity_heatmap=liquidity_heatmap,
         liquidation_map=liquidation_map,
         oi_analysis=oi_analysis,

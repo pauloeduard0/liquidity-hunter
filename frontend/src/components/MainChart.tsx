@@ -27,7 +27,7 @@ import {
   type LiquidationBandInput,
 } from '../charting/LiquidationBandsPrimitive'
 import { EqlZonesPrimitive, type EqlZoneInput } from '../charting/EqlZonesPrimitive'
-import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone, VolumeSpreadSignal } from '../types/dashboard'
+import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendPoint, VolumeSpreadSignal } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -51,6 +51,9 @@ import {
   VSA_STYLES,
   ZONE_COLORS,
   ZONE_TYPE_LABELS,
+  SUPERTREND_DOWN_COLOR,
+  SUPERTREND_LINE_WIDTH,
+  SUPERTREND_UP_COLOR,
 } from '../theme'
 import { setChartTimezoneMode, toChartTime } from '../utils/chartTime'
 
@@ -491,6 +494,29 @@ function selectVisiblePoiZones(
   return [...takeRecent('bullish'), ...takeRecent('bearish')]
 }
 
+// Supertrend: the reading follows one band at a time, so a run of same-trend
+// points is one continuous line and the flip is a break between runs (Pine's
+// `plot.style_linebr`). Each run becomes its own line series so the two trends
+// can carry their own colour without a bridging segment across the flip.
+interface SupertrendSegment {
+  direction: 'bullish' | 'bearish'
+  points: { time: Time; value: number }[]
+}
+
+function buildSupertrendSegments(points: SupertrendPoint[]): SupertrendSegment[] {
+  const segments: SupertrendSegment[] = []
+  let current: SupertrendSegment | null = null
+  for (const point of points) {
+    const direction = point.direction === 'bearish' ? 'bearish' : 'bullish'
+    if (!current || current.direction !== direction) {
+      current = { direction, points: [] }
+      segments.push(current)
+    }
+    current.points.push({ time: toChartTime(point.timestamp) as Time, value: point.value })
+  }
+  return segments.filter((segment) => segment.points.length > 0)
+}
+
 function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker<Time>[] {
   return [...divergences]
     .filter((div) => !DIVERGENCE_ARC_TYPES.has(div.divergence_type))
@@ -681,6 +707,7 @@ interface MainChartProps {
   showContinuationWindow?: boolean
   showVolume?: boolean
   showRsiDivergence?: boolean
+  showSupertrend?: boolean
   showControlOscillator?: boolean
 }
 
@@ -702,6 +729,7 @@ export function MainChart({
   showContinuationWindow = false,
   showVolume = true,
   showRsiDivergence = false,
+  showSupertrend = false,
   showControlOscillator = false,
 }: MainChartProps) {
   // Which clock this chart's times are drawn on -- local intraday, exchange
@@ -1669,6 +1697,23 @@ export function MainChart({
     }
     rangeBoxesPrimitiveRef.current?.setBoxes(rangeBoxes)
 
+    // Supertrend: one line series per same-trend run, drawn at the active
+    // band (a floor under price while bullish, a ceiling above it while
+    // bearish). The flip reads from the break between runs, so it carries no
+    // marker of its own. Segments live in the overlay pool, so they are torn
+    // down with the rest of the overlays on the next render.
+    for (const segment of showSupertrend ? buildSupertrendSegments(data.supertrend ?? []) : []) {
+      const stSeries = chart.addSeries(LineSeries, {
+        color: segment.direction === 'bullish' ? SUPERTREND_UP_COLOR : SUPERTREND_DOWN_COLOR,
+        lineWidth: SUPERTREND_LINE_WIDTH,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      })
+      stSeries.setData(segment.points)
+      overlaySeriesRef.current.push(stSeries)
+    }
+
     // Behavior divergence + VSA markers share one marker plugin (a series
     // holds a single marker set), merged and re-sorted ascending by time.
     const divMarkers = showDivergenceMarkers
@@ -1839,7 +1884,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence])
+  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">
