@@ -106,6 +106,26 @@ _WEIGHT_VSA_STRONG = 4.0
 _VSA_STRONG_CONFIDENCE = 70.0
 _WEIGHT_OI_FLUSH = 3.0
 _WEIGHT_ZONE = 2.0
+# A **pool raid**: a candle whose wick takes out a hunted-side stop pool (an
+# equal-highs level for hunted shorts, equal-lows for hunted longs) and whose
+# *close comes back inside* it. This is the grab's raw price signature, visible
+# without any detector agreeing: the stops above the pool were filled and the
+# move did not hold. It exists because the two signatures the engine had before
+# are both *derived* and both frequently silent at a real grab — a
+# `LIQUIDITY_SWEEP` needs the structure detector to classify a pivot that way
+# (it will not, if the leg's state machine is mid-flip), and a VSA
+# climax/thrust needs the candle's own anatomy to be extreme enough for the
+# analyzer's thresholds. The BTC 15m 2026-07-23 00:00 UTC raid of the 66190-
+# 66208 equal-highs pool (the very pool a hunt had already grabbed hours
+# earlier, then re-raided) printed neither, and was invisible at zone(2) alone.
+# Weighted 4 (above a bare `LIQUIDITY_SWEEP`, which by construction only
+# *labels* a pivot): the pool level is known-resting liquidity and the
+# rejection close is the grab failing in the same candle.
+_WEIGHT_RAID = 4.0
+# Short covering / long liquidation OI participation on a capture-side event:
+# the hunted side *closing out* is direct evidence its liquidity was the fuel,
+# one notch below an outright FLUSH (which is the violent version of it).
+_WEIGHT_OI_COVERING = 2.0
 # A counter-trend leg's *terminating* realignment break — a confirmed
 # capture-direction BOS/CHoCH that flips structure back toward the HTF trend —
 # is itself the grab that runs the counter-trend entrants: price broke decisively
@@ -134,6 +154,24 @@ _VSA_SHORT_CAPTURE: frozenset[VSAPattern] = frozenset(
 _VSA_LONG_CAPTURE: frozenset[VSAPattern] = frozenset(
     {VSAPattern.DOWN_THRUST, VSAPattern.SELLING_CLIMAX}
 )
+
+# A grab cluster must carry at least one *floor signature* — a signal that says
+# "this is where the move turned", not merely "liquidity sat here". VSA alone
+# used to be that gate; it proved too narrow (a real grab does not always print
+# a climax/thrust the analyzer's thresholds accept, and the counter-trend hunt
+# then went blind for whole legs — the BTC 15m 2026-07-22/23 case, 1 of 3 hunts
+# marked). A pool raid with a rejection close and a realignment flip-back are
+# the same kind of statement made by price and by structure respectively, so
+# any of the three opens the gate; the weighted threshold still decides.
+_FLOOR_SIGNATURE_SOURCES = frozenset({"vsa", "raid", "realignment"})
+
+
+def _opposite(direction: MarketDirection) -> MarketDirection:
+    return (
+        MarketDirection.BEARISH
+        if direction is MarketDirection.BULLISH
+        else MarketDirection.BULLISH
+    )
 
 
 class LiquidityHuntEngine:
@@ -466,6 +504,14 @@ class LiquidityHuntEngine:
                 merge_gap,
                 threshold=_CONTINUATION_CAPTURE_THRESHOLD,
                 require_vsa=True,
+                # The pool raid is a *counter-trend hunt* signature: it reads
+                # the stops of entrants trapped against the HTF trend. An
+                # aligned continuation pullback rests on ordinary internal
+                # liquidity, and at this layer's threshold 4 a raid would fire
+                # on almost every wick through a stale equal level (measured:
+                # ETHUSDT 1h 7 -> 14 episodes). The continuation floor keeps its
+                # VSA/sweep signature.
+                allow_raid=False,
             )
             sub_start = start
             for grab_ts, score, sources in grabs:
@@ -577,6 +623,7 @@ class LiquidityHuntEngine:
         threshold: float = _CAPTURE_THRESHOLD,
         require_vsa: bool = False,
         realignment_ts: datetime | None = None,
+        allow_raid: bool = True,
     ) -> list[tuple[datetime, float, list[str]]]:
         """Weighted capture grabs inside ``[start, end]`` as (ts, score, sources).
 
@@ -608,7 +655,7 @@ class LiquidityHuntEngine:
         candles before it.
         """
         signals = self._collect_capture_signals(
-            data, hunted_short, capture_direction, start, end
+            data, hunted_short, capture_direction, start, end, allow_raid=allow_raid
         )
         if realignment_ts is not None:
             # The confirmed break that flipped the leg back to the HTF trend is
@@ -634,16 +681,29 @@ class LiquidityHuntEngine:
             by_source: dict[str, float] = {}
             for _ts, weight, source in cluster:
                 by_source[source] = max(by_source.get(source, 0.0), weight)
-            if require_vsa and "vsa" not in by_source and "realignment" not in by_source:
-                # No exhaustion candle at the floor -> not the grab. The
-                # realignment flip-back is exempt: a confirmed capture-direction
-                # break that ran the entrants' stops is itself the grab and does
-                # not need a co-located VSA climax (the NEAR 30m case). CONT
-                # never carries a realignment source, so its gate is unchanged.
+            if require_vsa and not (_FLOOR_SIGNATURE_SOURCES & by_source.keys()):
+                # No floor signature (exhaustion candle / pool raid with a
+                # rejection close / realignment flip-back) -> liquidity merely
+                # rested here, this is not where the move turned.
                 continue
             first_ts, last_ts = cluster[0][0], cluster[-1][0]
             if self._delta_confirms(data, capture_direction, first_ts, last_ts):
                 by_source["delta"] = _WEIGHT_DELTA_MODIFIER
+            elif "raid" in by_source and self._delta_confirms(
+                data, _opposite(capture_direction), first_ts, last_ts
+            ):
+                # On a raid the *rejection* is the point: aggression against the
+                # grab wick (sellers hitting into an up-raid of the shorts'
+                # stops) is who took the other side of the trapped entrants, so
+                # it confirms the grab exactly as capture-side aggression does
+                # on a sweep. Same slot, so it never double-counts.
+                by_source["delta"] = _WEIGHT_DELTA_MODIFIER
+            if set(by_source) == {"raid"}:
+                # A bare raid with nothing else — no pool recorded as taken, no
+                # aggression either way, no structure or OI agreeing — is the
+                # same lone-signal noise the thresholds were raised to shut out
+                # (wicks poke stale levels constantly). It needs one partner.
+                continue
             score = sum(by_source.values())
             if score < threshold:
                 continue
@@ -654,9 +714,13 @@ class LiquidityHuntEngine:
             # thrust/climax marker the user sees, not a few candles before it.
             anchor = first_ts
             if require_vsa:
-                vsa_stamps = [ts for ts, _w, source in cluster if source == "vsa"]
-                if vsa_stamps:
-                    anchor = min(vsa_stamps)
+                floor_stamps = [
+                    ts
+                    for ts, _w, source in cluster
+                    if source in ("vsa", "raid")
+                ]
+                if floor_stamps:
+                    anchor = min(floor_stamps)
             grabs.append((anchor, score, sorted(by_source)))
         return grabs
 
@@ -667,6 +731,7 @@ class LiquidityHuntEngine:
         capture_direction: MarketDirection,
         start: datetime,
         end: datetime,
+        allow_raid: bool = True,
     ) -> list[tuple[datetime, float, str]]:
         """All weighted capture-side signals inside ``[start, end]``."""
         signals: list[tuple[datetime, float, str]] = []
@@ -683,14 +748,24 @@ class LiquidityHuntEngine:
             if hunted_short
             else LiquidityZoneType.EQUAL_LOWS
         )
+        pool_levels: list[tuple[float, datetime]] = []
         for zone in data.liquidity_zones:
+            if zone.zone_type is not zone_type:
+                continue
+            pool_levels.append(
+                (zone.price_high if hunted_short else zone.price_low, zone.formed_at)
+            )
             if (
-                zone.zone_type is zone_type
-                and zone.is_mitigated
+                zone.is_mitigated
                 and zone.invalidated_at is not None
                 and start <= zone.invalidated_at <= end
             ):
                 signals.append((zone.invalidated_at, _WEIGHT_ZONE, "zone"))
+
+        if allow_raid:
+            signals.extend(
+                self._raid_signals(data, hunted_short, pool_levels, start, end)
+            )
 
         # VSA maps by the *grab side*, not by VSA's implied direction (which is
         # the mirror): a hunted-short capture is an up-sweep rejecting the high
@@ -708,14 +783,60 @@ class LiquidityHuntEngine:
         if data.oi_analysis is not None:
             for qualified in data.oi_analysis.qualified_events:
                 if (
-                    qualified.participation is OIParticipation.FLUSH
-                    and qualified.direction is capture_direction
-                    and start <= qualified.event_timestamp <= end
+                    qualified.direction is not capture_direction
+                    or not start <= qualified.event_timestamp <= end
                 ):
+                    continue
+                if qualified.participation is OIParticipation.FLUSH:
                     signals.append(
                         (qualified.event_timestamp, _WEIGHT_OI_FLUSH, "oi_flush")
                     )
+                elif qualified.participation is OIParticipation.COVERING:
+                    # OI falling on a capture-direction break = the hunted side
+                    # closing out into it, the softer sibling of a FLUSH.
+                    signals.append(
+                        (qualified.event_timestamp, _WEIGHT_OI_COVERING, "oi_flush")
+                    )
         return signals
+
+    @staticmethod
+    def _raid_signals(
+        data: DashboardData,
+        hunted_short: bool,
+        pool_levels: list[tuple[float, datetime]],
+        start: datetime,
+        end: datetime,
+    ) -> list[tuple[datetime, float, str]]:
+        """Candles that wick through a hunted-side pool and close back inside.
+
+        One signal per candle (not per pool level it took out): several stacked
+        equal-level pools raided by the same wick are still one grab moment.
+        Only pools that had already *formed* by the raiding candle count — a
+        level built later was not resting liquidity at that moment.
+        """
+        if not pool_levels:
+            return []
+        raids: list[tuple[datetime, float, str]] = []
+        for candle in data.candles:
+            if not start <= candle.timestamp <= end:
+                continue
+            if hunted_short:
+                hit = any(
+                    formed_at <= candle.timestamp
+                    and candle.high > level
+                    and candle.close < level
+                    for level, formed_at in pool_levels
+                )
+            else:
+                hit = any(
+                    formed_at <= candle.timestamp
+                    and candle.low < level
+                    and candle.close > level
+                    for level, formed_at in pool_levels
+                )
+            if hit:
+                raids.append((candle.timestamp, _WEIGHT_RAID, "raid"))
+        return raids
 
     @staticmethod
     def _delta_confirms(

@@ -676,6 +676,64 @@ def test_history_multiple_grabs_in_one_leg_are_separate_hunts() -> None:
     ]
 
 
+def _raid_candle(i: int, level: float, *, taker_buy: float) -> Candle:
+    """A candle wicking above ``level`` and closing back below it."""
+    return Candle(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=T0 + H1 * i,
+        open=100.0,
+        high=level + 0.5,
+        low=99.0,
+        close=100.0,
+        volume=10.0,
+        taker_buy_volume=taker_buy,
+    )
+
+
+def test_history_pool_raid_with_rejection_is_a_grab_without_vsa() -> None:
+    # Bullish HTF, counter-trend bearish leg. No LIQUIDITY_SWEEP and no VSA
+    # exhaustion candle print — only price itself: a candle wicks through the
+    # equal-highs pool (raid 4), the pool is recorded as swept (zone 2) and the
+    # candle shows net *selling* into the wick (rejection delta 1) = 7. The
+    # grab is marked from the raw signature (the BTC 15m 2026-07-22/23 case).
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    pool = _eqh_zone(102.0, mitigated_at=T0 + H1 * 8)
+    candles = _candles(24)
+    candles[8] = _raid_candle(8, 102.0, taker_buy=2.0)  # delta -6 of volume 10
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        liquidity_zones=[pool],
+        candles=candles,
+    )
+    history = LiquidityHuntEngine().build_history(data)
+    assert len(history) == 1
+    assert history[0].end_timestamp == candles[8].timestamp
+    assert "raid" in history[0].capture_sources
+
+
+def test_history_lone_pool_raid_is_not_a_grab() -> None:
+    # Same raid, but the pool was never recorded as swept and no aggression
+    # either way: a bare wick through a stale level is not a hunt.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    candles = _candles(24)
+    candles[8] = _raid_candle(8, 102.0, taker_buy=5.0)  # delta 0
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        liquidity_zones=[_eqh_zone(102.0)],
+        candles=candles,
+    )
+    assert LiquidityHuntEngine().build_history(data) == []
+
+
 def test_history_skips_counter_trend_leg_without_capture() -> None:
     events = [
         _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
