@@ -517,6 +517,7 @@ class LiquidityHuntEngine:
                     capture_quality=self._episode_quality(
                         data, capture_direction, grab_ts
                     ),
+                    failed_reversal=True,
                     description=(
                         f"Failed-reversal hunt: a {direction.value} change of "
                         f"character swept {side_word} liquidity at its extreme "

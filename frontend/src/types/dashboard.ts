@@ -404,6 +404,9 @@ export interface LiquidityHuntEpisode {
    *  grab ran the stops on no new money (reversal-prone), a genuine break had
    *  fresh money behind the capture direction. */
   capture_quality: HuntCaptureQuality
+  /** The grab was the extreme of a failed reversal (a capture-direction CHoCH
+   *  later invalidated) — the leg's high-water mark, its principal hunt. */
+  failed_reversal: boolean
   description: string
 }
 

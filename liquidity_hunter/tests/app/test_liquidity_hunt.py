@@ -757,6 +757,7 @@ def test_history_marks_the_extreme_of_an_invalidated_choch() -> None:
     assert history[0].start_timestamp == events[0].timestamp
     assert history[0].end_timestamp == candles[8].timestamp
     assert history[0].hunted_side == RetailPositioning.SHORT
+    assert history[0].failed_reversal is True
 
 
 def test_history_ignores_an_invalidated_choch_that_grabbed_nothing() -> None:

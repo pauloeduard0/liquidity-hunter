@@ -65,6 +65,12 @@ class LiquidityHuntEpisode(DomainModel):
     # ``GENUINE_BREAK`` had fresh money behind the capture direction;
     # ``UNKNOWN`` when the market-control series does not cover the grab.
     capture_quality: HuntCaptureQuality = HuntCaptureQuality.UNKNOWN
+    # The grab was the extreme of a *failed reversal*: a change of character in
+    # the capture direction that ran the hunted side's stops at its high-water
+    # mark and was then invalidated. Structurally the strongest grab the engine
+    # names — the turn of the whole move rather than a floor inside it — so the
+    # chart draws it as the leg's principal hunt instead of one of the series.
+    failed_reversal: bool = False
     description: str
 
 

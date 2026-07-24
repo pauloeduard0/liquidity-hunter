@@ -1741,13 +1741,26 @@ export function MainChart({
         // is reversal-prone: purple with a ⚠; a genuine break stays green ✓. What
         // closed the hunt (sources + score) stays in the hover title.
         const exhaustion = episode.capture_quality === 'exhaustion_grab'
-        const color = exhaustion ? '#ab47bc' : '#26a69a'
+        // A failed-reversal grab is the high-water mark of the whole move (a
+        // capture-direction CHoCH that ran the stops there and was invalidated),
+        // not one floor in a series — the leg's *principal* hunt. It gets its
+        // own rose tone and a stronger fill so it reads as the peak at a
+        // glance, ahead of the exhaustion/genuine distinction.
+        const color = episode.failed_reversal
+          ? '#ec407a'
+          : exhaustion
+            ? '#ab47bc'
+            : '#26a69a'
         huntWindows.push({
           x0: toChartTime(episode.start_timestamp),
           x1: toChartTime(episode.end_timestamp),
           color,
-          fillColor: color + '0d',
-          label: exhaustion ? `⚠ ${sideWord} hunted (exhaustion)` : `✓ ${sideWord} hunted`,
+          fillColor: color + (episode.failed_reversal ? '1f' : '0d'),
+          label: episode.failed_reversal
+            ? `★ ${sideWord} hunted at the peak`
+            : exhaustion
+              ? `⚠ ${sideWord} hunted (exhaustion)`
+              : `✓ ${sideWord} hunted`,
         })
       }
     }
