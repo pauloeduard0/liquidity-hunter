@@ -410,6 +410,19 @@ class LiquidityHuntEngine:
                 )
                 else None
             )
+            # ...and if that realignment break is *itself* invalidated by the
+            # next flip, the grab it closed was the high-water mark of the whole
+            # move: the reversal that ran the entrants there did not hold. Same
+            # phenomenon _failed_excursion_episodes names from the other side —
+            # that one scans *inside* the failed excursion, this one catches the
+            # break that opened it, which the raid signature can miss when the
+            # breaking candle closes at its high (the rejection lands on the
+            # following candles, not on it — BTCUSDT 15m 2026-07-22 16:30).
+            realignment_failed = (
+                realignment_ts is not None
+                and idx + 2 < len(segments)
+                and segments[idx + 2][2] is StructureEvent.CHOCH_FAILED
+            )
             grabs = self._capture_grabs(
                 data,
                 hunted_short,
@@ -447,6 +460,8 @@ class LiquidityHuntEngine:
                         capture_quality=self._episode_quality(
                             data, capture_direction, grab_ts
                         ),
+                        failed_reversal=realignment_failed
+                        and "realignment" in sources,
                         description=(
                             f"Completed hunt: a {direction.value} move against "
                             f"the {htf.value} higher-timeframe trend swept "

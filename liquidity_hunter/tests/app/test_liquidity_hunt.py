@@ -760,6 +760,37 @@ def test_history_marks_the_extreme_of_an_invalidated_choch() -> None:
     assert history[0].failed_reversal is True
 
 
+def test_history_realignment_grab_flagged_when_its_break_is_invalidated() -> None:
+    # Bullish HTF. A bearish CHoCH opens a counter-trend leg; the bullish CHoCH
+    # that ends it is the realignment grab — but that break is itself then
+    # invalidated (CHOCH_FAILED). The grab was the high-water mark of the move,
+    # so it is flagged as the principal (failed-reversal) hunt even though the
+    # raid signature missed the breaking candle (BTCUSDT 15m 2026-07-22 16:30).
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(10, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        _event(14, StructureEvent.CHOCH_FAILED, MarketDirection.BULLISH),
+        _event(24, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    # The realignment break alone is weight 4; give it the co-located
+    # confluence a real flip carries (a swept pool + net-buy delta) so it
+    # reaches the threshold and becomes the grab.
+    candles = _candles(28)
+    candles[10] = _raid_candle(10, 102.0, taker_buy=8.0)  # net-buy delta
+    candles[10] = candles[10].model_copy(update={"close": 103.0, "high": 103.5})
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        liquidity_zones=[_eqh_zone(102.0, mitigated_at=T0 + H1 * 10)],
+        candles=candles,
+    )
+    history = LiquidityHuntEngine().build_history(data)
+    realignment = [e for e in history if "realignment" in e.capture_sources]
+    assert len(realignment) == 1
+    assert realignment[0].end_timestamp == events[1].timestamp
+    assert realignment[0].failed_reversal is True
+
+
 def test_history_ignores_an_invalidated_choch_that_grabbed_nothing() -> None:
     # Same shape, but the excursion simply gave its move back without taking
     # any liquidity: a failed reversal is not by itself a hunt.
