@@ -353,9 +353,13 @@ class LiquidityHuntEngine:
         :meth:`build_continuation_history` instead (which scans the opposite,
         pullback-direction sweep, so the two layers never double-count a grab).
         """
-        htf = data.higher_timeframe_direction
+        htf_scalar = data.higher_timeframe_direction
+        htf_events = data.higher_timeframe_events
         directional = (MarketDirection.BULLISH, MarketDirection.BEARISH)
-        if htf not in directional:
+        # Nothing to hunt against only when there is no HTF context at all (top
+        # timeframe with a non-directional scalar). With an event stream a leg is
+        # classified per-flip below even if the current scalar is NEUTRAL.
+        if not htf_events and htf_scalar not in directional:
             return []
 
         segments = self._trend_segments(data.internal_structure_events)
@@ -370,6 +374,10 @@ class LiquidityHuntEngine:
             if end is None:
                 continue
             if direction not in directional:
+                continue
+            # The HTF trend as it stood when *this* leg flipped, not now.
+            htf = self._htf_trend_at(htf_events, start, htf_scalar)
+            if htf not in directional:
                 continue
             if direction is htf:
                 # An aligned leg is not a hunt — *except* a short-lived one
@@ -569,9 +577,10 @@ class LiquidityHuntEngine:
         direction *opposite* the leg (the pullback direction) — the very same
         relationship that method already encodes.
         """
-        htf = data.higher_timeframe_direction
+        htf_scalar = data.higher_timeframe_direction
+        htf_events = data.higher_timeframe_events
         directional = (MarketDirection.BULLISH, MarketDirection.BEARISH)
-        if htf not in directional:
+        if not htf_events and htf_scalar not in directional:
             return []
 
         now = data.candles[-1].timestamp if data.candles else None
@@ -580,27 +589,29 @@ class LiquidityHuntEngine:
         segments = self._trend_segments(data.internal_structure_events)
         merge_gap = self._grab_merge_gap(data.candles)
 
-        # The grab is the pullback sweep *against* the aligned leg that then
-        # resumes with it: a bull leg's grab is a down-sweep of the lows, a bear
-        # leg's an up-sweep of the highs. So the grab side is the opposite of
-        # the trend, and hunted_side follows the usual rule (a bullish
-        # continuation hunts the shorts the pullback lured).
-        grab_up = htf is MarketDirection.BEARISH
-        capture_direction = (
-            MarketDirection.BULLISH if grab_up else MarketDirection.BEARISH
-        )
-        hunted_side = (
-            RetailPositioning.SHORT
-            if htf is MarketDirection.BULLISH
-            else RetailPositioning.LONG
-        )
-        trapped = "shorts" if htf is MarketDirection.BULLISH else "longs"
-
         episodes: list[LiquidityHuntEpisode] = []
         # Aligned legs run *through* failed-CHoCH excursions, so a CHoCH that
         # fizzled mid-trend (leaving VSA on its floor) is still scanned for its
         # continuation grab instead of falling into a vacuum between streams.
-        for start, end in self._continuation_legs(segments, htf, now):
+        # Each leg carries the HTF trend it was aligned with at its own flip.
+        for start, end, htf in self._continuation_legs(
+            segments, htf_events, htf_scalar, now
+        ):
+            # The grab is the pullback sweep *against* the aligned leg that then
+            # resumes with it: a bull leg's grab is a down-sweep of the lows, a
+            # bear leg's an up-sweep of the highs. So the grab side is the
+            # opposite of the trend, and hunted_side follows the usual rule (a
+            # bullish continuation hunts the shorts the pullback lured).
+            grab_up = htf is MarketDirection.BEARISH
+            capture_direction = (
+                MarketDirection.BULLISH if grab_up else MarketDirection.BEARISH
+            )
+            hunted_side = (
+                RetailPositioning.SHORT
+                if htf is MarketDirection.BULLISH
+                else RetailPositioning.LONG
+            )
+            trapped = "shorts" if htf is MarketDirection.BULLISH else "longs"
             grabs = self._capture_grabs(
                 data,
                 grab_up,
@@ -681,12 +692,13 @@ class LiquidityHuntEngine:
             trend = new_trend
         return segments
 
-    @staticmethod
     def _continuation_legs(
+        self,
         segments: list[tuple[MarketDirection, datetime, StructureEvent]],
-        htf: MarketDirection,
+        htf_events: list[MarketStructure],
+        htf_scalar: MarketDirection,
         now: datetime,
-    ) -> list[tuple[datetime, datetime]]:
+    ) -> list[tuple[datetime, datetime, MarketDirection]]:
         """Aligned-trend legs, absorbing counter-trend excursions that *failed*.
 
         A CHoCH against an aligned trend that is later reverted by a
@@ -697,25 +709,36 @@ class LiquidityHuntEngine:
         A counter excursion that instead *confirmed* (reverted by a fresh
         aligned BOS/CHoCH, not a failure) is a real hunt and breaks the aligned
         leg, as does an unresolved counter excursion still open at the live edge.
+
+        "Aligned" is judged against the HTF trend *as of each leg's flip* (see
+        :meth:`_htf_trend_at`), the exact mirror of the counter-trend
+        classification in :meth:`build_history`: the two must agree leg by leg,
+        or a leg could be counted as both a hunt and a continuation. Each run
+        carries the aligned direction that opened it.
         """
-        legs: list[tuple[datetime, datetime]] = []
+        legs: list[tuple[datetime, datetime, MarketDirection]] = []
         leg_start: datetime | None = None
+        leg_htf: MarketDirection | None = None
+        directional = (MarketDirection.BULLISH, MarketDirection.BEARISH)
         n = len(segments)
         for idx, (direction, start, _event) in enumerate(segments):
-            if direction is htf:
+            htf = self._htf_trend_at(htf_events, start, htf_scalar)
+            if htf in directional and direction is htf:
                 if leg_start is None:
                     leg_start = start
+                    leg_htf = htf
                 continue
             # Counter-trend excursion: absorbed only if the leg it flips back
             # into is opened by a CHOCH_FAILED (i.e. this CHoCH failed).
             next_event = segments[idx + 1][2] if idx + 1 < n else None
             if next_event is StructureEvent.CHOCH_FAILED:
                 continue  # failed excursion -> keep the aligned leg running
-            if leg_start is not None:
-                legs.append((leg_start, start))
+            if leg_start is not None and leg_htf is not None:
+                legs.append((leg_start, start, leg_htf))
                 leg_start = None
-        if leg_start is not None:
-            legs.append((leg_start, now))
+                leg_htf = None
+        if leg_start is not None and leg_htf is not None:
+            legs.append((leg_start, now, leg_htf))
         return legs
 
     def _capture_grabs(
@@ -1016,6 +1039,28 @@ class LiquidityHuntEngine:
                 flip_timestamp = event.timestamp
             trend = new_trend
         return trend, flip_timestamp
+
+    @classmethod
+    def _htf_trend_at(
+        cls,
+        htf_events: list[MarketStructure],
+        at: datetime,
+        fallback: MarketDirection,
+    ) -> MarketDirection:
+        """The higher-timeframe standing trend as of ``at`` (a leg's flip).
+
+        A concluded hunt is judged against the HTF context of *when it happened*,
+        not the current snapshot: with a one-step-up anchor the HTF flips soon
+        after the LTF, so a leg counter-trend at its flip would read "aligned" by
+        the time the snapshot is taken and vanish. Replays the HTF event stream
+        up to ``at``. Falls back to ``fallback`` (the current scalar) when the
+        stream is empty (top timeframe) or has no event at/before ``at`` yet — so
+        with no HTF events the behavior is identical to the old scalar model.
+        """
+        trend, _ = cls._current_trend(
+            [e for e in htf_events if e.timestamp <= at]
+        )
+        return trend if trend is not None else fallback
 
     # ------------------------------------------------------------------
     # Targets: the nearby opposing pools

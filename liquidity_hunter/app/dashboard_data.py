@@ -801,6 +801,15 @@ class DashboardData:
     # `HTF_ORDER_BLOCK` factor. Empty for the top timeframe. Not rendered
     # directly -- current-TF `poi_zones` still drive the chart boxes.
     htf_poi_zones: list[POIZone] = field(default_factory=list)
+    # The higher-timeframe (`_HIGHER_TIMEFRAME_MAP` pair) internal-structure
+    # events, so a *historical* hunt can be judged against the HTF trend as it
+    # stood at that leg's flip, not the current scalar `higher_timeframe_
+    # direction`. With a one-step-up anchor the HTF flips soon after the LTF, so
+    # a leg that was counter-trend at its flip would read "aligned" by the time
+    # the snapshot is taken and vanish from history; replaying these events up to
+    # each flip restores it. Empty for the top timeframe (the live read then
+    # falls back to the scalar, as before).
+    higher_timeframe_events: list[MarketStructure] = field(default_factory=list)
 
 
 def _structural_anchor_index(candles: list[Candle], visible_start: datetime) -> int:
@@ -2012,6 +2021,7 @@ def load_dashboard_data(
     poi_zones = [z for z in all_poi_zones if visible_start <= z.created_at <= visible_end]
 
     htf_poi_zones: list[POIZone] = []
+    higher_timeframe_events: list[MarketStructure] = []
     if htf_run_future is not None:
         # The higher-timeframe trend comes from the *internal* detector run on
         # the HTF series with that timeframe's own production wiring (params +
@@ -2028,6 +2038,10 @@ def load_dashboard_data(
         # is the pivot/wick side rather than the standing trend.
         htf_run = htf_run_future.result()
         higher_timeframe_direction = htf_run.trend
+        # The HTF event stream (its visible window spans a much wider calendar
+        # range than the current TF's), so the hunt can replay the HTF trend up
+        # to each historical leg's flip instead of using the current scalar.
+        higher_timeframe_events = htf_run.events
         # Order blocks on the higher-timeframe series (reusing the HTF candles
         # already fetched for the trend -- no extra request), so the confluence
         # engine can credit a break that reacts at an HTF OB. Same price scale
@@ -2130,6 +2144,7 @@ def load_dashboard_data(
         current_price=current_price,
         higher_timeframe_direction=higher_timeframe_direction,
         higher_timeframe=htf,
+        higher_timeframe_events=higher_timeframe_events,
         liquidity_zones=liquidity_zones,
         ranked_zones=ranked_zones,
         market_structure_events=market_structure_events,

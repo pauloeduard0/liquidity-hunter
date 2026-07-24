@@ -608,6 +608,49 @@ def test_history_episode_ends_at_the_grab_not_the_reflip() -> None:
     assert episode.end_timestamp == events[1].timestamp  # the sweep, not the re-flip
 
 
+def test_history_uses_htf_trend_as_of_the_leg_flip() -> None:
+    # The one-step-up anchor case: at the bearish CHoCH (t5) the HTF was still
+    # bullish, so that leg was counter-trend and swept the shorts — a real hunt.
+    # By the snapshot the HTF has since flipped bearish (the scalar is BEARISH),
+    # which under the old current-scalar model made the bearish leg read
+    # "aligned" and vanish. Replaying the HTF events up to the flip restores it.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    vsa = [_vsa(8, VSAPattern.UP_THRUST, MarketDirection.BEARISH)]
+    candles = _candles(24)
+
+    # Without the HTF stream, the current scalar (BEARISH) makes the bearish leg
+    # look aligned -> no history hunt (the regression the user saw).
+    aligned = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BEARISH,
+        internal_structure_events=events,
+        volume_spread_signals=vsa,
+        candles=candles,
+    )
+    assert LiquidityHuntEngine().build_history(aligned) == []
+
+    # With the HTF stream showing it was bullish at t5 (flip to bearish only at
+    # t15), the leg is judged counter-trend at its flip -> the hunt is kept.
+    htf_events = [
+        _event(2, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        _event(15, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+    ]
+    faithful = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BEARISH,
+        higher_timeframe_events=htf_events,
+        internal_structure_events=events,
+        volume_spread_signals=vsa,
+        candles=candles,
+    )
+    history = LiquidityHuntEngine().build_history(faithful)
+    assert len(history) == 1
+    assert history[0].hunted_side == RetailPositioning.SHORT
+    assert history[0].end_timestamp == events[1].timestamp
+
+
 def test_history_in_leg_grab_without_vsa_is_not_a_hunt() -> None:
     # Bullish HTF, counter-trend bearish leg. An in-leg up-sweep runs through a
     # swept equal-highs pool (sweep 3 + zone 2 + net-buy delta 1 = 6) but no VSA
