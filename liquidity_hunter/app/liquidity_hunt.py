@@ -295,7 +295,9 @@ class LiquidityHuntEngine:
         else:
             phase = LiquidityHuntPhase.COUNTER_TREND
 
-        capture_quality = self._capture_quality(data, capture_direction)
+        capture_quality = self._capture_quality(
+            data, capture_direction, flip_timestamp
+        )
 
         return LiquidityHuntState(
             symbol=data.symbol,
@@ -1191,15 +1193,21 @@ class LiquidityHuntEngine:
 
     @staticmethod
     def _quality_for_controller(
-        controller: MarketControlSide | None, capture_direction: MarketDirection
+        controller: MarketControlSide | None,
+        capture_direction: MarketDirection,
+        exhaustion_confirmed: bool,
     ) -> HuntCaptureQuality:
         """Map a credited controller to a grab quality against the capture side.
 
         Fresh money on the capture side (buyers backing an upward short-hunt /
         sellers backing a downward long-hunt) is a genuine break that cleared
-        liquidity along the way; anything else (short-covering / balanced / no
-        reading) means the grab ran the stops on no new money — an exhausting,
-        reversal-prone move. ``None`` controller → ``UNKNOWN``.
+        liquidity along the way. Absence of fresh money is *not enough* to call
+        a grab an exhaustion: the label is gated on a positive exhaustion
+        signature (``exhaustion_confirmed`` — an OI FLUSH or a VSA climax at the
+        grab, see ``_exhaustion_confirmed``). A stop-run with neither fresh money
+        nor an exhaustion fingerprint is merely ``UNKNOWN``, not exhaustion —
+        this is what keeps the purple marks precise instead of a catch-all
+        bucket. ``None`` controller → ``UNKNOWN``.
         """
         if controller is None:
             return HuntCaptureQuality.UNKNOWN
@@ -1208,24 +1216,64 @@ class LiquidityHuntEngine:
             if capture_direction is MarketDirection.BULLISH
             else MarketControlSide.SELLERS
         )
+        if controller is backing:
+            return HuntCaptureQuality.GENUINE_BREAK
         return (
-            HuntCaptureQuality.GENUINE_BREAK
-            if controller is backing
-            else HuntCaptureQuality.EXHAUSTION_GRAB
+            HuntCaptureQuality.EXHAUSTION_GRAB
+            if exhaustion_confirmed
+            else HuntCaptureQuality.UNKNOWN
+        )
+
+    @staticmethod
+    def _exhaustion_confirmed(
+        data: DashboardData,
+        capture_direction: MarketDirection,
+        start: datetime,
+        end: datetime,
+    ) -> bool:
+        """Whether a positive exhaustion signature sits in ``[start, end]``.
+
+        A grab lacking fresh money is only a reversal-prone *exhaustion* grab
+        when the stop-run carries a real capitulation fingerprint: a
+        capture-direction OI ``FLUSH`` (liquidation cascade) or a VSA
+        climax/thrust candle on the raided side. Without one, the grab is
+        unqualified rather than exhaustion — the filter that removes the clutter.
+        """
+        if data.oi_analysis is not None:
+            for q in data.oi_analysis.qualified_events:
+                if (
+                    q.direction is capture_direction
+                    and q.participation is OIParticipation.FLUSH
+                    and start <= q.event_timestamp <= end
+                ):
+                    return True
+        hunted_short = capture_direction is MarketDirection.BULLISH
+        vsa_patterns = _VSA_SHORT_CAPTURE if hunted_short else _VSA_LONG_CAPTURE
+        return any(
+            vsa.pattern in vsa_patterns and start <= vsa.timestamp <= end
+            for vsa in data.volume_spread_signals
         )
 
     @classmethod
     def _capture_quality(
-        cls, data: DashboardData, capture_direction: MarketDirection
+        cls,
+        data: DashboardData,
+        capture_direction: MarketDirection,
+        flip_timestamp: datetime,
     ) -> HuntCaptureQuality:
         """Quality of the *live* grab, from the current ``MarketControlState``.
 
+        The exhaustion signature is looked for across the current counter-trend
+        leg (flip → last candle), the span in which the live grab is unfolding.
         Degrades to ``UNKNOWN`` on spot / no OI (the ladder's slim snapshot has
         no ``market_control``).
         """
         control = data.market_control
         controller = control.controller if control is not None else None
-        return cls._quality_for_controller(controller, capture_direction)
+        confirmed = bool(data.candles) and cls._exhaustion_confirmed(
+            data, capture_direction, flip_timestamp, data.candles[-1].timestamp
+        )
+        return cls._quality_for_controller(controller, capture_direction, confirmed)
 
     @classmethod
     def _episode_quality(
@@ -1250,7 +1298,13 @@ class LiquidityHuntEngine:
                 controller = point.controller
             else:
                 break
-        return cls._quality_for_controller(controller, capture_direction)
+        tol = cls._grab_merge_gap(data.candles) or timedelta(0)
+        confirmed = cls._exhaustion_confirmed(
+            data, capture_direction, grab_ts - tol, grab_ts + tol
+        )
+        return cls._quality_for_controller(
+            controller, capture_direction, confirmed
+        )
 
     # ------------------------------------------------------------------
     # Description

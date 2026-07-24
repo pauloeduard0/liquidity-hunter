@@ -1171,15 +1171,49 @@ def test_capture_quality_unknown_without_market_control() -> None:
     assert state.capture_quality is HuntCaptureQuality.UNKNOWN
 
 
-def test_upward_grab_with_no_new_money_is_exhaustion() -> None:
+def test_upward_grab_with_no_new_money_and_no_signature_is_unknown() -> None:
     # Hunted shorts -> capture direction bullish. Control shows no buyers in
-    # control (short covering / balanced): the up move ran the stops on no
-    # fresh money -> exhaustion grab, reversal-prone.
+    # control (short covering / balanced), but there is no exhaustion signature
+    # (no OI FLUSH, no VSA climax): a stop-run on no fresh money with no
+    # capitulation fingerprint is UNKNOWN, not exhaustion — the noise filter.
     data = _minimal_data(
         higher_timeframe_direction=MarketDirection.BULLISH,
         internal_structure_events=[_bearish_choch()],
         liquidity_zones=[_eqh_zone(101.0)],
         market_control=_control(MarketControlSide.BALANCED),
+    )
+    state = LiquidityHuntEngine().build(data)
+    assert state.capture_quality is HuntCaptureQuality.UNKNOWN
+
+
+def test_upward_grab_no_new_money_with_flush_is_exhaustion() -> None:
+    # Same no-fresh-money grab, but now a capture-direction OI FLUSH sits in the
+    # leg window: a real liquidation cascade -> exhaustion grab, reversal-prone.
+    data = _minimal_data(
+        candles=[_candle(i) for i in range(13)],
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=[_bearish_choch()],
+        liquidity_zones=[_eqh_zone(101.0)],
+        market_control=_control(MarketControlSide.BALANCED),
+        oi_analysis=_oi(flush_at=T0 + H1 * 11),
+    )
+    state = LiquidityHuntEngine().build(data)
+    assert state.capture_quality is HuntCaptureQuality.EXHAUSTION_GRAB
+
+
+def test_upward_grab_no_new_money_with_vsa_climax_is_exhaustion() -> None:
+    # The VSA-climax branch of the exhaustion confirmer: an up-thrust rejecting
+    # the raided high in the leg window qualifies the no-fresh-money grab even
+    # with no OI FLUSH.
+    data = _minimal_data(
+        candles=[_candle(i) for i in range(13)],
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=[_bearish_choch()],
+        liquidity_zones=[_eqh_zone(101.0)],
+        market_control=_control(MarketControlSide.BALANCED),
+        volume_spread_signals=[
+            _vsa(11, VSAPattern.UP_THRUST, MarketDirection.BEARISH)
+        ],
     )
     state = LiquidityHuntEngine().build(data)
     assert state.capture_quality is HuntCaptureQuality.EXHAUSTION_GRAB
