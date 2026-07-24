@@ -1736,7 +1736,10 @@ export function MainChart({
       // Concluded hunts earlier in the window: dim green shaded bands with a ✓,
       // each ending at the liquidity grab that closed it (short, near-term).
       for (const episode of history) {
-        const sideWord = episode.hunted_side === 'short' ? 'shorts' : 'longs'
+        // Direction = a bold arrow to the raided side (shorts hunted → stops
+        // above → ▲); the label carries status only, so many overlapping bands
+        // stay legible without the long "shorts hunted" word repeating.
+        const arrow = episode.hunted_side === 'short' ? 'up' : 'down'
         // Exhaustion grab (stops run on no new money at the grab candle — CVD×OI)
         // is reversal-prone: purple with a ⚠; a genuine break stays green ✓. What
         // closed the hunt (sources + score) stays in the hover title.
@@ -1756,11 +1759,9 @@ export function MainChart({
           x1: toChartTime(episode.end_timestamp),
           color,
           fillColor: color + (episode.failed_reversal ? '1f' : '0d'),
-          label: episode.failed_reversal
-            ? `★ ${sideWord} hunted at the peak`
-            : exhaustion
-              ? `⚠ ${sideWord} hunted (exhaustion)`
-              : `✓ ${sideWord} hunted`,
+          arrow,
+          // Arrow only — status stays encoded in the color (rose = peak,
+          // purple = exhaustion, green = genuine); full detail in the hover.
         })
       }
     }
@@ -1771,7 +1772,7 @@ export function MainChart({
       // green "cleared" of a genuine break.
       const exhaustion = captured && hunt.capture_quality === 'exhaustion_grab'
       const color = exhaustion ? '#ab47bc' : captured ? '#26a69a' : '#ff9800'
-      const sideWord = hunt.hunted_side === 'short' ? 'shorts' : 'longs'
+      const arrow = hunt.hunted_side === 'short' ? 'up' : 'down'
       // The live window is the *pending* grab only: start it at the last grab
       // already captured in this leg (the latest history episode ending at or
       // after the flip), not the original flip — so it stays near-term and
@@ -1791,11 +1792,9 @@ export function MainChart({
             : ((lastCandleTime + 9_999_999) as UTCTimestamp),
         color,
         fillColor: color + '0d',
-        label: exhaustion
-          ? `⚠ ${sideWord} captured (exhaustion)`
-          : captured
-            ? `✓ ${sideWord} captured`
-            : `⚡ hunting ${sideWord}`,
+        arrow,
+        // Arrow only — status stays in the color (amber = hunting, green =
+        // captured, purple = exhaustion capture); detail in the hover.
       })
     }
     // Aligned trend-continuation grabs: a separate regime (a leg with the HTF

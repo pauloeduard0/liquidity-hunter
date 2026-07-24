@@ -20,6 +20,12 @@ export interface HuntWindow {
   color: string
   /** Translucent full-height fill. */
   fillColor: string
+  /**
+   * Direction the liquidity was raided in — the hunted side, drawn as a bold
+   * arrow ahead of the label so direction reads at a glance without the word:
+   * 'up' = shorts hunted (stops above), 'down' = longs hunted (stops below).
+   */
+  arrow?: 'up' | 'down'
   label?: string
 }
 
@@ -28,6 +34,7 @@ interface ResolvedWindow {
   x1: number | null
   color: string
   fillColor: string
+  arrow?: 'up' | 'down'
   label?: string
 }
 
@@ -64,13 +71,22 @@ class HuntWindowRenderer implements IPrimitivePaneRenderer {
         context.stroke()
         context.setLineDash([])
 
+        const PADDING = 4
+        context.textBaseline = 'top'
+        context.textAlign = 'left'
+        context.fillStyle = win.color
+        let cursor = left + PADDING
+        // Direction cue first: a bold arrow pointing to the raided side, the
+        // primary read. The status label follows in smaller type (or none).
+        if (win.arrow) {
+          context.font = 'bold 13px sans-serif'
+          const glyph = win.arrow === 'up' ? '▲' : '▼'
+          context.fillText(glyph, cursor, PADDING - 1)
+          cursor += context.measureText(glyph).width + 3
+        }
         if (win.label) {
-          const PADDING = 4
           context.font = '10px sans-serif'
-          context.textBaseline = 'top'
-          context.textAlign = 'left'
-          context.fillStyle = win.color
-          context.fillText(win.label, left + PADDING, PADDING)
+          context.fillText(win.label, cursor, PADDING)
         }
       }
     })
@@ -102,6 +118,7 @@ class HuntWindowPaneView implements IPrimitivePaneView {
       x1: timeScale.timeToCoordinate(win.x1),
       color: win.color,
       fillColor: win.fillColor,
+      arrow: win.arrow,
       label: win.label,
     }))
     return new HuntWindowRenderer(resolved)
