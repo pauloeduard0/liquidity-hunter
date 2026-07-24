@@ -99,7 +99,7 @@ def test_overview_higher_timeframe_anchors_follow_the_map() -> None:
     overview = load_overview(provider=provider)
 
     by_timeframe = {entry.timeframe: entry for entry in overview.entries}
-    assert by_timeframe[TimeFrame.M5].higher_timeframe is TimeFrame.H1
+    assert by_timeframe[TimeFrame.M5].higher_timeframe is TimeFrame.M15
     assert by_timeframe[TimeFrame.H1].higher_timeframe is TimeFrame.H4
     assert by_timeframe[TimeFrame.D1].higher_timeframe is TimeFrame.W1
     # W1 is the top of the ladder: no anchor, own trend, reads "aligned".
@@ -111,15 +111,15 @@ def test_overview_higher_timeframe_anchors_follow_the_map() -> None:
 def test_overview_counter_trend_timeframe_reports_hunt() -> None:
     falling = _zigzag(200, drift=-1.0)
     rising = _zigzag(200, drift=1.0)
-    provider = _PerTimeframeProvider({TimeFrame.M15: falling, TimeFrame.H1: rising})
+    provider = _PerTimeframeProvider({TimeFrame.M15: falling, TimeFrame.M30: rising})
 
     overview = load_overview(
-        provider=provider, timeframes=[TimeFrame.M15, TimeFrame.H1]
+        provider=provider, timeframes=[TimeFrame.M15, TimeFrame.M30]
     )
 
     m15 = overview.entries[0]
     assert m15.trend is MarketDirection.BEARISH
-    assert m15.higher_timeframe is TimeFrame.H1
+    assert m15.higher_timeframe is TimeFrame.M30
     assert m15.higher_timeframe_direction is MarketDirection.BULLISH
     # A bearish correction inside a bullish HTF: its sellers are the fuel.
     assert m15.hunted_side is RetailPositioning.SHORT

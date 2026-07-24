@@ -711,9 +711,9 @@ _BOS_PULLBACK_SEED_CHOCH_ORIGIN = True
 _HUNT_PROXIMITY_ATR = 2.0
 
 _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
-    TimeFrame.M1: TimeFrame.H1,
-    TimeFrame.M5: TimeFrame.H1,
-    TimeFrame.M15: TimeFrame.H1,
+    TimeFrame.M1: TimeFrame.M5,
+    TimeFrame.M5: TimeFrame.M15,
+    TimeFrame.M15: TimeFrame.M30,
     TimeFrame.M30: TimeFrame.H1,
     TimeFrame.H1: TimeFrame.H4,
     TimeFrame.H4: TimeFrame.D1,
