@@ -734,6 +734,47 @@ def test_history_lone_pool_raid_is_not_a_grab() -> None:
     assert LiquidityHuntEngine().build_history(data) == []
 
 
+def test_history_marks_the_extreme_of_an_invalidated_choch() -> None:
+    # Bullish HTF. A bullish CHoCH opens a short-lived aligned excursion that is
+    # then invalidated (CHOCH_FAILED). Its extreme raided the shorts' pool and
+    # rejected — the top before the fall. That window is scanned even though the
+    # leg runs *with* the HTF trend (SOLUSDT 1h 2026-07-06 83.75).
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        _event(12, StructureEvent.CHOCH_FAILED, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    candles = _candles(24)
+    candles[8] = _raid_candle(8, 102.0, taker_buy=2.0)
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        liquidity_zones=[_eqh_zone(102.0, mitigated_at=T0 + H1 * 8)],
+        candles=candles,
+    )
+    history = LiquidityHuntEngine().build_history(data)
+    assert len(history) == 1
+    assert history[0].start_timestamp == events[0].timestamp
+    assert history[0].end_timestamp == candles[8].timestamp
+    assert history[0].hunted_side == RetailPositioning.SHORT
+
+
+def test_history_ignores_an_invalidated_choch_that_grabbed_nothing() -> None:
+    # Same shape, but the excursion simply gave its move back without taking
+    # any liquidity: a failed reversal is not by itself a hunt.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        _event(12, StructureEvent.CHOCH_FAILED, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        candles=_candles(24),
+    )
+    assert LiquidityHuntEngine().build_history(data) == []
+
+
 def test_history_skips_counter_trend_leg_without_capture() -> None:
     events = [
         _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),

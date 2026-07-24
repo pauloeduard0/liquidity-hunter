@@ -367,8 +367,26 @@ class LiquidityHuntEngine:
             next_event = segments[idx + 1][2] if idx + 1 < len(segments) else None
             if end is None:
                 continue
-            if direction is htf or direction not in directional:
-                continue  # aligned leg, not a hunt
+            if direction not in directional:
+                continue
+            if direction is htf:
+                # An aligned leg is not a hunt — *except* a short-lived one
+                # opened by a CHoCH that was then invalidated (CHOCH_FAILED).
+                # That excursion is a reversal attempt in the capture direction
+                # that ran the hunted side's stops at its extreme and could not
+                # hold: the top before the fall. It sits in a blind spot
+                # otherwise — build_history skips aligned legs, and
+                # _continuation_legs absorbs the failed excursion into the
+                # surrounding leg and scans the *opposite* (pullback) direction
+                # inside it, so nothing ever looks at the extreme itself.
+                if next_event is not StructureEvent.CHOCH_FAILED:
+                    continue
+                episodes.extend(
+                    self._failed_excursion_episodes(
+                        data, htf, direction, start, end, merge_gap
+                    )
+                )
+                continue
             hunted_short = htf is MarketDirection.BULLISH
             hunted_side = (
                 RetailPositioning.SHORT if hunted_short else RetailPositioning.LONG
@@ -439,6 +457,76 @@ class LiquidityHuntEngine:
                     )
                 )
                 sub_start = grab_ts
+        return episodes
+
+    def _failed_excursion_episodes(
+        self,
+        data: DashboardData,
+        htf: MarketDirection,
+        direction: MarketDirection,
+        start: datetime,
+        end: datetime,
+        merge_gap: timedelta | None,
+    ) -> list[LiquidityHuntEpisode]:
+        """Grabs inside an aligned excursion whose CHoCH was invalidated.
+
+        The excursion runs in the capture direction (a bullish reversal attempt
+        under a bullish HTF, hunting shorts), takes out the pools its own break
+        exposed, then fails. Its extreme is the strongest kind of grab the
+        engine can name — the entrants who chased the break were run there and
+        price never returned — so it is scanned with the ordinary weighted
+        machinery rather than being asserted from the ``CHOCH_FAILED`` alone: a
+        reversal that simply gave back its move without touching liquidity is
+        not a hunt.
+
+        Disjoint from :meth:`build_continuation_history`, which scans the same
+        span for *pullback*-direction sweeps: the grab sides are opposite, the
+        same argument that keeps the counter-trend and continuation layers from
+        double-counting.
+        """
+        hunted_short = htf is MarketDirection.BULLISH
+        capture_direction = (
+            MarketDirection.BULLISH if hunted_short else MarketDirection.BEARISH
+        )
+        if direction is not capture_direction:
+            return []
+        grabs = self._capture_grabs(
+            data,
+            hunted_short,
+            capture_direction,
+            start,
+            end,
+            merge_gap,
+            require_vsa=True,
+        )
+        side_word = "shorts" if hunted_short else "longs"
+        hunted_side = (
+            RetailPositioning.SHORT if hunted_short else RetailPositioning.LONG
+        )
+        episodes: list[LiquidityHuntEpisode] = []
+        sub_start = start
+        for grab_ts, score, sources in grabs:
+            episodes.append(
+                LiquidityHuntEpisode(
+                    hunted_side=hunted_side,
+                    correction_direction=direction,
+                    start_timestamp=sub_start,
+                    end_timestamp=grab_ts,
+                    capture_score=score,
+                    capture_sources=sources,
+                    capture_quality=self._episode_quality(
+                        data, capture_direction, grab_ts
+                    ),
+                    description=(
+                        f"Failed-reversal hunt: a {direction.value} change of "
+                        f"character swept {side_word} liquidity at its extreme "
+                        f"({', '.join(sources)}; score {score:.0f}), then was "
+                        f"invalidated — the high-water mark before the move "
+                        f"resumed against it."
+                    ),
+                )
+            )
+            sub_start = grab_ts
         return episodes
 
     def build_continuation_history(
