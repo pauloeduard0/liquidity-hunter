@@ -1176,6 +1176,28 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
     un-capture a structurally finished hunt (fixed 2026-07-21; the
     CAPTURED ⇄ HUNT_IN_PROGRESS churn seen live). It still keeps a
     not-yet-captured leg in `HUNT_IN_PROGRESS`.
+  - **Capture signals** (`_collect_capture_signals`, shared by the
+    counter-trend hunt and the aligned continuation stream): weighted
+    `(timestamp, weight, source)` evidence clustered by proximity, where a
+    cluster reaching the layer's threshold is a grab. Besides `sweep`, `vsa`,
+    `oi_flush`, `zone`, `raid` and `realignment`, a **`supertrend`** source
+    (weight `_WEIGHT_SUPERTREND` = 3) fires on a capture-direction
+    `SupertrendBreak` with `quality=STOP_RUN` — the band's stops taken and
+    handed back, the raid signature against the population resting on the
+    Supertrend rather than on equal levels. It is a *floor signature*
+    (`_FLOOR_SIGNATURE_SOURCES`), so it satisfies the continuation stream's
+    `require_vsa` gate, and unlike `raid` it is **not** disabled there: the
+    band moves with price (no stale-level problem) and the analyzer already
+    gates it on a 1-ATR excursion. Two raid-*shaped* sources
+    (`_RAID_SHAPED_SOURCES` = `raid` + `supertrend`) in one cluster still need
+    a partner from another family — near a moving band a stale equal level is
+    usually the same wick told twice. Measured 2026-07-24 across
+    BTC/ETH/SOL/NEAR × 15m/1h/4h: continuation episodes **105 → 119** (+13%,
+    gains in 10 of 12 combos, none removed), hunt episodes 133 → 134, live
+    `phase` unchanged in all 12. The continuation stream gains most by
+    construction — its floor signature was VSA-only (`require_vsa=True` with
+    `allow_raid=False`), the documented narrowness that left whole legs
+    unmarked.
 
 - **`app/overview.py`** — multi-timeframe structural overview (the sidebar
   "Structure Ladder", as of 2026-07-11). Split in two stages so the API can

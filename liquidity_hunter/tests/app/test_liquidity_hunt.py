@@ -27,6 +27,8 @@ from liquidity_hunter.core.domain import (
     RetailPositioning,
     StructureEvent,
     StructureScope,
+    SupertrendBreak,
+    SupertrendBreakQuality,
     TimeFrame,
     VolumeSpreadSignal,
     VSAPattern,
@@ -1340,3 +1342,80 @@ def test_history_episode_quality_genuine_when_buyers_control_the_up_grab() -> No
     history = LiquidityHuntEngine().build_history(data)
     assert len(history) == 1
     assert history[0].capture_quality is HuntCaptureQuality.GENUINE_BREAK
+
+
+def _stop_run(i: int, direction: MarketDirection, level: float = 102.0) -> SupertrendBreak:
+    return SupertrendBreak(
+        timestamp=T0 + H1 * i,
+        direction=direction,
+        broken_level=level,
+        quality=SupertrendBreakQuality.STOP_RUN,
+        reclaim_timestamp=T0 + H1 * (i + 2),
+        reclaim_candles=2,
+        structure_confirmed=False,
+    )
+
+
+def test_history_supertrend_stop_run_is_a_floor_signature() -> None:
+    # Bullish HTF, counter-trend bearish leg. No VSA and no pool: the grab is
+    # named by a Supertrend stop run (3) plus the sweep it co-locates with (3)
+    # and capture-side aggression (1) = 7. The band is the pool here — the stops
+    # of everyone who entered on the previous flip.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    candles = _candles(24)
+    candles[8] = _raid_candle(8, 102.0, taker_buy=8.0)  # capture-side delta
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        candles=candles,
+        supertrend_breaks=[_stop_run(8, MarketDirection.BULLISH)],
+    )
+
+    history = LiquidityHuntEngine().build_history(data)
+
+    assert len(history) == 1
+    assert "supertrend" in history[0].capture_sources
+
+
+def test_history_stop_run_on_the_wrong_side_is_ignored() -> None:
+    # A hunted-short capture runs the stops *above*; a downward stop run took
+    # the other side's, so it is not this grab's signature.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    candles = _candles(24)
+    candles[8] = _raid_candle(8, 102.0, taker_buy=8.0)
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        candles=candles,
+        supertrend_breaks=[_stop_run(8, MarketDirection.BEARISH)],
+    )
+
+    assert LiquidityHuntEngine().build_history(data) == []
+
+
+def test_history_stop_run_alongside_a_raid_still_needs_a_partner() -> None:
+    # Both are the same shape (a public level poked and given back) and here the
+    # same wick: two raid-shaped sources alone do not make a grab.
+    events = [
+        _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+        _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+    ]
+    candles = _candles(24)
+    candles[8] = _raid_candle(8, 102.0, taker_buy=5.0)  # delta 0, no partner
+    data = _minimal_data(
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        internal_structure_events=events,
+        liquidity_zones=[_eqh_zone(102.0)],
+        candles=candles,
+        supertrend_breaks=[_stop_run(8, MarketDirection.BULLISH)],
+    )
+
+    assert LiquidityHuntEngine().build_history(data) == []

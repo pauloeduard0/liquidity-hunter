@@ -35,6 +35,7 @@ from liquidity_hunter.core.domain.enums import (
     OIRegime,
     RetailPositioning,
     StructureEvent,
+    SupertrendBreakQuality,
     VSAPattern,
 )
 from liquidity_hunter.core.domain.liquidity_hunt import (
@@ -122,6 +123,16 @@ _WEIGHT_ZONE = 2.0
 # *labels* a pivot): the pool level is known-resting liquidity and the
 # rejection close is the grab failing in the same candle.
 _WEIGHT_RAID = 4.0
+# A Supertrend flip qualified as a STOP_RUN: price broke the band, took the
+# stops resting on it, and closed back inside. The same shape as `_WEIGHT_RAID`
+# — a public level poked and given back — against a different population: the
+# band is where everyone who entered on the *previous* flip keeps their stop.
+# Weighted one notch below the raid because the pool is inferred from a
+# mechanical indicator rather than from equal levels price actually built, but
+# it does not carry the raid's staleness problem: the band moves with price
+# (a months-old equal level does not), and `SupertrendBreakAnalyzer` already
+# gates it on a 1-ATR excursion beyond the band.
+_WEIGHT_SUPERTREND = 3.0
 # Short covering / long liquidation OI participation on a capture-side event:
 # the hunted side *closing out* is direct evidence its liquidity was the fuel,
 # one notch below an outright FLUSH (which is the violent version of it).
@@ -163,7 +174,14 @@ _VSA_LONG_CAPTURE: frozenset[VSAPattern] = frozenset(
 # marked). A pool raid with a rejection close and a realignment flip-back are
 # the same kind of statement made by price and by structure respectively, so
 # any of the three opens the gate; the weighted threshold still decides.
-_FLOOR_SIGNATURE_SOURCES = frozenset({"vsa", "raid", "realignment"})
+_FLOOR_SIGNATURE_SOURCES = frozenset({"vsa", "raid", "realignment", "supertrend"})
+
+# Floor signatures of the *pool-raid* shape: a public level poked and handed
+# back. Two of them in one cluster is usually the same wick described twice (a
+# stale equal level sitting near the moving band), so a cluster made only of
+# these still needs a partner from another family — the same bare-signal guard
+# `raid` alone already carried.
+_RAID_SHAPED_SOURCES = frozenset({"raid", "supertrend"})
 
 
 def _opposite(direction: MarketDirection) -> MarketDirection:
@@ -827,11 +845,14 @@ class LiquidityHuntEngine:
                 # it confirms the grab exactly as capture-side aggression does
                 # on a sweep. Same slot, so it never double-counts.
                 by_source["delta"] = _WEIGHT_DELTA_MODIFIER
-            if set(by_source) == {"raid"}:
+            if set(by_source) <= _RAID_SHAPED_SOURCES:
                 # A bare raid with nothing else — no pool recorded as taken, no
                 # aggression either way, no structure or OI agreeing — is the
                 # same lone-signal noise the thresholds were raised to shut out
-                # (wicks poke stale levels constantly). It needs one partner.
+                # (wicks poke stale levels constantly). It needs one partner,
+                # and a co-located Supertrend stop run is not that partner: the
+                # band and a nearby equal level are usually the same wick told
+                # twice.
                 continue
             score = sum(by_source.values())
             if score < threshold:
@@ -846,7 +867,7 @@ class LiquidityHuntEngine:
                 floor_stamps = [
                     ts
                     for ts, _w, source in cluster
-                    if source in ("vsa", "raid")
+                    if source in ("vsa", "raid", "supertrend")
                 ]
                 if floor_stamps:
                     anchor = min(floor_stamps)
@@ -895,6 +916,17 @@ class LiquidityHuntEngine:
             signals.extend(
                 self._raid_signals(data, hunted_short, pool_levels, start, end)
             )
+
+        # A Supertrend flip that took the band's stops and was handed back is a
+        # raid against the population resting on the band. Anchored at the flip
+        # candle (where the stops went), not at the reclaim.
+        for brk in data.supertrend_breaks:
+            if (
+                brk.quality is SupertrendBreakQuality.STOP_RUN
+                and brk.direction is capture_direction
+                and start <= brk.timestamp <= end
+            ):
+                signals.append((brk.timestamp, _WEIGHT_SUPERTREND, "supertrend"))
 
         # VSA maps by the *grab side*, not by VSA's implied direction (which is
         # the mirror): a hunted-short capture is an up-sweep rejecting the high
