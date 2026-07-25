@@ -482,6 +482,24 @@ export interface SupertrendPoint {
   lower_band: number
 }
 
+export type SupertrendBreakQuality = 'unknown' | 'genuine' | 'stop_run'
+
+/** A Supertrend flip qualified by who financed it. */
+export interface SupertrendBreak {
+  timestamp: string
+  direction: MarketDirection
+  /** The band that gave way — the active band of the preceding candle. */
+  broken_level: number
+  quality: SupertrendBreakQuality
+  /** When price closed back inside the broken band (null while the break holds). */
+  reclaim_timestamp: string | null
+  reclaim_candles: number | null
+  controller: MarketControlSide | null
+  structure_confirmed: boolean
+  evidence: string[]
+  description: string
+}
+
 export interface DashboardData {
   symbol: string
   timeframe: TimeFrame
@@ -500,6 +518,7 @@ export interface DashboardData {
   behavior_divergences: BehaviorDivergence[]
   volume_spread_signals: VolumeSpreadSignal[]
   supertrend: SupertrendPoint[]
+  supertrend_breaks: SupertrendBreak[]
   liquidity_heatmap: LiquidityHeatmap | null
   liquidation_map: LeverageLiquidationMap | null
   narrative: MarketNarrative | null

@@ -31,6 +31,7 @@ from liquidity_hunter.core.domain.enums import (
     RetailPositioning,
     StructureEvent,
     StructureScope,
+    SupertrendBreakQuality,
     TimeFrame,
     VSAPattern,
 )
@@ -70,7 +71,7 @@ from liquidity_hunter.core.domain.overview import MarketOverview, TimeframeOverv
 from liquidity_hunter.core.domain.poi_zone import POIZone
 from liquidity_hunter.core.domain.retail_bias import RetailBias
 from liquidity_hunter.core.domain.structure_confluence import StructureConfluence
-from liquidity_hunter.core.domain.supertrend import SupertrendPoint
+from liquidity_hunter.core.domain.supertrend import SupertrendBreak, SupertrendPoint
 from liquidity_hunter.core.domain.volume_spread import VolumeSpreadSignal
 
 __all__ = [
@@ -122,9 +123,11 @@ __all__ = [
     "RetailBias",
     "RetailPositioning",
     "StructureConfluence",
-    "SupertrendPoint",
     "StructureEvent",
     "StructureScope",
+    "SupertrendBreak",
+    "SupertrendBreakQuality",
+    "SupertrendPoint",
     "TimeFrame",
     "TimeframeOverview",
     "VSAPattern",

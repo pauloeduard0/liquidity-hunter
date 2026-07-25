@@ -183,3 +183,7 @@ export const RSI_DIV_BEARISH_COLOR = '#ef5350'
 export const SUPERTREND_UP_COLOR = '#26a69a'
 export const SUPERTREND_DOWN_COLOR = '#ef5350'
 export const SUPERTREND_LINE_WIDTH = 2
+// A Supertrend flip that took the band's stops and handed price back inside.
+// Purple is the project's "trap" colour (see the exhaustion-grab hunt window),
+// so a false break reads the same way wherever it appears.
+export const SUPERTREND_STOP_RUN_COLOR = '#ab47bc'

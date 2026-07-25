@@ -12,6 +12,9 @@ from liquidity_hunter.psychology.analyzers.manipulation_cycle import Manipulatio
 from liquidity_hunter.psychology.analyzers.market_control import MarketControlAnalyzer
 from liquidity_hunter.psychology.analyzers.oi_regime import OIRegimeAnalyzer
 from liquidity_hunter.psychology.analyzers.retail_trap import RetailTrapAnalyzer
+from liquidity_hunter.psychology.analyzers.supertrend_break import (
+    SupertrendBreakAnalyzer,
+)
 from liquidity_hunter.psychology.analyzers.volume_spread import VolumeSpreadAnalyzer
 
 __all__ = [
@@ -23,5 +26,6 @@ __all__ = [
     "ProjectedLevel",
     "RetailBiasEstimator",
     "RetailTrapAnalyzer",
+    "SupertrendBreakAnalyzer",
     "VolumeSpreadAnalyzer",
 ]

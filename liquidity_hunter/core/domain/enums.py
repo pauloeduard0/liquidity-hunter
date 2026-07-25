@@ -223,6 +223,27 @@ class HuntCaptureQuality(str, Enum):
     EXHAUSTION_GRAB = "exhaustion_grab"  # grab with no new money — reversal-prone
 
 
+class SupertrendBreakQuality(str, Enum):
+    """Who paid for a Supertrend flip: fresh money, or a stop run.
+
+    The Supertrend band is a *public*, mechanical level — the stop of everyone
+    who entered on the previous flip rests there — so a break of it is an
+    event whose fuel is worth naming. A ``GENUINE`` break carries fresh money
+    in the flip's direction and is confirmed by structure shortly after; a
+    ``STOP_RUN`` broke the band, took those stops, and handed price back inside
+    within a few candles without new money behind it. Descriptive: an
+    observation about who financed the break, never an instruction.
+
+    A ``STOP_RUN`` is only knowable in retrospect (it needs the reclaim), so a
+    fresh flip whose window has not elapsed reads ``UNKNOWN`` until it
+    resolves — the same live-edge honesty as the detector's provisional marks.
+    """
+
+    UNKNOWN = "unknown"  # no coverage, or not yet resolved at the live edge
+    GENUINE = "genuine"  # new money in the flip's direction + structure agreed
+    STOP_RUN = "stop_run"  # broke the band, took stops, price came back inside
+
+
 class NarrativeEventType(str, Enum):
     """Classification of a narrative timeline event."""
 

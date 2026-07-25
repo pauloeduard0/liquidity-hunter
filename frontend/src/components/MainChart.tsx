@@ -27,7 +27,7 @@ import {
   type LiquidationBandInput,
 } from '../charting/LiquidationBandsPrimitive'
 import { EqlZonesPrimitive, type EqlZoneInput } from '../charting/EqlZonesPrimitive'
-import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendPoint, VolumeSpreadSignal } from '../types/dashboard'
+import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -53,6 +53,7 @@ import {
   ZONE_TYPE_LABELS,
   SUPERTREND_DOWN_COLOR,
   SUPERTREND_LINE_WIDTH,
+  SUPERTREND_STOP_RUN_COLOR,
   SUPERTREND_UP_COLOR,
 } from '../theme'
 import { setChartTimezoneMode, toChartTime } from '../utils/chartTime'
@@ -515,6 +516,45 @@ function buildSupertrendSegments(points: SupertrendPoint[]): SupertrendSegment[]
     current.points.push({ time: toChartTime(point.timestamp) as Time, value: point.value })
   }
   return segments.filter((segment) => segment.points.length > 0)
+}
+
+// A stop-run flip draws a segment along the band it broke, from the break to
+// the candle that gave it back — the shape of "they took you out and returned".
+// Genuine breaks draw nothing extra: the band itself already tells that story,
+// and marking the normal case would bury the exceptional one.
+function buildStopRunSegments(
+  breaks: SupertrendBreak[],
+): { points: { time: Time; value: number }[] }[] {
+  return breaks
+    .filter((brk) => brk.quality === 'stop_run' && brk.reclaim_timestamp !== null)
+    .map((brk) => ({
+      points: [
+        { time: toChartTime(brk.timestamp) as Time, value: brk.broken_level },
+        {
+          time: toChartTime(brk.reclaim_timestamp as string) as Time,
+          value: brk.broken_level,
+        },
+      ],
+    }))
+}
+
+function buildStopRunMarkers(breaks: SupertrendBreak[]): SeriesMarker<Time>[] {
+  return breaks
+    .filter((brk) => brk.quality === 'stop_run')
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+    .map(
+      (brk) =>
+        ({
+          time: toChartTime(brk.timestamp) as Time,
+          // Anchored on the side the break poked through, so the warning sits
+          // where the stops were.
+          position: brk.direction === 'bullish' ? 'aboveBar' : 'belowBar',
+          shape: 'circle',
+          color: SUPERTREND_STOP_RUN_COLOR,
+          text: '⚠ ST',
+          size: 1,
+        }) as SeriesMarker<Time>,
+    )
 }
 
 function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker<Time>[] {
@@ -1714,13 +1754,30 @@ export function MainChart({
       overlaySeriesRef.current.push(stSeries)
     }
 
+    // False breaks of the band: a dashed run along the level from the break to
+    // the give-back. Lives under the same toggle as the band it annotates.
+    const stopRuns = showSupertrend ? (data.supertrend_breaks ?? []) : []
+    for (const run of buildStopRunSegments(stopRuns)) {
+      const runSeries = chart.addSeries(LineSeries, {
+        color: SUPERTREND_STOP_RUN_COLOR,
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      })
+      runSeries.setData(run.points)
+      overlaySeriesRef.current.push(runSeries)
+    }
+
     // Behavior divergence + VSA markers share one marker plugin (a series
     // holds a single marker set), merged and re-sorted ascending by time.
     const divMarkers = showDivergenceMarkers
       ? buildDivergenceMarkers(data.behavior_divergences ?? [])
       : []
     const vsaMarkers = buildVsaMarkers(vsaSignals)
-    const mergedMarkers = [...divMarkers, ...vsaMarkers].sort(
+    const stopRunMarkers = buildStopRunMarkers(stopRuns)
+    const mergedMarkers = [...divMarkers, ...vsaMarkers, ...stopRunMarkers].sort(
       (a, b) => (a.time as number) - (b.time as number),
     )
     divergenceMarkersRef.current?.setMarkers(mergedMarkers)

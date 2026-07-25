@@ -367,7 +367,8 @@ re-exported from `liquidity_hunter.data`.
   `true_range_series` is exposed alongside it. Descriptive only: a
   volatility-scaled trend envelope, never a buy/sell instruction — the Pine
   script's Buy/Sell labels are not rendered at all.
-  Re-exported from `liquidity_hunter.indicators`.
+  Re-exported from `liquidity_hunter.indicators`. Each flip is separately
+  *qualified* by `SupertrendBreakAnalyzer` (psychology layer, below).
 
 ### Liquidity layer (`liquidity_hunter/liquidity`)
 
@@ -842,6 +843,41 @@ documented in `liquidity_hunter/docs/psychology.md`.
   `NEW_MONEY`/`COVERING`/`FLAT`. Events outside OI coverage are skipped, not
   guessed. OI alignment is by bisect (latest sample at/before each timestamp).
 
+- **`psychology/analyzers/supertrend_break.py`** — `SupertrendBreakAnalyzer`:
+  qualifies *who paid for* each Supertrend flip. The band is a public,
+  mechanical level — everyone who entered on the previous flip keeps a stop
+  there — so breaking it is a liquidity event as much as a trend event.
+  `analyze(candles, points, structure_events=…, market_control=…,
+  oi_analysis=…, volume_spread_signals=…) -> list[SupertrendBreak]` crosses
+  each flip with four components: a **reclaim** (a *close* back inside the
+  broken band within `reclaim_candles`, default 5 — a wick back inside is not
+  a reclaim — where price also travelled at least `min_excursion_atr` = **1.0**
+  mean-true-range beyond the band before returning), **fresh money** (the credited `controller` from the
+  market-control series at the flip candle), **structural confirmation** (a
+  non-provisional same-direction BOS/CHoCH within `confirm_candles`, default
+  10), and an **exhaustion signature** (a same-direction OI `FLUSH` or a VSA
+  climax/thrust on the raided side, within ±1 candle). Verdict
+  (`SupertrendBreakQuality`): `GENUINE` = fresh money **and** structure agreed;
+  `STOP_RUN` = a reclaim **plus** either no fresh money behind the flip or an
+  exhaustion fingerprint; everything else `UNKNOWN`. Absence of fresh money
+  alone never accuses a break — the reclaim is the positive evidence, the same
+  discipline that keeps `HuntCaptureQuality` precise. A `STOP_RUN` is only
+  knowable in retrospect, so a fresh flip whose reclaim window has not elapsed
+  reads `UNKNOWN` until it resolves (the live-edge honesty of the detector's
+  provisional marks). Every context input is optional: a spot symbol still
+  gets its flips listed, unqualified. The excursion gate is what makes the
+  label mean anything: without it the reading is dominated by the indicator's
+  own whipsaw (a flip that reverses on the next bar without ever leaving the
+  level attracted nobody into the break). Measured 2026-07-24 across
+  BTC/ETH/SOL × 15m/1h/4h, 267 flips: no gate → 151 stop runs (57%), 0.5 ATR →
+  113, **1.0 ATR → 58 (22%, ~6 per chart)**, 1.5 ATR → 29. `GENUINE` is rare by
+  construction (4/267): `controller` credits a side only in the OI-rising
+  quadrants, so demanding fresh money *and* structural confirmation is a strict
+  bar — deliberately, since only `STOP_RUN` is drawn. `SupertrendBreak`
+  (`core/domain/supertrend.py`) carries `timestamp`, `direction`,
+  `broken_level`, `quality`, `reclaim_timestamp`/`reclaim_candles`,
+  `controller`, `structure_confirmed`, `evidence` (the components that shaped
+  the verdict) and `description`.
 - **`psychology/analyzers/market_control.py`** — `MarketControlAnalyzer`:
   answers *who is in control of the tape right now?* by crossing **CVD
   aggression** (net taker delta over a per-TF window, normalized by window
@@ -866,7 +902,7 @@ documented in `liquidity_hunter/docs/psychology.md`.
   `core/domain/market_control.py`, the `MarketControlSide` enum in
   `core/domain/enums.py`.
 
-All eight are re-exported from `liquidity_hunter.psychology`.
+All nine are re-exported from `liquidity_hunter.psychology`.
 
 ### Scoring layer (`liquidity_hunter/scoring`)
 
@@ -909,6 +945,9 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `narrative` (`MarketNarrative | None`), `oi_analysis`
   (`OIAnalysis | None`), `market_control` (`MarketControlState | None` — who
   controls the tape from CVD×OI, `None` for spot; see `MarketControlAnalyzer`),
+  `supertrend_breaks` (`list[SupertrendBreak]` — each Supertrend flip
+  qualified as `genuine`/`stop_run`/`unknown`; runs after the futures block
+  since it reads the participation layers built there),
   `liquidity_hunt` (`LiquidityHuntState | None`),
   `higher_timeframe` (`TimeFrame | None` — the `_HIGHER_TIMEFRAME_MAP` anchor
   pair `higher_timeframe_direction` was measured on, `None` for the top
@@ -1300,7 +1339,12 @@ selector.
   only — the flip reads from the break between runs, so it carries no marker.
   Toggled by the `⌁ ST`
   toolbar button in `App.tsx` (`showSupertrend` prop, default **off**);
-  colors/width live in `theme.ts` (`SUPERTREND_*`).
+  colors/width live in `theme.ts` (`SUPERTREND_*`). Under the same toggle,
+  each `data.supertrend_breaks` entry with `quality === 'stop_run'` adds a
+  purple `⚠ ST` marker at the flip candle plus a dashed purple segment along
+  `broken_level` from the break to its `reclaim_timestamp` — the shape of
+  "broke out, took the stops, handed it back". `genuine` and `unknown` breaks
+  draw nothing extra: marking the normal case would bury the exceptional one.
 
   **Volume delta pane**: histogram bars colored by candle direction
   (`CANDLE_UP_COLOR`/`CANDLE_DOWN_COLOR`), computed as

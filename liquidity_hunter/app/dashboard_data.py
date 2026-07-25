@@ -31,6 +31,7 @@ from liquidity_hunter.core.domain import (
     POIZoneStatus,
     StructureConfluence,
     StructureEvent,
+    SupertrendBreak,
     SupertrendPoint,
     TimeFrame,
     VolumeSpreadSignal,
@@ -71,6 +72,7 @@ from liquidity_hunter.psychology import (
     OIRegimeAnalyzer,
     RetailBiasEstimate,
     RetailTrapAnalyzer,
+    SupertrendBreakAnalyzer,
     VolumeSpreadAnalyzer,
 )
 from liquidity_hunter.scoring import (
@@ -766,6 +768,9 @@ class DashboardData:
     # ATR-banded trailing trend readings over the visible window (Supertrend),
     # one per candle from the first defined ATR onward.
     supertrend: list[SupertrendPoint] = field(default_factory=list)
+    # Each Supertrend flip qualified by who financed it (fresh money vs a stop
+    # run that handed price back inside the band). See `SupertrendBreakAnalyzer`.
+    supertrend_breaks: list[SupertrendBreak] = field(default_factory=list)
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
@@ -2146,6 +2151,18 @@ def load_dashboard_data(
             open_interest=open_interest,
         )
 
+    # Who paid for each Supertrend flip. Runs after the futures block because
+    # it reads the participation layers built there; without them (spot) every
+    # break degrades to UNKNOWN rather than being guessed at.
+    supertrend_breaks = SupertrendBreakAnalyzer().analyze(
+        candles=candles,
+        points=supertrend_points,
+        structure_events=internal_structure_events,
+        market_control=market_control,
+        oi_analysis=oi_analysis,
+        volume_spread_signals=volume_spread_signals,
+    )
+
     data = DashboardData(
         symbol=symbol,
         timeframe=timeframe,
@@ -2165,6 +2182,7 @@ def load_dashboard_data(
         behavior_divergences=behavior_divergences,
         volume_spread_signals=volume_spread_signals,
         supertrend=supertrend_points,
+        supertrend_breaks=supertrend_breaks,
         liquidity_heatmap=liquidity_heatmap,
         liquidation_map=liquidation_map,
         oi_analysis=oi_analysis,
