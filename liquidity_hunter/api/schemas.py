@@ -27,6 +27,7 @@ from liquidity_hunter.core.domain import (
     SupertrendBreak,
     SupertrendPoint,
     TimeFrame,
+    VolumeProfile,
     VolumeSpreadSignal,
 )
 from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
@@ -57,6 +58,7 @@ class DashboardDataResponse(BaseModel):
     volume_spread_signals: list[VolumeSpreadSignal] = []
     supertrend: list[SupertrendPoint] = []
     supertrend_breaks: list[SupertrendBreak] = []
+    volume_profile: VolumeProfile | None = None
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None

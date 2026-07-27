@@ -136,6 +136,8 @@ function App() {
   const [volumeVisible, setVolumeVisible] = useState(true)
   const [rsiDivVisible, setRsiDivVisible] = useState(false)
   const [supertrendVisible, setSupertrendVisible] = useState(false)
+  const [volumeProfileVisible, setVolumeProfileVisible] = useState(false)
+  const [volumeProfileDelta, setVolumeProfileDelta] = useState(false)
   const [controlOscVisible, setControlOscVisible] = useState(true)
   const [indicatorsVisible, setIndicatorsVisible] = useState(false)
   const [, setTick] = useState(0)
@@ -544,6 +546,23 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={(e) => {
+                        // Alt/Shift-click swaps the bands to delta colouring;
+                        // plain click toggles visibility.
+                        if (e.altKey || e.shiftKey) setVolumeProfileDelta((v) => !v)
+                        else setVolumeProfileVisible((v) => !v)
+                      }}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        volumeProfileVisible
+                          ? 'bg-[#2962ff22] text-[#5b8dff]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Click: toggle volume-at-price (POC red, value area blue) · Alt/Shift-click: colour bands by aggressor side (estimated per candle)"
+                    >
+                      ▤ VP{volumeProfileDelta ? ' \u0394' : ''}
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setControlOscVisible((v) => !v)}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         controlOscVisible
@@ -598,7 +617,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} showControlOscillator={controlOscVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible} />
                 </div>
               </div>
 

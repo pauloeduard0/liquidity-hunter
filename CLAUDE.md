@@ -197,6 +197,19 @@ and `validate_assignment=True`. New entities should follow this pattern.
   `price_level`, `volume_delta_avg`, `price_change_pct`, optional zone
   context (`nearest_zone_side`, `nearest_zone_price_low/high`),
   `confidence` (0-100), `description`.
+- **`VolumeProfile`** / **`VolumeProfileBucket`** — volume-at-price over one
+  window, defined in `core/domain/volume_profile.py`. Where the candle series
+  says *when* price moved, the profile says *where* the market agreed.
+  `VolumeProfile` fields: `symbol`, `timeframe`, `start_timestamp`/
+  `end_timestamp`, `price_low`/`price_high`, `bucket_size`, `buckets`
+  (low→high), `poc_price` (the heaviest band's midpoint), `value_area_low`/
+  `value_area_high`/`value_area_pct`, `total_volume`, and `delta_estimated`
+  (always `True` for a kline-sourced profile — the buy/sell split is inferred
+  per candle, not observed per trade). Each `VolumeProfileBucket` carries
+  `price_low`/`price_high`, `volume`, `buy_volume`/`sell_volume`, `node`
+  (`VolumeNode`: `HIGH_VOLUME` shelf / `LOW_VOLUME` gap / `NORMAL`),
+  `in_value_area`, `is_poc`, plus `delta` and `mid_price` properties.
+  Descriptive: where participation concentrated, not a target.
 - **`RetailBias`** — a measurement of retail sentiment/positioning from a
   given `BiasSource`, with a bounded `sentiment_score` and `confidence`.
 - **`OpenInterestPoint`** / **`FundingRate`** / **`LongShortRatio`** —
@@ -273,7 +286,7 @@ Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `POIZoneStatus`, `POIZoneKind`, `ConsolidationStatus`, `ManipulationPhase`,
 `ManipulationCycleStatus`,
 `DivergenceType`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`,
-`NarrativeEventType`, `AnomalySeverity`) live in
+`NarrativeEventType`, `AnomalySeverity`, `VolumeNode`) live in
 `core/domain/enums.py`. Extend behavior by adding enum members rather than
 branching logic elsewhere (Open/Closed principle).
 
@@ -369,6 +382,26 @@ re-exported from `liquidity_hunter.data`.
   script's Buy/Sell labels are not rendered at all.
   Re-exported from `liquidity_hunter.indicators`. Each flip is separately
   *qualified* by `SupertrendBreakAnalyzer` (psychology layer, below).
+- **`indicators/volume_profile.py`** — `volume_profile(candles, *, symbol,
+  timeframe, bucket_count=100, value_area_pct=0.70, tick_size=None, …) ->
+  VolumeProfile | None`: volume-at-price over a window. Each candle's volume
+  is spread across the buckets its high-low range overlaps, in proportion to
+  the fraction of the range in each; the taker-buy share rides the same
+  distribution to give a per-band buy/sell split. POC = heaviest band, value
+  area = standard Market Profile expansion outward from it, bands classified
+  HVN/LVN against the mean traded band. Bucket width is **floored at the
+  instrument's tick** (`infer_tick_size`, from the finest decimal precision in
+  the window's OHLC): a sub-tick bucket cannot be reached by any printable
+  price, which turns the true profile into a comb of spikes (measured on
+  NEARUSDT: 30% overlap without the floor, 87% with). Returns `None` for an
+  empty or flat window rather than raising. **Measured against a trade-level
+  (aggTrades) profile, the candles already in `DashboardData` reproduce it at
+  95-97% histogram overlap with the POC exact or within ~0.6 timeframe-ATR —
+  no extra fetch needed.** Delta-at-price is the weak half (72-90% per-bucket
+  sign agreement) and is flagged `delta_estimated`; a true footprint needs
+  trade data. Full methodology and both measurements in
+  `liquidity_hunter/docs/volume_profile.md`. Re-exported from
+  `liquidity_hunter.indicators`.
 
 ### Liquidity layer (`liquidity_hunter/liquidity`)
 
@@ -948,6 +981,13 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   `supertrend_breaks` (`list[SupertrendBreak]` — each Supertrend flip
   qualified as `genuine`/`stop_run`/`unknown`; runs after the futures block
   since it reads the participation layers built there),
+  `volume_profile` (`VolumeProfile | None` — volume-at-price over the
+  **recent** `_VOLUME_PROFILE_LOOKBACK` = 200 candles of the visible window
+  (`_VOLUME_PROFILE_BUCKETS` = 200 bands), built from `candles` alone by
+  `indicators.volume_profile`; a lookback rather than the whole series
+  because the reading is about where the market is trading *now* — a
+  1200-candle H1 profile spans ~50 days and buries the current balance;
+  `None` when the window has no price range),
   `liquidity_hunt` (`LiquidityHuntState | None`),
   `higher_timeframe` (`TimeFrame | None` — the `_HIGHER_TIMEFRAME_MAP` anchor
   pair `higher_timeframe_direction` was measured on, `None` for the top
@@ -1290,8 +1330,8 @@ only on `app` and `core` (an alternative presentation layer to
   already `DomainModel`s and serialize as-is. `poi_zones`,
   `manipulation_cycles`, `behavior_divergences`,
   `liquidity_heatmap`, `liquidation_map`, `narrative`, `oi_analysis`,
-  `liquidity_hunt`, `higher_timeframe`, and `consolidation_ranges` fields are
-  included.
+  `liquidity_hunt`, `higher_timeframe`, `volume_profile`, and
+  `consolidation_ranges` fields are included.
 
 Tested with FastAPI's `TestClient` in `liquidity_hunter/tests/api/test_main.py`.
 
@@ -1503,6 +1543,38 @@ selector.
   toggles visibility on plain click; Alt/Shift-click toggles a "live pools only"
   mode (`liquidationLiveOnly`, shown as `⊟ Liq •`).
 
+- **`frontend/src/charting/VolumeProfilePrimitive.ts`** —
+  `VolumeProfilePrimitive` draws `data.volume_profile` as a thin-line histogram
+  on the **right** of the main pane, growing leftward from an anchor near the
+  price scale (`VP_RIGHT_MARGIN`) — the layout of the classic TradingView
+  volume-profile studies. Bar length scales with the band's volume against the
+  heaviest. Default colouring mirrors the reference study: grey outside the
+  value area, blue inside it, red at the POC, with POC/VAH/VAL lines running
+  back over the lookback (from the profile's `start_timestamp`) and stopping
+  `VP_VA_LINE_GAP` short of the band they point at. Colors in `theme.ts`
+  (`VP_*`).
+
+  **Adaptive band merging** (`mergeToVisibleBands`): the profile covers only its
+  lookback's price range while the pane's scale spans the whole visible series,
+  so on a chart showing far more history than the profile all 200 bands round to
+  one pixel and the histogram reads as a solid block. Adjacent bands are merged
+  until each renders at least `VP_MIN_BAND_PX` (2.5) tall — volumes add, and a
+  merged band inherits value-area/POC membership from any member so the POC is
+  never swallowed. On BTC/NEAR H4 with the dashboard's 1200-candle window this
+  groups 4 buckets per band; at 300 visible candles, 2; on M5, none.
+
+  A second **delta mode** colours bands by the aggressor side instead
+  (`VP_DELTA_*`). That split is inferred per candle rather than observed per
+  trade (`VolumeProfile.delta_estimated`), so it sits behind a modifier-click
+  rather than being the default picture. The `▤ VP` toolbar button in `App.tsx`
+  toggles visibility on plain click (`showVolumeProfile`, default **off**) and
+  swaps to delta colouring on Alt/Shift-click (shown as `▤ VP Δ`), the same
+  pattern as `⊟ Liq`.
+
+  The anchor is the pane's right edge rather than a bar offset into the future
+  (the reference study's `vp_right_offset`): the panes here are synced by
+  logical range, so reserving future space would have to move every pane.
+
 - **`frontend/src/utils/chartTime.ts`** — the chart's timezone (as of
   2026-07-18). Lightweight Charts has no timezone support and renders every
   `UTCTimestamp` in UTC, so a 15m candle printed at 21:30 in São Paulo labeled
@@ -1532,7 +1604,8 @@ selector.
   `NarrativeEventType`, `AnomalySeverity`, `OIAnalysis`, `OIRegimeReading`,
   `OIQualifiedEvent`, `OIRegime`, `OIParticipation`, `LiquidityHuntState`,
   `LiquidityHuntTarget`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`,
-  `ConsolidationRange`, `ConsolidationStatus`;
+  `ConsolidationRange`, `ConsolidationStatus`, `VolumeProfile`,
+  `VolumeProfileBucket`, `VolumeNode`;
   `DashboardData.higher_timeframe` (`TimeFrame | null`) and
   `DashboardData.consolidation_ranges`; `TimeframeOverview.in_consolidation`
   / `consolidation_candles`.
@@ -1743,3 +1816,10 @@ state in brief:
   frontend-only, `MainChart.tsx`) into `indicators/`.
 - React frontend liquidity targets, retail trap, and market structure
   sidebar panels.
+- **Order flow proper** (footprint / DOM). The project has order flow
+  *aggregated per candle* (`volume_delta`, CVD, VSA, `MarketControlAnalyzer`,
+  `OIRegimeAnalyzer`) and volume-at-price (`indicators.volume_profile`), but
+  no trade-level tape and no order book: no true delta-at-price, no
+  footprint chart, no DOM. Would need `aggTrades` (or a websocket) plus
+  persistence — a new provider and data path, not a parameter of the
+  profile. See `docs/volume_profile.md`.

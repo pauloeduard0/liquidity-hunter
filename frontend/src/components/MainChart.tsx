@@ -23,6 +23,11 @@ import { DivergenceArcPrimitive, type DivergenceArc } from '../charting/Divergen
 import { POIBoxesPrimitive, type POIBox } from '../charting/POIBoxesPrimitive'
 import { HeatmapStripPrimitive, type HeatmapBand } from '../charting/HeatmapStripPrimitive'
 import {
+  VolumeProfilePrimitive,
+  type VolumeProfileBar,
+  type VolumeProfileMode,
+} from '../charting/VolumeProfilePrimitive'
+import {
   LiquidationBandsPrimitive,
   type LiquidationBandInput,
 } from '../charting/LiquidationBandsPrimitive'
@@ -748,6 +753,8 @@ interface MainChartProps {
   showVolume?: boolean
   showRsiDivergence?: boolean
   showSupertrend?: boolean
+  showVolumeProfile?: boolean
+  volumeProfileMode?: VolumeProfileMode
   showControlOscillator?: boolean
 }
 
@@ -770,6 +777,8 @@ export function MainChart({
   showVolume = true,
   showRsiDivergence = false,
   showSupertrend = false,
+  showVolumeProfile = false,
+  volumeProfileMode = 'value-area',
   showControlOscillator = false,
 }: MainChartProps) {
   // Which clock this chart's times are drawn on -- local intraday, exchange
@@ -801,6 +810,7 @@ export function MainChart({
   const manipBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const rangeBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const heatmapPrimitiveRef = useRef<HeatmapStripPrimitive | null>(null)
+  const volumeProfilePrimitiveRef = useRef<VolumeProfilePrimitive | null>(null)
   const liquidationBandsPrimitiveRef = useRef<LiquidationBandsPrimitive | null>(null)
   const eqlZonesPrimitiveRef = useRef<EqlZonesPrimitive | null>(null)
   const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
@@ -982,6 +992,10 @@ export function MainChart({
     series.attachPrimitive(heatmapPrimitive)
     heatmapPrimitiveRef.current = heatmapPrimitive
 
+    const volumeProfilePrimitive = new VolumeProfilePrimitive()
+    series.attachPrimitive(volumeProfilePrimitive)
+    volumeProfilePrimitiveRef.current = volumeProfilePrimitive
+
     const liquidationBandsPrimitive = new LiquidationBandsPrimitive()
     series.attachPrimitive(liquidationBandsPrimitive)
     liquidationBandsPrimitiveRef.current = liquidationBandsPrimitive
@@ -1085,6 +1099,7 @@ export function MainChart({
       manipBoxesPrimitiveRef.current = null
       rangeBoxesPrimitiveRef.current = null
       heatmapPrimitiveRef.current = null
+      volumeProfilePrimitiveRef.current = null
       liquidationBandsPrimitiveRef.current = null
       divergenceMarkersRef.current = null
       divergenceArcsPrimitiveRef.current = null
@@ -1804,6 +1819,31 @@ export function MainChart({
         : []
     heatmapPrimitiveRef.current?.setBands(heatmapBands)
 
+    // Volume-at-price over the visible window (POC / value area / HVN-LVN).
+    const profile = showVolumeProfile ? data.volume_profile : null
+    const volumeProfileBars: VolumeProfileBar[] = profile
+      ? profile.buckets.map((bucket) => ({
+          priceLow: bucket.price_low,
+          priceHigh: bucket.price_high,
+          volume: bucket.volume,
+          buyVolume: bucket.buy_volume,
+          inValueArea: bucket.in_value_area,
+          isPoc: bucket.is_poc,
+        }))
+      : []
+    volumeProfilePrimitiveRef.current?.setProfile(
+      volumeProfileBars,
+      profile
+        ? {
+            poc: profile.poc_price,
+            valueAreaLow: profile.value_area_low,
+            valueAreaHigh: profile.value_area_high,
+            startTime: toChartTime(profile.start_timestamp),
+          }
+        : null,
+      volumeProfileMode,
+    )
+
     // Leverage liquidation bands (time-bounded: entry formation -> liq hit).
     // Declutter to the relevant subset near current price (full set stays in
     // the API for the backtest).
@@ -1941,7 +1981,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend])
+  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, showVolumeProfile, volumeProfileMode])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

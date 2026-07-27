@@ -187,3 +187,26 @@ export const SUPERTREND_LINE_WIDTH = 2
 // Purple is the project's "trap" colour (see the exhaustion-grab hunt window),
 // so a false break reads the same way wherever it appears.
 export const SUPERTREND_STOP_RUN_COLOR = '#ab47bc'
+
+// --- Volume profile (volume-at-price) ------------------------------------
+/** Longest histogram bar, in px, for the heaviest price band. */
+export const VP_BAR_MAX_WIDTH = 150
+/** Gap between the histogram's right anchor and the price scale, in px. */
+export const VP_RIGHT_MARGIN = 12
+/** Vertical gap between bands, in px — what gives the hatched line look. */
+export const VP_LEVEL_GAP = 1
+/** Adjacent bands merge until each renders at least this tall, in px. */
+export const VP_MIN_BAND_PX = 2.5
+/** Bands outside the value area. */
+export const VP_LEVEL_LINE_COLOR = 'rgba(150, 158, 178, 0.45)'
+/** Bands inside the value area. */
+export const VP_VA_COLOR = '#2962ff'
+/** Point of control: the band that traded most, and its line. */
+export const VP_POC_COLOR = '#f23645'
+export const VP_POC_LINE_WIDTH = 1
+export const VP_VA_LINE_WIDTH = 1
+/** Gap between a level line's end and the band it points at, in px. */
+export const VP_VA_LINE_GAP = 10
+/** Delta mode (modifier-click): bands coloured by the aggressor side. */
+export const VP_DELTA_BUY_COLOR = 'rgba(38, 166, 154, 0.75)'
+export const VP_DELTA_SELL_COLOR = 'rgba(239, 83, 80, 0.75)'

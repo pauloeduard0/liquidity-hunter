@@ -500,6 +500,39 @@ export interface SupertrendBreak {
   description: string
 }
 
+export type VolumeNode = 'high_volume' | 'low_volume' | 'normal'
+
+export interface VolumeProfileBucket {
+  price_low: number
+  price_high: number
+  volume: number
+  /** Taker-buy share of `volume`. Estimated per candle, not observed per trade. */
+  buy_volume: number
+  sell_volume: number
+  node: VolumeNode
+  in_value_area: boolean
+  is_poc: boolean
+}
+
+/** Volume-at-price over the visible window: where the market agreed, not when. */
+export interface VolumeProfile {
+  symbol: string
+  timeframe: TimeFrame
+  start_timestamp: string
+  end_timestamp: string
+  price_low: number
+  price_high: number
+  bucket_size: number
+  buckets: VolumeProfileBucket[]
+  poc_price: number
+  value_area_low: number
+  value_area_high: number
+  value_area_pct: number
+  total_volume: number
+  /** Always true for a kline-sourced profile; the buy/sell split is inferred. */
+  delta_estimated: boolean
+}
+
 export interface DashboardData {
   symbol: string
   timeframe: TimeFrame
@@ -519,6 +552,7 @@ export interface DashboardData {
   volume_spread_signals: VolumeSpreadSignal[]
   supertrend: SupertrendPoint[]
   supertrend_breaks: SupertrendBreak[]
+  volume_profile: VolumeProfile | null
   liquidity_heatmap: LiquidityHeatmap | null
   liquidation_map: LeverageLiquidationMap | null
   narrative: MarketNarrative | null

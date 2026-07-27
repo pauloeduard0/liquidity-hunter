@@ -303,3 +303,18 @@ class VSAPattern(str, Enum):
     # Up thrust (classic VSA): upper-wick rejection, close low, above-average
     # volume — supply overwhelmed demand at the high. Bearish.
     UP_THRUST = "up_thrust"
+
+
+class VolumeNode(str, Enum):
+    """How much of a window's volume changed hands in one price band.
+
+    Read off a `VolumeProfile`: a ``HIGH_VOLUME`` band is a shelf the market
+    kept returning to (agreement — price tends to stall there), a
+    ``LOW_VOLUME`` band is one it refused (rejection — price tends to travel
+    through it quickly). Descriptive, like every other observation here: where
+    participation concentrated, not what to do about it.
+    """
+
+    HIGH_VOLUME = "high_volume"
+    LOW_VOLUME = "low_volume"
+    NORMAL = "normal"

@@ -34,6 +34,7 @@ from liquidity_hunter.core.domain import (
     SupertrendBreak,
     SupertrendPoint,
     TimeFrame,
+    VolumeProfile,
     VolumeSpreadSignal,
 )
 from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
@@ -47,7 +48,7 @@ from liquidity_hunter.data import (
     OHLCVProvider,
 )
 from liquidity_hunter.data.exceptions import DataProviderError
-from liquidity_hunter.indicators import supertrend, volume_delta_series
+from liquidity_hunter.indicators import supertrend, volume_delta_series, volume_profile
 from liquidity_hunter.liquidity import (
     EqualHighDetector,
     EqualLowDetector,
@@ -713,6 +714,16 @@ _BOS_PULLBACK_SEED_CHOCH_ORIGIN = True
 # gap's own [2, 3] plateau is kept.
 _HUNT_PROXIMITY_ATR = 2.0
 
+# Candles the volume profile is built from, counted back from the live edge.
+# The profile answers "where is the market trading *now*", so it is deliberately
+# a recent-lookback reading rather than one over the whole visible series: a
+# 1200-candle profile on H1 spans ~50 days and buries the current balance under
+# months of unrelated history. 200 matches the reference TradingView studies.
+_VOLUME_PROFILE_LOOKBACK = 200
+# Price bands the lookback range is divided into (floored at the instrument's
+# tick inside `volume_profile`).
+_VOLUME_PROFILE_BUCKETS = 200
+
 _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
     TimeFrame.M1: TimeFrame.M5,
     TimeFrame.M5: TimeFrame.M15,
@@ -771,6 +782,11 @@ class DashboardData:
     # Each Supertrend flip qualified by who financed it (fresh money vs a stop
     # run that handed price back inside the band). See `SupertrendBreakAnalyzer`.
     supertrend_breaks: list[SupertrendBreak] = field(default_factory=list)
+    # Volume-at-price over the visible window: where the market agreed (POC,
+    # value area) rather than when it moved. `None` when the window has no
+    # price range at all. See `indicators.volume_profile` for the fidelity a
+    # kline-sourced profile achieves against trade-level data.
+    volume_profile: VolumeProfile | None = None
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
@@ -2101,6 +2117,17 @@ def load_dashboard_data(
     # signal -- `flip` marks where the band changed sides.
     supertrend_points = supertrend(candles)
 
+    # Volume-at-price over the *recent* window rather than the whole visible
+    # series: the reading is about where the market is trading now, and a
+    # 1200-candle profile averages the current balance away into months of
+    # history. Descriptive -- the POC is where trade concentrated, not a target.
+    window_volume_profile = volume_profile(
+        candles[-_VOLUME_PROFILE_LOOKBACK:],
+        symbol=symbol,
+        timeframe=timeframe,
+        bucket_count=_VOLUME_PROFILE_BUCKETS,
+    )
+
     liquidity_heatmap = LiquidityHeatmapEngine().build(
         symbol=symbol,
         timeframe=timeframe,
@@ -2183,6 +2210,7 @@ def load_dashboard_data(
         volume_spread_signals=volume_spread_signals,
         supertrend=supertrend_points,
         supertrend_breaks=supertrend_breaks,
+        volume_profile=window_volume_profile,
         liquidity_heatmap=liquidity_heatmap,
         liquidation_map=liquidation_map,
         oi_analysis=oi_analysis,
