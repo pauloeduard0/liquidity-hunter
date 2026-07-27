@@ -87,7 +87,7 @@ Uniform (fractional overlap) and triangular (peaked at the candle midpoint)
 were both measured. They tie over the production window. Uniform ships: it is
 simpler and does not invent a shape the data does not support.
 
-## Scope: a recent lookback, not the whole window
+## Scope: a recent lookback
 
 `load_dashboard_data` builds the profile over the last
 `_VOLUME_PROFILE_LOOKBACK` = 200 candles, not the full visible series, into
@@ -95,6 +95,14 @@ simpler and does not invent a shape the data does not support.
 trading *now*" — a 1200-candle H1 profile spans ~50 days and averages the
 current balance away into months of unrelated history. 200 bars matches the
 reference TradingView studies.
+
+The scope is deliberately **fixed**, not re-derived from the chart's visible
+range. A visible-range profile (the reference study's "Use Visible Range"
+option) was built and reverted: it made the POC and value area move whenever the
+user zoomed or panned, so the levels stopped being a stable reading of the
+current balance. Only the *rendering* follows zoom — see
+`VolumeProfilePrimitive` — which is what keeps the profile in proportion with
+the chart without changing what it measures.
 
 Cross-checked against the kv4coins "Volume Profile" study (200 bars, VA 68%) on
 NEARUSDT.P 4h: it reports POC ~1.918, this implementation 1.9150 — within two

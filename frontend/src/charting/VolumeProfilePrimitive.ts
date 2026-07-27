@@ -11,11 +11,13 @@ import type {
 import type { CanvasRenderingTarget2D } from 'fancy-canvas'
 
 import {
-  VP_BAR_MAX_WIDTH,
+  VP_BAR_MAX_PX,
+  VP_BAR_MIN_PX,
   VP_DELTA_BUY_COLOR,
   VP_DELTA_SELL_COLOR,
   VP_LEVEL_GAP,
   VP_LEVEL_LINE_COLOR,
+  VP_MAX_LENGTH_BARS,
   VP_MIN_BAND_PX,
   VP_POC_COLOR,
   VP_POC_LINE_WIDTH,
@@ -183,6 +185,14 @@ class VolumeProfilePaneView implements IPrimitivePaneView {
     for (const bar of bars) if (bar.volume > peak) peak = bar.volume
     if (peak <= 0) return null
 
+    // Length in bar units, so the profile tracks horizontal zoom, bounded in
+    // pixels so it stays usable at both ends of this chart's zoom range.
+    const barSpacing = chart?.timeScale().options().barSpacing ?? 6
+    const maxLength = Math.min(
+      Math.max(VP_MAX_LENGTH_BARS * barSpacing, VP_BAR_MIN_PX),
+      VP_BAR_MAX_PX,
+    )
+
     const resolved: ResolvedBar[] = []
     // Bar lengths for the three levels, so their lines can stop just short of
     // the band they point at (as the reference study does).
@@ -201,7 +211,7 @@ class VolumeProfilePaneView implements IPrimitivePaneView {
       // A hairline gap between bands gives the hatched look of the reference,
       // but a band must never vanish when the price scale is compressed.
       const height = Math.max(span - VP_LEVEL_GAP, 1)
-      const length = (bar.volume / peak) * VP_BAR_MAX_WIDTH
+      const length = (bar.volume / peak) * maxLength
 
       if (levels !== null) {
         if (bar.isPoc) pocLength = length

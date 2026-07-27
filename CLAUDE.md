@@ -1547,12 +1547,23 @@ selector.
   `VolumeProfilePrimitive` draws `data.volume_profile` as a thin-line histogram
   on the **right** of the main pane, growing leftward from an anchor near the
   price scale (`VP_RIGHT_MARGIN`) — the layout of the classic TradingView
-  volume-profile studies. Bar length scales with the band's volume against the
-  heaviest. Default colouring mirrors the reference study: grey outside the
-  value area, blue inside it, red at the POC, with POC/VAH/VAL lines running
-  back over the lookback (from the profile's `start_timestamp`) and stopping
-  `VP_VA_LINE_GAP` short of the band they point at. Colors in `theme.ts`
-  (`VP_*`).
+  volume-profile studies. Default colouring mirrors the reference study: grey
+  outside the value area, blue inside it, red at the POC, with POC/VAH/VAL lines
+  running back over the lookback (from the profile's `start_timestamp`) and
+  stopping `VP_VA_LINE_GAP` short of the band they point at. Colors in
+  `theme.ts` (`VP_*`).
+
+  **Both axes follow the chart's zoom.** Vertically the bands sit at their price
+  coordinates, so they track the price scale like any overlay. Horizontally the
+  bands' length is measured in chart *bars* (`VP_MAX_LENGTH_BARS` × the time
+  scale's `barSpacing`, bounded to `[VP_BAR_MIN_PX, VP_BAR_MAX_PX]` because this
+  chart's default window is far wider than a typical TradingView view — 1200
+  candles is ~1px per bar), so the profile widens and narrows with horizontal
+  zoom the way the reference's bar-unit `scale_volume` does. `barSpacing` is
+  read inside `renderer()`, which the library calls on every repaint, so this
+  needs no zoom subscription. The profile's *scope* is unaffected: it stays the
+  backend's fixed recent lookback and does not re-derive itself from whatever is
+  on screen.
 
   **Adaptive band merging** (`mergeToVisibleBands`): the profile covers only its
   lookback's price range while the pane's scale spans the whole visible series,

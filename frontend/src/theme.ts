@@ -189,8 +189,20 @@ export const SUPERTREND_LINE_WIDTH = 2
 export const SUPERTREND_STOP_RUN_COLOR = '#ab47bc'
 
 // --- Volume profile (volume-at-price) ------------------------------------
-/** Longest histogram bar, in px, for the heaviest price band. */
-export const VP_BAR_MAX_WIDTH = 150
+/**
+ * Length of the heaviest band, measured in **chart bars** rather than pixels,
+ * so the profile grows and shrinks with horizontal zoom the way the reference
+ * study does (its `scale_volume` works in bar units too).
+ */
+export const VP_MAX_LENGTH_BARS = 25
+/**
+ * Pixel bounds on that length. The dashboard's default window is far wider
+ * than a typical TradingView view (1200 candles, ~1px per bar), so the raw
+ * bar-unit length would collapse to a stub when zoomed out and swallow the
+ * pane when zoomed in.
+ */
+export const VP_BAR_MIN_PX = 70
+export const VP_BAR_MAX_PX = 300
 /** Gap between the histogram's right anchor and the price scale, in px. */
 export const VP_RIGHT_MARGIN = 12
 /** Vertical gap between bands, in px — what gives the hatched line look. */
