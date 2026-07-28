@@ -321,7 +321,9 @@ def test_choch_window_reaches_reversal_origin_evidence():
     assert ConfluenceFactor.LIQUIDITY_SWEEP not in bos_conf.factors
 
 
-def test_provisional_and_non_break_events_skipped():
+def test_provisional_break_is_qualified_as_partial():
+    # A live-edge mark is still qualified — the reading is how the forming
+    # break is going — but flagged `provisional` so the badge reads partial.
     provisional = MarketStructure(
         symbol="BTCUSDT",
         timeframe=TimeFrame.H1,
@@ -329,9 +331,62 @@ def test_provisional_and_non_break_events_skipped():
         event=StructureEvent.BREAK_OF_STRUCTURE,
         direction=MarketDirection.BULLISH,
         price_level=100.0,
+        reference_price_level=100.0,
         scope=StructureScope.INTERNAL,
         provisional=True,
     )
+    (conf,) = StructureConfluenceEngine().build(
+        _data(internal_structure_events=[provisional])
+    )
+    assert conf.provisional is True
+    assert conf.factors == [ConfluenceFactor.VOLUME_DELTA]
+
+
+def test_provisional_choch_counts_only_evidence_behind_the_break():
+    # Evidence *after* a provisional CHoCH's confirmation must not count: the
+    # forward window (the level being defended) has not happened yet, so the
+    # tally would grow-and-shrink with each poll instead of only growing.
+    choch = MarketStructure(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=T0 + H1 * 10,
+        event=StructureEvent.CHANGE_OF_CHARACTER,
+        direction=MarketDirection.BULLISH,
+        price_level=100.0,
+        reference_price_level=100.0,
+        reference_timestamp=T0 + H1 * 8,
+        scope=StructureScope.INTERNAL,
+    )
+    forward_vsa = VolumeSpreadSignal(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=T0 + H1 * 15,
+        pattern=VSAPattern.DOWN_THRUST,
+        direction=MarketDirection.BULLISH,
+        price_level=99.0,
+        spread_ratio=1.5,
+        close_position=0.9,
+        volume_ratio=1.5,
+        volume_delta=3.0,
+        confidence=60.0,
+        description="thrust",
+    )
+    confirmed = StructureConfluenceEngine().build(
+        _data(internal_structure_events=[choch], volume_spread_signals=[forward_vsa])
+    )[0]
+    assert ConfluenceFactor.VSA_VOLUME in confirmed.factors
+
+    forming = StructureConfluenceEngine().build(
+        _data(
+            internal_structure_events=[choch.model_copy(update={"provisional": True})],
+            volume_spread_signals=[forward_vsa],
+        )
+    )[0]
+    assert forming.provisional is True
+    assert ConfluenceFactor.VSA_VOLUME not in forming.factors
+
+
+def test_non_break_events_skipped():
     pivot = MarketStructure(
         symbol="BTCUSDT",
         timeframe=TimeFrame.H1,
@@ -342,7 +397,7 @@ def test_provisional_and_non_break_events_skipped():
         scope=StructureScope.INTERNAL,
     )
     result = StructureConfluenceEngine().build(
-        _data(internal_structure_events=[provisional, pivot])
+        _data(internal_structure_events=[pivot])
     )
     assert result == []
 

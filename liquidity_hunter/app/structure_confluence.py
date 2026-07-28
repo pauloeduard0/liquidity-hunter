@@ -128,20 +128,28 @@ class StructureConfluenceEngine:
 
         results: list[StructureConfluence] = []
         for ev in events:
-            if ev.event not in _QUALIFIED_EVENTS or ev.provisional:
+            if ev.event not in _QUALIFIED_EVENTS:
                 continue
             ev_idx = idx_by_ts.get(ev.timestamp)
             if ev_idx is None:
                 continue
 
             is_choch = ev.event == StructureEvent.CHANGE_OF_CHARACTER
+            # A provisional mark is qualified on *past-only* evidence: its
+            # windows stop at the break candle, so the tally never counts a
+            # future that has not happened and can only grow as it confirms.
+            provisional = ev.provisional
 
             # Resolve the evidence window and OB matching parameters. A BOS uses
             # a tight window around the break; a CHoCH spans from the reversal
             # origin (leg extreme) forward to the next opposite/failing event.
             if is_choch:
                 origin_idx, origin_price = self._reversal_origin(ev, ev_idx, candles, idx_by_ts)
-                fwd_idx = self._choch_forward_bound(ev, ev_idx, flow, last_idx)
+                fwd_idx = (
+                    ev_idx
+                    if provisional
+                    else self._choch_forward_bound(ev, ev_idx, flow, last_idx)
+                )
                 vsa_lo, vsa_hi = origin_idx, fwd_idx
                 sweep_lo, sweep_hi = origin_idx, fwd_idx
                 ob_levels = [origin_price]
@@ -150,7 +158,8 @@ class StructureConfluenceEngine:
                 ob_created_bound = candles[fwd_idx].timestamp
                 ob_retest_hi = fwd_idx
             else:
-                vsa_lo, vsa_hi = ev_idx - _LOOKBACK, ev_idx + _LOOKAHEAD
+                vsa_lo = ev_idx - _LOOKBACK
+                vsa_hi = ev_idx if provisional else ev_idx + _LOOKAHEAD
                 sweep_lo, sweep_hi = ev_idx - _SWEEP_LOOKBACK, ev_idx - 1
                 level = (
                     ev.reference_price_level
@@ -224,7 +233,8 @@ class StructureConfluenceEngine:
                     price_level=ev.price_level,
                     factors=factors,
                     score=score,
-                    description=_describe(ev.event, ev.direction, factors, score),
+                    description=_describe(ev.event, ev.direction, factors, score, provisional),
+                    provisional=provisional,
                 )
             )
         return results
@@ -342,12 +352,16 @@ def _describe(
     direction: MarketDirection,
     factors: list[ConfluenceFactor],
     score: float,
+    provisional: bool = False,
 ) -> str:
     name = "BOS" if event == StructureEvent.BREAK_OF_STRUCTURE else "CHoCH"
+    mark = "forming " if provisional else ""
     if not factors:
-        return f"{direction.value} {name} with no confirming confluence"
+        return f"{direction.value} {mark}{name} with no confirming confluence"
     tags = ", ".join(f.value for f in factors)
+    verb = "so far backed by" if provisional else "confirmed by"
     return (
-        f"{direction.value} {name} confirmed by {len(factors)} factor(s) "
+        f"{direction.value} {mark}{name} {verb} {len(factors)} factor(s) "
         f"[{tags}] — score {score:.0f}"
+        + (" (partial: evidence behind the break only)" if provisional else "")
     )

@@ -36,3 +36,11 @@ class StructureConfluence(DomainModel):
     factors: list[ConfluenceFactor] = Field(default_factory=list)
     score: float = Field(ge=0.0, le=100.0)
     description: str
+    provisional: bool = False
+    """The qualified event is a live-edge provisional mark (``BOS?``/``CHoCH?``).
+
+    Such a reading is *partial* by construction: the forward half of a CHoCH's
+    evidence window (the level being retested and defended) has not happened
+    yet, so only the evidence already behind the break is counted. The tally can
+    only grow as the mark confirms — the frontend renders it dimmed with a `~`.
+    """

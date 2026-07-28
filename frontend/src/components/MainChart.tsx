@@ -1568,11 +1568,15 @@ export function MainChart({
     // many orthogonal reads (VSA / OB / OI / volume delta / sweep) confirm the
     // break. Shown as `✦N` for 2+ confirming factors — a single factor is too
     // weak to flag.
-    const confluenceByEvent = new Map<string, number>()
+    // A provisional mark (`BOS?`/`CHoCH?`) is qualified on past-only evidence,
+    // so its tally is partial and can only grow — badged `✦N~`.
+    const confluenceByEvent = new Map<string, { count: number; partial: boolean }>()
     for (const conf of data.structure_confluence ?? []) {
-      if (conf.factors.length >= 2) {
-        confluenceByEvent.set(`${conf.event_timestamp}|${conf.event_type}`, conf.factors.length)
-      }
+      if (conf.factors.length < 2) continue
+      const key = `${conf.event_timestamp}|${conf.event_type}`
+      // A confirmed reading always wins over a provisional one at the same key.
+      if (conf.provisional && confluenceByEvent.get(key)?.partial === false) continue
+      confluenceByEvent.set(key, { count: conf.factors.length, partial: conf.provisional })
     }
 
     for (const event of structureEvents) {
@@ -1586,7 +1590,10 @@ export function MainChart({
       }
       const style = STRUCTURE_EVENT_STYLES[event.event]
       const oiSuffix = oiSuffixByEvent.get(`${event.timestamp}|${event.event}`)
-      const confluenceCount = confluenceByEvent.get(`${event.timestamp}|${event.event}`)
+      const confluence = confluenceByEvent.get(`${event.timestamp}|${event.event}`)
+      const confluenceSuffix = confluence
+        ? ` ✦${confluence.count}${confluence.partial ? '~' : ''}`
+        : ''
       // BOS/CHoCH are colored by direction (green bullish, red bearish), so
       // their labels drop the ▲/▼ arrow — the color already says it. Neutral
       // events (Sweep, CHoCH ✕) keep their own color and the arrow.
@@ -1739,7 +1746,7 @@ export function MainChart({
         price: linePrice,
         color: lineColor,
         below: labelBelow,
-        text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''}${directionIcon ? ` ${directionIcon}` : ''}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}${confluenceCount ? ` ✦${confluenceCount}` : ''}`,
+        text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''}${directionIcon ? ` ${directionIcon}` : ''}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}${confluenceSuffix}`,
       })
     }
 

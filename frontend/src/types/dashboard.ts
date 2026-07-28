@@ -240,6 +240,7 @@ export interface StructureConfluence {
   factors: ConfluenceFactor[]
   score: number
   description: string
+  provisional: boolean
 }
 
 export interface VolumeSpreadSignal {
