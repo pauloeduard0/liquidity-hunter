@@ -806,6 +806,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_confirmed_trend_persistence_candles: int | None = None,
         emit_provisional_bos: bool = False,
         emit_provisional_first_bos: bool = False,
+        emit_provisional_continuation_bos: bool = False,
         emit_provisional_choch: bool = False,
         emit_provisional_choch_weak: bool = False,
         bos_confluence_strong_close_frac: float | None = None,
@@ -937,6 +938,7 @@ class InternalStructureDetector(MarketStructureDetector):
         )
         self._emit_provisional_bos = emit_provisional_bos
         self._emit_provisional_first_bos = emit_provisional_first_bos
+        self._emit_provisional_continuation_bos = emit_provisional_continuation_bos
         self._emit_provisional_choch = emit_provisional_choch
         self._emit_provisional_choch_weak = emit_provisional_choch_weak
         self._bos_confluence_strong_close_frac = bos_confluence_strong_close_frac
@@ -4261,7 +4263,11 @@ class InternalStructureDetector(MarketStructureDetector):
         # marks only.
         prov_event: MarketStructure | None = None
         if (
-            (self._emit_provisional_bos or self._emit_provisional_first_bos)
+            (
+                self._emit_provisional_bos
+                or self._emit_provisional_first_bos
+                or self._emit_provisional_continuation_bos
+            )
             and trend is not MarketDirection.NEUTRAL
             # A live-edge failure just flipped the trend without the failure
             # block's staircase/floor bookkeeping (see above), so the floor
@@ -4348,14 +4354,30 @@ class InternalStructureDetector(MarketStructureDetector):
                 and (last_choch is None or e.timestamp >= last_choch.timestamp)
                 for e in events
             )
+            # `emit_provisional_continuation_bos` extends the same standing-pending
+            # path to a *continuation*. Between the two provisional routes there
+            # was a hole exactly where a live drop is most readable: the
+            # continuation route above scans the tail after the last advance
+            # against the ratcheted floor, so it only fires while the machine has
+            # NOT advanced yet; once the advance lands, a pending BOS stands with
+            # the real floor -- and this route refused it because the leg already
+            # had a confirmed BOS. A leg that keeps making lows therefore went
+            # unmarked from the advance until its pullback pivot formed (BTCUSDT
+            # M15 2026-07-28: the 63021.0 fundo of 01:00 closed-broke at 13:30 and
+            # the chart's last mark stayed the 22:30 BOS, 15 hours and -2% back).
             if (
                 prov_event is None
-                and self._emit_provisional_first_bos
-                and not leg_has_confirmed_bos
-                and last_choch is not None
-                and last_choch.direction is trend
                 and pending_bos is not None
                 and pending_bos.direction is trend
+                and (
+                    (
+                        self._emit_provisional_first_bos
+                        and not leg_has_confirmed_bos
+                        and last_choch is not None
+                        and last_choch.direction is trend
+                    )
+                    or (self._emit_provisional_continuation_bos and leg_has_confirmed_bos)
+                )
             ):
                 # Anchor at the pending BOS's own recorded floor -- the exact level
                 # the confirmed BOS will report when its pullback pivot forms, so

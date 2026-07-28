@@ -720,6 +720,14 @@ _STAGE_SUPERSEDED_CONTINUATION_BOS = True
 # formed prints no staircase step at all.
 _STAGE_REFIRE_INTERMEDIATE_BOS = True
 
+# Provisional live-edge mark for a *continuation* BOS whose state advance has
+# landed but whose confirming pullback pivot has not formed
+# (`InternalStructureDetector.emit_provisional_continuation_bos`). The two older
+# provisional routes leave a hole between them -- the tail scan works only
+# before the advance, the first-BOS route only on a leg's opening break -- so a
+# leg making new lows goes unmarked for the whole swing-lookback lag.
+_EMIT_PROVISIONAL_CONTINUATION_BOS = True
+
 # Whether `_drop_failed_refire_cycles`'s `refire_worked` guard accepts a
 # *staged* BOS as proof that a re-fired CHoCH's leg broke structure.
 #
@@ -1802,6 +1810,13 @@ def _build_internal_detector(
         # drawn at the reported fundo/topo (distinct from the CHoCH gate) so it
         # does not overdraw the CHoCH line. Under review on NEAR M30.
         emit_provisional_first_bos=True,
+        # The same standing-pending route, for a *continuation*. Closes the hole
+        # between the two provisional paths: the tail-scan route only fires
+        # before the machine advances, the first-BOS route only on a leg's first
+        # break -- so a leg that keeps making lows showed nothing between the
+        # advance and its confirming pullback pivot. See
+        # _EMIT_PROVISIONAL_CONTINUATION_BOS.
+        emit_provisional_continuation_bos=_EMIT_PROVISIONAL_CONTINUATION_BOS,
         # Strong-close override for the BOS confluence filter (see the constant):
         # a decisive close at the candle's extreme passes even when the
         # shadow-balance test would reject it (a momentum breakout closing at its

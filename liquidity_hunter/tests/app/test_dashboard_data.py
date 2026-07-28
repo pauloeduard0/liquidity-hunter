@@ -3058,3 +3058,75 @@ def test_refire_worked_guard_counts_staged_bos_by_choice(
     machine_only = _ena_refire_cycle_events(run())
 
     assert len(counted) > len(machine_only)
+
+
+def _load_btc_15m_prov_continuation_candles() -> list[Candle]:
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "btcusdt_15m_2026_07_28_prov_continuation.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="BTCUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def _btc_live_edge_provisional_bos(
+    run: dashboard_data.InternalStructureRun,
+) -> list[MarketStructure]:
+    return [
+        e
+        for e in run.events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.provisional
+        and e.timestamp >= datetime(2026, 7, 28, tzinfo=UTC)
+    ]
+
+
+def test_run_internal_structure_marks_btc_15m_forming_continuation() -> None:
+    """A leg that keeps making lows is marked while its pivot is still forming.
+
+    BTCUSDT M15 2026-07-28: the 63021.0 fundo of 01:00 closed-broke at 13:30,
+    but the confirming pullback pivot needs candles the series does not have
+    yet. Between the two older provisional routes this fell in a hole -- the
+    tail scan only fires *before* the state advance, the first-BOS route only on
+    a leg's opening break -- so the chart's last mark stayed the 22:30 BOS,
+    fifteen hours and -2% behind price.
+    """
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: _load_btc_15m_prov_continuation_candles()})
+
+    run = _run_internal_structure(provider, "BTCUSDT", TimeFrame.M15, 400, True)
+
+    forming = _btc_live_edge_provisional_bos(run)
+    assert [e.reference_price_level for e in forming] == [pytest.approx(63021.0)]
+    assert forming[0].direction is MarketDirection.BEARISH
+    assert forming[0].timestamp == datetime(2026, 7, 28, 13, 30, tzinfo=UTC)
+
+
+def test_run_internal_structure_btc_15m_continuation_unmarked_without_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dashboard_data, "_EMIT_PROVISIONAL_CONTINUATION_BOS", False)
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: _load_btc_15m_prov_continuation_candles()})
+
+    run = _run_internal_structure(provider, "BTCUSDT", TimeFrame.M15, 400, True)
+
+    assert _btc_live_edge_provisional_bos(run) == []

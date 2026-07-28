@@ -1847,7 +1847,11 @@ state in brief:
   relentless one-way move that never forms a swing pivot cannot leave a
   long-since-invalidated CHoCH holding the wrong trend at the live edge),
   shallow-pullback promotion, close-confirmed structural floor, provisional
-  live-edge BOS/CHoCH marks, fast-fizzle marker (with the origin-buffer gate
+  live-edge BOS/CHoCH marks (including `emit_provisional_continuation_bos`: the
+  standing-`pending_bos` route also covers a *continuation*, closing the hole
+  where the advance had landed but the leg already had a confirmed BOS — the
+  tail-scan route only fires before the advance, so a trending leg went unmarked
+  for the whole swing-lookback lag), fast-fizzle marker (with the origin-buffer gate
   `choch_fizzle_reclaim_origin_buffer_atr` = 1.0: the fizzle reclaim must
   recover the leg *origin* ± N×mean-TR%, not merely retest the broken level —
   a routine pullback into the counter-zone no longer paints a `CHoCH✕`; the

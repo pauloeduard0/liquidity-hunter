@@ -2353,3 +2353,42 @@ stager on/off over two fixtures and asserts (a) it really does add a mark
 ENA H1 fixture. Counting BOS is not enough to know a change is additive -- that
 measurement is exactly what missed the first `_stage_refire_intermediate_bos`
 regression.
+
+### Provisional continuation BOS (`_EMIT_PROVISIONAL_CONTINUATION_BOS`, 2026-07-28)
+
+**Symptom** (BTCUSDT M15, live). The 63021.0 fundo of 07-28 01:00 closed-broke
+at 13:30 (close 62966.1) and price kept falling to 62660. The chart's last mark
+stayed the 07-27 22:30 BOS — fifteen hours and −2% behind, with no `BOS?` either.
+
+**Cause**: a hole between the two provisional routes.
+
+- The **tail-scan** route (`emit_provisional_bos`) compares candles after the
+  last state advance against `last_bear_bos_low`. It fires only while the
+  machine has **not** advanced — once it does, the floor ratchets to the new
+  pivot and nothing closes beyond it.
+- The **standing-pending** route (`emit_provisional_first_bos`) reads the
+  `pending_bos` the advance left, which carries the real floor — but was gated
+  on `not leg_has_confirmed_bos`, i.e. a leg's *opening* break only.
+
+So the exact state "advance landed, pending stands, leg already had a BOS" —
+every continuation in a trending leg — was covered by neither. The mark
+reappears only when the pullback pivot forms, which in a one-way move can take
+the whole swing lookback or never come.
+
+**Fix**: `emit_provisional_continuation_bos` extends the standing-pending route
+to `leg_has_confirmed_bos`. Same anchor as the first-BOS path (`pending_bos.floor`,
+the level the confirmed BOS will report), so the provisional never jumps on
+confirmation.
+
+**Measurement** (2026-07-28, BTC/ETH/SOL/NEAR/ENA/AAVE × 5m..1d = 36 combos,
+whole event stream): **+3 marks, all `provisional=True` BOS**, nothing else
+changed anywhere, trend unchanged in 36/36. BTCUSDT M15 @63021.0, SOLUSDT M5
+@72.8, NEARUSDT M5 @1.646. Only three because a provisional mark is a live-edge
+state — most charts are not in it at any given moment.
+
+**Note on measuring live-edge features**: the first attempt diffed two
+back-to-back live runs and produced spurious changes (a forming candle moved
+between fetches, flipping an AAVE CHoCH from confirmed to provisional). Snapshot
+the candle series once and run both sides against it — a live-edge feature is
+exactly the kind whose measurement the live edge corrupts. Fixture:
+`btcusdt_15m_2026_07_28_prov_continuation.json`.
