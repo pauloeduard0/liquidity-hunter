@@ -736,6 +736,11 @@ _EMIT_PROVISIONAL_CONTINUATION_BOS = True
 # erased BOS? is precisely the observation that dates the turn.
 _KEEP_PROVISIONAL_BOS_UNDER_REVERSAL = True
 
+# Relative tolerance matching a provisional BOS's floor against a real one's in
+# `_drop_duplicated_provisional_bos` (mirrors the detector's own staged-BOS
+# tolerance).
+_PROVISIONAL_BOS_DEDUP_PCT = 0.002
+
 # Whether `_drop_failed_refire_cycles`'s `refire_worked` guard accepts a
 # *staged* BOS as proof that a re-fired CHoCH's leg broke structure.
 #
@@ -1651,6 +1656,59 @@ def _drop_failed_refire_cycles(
     return kept
 
 
+def _drop_duplicated_provisional_bos(
+    events: list[MarketStructure],
+) -> list[MarketStructure]:
+    """Drop a ``BOS?`` that a real BOS of the same direction already marks.
+
+    The detector dedups its own provisional against the marks it emitted, but a
+    real BOS can also arrive from *outside* the detector -- a staged
+    range-breakout (``stage_breakout_events``) -- which it never sees. ETHBTC H4
+    2026-07-26: the breakout of the July range staged a real bullish BOS at the
+    0.029793 boundary while the live-edge mark stood at the same boundary, and
+    the chart drew ``BOS`` and ``BOS?`` stacked on one line.
+
+    The key is the **floor** (``reference_price_level``), not the breaking pivot:
+    the floor *is* the break, and a genuine continuation must break a different
+    (ratcheted) floor -- that is the staircase. The pivot deliberately stays out,
+    since the provisional scans to the live edge and reports the leg's real
+    extreme while a confirmed mark reports the pivot that formed, so the two
+    legitimately differ (0.030177 vs 0.029986 here, 0.64% apart -- wide enough to
+    slip any pivot tolerance).
+    """
+    real = [
+        e
+        for e in events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and not e.provisional
+        and e.reference_price_level is not None
+    ]
+    if not real:
+        return events
+
+    def duplicated(prov: MarketStructure) -> bool:
+        level = prov.reference_price_level
+        if level is None or level == 0:
+            return False
+        return any(
+            other.direction is prov.direction
+            and other_level is not None
+            and abs(other_level - level) <= abs(level) * _PROVISIONAL_BOS_DEDUP_PCT
+            for other in real
+            for other_level in (other.reference_price_level,)
+        )
+
+    return [
+        e
+        for e in events
+        if not (
+            e.event is StructureEvent.BREAK_OF_STRUCTURE
+            and e.provisional
+            and duplicated(e)
+        )
+    ]
+
+
 def _drop_superseded_provisional_choch(
     events: list[MarketStructure],
 ) -> list[MarketStructure]:
@@ -2088,6 +2146,10 @@ def _run_internal_structure(
     # structure already settled (a later non-provisional BOS/CHoCH), so a stale
     # `CHoCH?` never lingers in history; only live-edge marks survive.
     all_events = _drop_superseded_provisional_choch(all_events)
+    # A `BOS?` whose floor a real BOS already marks is the same break told twice
+    # -- including one staged from outside the detector, which its own dedup
+    # cannot see.
+    all_events = _drop_duplicated_provisional_bos(all_events)
     events = [e for e in all_events if visible_start <= e.timestamp <= visible_end]
     return InternalStructureRun(
         buffered_candles=buffered_candles,

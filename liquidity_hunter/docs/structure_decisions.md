@@ -2423,3 +2423,28 @@ observation survives the repaint rather than vanishing with it.
 whole event stream, against a snapshotted series): **+7 marks, all
 `provisional=True` BOS**, no line removed, no reference altered, trend unchanged
 everywhere. Fixture: `btcusdt_15m_2026_07_28_keep_under_reversal.json`.
+
+## `BOS?` stacked on a confirmed `BOS` (composition-level dedup)
+
+Pass: `_drop_duplicated_provisional_bos` (runs beside
+`_drop_superseded_provisional_choch`, after every merge).
+
+The detector already dedups its live-edge mark against the BOS it emitted
+(`prov_bos_duplicates_confirmed`), but a real BOS can arrive from *outside* it: a
+staged range breakout (`stage_breakout_events`) is merged in `_run_internal_structure`,
+long after `detect` returned. The detector cannot see it, so nothing removed the
+now-redundant provisional. ETHBTC H4 2026-07-26 drew `BOS ⊕ ✦3` and `BOS? ⊕ ✦3`
+on the same dotted line at 0.029793.
+
+The dedup key is the **floor** (`reference_price_level`), not the breaking pivot.
+The floor *is* the break, and a genuine continuation must break a different
+(ratcheted) floor — that is the staircase, so same direction + same floor means
+the same event. The pivot deliberately stays out of the key: the provisional
+scans to the live edge and reports the leg's real extreme while a confirmed mark
+reports the pivot that formed, so the two legitimately differ (0.030177 vs
+0.029986 here — 0.64% apart, wide enough to slip any pivot tolerance, which is
+exactly why the detector's own pivot-based check would not have caught it either).
+
+**Measurement**: −2 provisional marks across the live matrix (ETHBTC H4 @0.029793,
+NEARUSDT M5 @1.646 — both stacked on a real BOS with the identical floor), nothing
+else changed. Fixture: `ethbtc_4h_2026_07_26_dup_prov_bos.json`.

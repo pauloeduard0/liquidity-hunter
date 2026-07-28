@@ -3206,3 +3206,76 @@ def test_run_internal_structure_btc_15m_bos_erased_by_reversal_without_flag(
     bos, choch = _btc_keep_under_reversal_marks(run)
     assert bos == []
     assert [e.direction for e in choch] == [MarketDirection.BULLISH]
+
+
+def _load_ethbtc_4h_dup_prov_bos_candles() -> list[Candle]:
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "ethbtc_4h_2026_07_26_dup_prov_bos.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="ETHBTC",
+            timeframe=TimeFrame.H4,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def _ethbtc_july_bos(run: dashboard_data.InternalStructureRun) -> list[MarketStructure]:
+    return [
+        e
+        for e in run.events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.timestamp >= datetime(2026, 7, 26, tzinfo=UTC)
+    ]
+
+
+def test_run_internal_structure_drops_ethbtc_4h_duplicated_provisional_bos() -> None:
+    """A `BOS?` is dropped when a real BOS already marks the same floor.
+
+    ETHBTC H4 2026-07-26: the July range's breakout staged a real bullish BOS at
+    the 0.029793 boundary -- from outside the detector, so its own dedup could
+    not see it -- while the live-edge route marked the same boundary. The chart
+    drew `BOS` and `BOS?` stacked on one line.
+    """
+    candles = _load_ethbtc_4h_dup_prov_bos_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.H4: candles})
+
+    run = _run_internal_structure(provider, "ETHBTC", TimeFrame.H4, 400, True)
+
+    july = _ethbtc_july_bos(run)
+    assert [e.provisional for e in july] == [False]
+    assert july[0].reference_price_level == pytest.approx(0.029793)
+
+
+def test_run_internal_structure_ethbtc_4h_duplicate_kept_without_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        dashboard_data, "_drop_duplicated_provisional_bos", lambda events: events
+    )
+    candles = _load_ethbtc_4h_dup_prov_bos_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.H4: candles})
+
+    run = _run_internal_structure(provider, "ETHBTC", TimeFrame.H4, 400, True)
+
+    july = _ethbtc_july_bos(run)
+    # Both marks on the same floor -- the stacked pair the pass removes.
+    assert sorted(e.provisional for e in july) == [False, True]
+    assert {round(e.reference_price_level or 0, 6) for e in july} == {0.029793}
