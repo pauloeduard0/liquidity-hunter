@@ -29,6 +29,7 @@ from liquidity_hunter.core.domain import (
     TimeFrame,
     VolumeProfile,
     VolumeSpreadSignal,
+    VWAPSeries,
 )
 from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
 from liquidity_hunter.core.domain.poi_zone import POIZone
@@ -59,6 +60,8 @@ class DashboardDataResponse(BaseModel):
     supertrend: list[SupertrendPoint] = []
     supertrend_breaks: list[SupertrendBreak] = []
     volume_profile: VolumeProfile | None = None
+    vwap: VWAPSeries | None = None
+    anchored_vwaps: list[VWAPSeries] = []
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None

@@ -222,3 +222,21 @@ export const VP_VA_LINE_GAP = 10
 /** Delta mode (modifier-click): bands coloured by the aggressor side. */
 export const VP_DELTA_BUY_COLOR = 'rgba(38, 166, 154, 0.75)'
 export const VP_DELTA_SELL_COLOR = 'rgba(239, 83, 80, 0.75)'
+
+// --- VWAP (average price paid since an anchor) ----------------------------
+/**
+ * The session line: neutral gold, so it reads as a reference the whole tape
+ * shares rather than as a directional call like the Supertrend band.
+ */
+export const VWAP_COLOR = '#e0a13a'
+export const VWAP_LINE_WIDTH = 2
+/** ±1σ / ±2σ of the accumulation — how widely the session's volume paid. */
+export const VWAP_BAND_1_COLOR = 'rgba(224, 161, 58, 0.45)'
+export const VWAP_BAND_2_COLOR = 'rgba(224, 161, 58, 0.22)'
+/**
+ * Anchored VWAPs (a CHoCH, a sweep): cyan, distinct from the session line
+ * because they answer a different question — not "what did today pay" but
+ * "what does the crowd that entered on that event hold".
+ */
+export const VWAP_ANCHORED_COLORS = ['#4dd0e1', '#9575cd']
+export const VWAP_ANCHORED_LINE_WIDTH = 2

@@ -318,3 +318,23 @@ class VolumeNode(str, Enum):
     HIGH_VOLUME = "high_volume"
     LOW_VOLUME = "low_volume"
     NORMAL = "normal"
+
+
+class VWAPAnchor(str, Enum):
+    """What a VWAP accumulation starts from.
+
+    A volume-weighted average price only means something relative to where it
+    started accumulating: it reports what every participant since that point
+    paid, on average. ``SESSION``/``WEEK``/``MONTH`` are the conventional
+    calendar anchors (a fresh accumulation at each exchange period, 00:00 UTC
+    in crypto); ``ROLLING`` is a fixed-length trailing window; ``EVENT``
+    anchors the accumulation to an observation this project already makes — a
+    liquidity sweep, the CHoCH that turned the leg — so the line reads as
+    "what the population that entered on that event is holding".
+    """
+
+    SESSION = "session"
+    WEEK = "week"
+    MONTH = "month"
+    ROLLING = "rolling"
+    EVENT = "event"

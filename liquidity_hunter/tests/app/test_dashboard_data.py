@@ -7,6 +7,7 @@ import pytest
 from liquidity_hunter.app import dashboard_data
 from liquidity_hunter.app.dashboard_data import (
     _STRUCTURAL_ANCHOR_REGION,
+    _build_anchored_vwaps,
     _build_internal_detector,
     _drop_failed_refire_cycles,
     _drop_pre_break_reference_bos,
@@ -31,6 +32,7 @@ from liquidity_hunter.core.domain import (
     StructureEvent,
     StructureScope,
     TimeFrame,
+    VWAPAnchor,
 )
 from liquidity_hunter.data.exceptions import DataProviderConnectionError
 from liquidity_hunter.data.providers.base import FuturesDataProvider, OHLCVProvider
@@ -2664,3 +2666,85 @@ def test_run_internal_structure_near_15m_superseded_lost_without_staging(
         pytest.approx(1.9760),
         pytest.approx(2.0400),
     ]
+
+
+def _event_at_candle(
+    candle: Candle,
+    event: StructureEvent,
+    *,
+    direction: MarketDirection = MarketDirection.BEARISH,
+    provisional: bool = False,
+) -> MarketStructure:
+    return MarketStructure(
+        symbol=candle.symbol,
+        timeframe=candle.timeframe,
+        timestamp=candle.timestamp,
+        event=event,
+        direction=direction,
+        price_level=candle.close,
+        scope=StructureScope.INTERNAL,
+        provisional=provisional,
+    )
+
+
+def test_build_anchored_vwaps_anchors_at_the_flip_and_the_last_sweep() -> None:
+    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+    events = [
+        _event_at_candle(candles[2], StructureEvent.CHANGE_OF_CHARACTER),
+        _event_at_candle(candles[5], StructureEvent.LIQUIDITY_SWEEP),
+    ]
+
+    series = _build_anchored_vwaps(
+        candles, events, symbol="BTCUSDT", timeframe=TimeFrame.H1
+    )
+
+    assert [s.label for s in series] == ["CHoCH ▼", "Sweep ▼"]
+    assert [s.anchor_timestamp for s in series] == [
+        candles[2].timestamp,
+        candles[5].timestamp,
+    ]
+
+
+def test_build_anchored_vwaps_skips_provisional_and_live_edge_anchors() -> None:
+    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+    events = [
+        # A live-edge mark: its anchor can vanish on the next refresh.
+        _event_at_candle(
+            candles[3], StructureEvent.CHANGE_OF_CHARACTER, provisional=True
+        ),
+        # Confirmed, but only two candles of accumulation behind it.
+        _event_at_candle(candles[-2], StructureEvent.LIQUIDITY_SWEEP),
+    ]
+
+    assert _build_anchored_vwaps(
+        candles, events, symbol="BTCUSDT", timeframe=TimeFrame.H1
+    ) == []
+
+
+def test_load_dashboard_data_populates_session_vwap() -> None:
+    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+
+    data = load_dashboard_data(
+        provider=_FakeProvider(candles), symbol="BTCUSDT", futures_provider=_FAKE_FUTURES
+    )
+
+    assert data.vwap is not None
+    assert data.vwap.anchor is VWAPAnchor.SESSION
+    assert data.vwap.points[-1].timestamp == candles[-1].timestamp
+
+
+def test_load_dashboard_data_vwap_anchor_period_coarsens_on_high_timeframes() -> None:
+    # A UTC day holds one D1 candle, so a day-anchored average there would
+    # report the candle itself; the month is the finest period that accumulates.
+    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+
+    data = load_dashboard_data(
+        provider=_FakeProvider(candles),
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.D1,
+        futures_provider=_FAKE_FUTURES,
+    )
+
+    assert data.vwap is not None
+    assert data.vwap.anchor is VWAPAnchor.MONTH
+    assert data.vwap.label == "Monthly"

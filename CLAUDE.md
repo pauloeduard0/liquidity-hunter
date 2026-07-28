@@ -210,6 +210,20 @@ and `validate_assignment=True`. New entities should follow this pattern.
   (`VolumeNode`: `HIGH_VOLUME` shelf / `LOW_VOLUME` gap / `NORMAL`),
   `in_value_area`, `is_poc`, plus `delta` and `mid_price` properties.
   Descriptive: where participation concentrated, not a target.
+- **`VWAPPoint`** / **`VWAPSeries`** — the volume-weighted average price paid
+  since an anchor, defined in `core/domain/vwap.py`. Where a `VolumeProfile` is
+  a static picture of *where* a window traded, a VWAP is a line that walks
+  forward reporting *what the participants who entered since the anchor paid*
+  — i.e. that population's break-even. `VWAPSeries` fields: `symbol`,
+  `timeframe`, `anchor` (`VWAPAnchor`), `anchor_timestamp` (the accumulation
+  still running at the live edge), `label`, `band_multipliers`, `points`, and
+  `estimated` (always `True` for a kline-sourced VWAP — each candle contributes
+  its typical price `hlc3` weighted by its whole volume, not every print at its
+  own price; a second-order error, unlike kline-sourced delta-at-price). Each
+  `VWAPPoint` carries `timestamp`, `anchor_timestamp` (constant across a run,
+  so a consumer breaks the line into segments on it), `value`, and the
+  volume-weighted standard-deviation bands `upper_1`/`lower_1`/`upper_2`/
+  `lower_2` (`None` before the accumulation has any dispersion).
 - **`RetailBias`** — a measurement of retail sentiment/positioning from a
   given `BiasSource`, with a bounded `sentiment_score` and `confidence`.
 - **`OpenInterestPoint`** / **`FundingRate`** / **`LongShortRatio`** —
@@ -286,7 +300,7 @@ Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `POIZoneStatus`, `POIZoneKind`, `ConsolidationStatus`, `ManipulationPhase`,
 `ManipulationCycleStatus`,
 `DivergenceType`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`,
-`NarrativeEventType`, `AnomalySeverity`, `VolumeNode`) live in
+`NarrativeEventType`, `AnomalySeverity`, `VolumeNode`, `VWAPAnchor`) live in
 `core/domain/enums.py`. Extend behavior by adding enum members rather than
 branching logic elsewhere (Open/Closed principle).
 
@@ -401,6 +415,22 @@ re-exported from `liquidity_hunter.data`.
   sign agreement) and is flagged `delta_estimated`; a true footprint needs
   trade data. Full methodology and both measurements in
   `liquidity_hunter/docs/volume_profile.md`. Re-exported from
+  `liquidity_hunter.indicators`.
+- **`indicators/vwap.py`** — `vwap(candles, *, symbol, timeframe,
+  anchor=VWAPAnchor.SESSION, anchor_timestamp=None, rolling_window=None,
+  band_multipliers=(1.0, 2.0), label="") -> VWAPSeries | None`: the running
+  `Σ(volume × hlc3) / Σ(volume)` from an anchor, with volume-weighted
+  standard-deviation bands (accumulated first/second moments, so no re-scan).
+  `anchor` selects what restarts the accumulation: `SESSION`/`WEEK`/`MONTH`
+  (calendar periods on 00:00 UTC boundaries — the series then holds several
+  segments, delimited by each point's `anchor_timestamp`), `EVENT` (one
+  accumulation from `anchor_timestamp`), or `ROLLING` (a trailing
+  `rolling_window`, defined once full). `anchored_vwap(candles, timestamp, …)`
+  is the `EVENT` convenience wrapper — the reading this project cares about,
+  since anchoring at a sweep or a CHoCH makes the line the break-even of the
+  crowd that event drew in. Returns `None` when no reading is defined (empty
+  window, anchor past the last candle, no traded volume) rather than raising.
+  `typical_price(candle)` (`hlc3`) is exposed alongside it. Re-exported from
   `liquidity_hunter.indicators`.
 
 ### Liquidity layer (`liquidity_hunter/liquidity`)
@@ -988,6 +1018,19 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   because the reading is about where the market is trading *now* — a
   1200-candle H1 profile spans ~50 days and buries the current balance;
   `None` when the window has no price range),
+  `vwap` (`VWAPSeries | None` — the periodic VWAP over the visible window;
+  the restart period is per timeframe (`_VWAP_ANCHOR_PERIOD`: the UTC day
+  intraday, `WEEK` on H4, `MONTH` on D1/W1 — measured 2026-07-27, a
+  day-anchored H4 gives 6-candle segments and D1 exactly one, so the average
+  would report the candle itself),
+  `anchored_vwaps` (`list[VWAPSeries]` — VWAPs anchored to the events that drew
+  the current population in, from `_build_anchored_vwaps`: the last confirmed
+  trend flip (`CHANGE_OF_CHARACTER`/`CHOCH_FAILED`) and the last
+  `LIQUIDITY_SWEEP` of the internal stream, each read as that crowd's
+  break-even. Provisional marks are skipped — a live-edge anchor can vanish on
+  the next refresh, and a line that re-bases itself is not a break-even — as
+  are anchors with fewer than `_VWAP_MIN_ANCHOR_CANDLES` = 3 candles behind
+  them),
   `liquidity_hunt` (`LiquidityHuntState | None`),
   `higher_timeframe` (`TimeFrame | None` — the `_HIGHER_TIMEFRAME_MAP` anchor
   pair `higher_timeframe_direction` was measured on, `None` for the top
@@ -1330,8 +1373,8 @@ only on `app` and `core` (an alternative presentation layer to
   already `DomainModel`s and serialize as-is. `poi_zones`,
   `manipulation_cycles`, `behavior_divergences`,
   `liquidity_heatmap`, `liquidation_map`, `narrative`, `oi_analysis`,
-  `liquidity_hunt`, `higher_timeframe`, `volume_profile`, and
-  `consolidation_ranges` fields are included.
+  `liquidity_hunt`, `higher_timeframe`, `volume_profile`, `vwap`,
+  `anchored_vwaps`, and `consolidation_ranges` fields are included.
 
 Tested with FastAPI's `TestClient` in `liquidity_hunter/tests/api/test_main.py`.
 
@@ -1407,6 +1450,17 @@ selector.
   `broken_level` from the break to its `reclaim_timestamp` — the shape of
   "broke out, took the stops, handed it back". `genuine` and `unknown` breaks
   draw nothing extra: marking the normal case would bury the exceptional one.
+
+  **VWAP**: `data.vwap` is drawn on the main pane as one gold `LineSeries` per
+  accumulation (`buildVwapSegments` splits the points on `anchor_timestamp`, so
+  the UTC rollover breaks the line instead of drawing a jump nobody paid), with
+  its ±1σ/±2σ bands as thin dotted lines. Each `data.anchored_vwaps` entry adds
+  a dashed cyan/violet line titled `VWAP <label>` (`VWAP CHoCH ▼`, `VWAP
+  Sweep ▲`), with `lastValueVisible` on so the price scale carries that crowd's
+  break-even. The `⌀ VWAP` toolbar button in `App.tsx` toggles the periodic line
+  on plain click (`showVwap`, default **off**) and the anchored ones on
+  Alt/Shift-click (`showAnchoredVwap`, shown as `⌀ VWAP ⚓`) — the same modifier
+  pattern as `▤ VP` and `⊟ Liq`. Colors in `theme.ts` (`VWAP_*`).
 
   **Volume delta pane**: histogram bars colored by candle direction
   (`CANDLE_UP_COLOR`/`CANDLE_DOWN_COLOR`), computed as
@@ -1616,7 +1670,8 @@ selector.
   `OIQualifiedEvent`, `OIRegime`, `OIParticipation`, `LiquidityHuntState`,
   `LiquidityHuntTarget`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`,
   `ConsolidationRange`, `ConsolidationStatus`, `VolumeProfile`,
-  `VolumeProfileBucket`, `VolumeNode`;
+  `VolumeProfileBucket`, `VolumeNode`, `VWAPSeries`, `VWAPPoint`,
+  `VWAPAnchor`;
   `DashboardData.higher_timeframe` (`TimeFrame | null`) and
   `DashboardData.consolidation_ranges`; `TimeframeOverview.in_consolidation`
   / `consolidation_candles`.

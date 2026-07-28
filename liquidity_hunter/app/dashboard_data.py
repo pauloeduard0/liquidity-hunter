@@ -36,6 +36,8 @@ from liquidity_hunter.core.domain import (
     TimeFrame,
     VolumeProfile,
     VolumeSpreadSignal,
+    VWAPAnchor,
+    VWAPSeries,
 )
 from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
 from liquidity_hunter.core.domain.poi_zone import POIZone
@@ -48,7 +50,13 @@ from liquidity_hunter.data import (
     OHLCVProvider,
 )
 from liquidity_hunter.data.exceptions import DataProviderError
-from liquidity_hunter.indicators import supertrend, volume_delta_series, volume_profile
+from liquidity_hunter.indicators import (
+    anchored_vwap,
+    supertrend,
+    volume_delta_series,
+    volume_profile,
+    vwap,
+)
 from liquidity_hunter.liquidity import (
     EqualHighDetector,
     EqualLowDetector,
@@ -724,6 +732,30 @@ _VOLUME_PROFILE_LOOKBACK = 200
 # tick inside `volume_profile`).
 _VOLUME_PROFILE_BUCKETS = 200
 
+# Candles that must have printed since an event for it to be worth anchoring a
+# VWAP at: with fewer, the "average paid since the event" is barely more than
+# the event candle's own typical price, and the line is a stub.
+_VWAP_MIN_ANCHOR_CANDLES = 3
+
+# The calendar period the periodic VWAP restarts on, per timeframe. The UTC day
+# is the intraday convention (and the rollover Binance's own daily candle uses),
+# but it degenerates upward: an H4 day holds 6 candles and a D1 day exactly one,
+# so a day-anchored average there reports little more than the candle itself
+# (measured 2026-07-27 on BTCUSDT H4: 68 segments over 400 candles, the live one
+# a single candle with no dispersion at all). Each timeframe gets the finest
+# period that still accumulates a few dozen candles.
+_VWAP_ANCHOR_PERIOD: dict[TimeFrame, VWAPAnchor] = {
+    TimeFrame.H4: VWAPAnchor.WEEK,
+    TimeFrame.D1: VWAPAnchor.MONTH,
+    TimeFrame.W1: VWAPAnchor.MONTH,
+}
+_VWAP_DEFAULT_ANCHOR_PERIOD = VWAPAnchor.SESSION
+_VWAP_ANCHOR_LABELS: dict[VWAPAnchor, str] = {
+    VWAPAnchor.SESSION: "Session",
+    VWAPAnchor.WEEK: "Weekly",
+    VWAPAnchor.MONTH: "Monthly",
+}
+
 _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
     TimeFrame.M1: TimeFrame.M5,
     TimeFrame.M5: TimeFrame.M15,
@@ -787,6 +819,13 @@ class DashboardData:
     # price range at all. See `indicators.volume_profile` for the fidelity a
     # kline-sourced profile achieves against trade-level data.
     volume_profile: VolumeProfile | None = None
+    # Session VWAP over the visible window: the average price paid within each
+    # UTC day, restarting at every rollover. `None` when nothing traded.
+    vwap: VWAPSeries | None = None
+    # VWAPs anchored to observations this snapshot already made (the CHoCH that
+    # turned the current leg, the last liquidity sweep) — the break-even of the
+    # population each event drew in. See `_build_anchored_vwaps`.
+    anchored_vwaps: list[VWAPSeries] = field(default_factory=list)
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     narrative: MarketNarrative | None = None
@@ -1931,6 +1970,70 @@ def _detect_consolidations(
     )
 
 
+def _build_anchored_vwaps(
+    candles: list[Candle],
+    events: list[MarketStructure],
+    *,
+    symbol: str,
+    timeframe: TimeFrame,
+) -> list[VWAPSeries]:
+    """VWAPs anchored to the events that drew the current population in.
+
+    A session VWAP answers "what did today's traders pay". An *anchored* one
+    answers the question this platform already asks everywhere else: what does
+    the crowd that entered on *that* event hold? Two anchors are worth drawing,
+    both taken from the internal stream the chart renders:
+
+    - the last confirmed trend flip (``CHANGE_OF_CHARACTER``/``CHOCH_FAILED``)
+      — the break-even of everyone who entered on the reversal, i.e. of the
+      leg the structure is currently in;
+    - the last ``LIQUIDITY_SWEEP`` — the break-even of the population the
+      stop-hunt itself trapped.
+
+    Provisional (live-edge) marks are skipped: their anchor can disappear on
+    the next refresh, and a line that re-bases itself is not a break-even. An
+    anchor with fewer than `_VWAP_MIN_ANCHOR_CANDLES` candles behind it is
+    skipped for the same reason a fresh reading is not a reading yet.
+    """
+    if not candles:
+        return []
+
+    flip_events = {StructureEvent.CHANGE_OF_CHARACTER, StructureEvent.CHOCH_FAILED}
+    cutoff = candles[-_VWAP_MIN_ANCHOR_CANDLES].timestamp
+
+    def _latest(kinds: set[StructureEvent]) -> MarketStructure | None:
+        for event in reversed(events):
+            if event.provisional or event.event not in kinds:
+                continue
+            if event.timestamp > cutoff:
+                continue
+            return event
+        return None
+
+    arrow = {MarketDirection.BULLISH: "▲", MarketDirection.BEARISH: "▼"}
+    candidates: list[tuple[MarketStructure | None, str]] = [
+        (_latest(flip_events), "CHoCH"),
+        (_latest({StructureEvent.LIQUIDITY_SWEEP}), "Sweep"),
+    ]
+
+    series: list[VWAPSeries] = []
+    seen: set[datetime] = set()
+    for event, name in candidates:
+        if event is None or event.timestamp in seen:
+            continue
+        seen.add(event.timestamp)
+        anchored = anchored_vwap(
+            candles,
+            event.timestamp,
+            symbol=symbol,
+            timeframe=timeframe,
+            label=f"{name} {arrow.get(event.direction, '')}".strip(),
+        )
+        if anchored is not None:
+            series.append(anchored)
+    return series
+
+
 def default_ohlcv_provider() -> OHLCVProvider:
     """The production candle source.
 
@@ -2128,6 +2231,26 @@ def load_dashboard_data(
         bucket_count=_VOLUME_PROFILE_BUCKETS,
     )
 
+    # What the tape paid, rather than where it went. The periodic line restarts
+    # at each calendar rollover (a UTC day intraday, coarser above -- see
+    # `_VWAP_ANCHOR_PERIOD`); the anchored ones start at the events that drew
+    # the current population in, so each reads as that crowd's break-even.
+    # Descriptive: an average paid.
+    vwap_period = _VWAP_ANCHOR_PERIOD.get(timeframe, _VWAP_DEFAULT_ANCHOR_PERIOD)
+    session_vwap = vwap(
+        candles,
+        symbol=symbol,
+        timeframe=timeframe,
+        anchor=vwap_period,
+        label=_VWAP_ANCHOR_LABELS.get(vwap_period, ""),
+    )
+    anchored_vwaps = _build_anchored_vwaps(
+        candles,
+        internal_structure_events,
+        symbol=symbol,
+        timeframe=timeframe,
+    )
+
     liquidity_heatmap = LiquidityHeatmapEngine().build(
         symbol=symbol,
         timeframe=timeframe,
@@ -2211,6 +2334,8 @@ def load_dashboard_data(
         supertrend=supertrend_points,
         supertrend_breaks=supertrend_breaks,
         volume_profile=window_volume_profile,
+        vwap=session_vwap,
+        anchored_vwaps=anchored_vwaps,
         liquidity_heatmap=liquidity_heatmap,
         liquidation_map=liquidation_map,
         oi_analysis=oi_analysis,

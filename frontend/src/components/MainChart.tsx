@@ -32,7 +32,7 @@ import {
   type LiquidationBandInput,
 } from '../charting/LiquidationBandsPrimitive'
 import { EqlZonesPrimitive, type EqlZoneInput } from '../charting/EqlZonesPrimitive'
-import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal } from '../types/dashboard'
+import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -60,6 +60,12 @@ import {
   SUPERTREND_LINE_WIDTH,
   SUPERTREND_STOP_RUN_COLOR,
   SUPERTREND_UP_COLOR,
+  VWAP_ANCHORED_COLORS,
+  VWAP_ANCHORED_LINE_WIDTH,
+  VWAP_BAND_1_COLOR,
+  VWAP_BAND_2_COLOR,
+  VWAP_COLOR,
+  VWAP_LINE_WIDTH,
 } from '../theme'
 import { setChartTimezoneMode, toChartTime } from '../utils/chartTime'
 
@@ -500,6 +506,42 @@ function selectVisiblePoiZones(
   return [...takeRecent('bullish'), ...takeRecent('bearish')]
 }
 
+// VWAP: each accumulation is its own line. A session series restarts at every
+// UTC rollover, and joining yesterday's closing average to today's opening one
+// would draw a jump nobody paid — so the points are split on their
+// `anchor_timestamp` and each run becomes its own series, the same break-on-
+// discontinuity treatment the Supertrend flip gets below.
+interface VwapSegment {
+  value: { time: Time; value: number }[]
+  upper1: { time: Time; value: number }[]
+  lower1: { time: Time; value: number }[]
+  upper2: { time: Time; value: number }[]
+  lower2: { time: Time; value: number }[]
+}
+
+function buildVwapSegments(series: VWAPSeries | null | undefined): VwapSegment[] {
+  if (!series) return []
+  const segments: VwapSegment[] = []
+  let current: VwapSegment | null = null
+  let anchor: string | null = null
+  for (const point of series.points) {
+    if (!current || point.anchor_timestamp !== anchor) {
+      anchor = point.anchor_timestamp
+      current = { value: [], upper1: [], lower1: [], upper2: [], lower2: [] }
+      segments.push(current)
+    }
+    const time = toChartTime(point.timestamp) as Time
+    current.value.push({ time, value: point.value })
+    // Bands are undefined on an accumulation's first candles (no dispersion
+    // yet); those points simply carry no band data rather than a flat stub.
+    if (point.upper_1 != null) current.upper1.push({ time, value: point.upper_1 })
+    if (point.lower_1 != null) current.lower1.push({ time, value: point.lower_1 })
+    if (point.upper_2 != null) current.upper2.push({ time, value: point.upper_2 })
+    if (point.lower_2 != null) current.lower2.push({ time, value: point.lower_2 })
+  }
+  return segments.filter((segment) => segment.value.length > 0)
+}
+
 // Supertrend: the reading follows one band at a time, so a run of same-trend
 // points is one continuous line and the flip is a break between runs (Pine's
 // `plot.style_linebr`). Each run becomes its own line series so the two trends
@@ -753,6 +795,8 @@ interface MainChartProps {
   showVolume?: boolean
   showRsiDivergence?: boolean
   showSupertrend?: boolean
+  showVwap?: boolean
+  showAnchoredVwap?: boolean
   showVolumeProfile?: boolean
   volumeProfileMode?: VolumeProfileMode
   showControlOscillator?: boolean
@@ -777,6 +821,8 @@ export function MainChart({
   showVolume = true,
   showRsiDivergence = false,
   showSupertrend = false,
+  showVwap = false,
+  showAnchoredVwap = false,
   showVolumeProfile = false,
   volumeProfileMode = 'value-area',
   showControlOscillator = false,
@@ -1752,6 +1798,62 @@ export function MainChart({
     }
     rangeBoxesPrimitiveRef.current?.setBoxes(rangeBoxes)
 
+    // VWAP: what the tape paid, not where it went. The session line restarts
+    // each UTC day (one series per accumulation, see `buildVwapSegments`); its
+    // ±1σ/±2σ bands are how widely that day's volume was spread, drawn thin so
+    // the average itself stays the reading.
+    for (const segment of showVwap ? buildVwapSegments(data.vwap) : []) {
+      for (const [points, color] of [
+        [segment.upper2, VWAP_BAND_2_COLOR],
+        [segment.lower2, VWAP_BAND_2_COLOR],
+        [segment.upper1, VWAP_BAND_1_COLOR],
+        [segment.lower1, VWAP_BAND_1_COLOR],
+      ] as const) {
+        if (points.length === 0) continue
+        const bandSeries = chart.addSeries(LineSeries, {
+          color,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        })
+        bandSeries.setData(points)
+        overlaySeriesRef.current.push(bandSeries)
+      }
+      const vwapSeries = chart.addSeries(LineSeries, {
+        color: VWAP_COLOR,
+        lineWidth: VWAP_LINE_WIDTH,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      })
+      vwapSeries.setData(segment.value)
+      overlaySeriesRef.current.push(vwapSeries)
+    }
+
+    // Anchored VWAPs: one unbroken line each (a single accumulation), tagged
+    // on the price scale with what it is anchored to — the break-even of the
+    // crowd that entered on that CHoCH or sweep, which is what makes the level
+    // worth reading at all.
+    const anchoredVwaps = showAnchoredVwap ? (data.anchored_vwaps ?? []) : []
+    anchoredVwaps.forEach((series, index) => {
+      const color = VWAP_ANCHORED_COLORS[index % VWAP_ANCHORED_COLORS.length]
+      for (const segment of buildVwapSegments(series)) {
+        const anchoredSeries = chart.addSeries(LineSeries, {
+          color,
+          lineWidth: VWAP_ANCHORED_LINE_WIDTH,
+          lineStyle: LineStyle.Dashed,
+          title: `VWAP ${series.label}`.trim(),
+          lastValueVisible: true,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        })
+        anchoredSeries.setData(segment.value)
+        overlaySeriesRef.current.push(anchoredSeries)
+      }
+    })
+
     // Supertrend: one line series per same-trend run, drawn at the active
     // band (a floor under price while bullish, a ceiling above it while
     // bearish). The flip reads from the break between runs, so it carries no
@@ -1981,7 +2083,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, showVolumeProfile, volumeProfileMode])
+  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, showVwap, showAnchoredVwap, showVolumeProfile, volumeProfileMode])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">

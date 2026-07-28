@@ -35,6 +35,7 @@ from liquidity_hunter.core.domain.enums import (
     TimeFrame,
     VolumeNode,
     VSAPattern,
+    VWAPAnchor,
 )
 from liquidity_hunter.core.domain.futures import (
     FundingRate,
@@ -78,6 +79,7 @@ from liquidity_hunter.core.domain.volume_profile import (
     VolumeProfileBucket,
 )
 from liquidity_hunter.core.domain.volume_spread import VolumeSpreadSignal
+from liquidity_hunter.core.domain.vwap import VWAPPoint, VWAPSeries
 
 __all__ = [
     "AnomalySeverity",
@@ -139,5 +141,8 @@ __all__ = [
     "VolumeNode",
     "VolumeProfile",
     "VolumeProfileBucket",
+    "VWAPAnchor",
+    "VWAPPoint",
+    "VWAPSeries",
     "VolumeSpreadSignal",
 ]

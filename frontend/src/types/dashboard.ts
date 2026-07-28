@@ -533,6 +533,34 @@ export interface VolumeProfile {
   delta_estimated: boolean
 }
 
+export type VWAPAnchor = 'session' | 'week' | 'month' | 'rolling' | 'event'
+
+export interface VWAPPoint {
+  timestamp: string
+  /** The candle the accumulation behind this reading started at. */
+  anchor_timestamp: string
+  value: number
+  upper_1: number | null
+  lower_1: number | null
+  upper_2: number | null
+  lower_2: number | null
+}
+
+/** The average price paid since an anchor, weighted by volume. */
+export interface VWAPSeries {
+  symbol: string
+  timeframe: TimeFrame
+  anchor: VWAPAnchor
+  /** Start of the accumulation still running at the live edge. */
+  anchor_timestamp: string
+  /** Short name for what the line is anchored to ("Session", "CHoCH ▼"). */
+  label: string
+  band_multipliers: number[]
+  points: VWAPPoint[]
+  /** Built from per-candle typical prices, not per-trade prices. */
+  estimated: boolean
+}
+
 export interface DashboardData {
   symbol: string
   timeframe: TimeFrame
@@ -553,6 +581,8 @@ export interface DashboardData {
   supertrend: SupertrendPoint[]
   supertrend_breaks: SupertrendBreak[]
   volume_profile: VolumeProfile | null
+  vwap: VWAPSeries | null
+  anchored_vwaps: VWAPSeries[]
   liquidity_heatmap: LiquidityHeatmap | null
   liquidation_map: LeverageLiquidationMap | null
   narrative: MarketNarrative | null
