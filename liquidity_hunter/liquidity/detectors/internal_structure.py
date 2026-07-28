@@ -4182,15 +4182,61 @@ class InternalStructureDetector(MarketStructureDetector):
             and not live_edge_fail
         ):
             tail = candles[last_advance_index + 1 :] if last_advance_index >= 0 else []
-            # A bearish CHoCH forms in a bullish trend (breaks validated_choch_low);
-            # a bullish CHoCH in a bearish trend (breaks validated_choch_high).
+            # A bearish CHoCH forms in a bullish trend (breaks the low-side
+            # reference); a bullish CHoCH in a bearish trend (the high side).
             bearish_choch = trend is MarketDirection.BULLISH
-            ref = validated_choch_low if bearish_choch else validated_choch_high
-            ref_structural = (
-                validated_choch_low_structural
-                if bearish_choch
-                else validated_choch_high_structural
+            # Resolve the reference the way the *confirmed* CHoCH check does --
+            # `validated -> pending leg origin -> blind-spot origin -> re-arm` --
+            # rather than `validated` alone. A live edge often stands on one of
+            # the fallbacks with `validated_choch_<side>` still `None`: the CHoCH
+            # that opened the leg reset it and no continuation BOS has rebuilt it
+            # yet. The re-arm (`choch_failed_rearm`) is the load-bearing case,
+            # and the one this gap was found on (ETHUSDT 15m 2026-07-27): a
+            # bearish CHoCH at 1935.29 failed on a six-hour reclaim, arming that
+            # level; price then rolled back over and closed below it for eleven
+            # candles (-3.5%) -- but every candle of that drop made a new low, so
+            # no swing pivot could form to run the pivot-gated confirmed check,
+            # and the provisional path saw only `validated_choch_low = None` and
+            # emitted nothing. The re-arm exists precisely so a failure whose
+            # reclaim was the old trend's last gasp can re-fire; without a
+            # live-edge consumer it can only speak once a pivot forms, which a
+            # one-way move denies it. The trailing `active_<side>` cold-start
+            # fallback is deliberately NOT included: it is a hair-trigger local
+            # pivot, and a `CHoCH?` on every ordinary pullback is noise, not a
+            # forming reversal.
+            pending_leg_origin: Pivot | None = None
+            if (
+                self._bos_leg_origin_choch_ref
+                and pending_bos is not None
+                and pending_bos.direction is trend
+            ):
+                pending_leg_origin = pending_bos.pullback_ref
+            rearm_ref = (
+                (bear_choch_rearm if bearish_choch else bull_choch_rearm)
+                if self._choch_failed_rearm
+                else None
             )
+            structural_ref = (
+                (validated_choch_low if bearish_choch else validated_choch_high)
+                or pending_leg_origin
+                or (choch_origin_low if bearish_choch else choch_origin_high)
+            )
+            ref = structural_ref or rearm_ref
+            if structural_ref is not None:
+                # A promoted leg origin / blind-spot origin is structural by
+                # construction; only a re-anchored *validated* level is weak.
+                ref_structural = structural_ref is not (
+                    validated_choch_low if bearish_choch else validated_choch_high
+                ) or (
+                    validated_choch_low_structural
+                    if bearish_choch
+                    else validated_choch_high_structural
+                )
+            else:
+                # A re-arm carries its original CHoCH's own classification.
+                ref_structural = not (
+                    bear_choch_rearm_weak if bearish_choch else bull_choch_rearm_weak
+                )
             # A weak (re-anchored) reference qualifies only under
             # `emit_provisional_choch_weak` -- after any re-anchor the standing
             # reference is weak, so without this the released/reset cycles this

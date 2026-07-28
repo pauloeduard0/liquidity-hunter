@@ -2748,3 +2748,102 @@ def test_load_dashboard_data_vwap_anchor_period_coarsens_on_high_timeframes() ->
     assert data.vwap is not None
     assert data.vwap.anchor is VWAPAnchor.MONTH
     assert data.vwap.label == "Monthly"
+
+
+def test_ethusdt_15m_failed_choch_refires_at_live_edge() -> None:
+    """A re-armed CHoCH level must speak at the live edge, not wait for a pivot.
+
+    ETHUSDT 15m, 2026-07-27: a bearish CHoCH confirms at 14:30 against the
+    structural 1935.29 (the higher low formed 01:30) and dives to 1917.90.
+    Price then reclaims the level and holds above it for six hours -- a real
+    reclaim by the calibrated pending-fail bar -- so a CHOCH_FAILED fires at
+    16:15 and arms 1935.29 as a re-arm reference.
+
+    From 22:15 price rolls back over and closes below 1935.29 for eleven
+    consecutive candles (-3.5%, down to 1865). That is exactly what the re-arm
+    exists for: the reclaim was the old trend's last gasp. But every candle of
+    the drop makes a new low, so no swing pivot can form to run the pivot-gated
+    confirmed CHoCH check -- and the provisional live-edge path used to consult
+    only `validated_choch_low`, which the original CHoCH had reset to `None`.
+    The chart went blank through the entire move.
+
+    With the provisional CHoCH resolving its reference the way the confirmed
+    check does (validated -> pending leg origin -> blind-spot origin -> re-arm),
+    the re-fire shows as a dimmed `CHoCH? ↻ ▼` at the first sustained close
+    below the level. The state-machine trend stays untouched (provisional marks
+    are additive), and the mark carries the *failure's* timestamp as its
+    reference so the frontend anchors its line at the `✕`.
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "ethusdt_15m_2026_07_27_choch_refire.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    candles = [
+        Candle(
+            symbol="ETHUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=row[5],
+            taker_buy_volume=row[6],
+        )
+        for row in rows
+    ]
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: candles})
+
+    run = _run_internal_structure(provider, "ETHUSDT", TimeFrame.M15, 1200, True)
+
+    # The original bearish CHoCH and its failure are unchanged.
+    choch = next(
+        e
+        for e in run.events
+        if e.timestamp == datetime(2026, 7, 27, 14, 30, tzinfo=UTC)
+        and e.event is StructureEvent.CHANGE_OF_CHARACTER
+    )
+    assert choch.direction is MarketDirection.BEARISH
+    assert choch.reference_price_level == pytest.approx(1935.29)
+    assert not choch.provisional
+
+    failure = next(
+        e
+        for e in run.events
+        if e.timestamp == datetime(2026, 7, 27, 16, 15, tzinfo=UTC)
+        and e.event is StructureEvent.CHOCH_FAILED
+    )
+    assert failure.direction is MarketDirection.BEARISH
+    assert not failure.provisional
+
+    # The re-fire: a provisional bearish CHoCH at the first sustained close back
+    # below the re-armed level, referencing it and anchored at the failure.
+    refire = next(
+        (
+            e
+            for e in run.events
+            if e.event is StructureEvent.CHANGE_OF_CHARACTER
+            and e.provisional
+            and e.direction is MarketDirection.BEARISH
+            and e.timestamp > failure.timestamp
+        ),
+        None,
+    )
+    assert refire is not None, "re-armed CHoCH never re-fired at the live edge"
+    assert refire.timestamp == datetime(2026, 7, 27, 22, 15, tzinfo=UTC)
+    assert refire.reference_price_level == pytest.approx(1935.29)
+    # The re-arm pivot carries the failure's timestamp, so the frontend renders
+    # `CHoCH? ↻ ▼` and starts its line at the `✕`.
+    assert refire.reference_timestamp == failure.timestamp
+    assert refire.reference_structural is True
+
+    # Additive only: the provisional mark never flips the state machine.
+    assert run.trend is MarketDirection.BULLISH

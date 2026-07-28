@@ -130,7 +130,13 @@ and `validate_assignment=True`. New entities should follow this pattern.
   `emit_provisional_choch`) is a reversal whose *structural* CHoCH reference has
   been sustained-*closed*-broken (under `emit_provisional_choch_weak`, a *weak*
   reference also qualifies, at the weak-ref barrier persistence — rendered
-  `CHoCH?* ▲`). Either appears only in the last few candles of a
+  `CHoCH?* ▲`). That reference is resolved the way the *confirmed* CHoCH check
+  resolves it — `validated → pending leg origin → blind-spot origin → re-arm`,
+  stopping short of the trailing `active_<side>` fallback (a hair-trigger local
+  pivot would put a `CHoCH?` on every pullback) — so a **re-armed** level
+  (`choch_failed_rearm`) can re-fire at the live edge instead of waiting for a
+  swing pivot a one-way move never forms; such a mark carries the failure's
+  timestamp as its reference and renders `CHoCH? ↻ ▼`. Either appears only in the last few candles of a
   leg — superseded by the confirmed event once the pivots form, or it vanishes if
   the move fails first (an intentional live-edge repaint) — and the frontend
   renders it dimmed/dotted with a `?` suffix (`BOS? ▼` / `CHoCH? ▼`), like a weak

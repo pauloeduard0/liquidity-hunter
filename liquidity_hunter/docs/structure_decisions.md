@@ -585,6 +585,57 @@ communicates that. Real-data regression fixture:
 self-contained window; off → no provisional, on → one bearish `CHoCH?` @ 80.72).
 Not mirrored into `SwingStructureDetector` (not drawn).
 
+**Provisional CHoCH resolves the full reference family** (2026-07-27). The block
+above originally consulted `validated_choch_<side>` **alone**, while the confirmed
+CHoCH check resolves `validated → pending leg origin → blind-spot origin →
+re-arm → trailing fallback`. At a live edge the standing reference is very often
+one of the fallbacks with `validated_choch_<side>` still `None` — the CHoCH that
+opened the leg reset it and no continuation BOS has rebuilt it yet — so the
+provisional mark stayed silent exactly where it was most needed. The **re-arm**
+(`choch_failed_rearm`) is the load-bearing case and the one the gap was found on
+(**ETHUSDT 15m 2026-07-27**): a bearish CHoCH confirmed at 14:30 against the
+structural 1935.29 and dove to 1917.90; price reclaimed the level and held above
+it for six hours, so the pending-fail rule correctly fired `CHOCH_FAILED` at
+16:15 and armed 1935.29. From 22:15 price rolled back over and closed below the
+armed level for **eleven consecutive candles (−3.5%, to 1865)** — precisely the
+"the reclaim was the old trend's last gasp" scenario the re-arm exists for — but
+every candle of the drop made a new low, so no swing pivot could form to run the
+pivot-gated confirmed check, and the chart went **blank through the entire move**
+(the user-visible symptom: "não ativou o CHoCH de baixa novamente, ficou preso").
+The re-arm could only speak through a pivot a one-way move denies it.
+
+Now the provisional path mirrors the confirmed precedence, with one deliberate
+omission: the trailing `active_<side>` **cold-start fallback is excluded** — it is
+a hair-trigger local pivot, and a `CHoCH?` on every ordinary pullback is noise,
+not a forming reversal. Structural classification follows the confirmed check
+(a promoted leg origin / blind-spot origin is structural by construction; only a
+re-anchored *validated* level is weak; a re-arm carries its original CHoCH's own
+class), so the weak-ref barrier persistence still applies where it should. The
+existing `eligible = [c for c in tail if c.timestamp > ref.timestamp]` filter
+already implements the confirmed path's "only closes after the failure that armed
+it" clamp for free, because the re-arm pivot carries the *failure's* timestamp by
+construction — which also means the mark's `reference_timestamp` lands on the
+`CHoCH ✕`, so the frontend renders it `CHoCH? ↻ ▼` with its line starting at the
+failure (the `provisional !== true` guard on `reactivatedChoch` in
+`MainChart.tsx` was lifted for this — it only made sense while a provisional
+CHoCH could never come from a re-arm).
+
+Measured 2026-07-27 (BTC/ETH/SOL/NEAR/AAVE/ENA × 5m/15m/30m/1h/4h/1d, limit=1200,
+36 combos): **3/36 combos changed, +3 / −0 events, 0 trend flips** — purely
+additive, as the provisional contract requires. All three are the same signature,
+a failed CHoCH re-firing at the live edge: ETH 15m bearish @ 1935.29 (the
+motivating case), ENA 30m bearish @ 0.08903 (followed by −8%), ENA 4h bullish @
+0.08605 (a +6% rally off the failure). Real-data regression fixture:
+`tests/liquidity/detectors/data/ethusdt_15m_2026_07_27_choch_refire.json`
+(`test_ethusdt_15m_failed_choch_refires_at_live_edge`).
+
+Note this changes only *when the re-fire becomes visible*, not the failure rule:
+the 16:15 `CHOCH_FAILED` is correct by the calibrated pending-fail bar (the
+reclaim held ~14 consecutive closes, far into the ">> 8 = real fizzle reclaim"
+plateau `_CHOCH_PENDING_FAIL_PERSISTENCE = 6` was chosen against). Raising that
+persistence would not have saved this CHoCH and would cascade the trend; the
+correct reading is `CHoCH ▼ → ✕ → CHoCH? ↻ ▼`, which is what now renders.
+
 **Fast-fizzle CHoCH invalidation marker** (`InternalStructureDetector`, as of
 2026-07-07): `choch_fizzle_reclaim_candles` (constructor default `None` = off;
 wired **`30`** in `load_dashboard_data` via `_CHOCH_FIZZLE_RECLAIM_CANDLES`). The

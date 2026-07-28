@@ -1663,9 +1663,11 @@ export function MainChart({
       // failure's own timestamp, so a prior same-direction real `CHoCH ✕`
       // sitting exactly at `reference_timestamp` identifies it. Rendered with
       // a `↻` suffix so a re-activation is tellable from a fresh CHoCH.
+      // Provisional marks qualify too: the live-edge CHoCH now resolves its
+      // reference against the re-arm as well, so a forming re-fire reads
+      // `CHoCH? ↻ ▼` and its line starts at the `✕` it resumes from.
       const reactivatedChoch =
         event.event === 'change_of_character' &&
-        event.provisional !== true &&
         event.reference_timestamp != null &&
         scopeEvents.some(
           (other) =>
