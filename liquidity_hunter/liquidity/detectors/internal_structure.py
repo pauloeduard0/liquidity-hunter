@@ -975,6 +975,23 @@ class InternalStructureDetector(MarketStructureDetector):
         # never mutating it), and it resolves CHOCH_FAILED correctly (the
         # trend reverts on failure). NEUTRAL until `detect()` runs.
         self.final_trend: MarketDirection = MarketDirection.NEUTRAL
+        # Identity of every *staged* BOS in the most recent `detect()` output:
+        # a mark that no state-machine advance emitted, added retroactively by
+        # one of the stagers (impulse / wick-rejected / reversal-eaten /
+        # superseded-continuation / failed-CHoCH-window). Keyed on
+        # `(direction, price_level, reference_price_level)`, the fields the
+        # composition passes never rewrite -- they re-time a BOS but never move
+        # its pivot or the level it broke.
+        #
+        # Composition passes that ask "did this leg break structure?" need to
+        # know: a staged mark is evidence a *level* broke, not that the state
+        # machine confirmed a continuation, and the two answers differ (see
+        # `_drop_failed_refire_cycles`). Without this the answer depends on
+        # which stagers happen to be wired -- the silent coupling that let a new
+        # stager rewrite settled CHoCH structure.
+        self.last_staged_bos_keys: frozenset[tuple[MarketDirection, float, float | None]] = (
+            frozenset()
+        )
 
     def _pending_fail_recovery_ok(
         self,
@@ -4664,6 +4681,7 @@ class InternalStructureDetector(MarketStructureDetector):
             return False
 
         if not staged_bos:
+            self.last_staged_bos_keys = frozenset()
             if prov_event is not None and not prov_bos_duplicates_confirmed(
                 prov_event, events
             ):
@@ -4723,6 +4741,9 @@ class InternalStructureDetector(MarketStructureDetector):
                 continue
             accepted.append(staged)
 
+        self.last_staged_bos_keys = frozenset(
+            (e.direction, e.price_level, e.reference_price_level) for e in accepted
+        )
         merged = [*events, *accepted]
         if prov_event is not None and not prov_bos_duplicates_confirmed(
             prov_event, merged

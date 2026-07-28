@@ -720,6 +720,28 @@ _STAGE_SUPERSEDED_CONTINUATION_BOS = True
 # formed prints no staircase step at all.
 _STAGE_REFIRE_INTERMEDIATE_BOS = True
 
+# Whether `_drop_failed_refire_cycles`'s `refire_worked` guard accepts a
+# *staged* BOS as proof that a re-fired CHoCH's leg broke structure.
+#
+# The guard keeps a `✕ → ↻ → ✕` cycle intact when the re-fire's leg printed a
+# same-direction BOS: the reversal did add standing structure, so the later
+# failure marks where a confirmed move ended, not a dead re-attempt. Its
+# motivating case -- the ENAUSDT H1 2026-07-12 re-fire at 0.08104, which
+# dropped to a 0.0776 BOS before the V-recovery failed it -- is satisfied by a
+# mark `stage_reversal_eaten_bos` staged, not by one the state machine emitted.
+#
+# That was an accident of ordering, not a decision: whether a re-fire cycle
+# survives depended on which stagers happened to be wired, and a new stager
+# silently rewrote settled CHoCH structure (see `_stage_refire_intermediate_bos`
+# on why it had to become a post-pass). Wired `True` -- a staged mark still
+# counts, preserving the ENA lock -- but now as a stated choice, and the
+# alternative is one flag away. Measured 2026-07-28 across
+# BTC/ETH/SOL/NEAR/ENA x 15m..1d, whole event stream: `False` collapses *two*
+# ENA H1 cycles (07-12 at 0.08104 and 07-18 at 0.08159, -2 CHoCH / -2 ✕, plus
+# the staged BOS hanging off the first) and changes nothing anywhere else;
+# trend unchanged in 25/25.
+_REFIRE_WORKED_COUNTS_STAGED_BOS = True
+
 # Strong-close override for the LuxAlgo BOS confluence filter
 # (`InternalStructureDetector.bos_confluence_strong_close_frac`). The pure
 # shadow-balance test rejects a clean momentum breakout that closes at its
@@ -1463,7 +1485,11 @@ def _stage_refire_intermediate_bos(
     return sorted([*events, *added], key=lambda e: e.timestamp)
 
 
-def _drop_failed_refire_cycles(events: list[MarketStructure]) -> list[MarketStructure]:
+def _drop_failed_refire_cycles(
+    events: list[MarketStructure],
+    *,
+    staged_bos_keys: frozenset[tuple[MarketDirection, float, float | None]] = frozenset(),
+) -> list[MarketStructure]:
     """Drop a re-fired CHoCH that itself failed, together with its failure mark.
 
     Under ``choch_failed_rearm`` a ``CHOCH_FAILED`` can re-fire its CHoCH; the
@@ -1566,6 +1592,11 @@ def _drop_failed_refire_cycles(events: list[MarketStructure]) -> list[MarketStru
                 and not mid.provisional
                 and mid.direction is event.direction
                 and event.timestamp < mid.timestamp <= failure_ts
+                and (
+                    _REFIRE_WORKED_COUNTS_STAGED_BOS
+                    or (mid.direction, mid.price_level, mid.reference_price_level)
+                    not in staged_bos_keys
+                )
                 for mid in events
             )
             if refire_worked:
@@ -1972,7 +2003,9 @@ def _run_internal_structure(
         # level's story is already told by the original failure, so drop the
         # pair (re-fire + its own failure). Runs after the fizzle pass so a
         # *resumed* re-fire (its fizzle dropped above) is never collapsed.
-        events = _drop_failed_refire_cycles(events)
+        events = _drop_failed_refire_cycles(
+            events, staged_bos_keys=detector.last_staged_bos_keys
+        )
         # Strictly additive, and last: a re-fired CHoCH's leg gets the staircase
         # step it broke through (see the function's note on why it cannot run
         # inside the passes above).

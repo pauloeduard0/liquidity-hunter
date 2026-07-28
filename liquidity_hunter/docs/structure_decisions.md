@@ -2308,3 +2308,48 @@ pre-existing BOS reference preserved verbatim, `higher_timeframe_direction`
 unchanged in all 25. ETHUSDT M15 gets `BOS ▼ @ 1917.9` at 07-27 22:30 — the
 motivating mark. Wired `True`. Fixture:
 `ethusdt_15m_2026_07_27_refire.json`.
+
+### Staged-mark identity and the `refire_worked` guard (2026-07-28)
+
+A follow-up audit of the lesson above: for each additive staging flag, diff the
+*whole* event stream with BOS excluded. A stager that only adds a mark must
+leave every CHoCH / `CHOCH_FAILED` / sweep / pivot label untouched.
+
+| flag | non-BOS lines that move |
+|---|---|
+| `_STAGE_REFIRE_INTERMEDIATE_BOS` | 0 |
+| `_STAGE_SUPERSEDED_CONTINUATION_BOS` | 0 |
+| `_IMPULSE_BOS_DISPLACEMENT_PCT` | 0 |
+| `_STAGE_REVERSAL_EATEN_BOS` | 2 |
+| `_STAGE_CHOCH_FAILED_WINDOW_BOS` | 27 |
+
+The 27 are not a leak: that flag is not a pure stager -- it also *folds the
+eaten extremes into the restored staircase floors*, a stated state-machine
+change.
+
+The 2 are real, and they are the ENAUSDT H1 cycles at 0.08104 (07-12) and
+0.08159 (07-18). Both survive `_drop_failed_refire_cycles` only because a mark
+`stage_reversal_eaten_bos` staged satisfies the `refire_worked` guard -- i.e.
+the guard's own motivating fixture, named in its docstring, is answered by a
+retroactive mark rather than by a machine-emitted continuation. That coupling
+was undocumented, which is precisely what let a new stager rewrite settled
+CHoCH structure.
+
+**Made explicit, not changed.** `InternalStructureDetector.last_staged_bos_keys`
+now reports which marks were staged, keyed on
+`(direction, price_level, reference_price_level)` -- the fields the composition
+passes never rewrite (they re-time a BOS but never move its pivot or the level
+it broke). `_REFIRE_WORKED_COUNTS_STAGED_BOS` (wired `True`) states that staged
+marks count, preserving the ENA lock. Measured: `False` collapses both ENA H1
+cycles (−2 CHoCH / −2 ✕, plus the staged BOS hanging off the first) and changes
+nothing anywhere else across BTC/ETH/SOL/NEAR/ENA × 15m..1d; trend unchanged in
+25/25. Production output is byte-identical to before this change.
+
+**The invariance is now a test**, not a habit:
+`test_additive_bos_stagers_leave_non_bos_structure_untouched` runs each pure
+stager on/off over two fixtures and asserts (a) it really does add a mark
+(non-vacuous) and (b) the non-BOS stream is identical.
+`test_refire_worked_guard_counts_staged_bos_by_choice` pins the exception on the
+ENA H1 fixture. Counting BOS is not enough to know a change is additive -- that
+measurement is exactly what missed the first `_stage_refire_intermediate_bos`
+regression.

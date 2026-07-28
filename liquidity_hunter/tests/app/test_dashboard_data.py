@@ -2920,3 +2920,141 @@ def test_run_internal_structure_eth_15m_refire_bos_absent_without_staging(
     run = _run_internal_structure(provider, "ETHUSDT", TimeFrame.M15, 400, True)
 
     assert _eth_refire_intermediate_bos(run) == []
+
+
+# --- Additive-staging invariance ---------------------------------------------
+#
+# A BOS stager is meant to *add a mark*. It must not move a CHoCH, a
+# CHOCH_FAILED, a sweep or a pivot label -- but nothing in the pipeline enforces
+# that, and the coupling is easy to miss: the composition passes read the BOS set
+# to decide the fate of *other* events (`_drop_failed_refire_cycles`'s
+# `refire_worked` guard, the leg-launch rescue's window bound). A stager wired in
+# the wrong place therefore rewrites settled structure while every BOS-counting
+# measurement looks clean -- exactly how `_stage_refire_intermediate_bos` was
+# first built, silently growing four CHoCH/✕ pairs on NEARUSDT M15.
+#
+# These tests pin the contract per flag on real fixtures.
+
+_ADDITIVE_STAGING_FLAGS = [
+    "_STAGE_REFIRE_INTERMEDIATE_BOS",
+    "_STAGE_SUPERSEDED_CONTINUATION_BOS",
+]
+
+
+def _non_bos_signature(run: dashboard_data.InternalStructureRun) -> list[tuple]:
+    """Every field the chart draws, for every event that is not a BOS."""
+    return [
+        (
+            e.timestamp,
+            e.event,
+            e.direction,
+            e.price_level,
+            e.reference_price_level,
+            e.reference_timestamp,
+            e.reference_structural,
+            e.provisional,
+        )
+        for e in run.events
+        if e.event is not StructureEvent.BREAK_OF_STRUCTURE
+    ]
+
+
+def _bos_count(run: dashboard_data.InternalStructureRun) -> int:
+    return sum(1 for e in run.events if e.event is StructureEvent.BREAK_OF_STRUCTURE)
+
+
+@pytest.mark.parametrize("flag", _ADDITIVE_STAGING_FLAGS)
+@pytest.mark.parametrize(
+    ("symbol", "fixture"),
+    [
+        ("ETHUSDT", "eth_refire"),
+        ("NEARUSDT", "near_superseded"),
+    ],
+)
+def test_additive_bos_stagers_leave_non_bos_structure_untouched(
+    monkeypatch: pytest.MonkeyPatch, flag: str, symbol: str, fixture: str
+) -> None:
+    candles = (
+        _load_eth_15m_refire_candles()
+        if fixture == "eth_refire"
+        else _load_near_15m_superseded_candles()
+    )
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: candles})
+
+    on = _run_internal_structure(provider, symbol, TimeFrame.M15, 400, True)
+    monkeypatch.setattr(dashboard_data, flag, False)
+    off = _run_internal_structure(provider, symbol, TimeFrame.M15, 400, True)
+
+    # Non-vacuous: the flag really does add a mark on this fixture.
+    assert _bos_count(on) == _bos_count(off) + 1
+    # ...and that is the *only* thing it does.
+    assert _non_bos_signature(on) == _non_bos_signature(off)
+
+
+def _load_ena_1h_refire_worked_candles() -> list[Candle]:
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "enausdt_1h_2026_07_12_refire_worked.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="ENAUSDT",
+            timeframe=TimeFrame.H1,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def _ena_refire_cycle_events(events: list[MarketStructure]) -> list[StructureEvent]:
+    window_start = datetime(2026, 7, 12, tzinfo=UTC)
+    window_end = datetime(2026, 7, 21, tzinfo=UTC)
+    return [
+        e.event
+        for e in events
+        if e.direction is MarketDirection.BEARISH
+        and not e.provisional
+        and e.event
+        in (StructureEvent.CHANGE_OF_CHARACTER, StructureEvent.CHOCH_FAILED)
+        and window_start <= e.timestamp <= window_end
+    ]
+
+
+def test_refire_worked_guard_counts_staged_bos_by_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`stage_reversal_eaten_bos` is the documented exception to the rule above.
+
+    Its staged mark satisfies `_drop_failed_refire_cycles`'s `refire_worked`
+    guard, so it *does* decide whether a `✕ → ↻ → ✕` cycle survives — the
+    ENAUSDT H1 2026-07 lock. This pins that as a wired decision
+    (`_REFIRE_WORKED_COUNTS_STAGED_BOS`) rather than an accident of which
+    stagers happen to be on: restrict the guard to machine-emitted BOS and the
+    same fixture's cycles collapse.
+    """
+    provider = _FuturesLimitFakeProvider({TimeFrame.H1: _load_ena_1h_refire_worked_candles()})
+
+    def run() -> list[MarketStructure]:
+        return _run_internal_structure(provider, "ENAUSDT", TimeFrame.H1, 400, True).events
+
+    assert dashboard_data._REFIRE_WORKED_COUNTS_STAGED_BOS is True
+    counted = _ena_refire_cycle_events(run())
+
+    monkeypatch.setattr(dashboard_data, "_REFIRE_WORKED_COUNTS_STAGED_BOS", False)
+    machine_only = _ena_refire_cycle_events(run())
+
+    assert len(counted) > len(machine_only)
