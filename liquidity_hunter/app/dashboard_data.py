@@ -31,6 +31,7 @@ from liquidity_hunter.core.domain import (
     POIZoneStatus,
     StructureConfluence,
     StructureEvent,
+    StructureScope,
     SupertrendBreak,
     SupertrendPoint,
     TimeFrame,
@@ -71,6 +72,7 @@ from liquidity_hunter.liquidity import (
 )
 from liquidity_hunter.liquidity.detectors._common import (
     RangeReset,
+    find_close_break_index,
     resolve_break_origin_timestamp,
 )
 from liquidity_hunter.psychology import (
@@ -712,6 +714,12 @@ _RESCUE_LEG_LAUNCH_BOS = True
 # instead of the 07:15 topo. Staged, the leg reads BOS 2.0120 then BOS 2.0400.
 _STAGE_SUPERSEDED_CONTINUATION_BOS = True
 
+# Additive BOS at the level a *re-fired* CHoCH's leg broke on its way to its own
+# extreme (`_stage_refire_intermediate_bos`). A re-fire reads the whole
+# excursion as one reversal, so the fundo/topo the original (failed) CHoCH
+# formed prints no staircase step at all.
+_STAGE_REFIRE_INTERMEDIATE_BOS = True
+
 # Strong-close override for the LuxAlgo BOS confluence filter
 # (`InternalStructureDetector.bos_confluence_strong_close_frac`). The pure
 # shadow-balance test rejects a clean momentum breakout that closes at its
@@ -1325,6 +1333,136 @@ def _drop_resumed_fizzle_markers(
     ]
 
 
+def _stage_refire_intermediate_bos(
+    events: list[MarketStructure], candles: list[Candle]
+) -> list[MarketStructure]:
+    """Mark the level a *re-fired* CHoCH's leg broke on its way to its own extreme.
+
+    Under ``choch_failed_rearm`` a failed CHoCH re-arms its broken level, and the
+    move that breaks it again re-fires the CHoCH. But the state machine reads
+    that whole excursion as *one reversal*: the fundo/topo the original (failed)
+    CHoCH formed -- which the resumed leg then closed straight through -- never
+    becomes a staircase step, and the new leg's reported floor is seeded at the
+    re-fire's own far extreme. The chart shows ``CHoCH ✕`` then ``CHoCH ↻`` with
+    nothing in between, even across a multi-percent leg (the ETHUSDT M15
+    2026-07-27 drop: the 1917.9 fundo broken on the way to 1865.0).
+
+    That intermediate level is a genuine structural break by the same key every
+    other stager uses -- a *close* beyond a formed extreme -- so add a BOS for
+    it, anchored at that close.
+
+    Deliberately a **post-pass over the surviving stream** rather than a
+    detector-side stager: an extra BOS inside ``run_passes`` feeds back into
+    ``_drop_failed_refire_cycles``'s ``refire_worked`` guard (a staged mark is
+    not a re-fire's *confirming* BOS) and into the leg-launch rescue, which was
+    measured to rewrite settled structure -- NEARUSDT M15 grew four spurious
+    CHoCH/✕ pairs and lost its 1.976 leg-launch reference. Running last keeps
+    the pass strictly additive.
+    """
+    if not events:
+        return events
+    index_by_timestamp = {c.timestamp: i for i, c in enumerate(candles)}
+    added: list[MarketStructure] = []
+    for i, event in enumerate(events):
+        if (
+            event.event is not StructureEvent.CHANGE_OF_CHARACTER
+            or event.provisional
+            or event.reference_timestamp is None
+        ):
+            continue
+        # The re-fire's reference carries the failure's own timestamp (the same
+        # match the frontend keys its `↻` suffix on).
+        failure = next(
+            (
+                other
+                for other in events[:i]
+                if other.event is StructureEvent.CHOCH_FAILED
+                and not other.provisional
+                and other.direction is event.direction
+                and other.timestamp == event.reference_timestamp
+            ),
+            None,
+        )
+        if failure is None:
+            continue
+        # The level the leg broke through is the *original* CHoCH's confirming
+        # extreme (the fundo a bearish reversal formed), not the failure's own
+        # `price_level` (the reclaim pivot, on the opposite side of the move).
+        original = next(
+            (
+                other
+                for other in reversed(events[:i])
+                if other.event is StructureEvent.CHANGE_OF_CHARACTER
+                and not other.provisional
+                and other.direction is event.direction
+                and other.timestamp < failure.timestamp
+            ),
+            None,
+        )
+        if original is None:
+            continue
+        prior_extreme = original.price_level
+        bullish = event.direction is MarketDirection.BULLISH
+        # The resumed leg must have gone *beyond* the prior extreme; a re-fire
+        # that merely re-broke the armed level has no intermediate step.
+        if bullish and event.price_level <= prior_extreme:
+            continue
+        if not bullish and event.price_level >= prior_extreme:
+            continue
+        start = index_by_timestamp.get(failure.timestamp)
+        if start is None:
+            continue
+        # The CHoCH's *timestamp* is the sustained-break attribution; its
+        # confirming extreme forms later (the swing-lookback lag), and the close
+        # through the intermediate level usually sits in between. Scan through
+        # the candle that actually printed the leg extreme.
+        end = next(
+            (
+                k
+                for k in range(start + 1, len(candles))
+                if (
+                    candles[k].high >= event.price_level
+                    if bullish
+                    else candles[k].low <= event.price_level
+                )
+            ),
+            None,
+        )
+        if end is None:
+            continue
+        close_idx = find_close_break_index(
+            candles, start + 1, end, prior_extreme, bullish=bullish
+        )
+        if close_idx is None:
+            continue
+        # Nothing to add if a real same-direction BOS already stands between the
+        # failure and the re-fire.
+        if any(
+            other.event is StructureEvent.BREAK_OF_STRUCTURE
+            and not other.provisional
+            and other.direction is event.direction
+            and failure.timestamp < other.timestamp <= event.timestamp
+            for other in events
+        ):
+            continue
+        added.append(
+            MarketStructure(
+                symbol=event.symbol,
+                timeframe=event.timeframe,
+                timestamp=candles[close_idx].timestamp,
+                event=StructureEvent.BREAK_OF_STRUCTURE,
+                direction=event.direction,
+                price_level=event.price_level,
+                reference_price_level=prior_extreme,
+                reference_timestamp=failure.timestamp,
+                scope=StructureScope.INTERNAL,
+            )
+        )
+    if not added:
+        return events
+    return sorted([*events, *added], key=lambda e: e.timestamp)
+
+
 def _drop_failed_refire_cycles(events: list[MarketStructure]) -> list[MarketStructure]:
     """Drop a re-fired CHoCH that itself failed, together with its failure mark.
 
@@ -1834,7 +1972,13 @@ def _run_internal_structure(
         # level's story is already told by the original failure, so drop the
         # pair (re-fire + its own failure). Runs after the fizzle pass so a
         # *resumed* re-fire (its fizzle dropped above) is never collapsed.
-        return _drop_failed_refire_cycles(events)
+        events = _drop_failed_refire_cycles(events)
+        # Strictly additive, and last: a re-fired CHoCH's leg gets the staircase
+        # step it broke through (see the function's note on why it cannot run
+        # inside the passes above).
+        if _STAGE_REFIRE_INTERMEDIATE_BOS:
+            events = _stage_refire_intermediate_bos(events, internal_candles)
+        return events
 
     all_events = run_passes([])
     # Consolidation post-pass over the *surviving* stream: segment boundaries

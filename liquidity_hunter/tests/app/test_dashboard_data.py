@@ -2847,3 +2847,76 @@ def test_ethusdt_15m_failed_choch_refires_at_live_edge() -> None:
 
     # Additive only: the provisional mark never flips the state machine.
     assert run.trend is MarketDirection.BULLISH
+
+
+def _load_eth_15m_refire_candles() -> list[Candle]:
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "ethusdt_15m_2026_07_27_refire.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="ETHUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def _eth_refire_intermediate_bos(
+    run: dashboard_data.InternalStructureRun,
+) -> list[MarketStructure]:
+    leg_start = datetime(2026, 7, 27, 16, tzinfo=UTC)
+    return [
+        e
+        for e in run.events
+        if e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BEARISH
+        and not e.provisional
+        and e.timestamp >= leg_start
+    ]
+
+
+def test_run_internal_structure_stages_eth_15m_refire_intermediate_bos() -> None:
+    """The re-fired CHoCH's leg gets the staircase step it closed through.
+
+    ETHUSDT M15 2026-07-27: `CHoCH ▼` at 1917.9 (14:30) failed at 16:15, the
+    level re-armed, and the resumed drop re-fired it at 22:15 with a confirming
+    fundo of 1865.0 -- closing straight through the 1917.9 fundo on the way,
+    which the state machine reads as part of the one reversal and never marks.
+    """
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: _load_eth_15m_refire_candles()})
+
+    run = _run_internal_structure(provider, "ETHUSDT", TimeFrame.M15, 400, True)
+
+    bos = _eth_refire_intermediate_bos(run)
+    assert [e.reference_price_level for e in bos] == [pytest.approx(1917.9)]
+    # Anchored at the close through the level, and its line starts at the ✕.
+    assert bos[0].reference_timestamp == datetime(2026, 7, 27, 16, 15, tzinfo=UTC)
+    assert bos[0].timestamp > datetime(2026, 7, 27, 16, 15, tzinfo=UTC)
+
+
+def test_run_internal_structure_eth_15m_refire_bos_absent_without_staging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dashboard_data, "_STAGE_REFIRE_INTERMEDIATE_BOS", False)
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: _load_eth_15m_refire_candles()})
+
+    run = _run_internal_structure(provider, "ETHUSDT", TimeFrame.M15, 400, True)
+
+    assert _eth_refire_intermediate_bos(run) == []

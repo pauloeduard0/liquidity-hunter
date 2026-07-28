@@ -2261,3 +2261,50 @@ that window via pending-fail); new
 `test_choch_fizzle_origin_buffer_suppresses_shallow_reclaim` (SOL fixture: gate
 off fires, gate on suppresses, standing CHoCH untouched) and a non-negative
 validation test. The detector-level base tests (gate off) are unchanged.
+
+### Re-fire intermediate BOS staging (`_STAGE_REFIRE_INTERMEDIATE_BOS`, 2026-07-28)
+
+**Symptom** (ETHUSDT M15, 2026-07-27). A bearish `CHoCH ▼` confirmed at 14:30
+with its fundo at 1917.9, failed at 16:15 (`CHoCH ✕`), and the re-armed level
+re-fired at 22:15 (`CHoCH ↻`) with a confirming fundo of 1865.0. Between the ✕
+and the ↻ the chart is empty: a −3.5% leg that closed straight through the
+1917.9 fundo prints no staircase step at all.
+
+**Cause**, two mechanisms compounding:
+
+1. Under `choch_failed_rearm` the failure re-arms the broken level, so the
+   whole excursion is read as *one reversal* — while the trend is (post-✕)
+   bullish, a break down is never a continuation, so 1917.9 can never be a BOS.
+2. At the re-fire, `bos_first_floor_leg_extreme` seeds `prev_bear_bos_extreme`
+   with the leg's true fundo (1865.0), so the leg's *first* BOS may only
+   reference a level price has not revisited.
+
+**Fix**: `_stage_refire_intermediate_bos` (`dashboard_data.py`), an additive
+post-pass. For each real re-fired CHoCH (identified as the frontend keys its
+`↻`: a prior same-direction real `CHOCH_FAILED` at its `reference_timestamp`),
+take the *original* CHoCH's `price_level` — not the failure's, which is the
+reclaim pivot on the opposite side of the move — and stage a BOS at it if a
+candle closed beyond it between the ✕ and the leg extreme, with
+`reference_timestamp` at the ✕ so the line starts there. Skipped when a real
+same-direction BOS already stands in that window.
+
+**Why a post-pass and not a detector-side stager.** The first implementation
+staged inside the detector, next to `stage_eaten_bos`. Measured, it was *not*
+additive: the extra BOS feeds `_drop_failed_refire_cycles`'s `refire_worked`
+guard (a staged mark is not a re-fire's *confirming* BOS) and the leg-launch
+rescue. NEARUSDT M15 grew four spurious `CHoCH`/`✕` pairs and lost its 1.976
+leg-launch reference (1.976 → 1.970); BTCUSDT D1 swapped 101516.5 for 108566.0.
+Running last, over the surviving stream, is strictly additive.
+
+**Scan bound.** The CHoCH's own `timestamp` is the sustained-break attribution;
+its confirming extreme forms later (swing-lookback lag) and the close through
+the intermediate level usually sits *between* the two. Ending the scan at the
+CHoCH timestamp found nothing on the motivating case — the bound is the candle
+that printed the leg extreme.
+
+**Measurement** (2026-07-28, BTC/ETH/SOL/NEAR/ENA × 15m/30m/1h/4h/1d, limit 400,
+flag off vs on): 6 of 25 combos changed, **+6 marks, −0 removed**, every
+pre-existing BOS reference preserved verbatim, `higher_timeframe_direction`
+unchanged in all 25. ETHUSDT M15 gets `BOS ▼ @ 1917.9` at 07-27 22:30 — the
+motivating mark. Wired `True`. Fixture:
+`ethusdt_15m_2026_07_27_refire.json`.

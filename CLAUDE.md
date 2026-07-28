@@ -1798,7 +1798,13 @@ state in brief:
   overwritten by the *next same-direction advance* — an impulsive run of
   consecutive same-side pivots with no pullback pivot between — so each
   top/bottom that formed and broke keeps a mark instead of only the run's last
-  one), first-pending pullback seed at the CHoCH origin
+  one) + re-fire intermediate staging (`_STAGE_REFIRE_INTERMEDIATE_BOS`, a
+  composition-level *post-pass* — a re-fired `CHoCH ↻` reads its whole
+  excursion as one reversal, so the fundo/topo the original failed CHoCH
+  formed, which the resumed leg closed straight through, prints no staircase
+  step; staged at that level anchored on the `✕`. Deliberately outside the
+  detector: an in-detector variant fed `_drop_failed_refire_cycles`'s
+  `refire_worked` guard and rewrote settled structure), first-pending pullback seed at the CHoCH origin
   (`bos_pullback_seed_choch_origin`: the first pending BOS of a CHoCH-launched
   leg often snapshots a `None` pullback ref — the flip promoted an empty
   `pending_<side>` and the `None`-inheritance only covers continuations — so
