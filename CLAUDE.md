@@ -1822,6 +1822,12 @@ state in brief:
   CHoCH also dies on a sustained reclaim of the very level it broke, even
   structural — so an impulsive counter-move that never printed a BOS can't
   hold a stale trend through a full recovery),
+  CHoCH-failure noise band (`choch_fail_level_buffer_atr` = 0.5: a level-armed
+  failure's reclaim must *clear* the broken level by N×mean-TR%, not touch a
+  hair past it — every failure check measured a bare price at base persistence
+  2, so an ordinary retest negated the reversal; the BTC M15 2026-07-25 CHoCH
+  killed by a 0.37-ATR dip that re-fired an hour later into a +1.9% leg. Origin
+  reclaims keep the bare price — the escape valve is never hardened),
   failed-CHoCH re-activation (`choch_failed_rearm`: a `CHOCH_FAILED` arms the
   broken level as a re-arm reference — a later sustained break back beyond it
   re-fires the CHoCH, so a failure whose "reclaim" was the old trend's last

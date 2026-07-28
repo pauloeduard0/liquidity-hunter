@@ -2448,3 +2448,66 @@ exactly why the detector's own pivot-based check would not have caught it either
 **Measurement**: −2 provisional marks across the live matrix (ETHBTC H4 @0.029793,
 NEARUSDT M5 @1.646 — both stacked on a real BOS with the identical floor), nothing
 else changed. Fixture: `ethbtc_4h_2026_07_26_dup_prov_bos.json`.
+
+## CHoCH-failure noise band (`choch_fail_level_buffer_atr`, 2026-07-28)
+
+**Symptom (reported)**: "os CHoCH cancelam rápido demais, negativando por uma
+retração mínima e normal". BTCUSDT M15: a bullish CHoCH confirms 2026-07-25
+18:00 against the 64305.8 lower high formed 07-24 15:30 (`reference_structural
+= False`, a weak/level-armed reference). It holds ten candles up to +0.15%, then
+four closes dip below the level — the deepest 64254.0, **0.37 mean-TR**
+(0.08%) — and the failure check fires a `CHoCH ✕ ▲` at 20:30. One hour later
+the same level re-fires (`CHoCH ↻ ▲`) and the leg runs to 65555 (+1.9%). The
+chart carried a ✕ and a re-fire stacked on one price for a move that never
+actually failed.
+
+**Cause**: every CHoCH-failure check measures the reclaim against a **bare
+price** with `is_sustained_break` — pure time, no depth. On the production
+internal wiring the level-armed paths (`choch_weak_ref_fail_at_broken_level`,
+and the origin/weak branch of `choch_pending_fail_at_broken_level`) keep the
+*base* persistence, which is **2**. Two closes one tick past the level is an
+invalidation by that rule, and price retests a level it just broke as a matter
+of course. The structural pending-fail path had already been hardened with its
+own persistence (6) and the fizzle marker with an origin buffer; the level-armed
+door was the one left at the bare price.
+
+**Fix**: `choch_fail_level_buffer_atr` (wired `0.5` via
+`_CHOCH_FAIL_LEVEL_BUFFER_ATR`) offsets the reclaim level by N × the series'
+mean true-range% — the reclaim must *clear* the level by the band, not touch a
+hair past it. Scoped to the fail pivot being the CHoCH's armed **level**; a
+reclaim of the leg **origin** keeps the bare price, since recovering the whole
+move is already unambiguous invalidation and the escape valve must never be
+hardened. `_fail_break_level` is the single conversion point, applied at all
+four doors (bearish/bullish pivot loop + both live-edge re-runs); the emitted
+`CHOCH_FAILED` still reports the true level, so nothing plots at a synthetic
+price.
+
+**Calibration**: the case needs > 0.37 ATR, so 0.25 was too small to fix it and
+1.0 (the fizzle marker's origin buffer) far more than needed at a level this
+close to price. 0.5 fixes it with the smallest margin that also survived the
+fixture suite.
+
+**Measurement** (live matrix, BTC/ETH/SOL/NEAR/ENA × M5/M15/M30/H1/H4/D1, 30
+combos): **`CHOCH_FAILED` 82 → 68 (−17%)**, 27/30 combos changed, **1 trend
+flip** — SOLUSDT H4 `bullish → bearish`, an improvement: the buffer promotes the
+07-23 16:00 bearish CHoCH at 76.24 from a live-edge `CHoCH?` to a confirmed
+mark, and SOL fell 78.6 → 72.3 over that week under lower highs. Most of the
+other churn is the same ✕ **confirming a few candles later** (the close that
+clears the band) plus the legs that no longer die and print their staircase.
+
+**Fixture locks touched**, all shifts of the same event rather than a lost
+failure:
+- BTC D1 January pending-fail 01-18 → 01-19 (crash unchanged).
+- AAVE H1 87.90 failure 07-09 05:00 → 11:00 (rally to 98 unchanged).
+- ETH M15 re-fire fixture ✕ 16:15 → 16:30 (re-fire and its staged BOS anchor
+  follow).
+- MUUSDT H4 *pathology* lock (`choch_failed_rearm` off): the buffer alone
+  prevents the pathology — the false 07-03 ✕ never fires and the −19% collapse
+  prints its bearish BOS — so the lock now runs with the buffer off, since it
+  is about what *re-arm* protects against.
+- ENAUSDT H1 `refire_worked` lock: with the buffer on, the fixture's reclaims
+  no longer clear the level and the `✕ → ↻ → ✕` cycle it pins never forms;
+  runs with the buffer off.
+
+Fixture: `btcusdt_15m_2026_07_25_choch_fail_buffer.json`
+(`test_btc_15m_shallow_retest_does_not_negate_choch` pins both sides).

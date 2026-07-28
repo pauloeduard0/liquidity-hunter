@@ -551,6 +551,25 @@ class InternalStructureDetector(MarketStructureDetector):
     at the reclaimed level. With `False` the output is byte-for-byte
     identical.
 
+    `choch_fail_level_buffer_atr` (default `None` = off) puts a
+    volatility-scaled **noise band** around every level-armed CHoCH-failure
+    reclaim. All the failure checks measure the reclaim against a bare price,
+    and price retests a broken level constantly, so two closes a hair past one
+    invalidated the reversal at base persistence: the BTCUSDT M15 bullish CHoCH
+    of 2026-07-25 18:00 (ref 64305.8) held ten candles, dipped a maximum of
+    0.37 mean-TR below the level for four, was killed -- and re-fired at the
+    same level an hour later into a +1.9% leg, printing `CHoCH ✕ ▲` and
+    `CHoCH ↻ ▲` on one price. When set, the reclaim must *clear* the level by
+    N x the series' mean true-range% before it counts, so a routine pullback
+    into the counter-zone no longer negates a CHoCH while a genuine loss of the
+    level still does (the failure simply confirms a few candles later, at the
+    close that actually clears the band). Applies only where the fail pivot is
+    the CHoCH's armed *level* (`choch_weak_ref_fail_at_broken_level` /
+    `choch_pending_fail_at_broken_level`, live-edge re-run included): a reclaim
+    of the leg **origin** is already a deep, unambiguous invalidation and keeps
+    the bare price -- the escape valve is never hardened. The emitted
+    `CHOCH_FAILED` reports the true level, not the buffered one.
+
     `choch_pending_fail_min_recovery_frac` (default `None` = off) adds a
     **depth** requirement to that pending-fail path, which is otherwise purely
     a *time* rule: six closes a hair above the broken level kill the reversal
@@ -816,6 +835,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_pending_fail_at_broken_level: bool = False,
         choch_pending_fail_persistence_candles: int | None = None,
         choch_pending_fail_min_recovery_frac: float | None = None,
+        choch_fail_level_buffer_atr: float | None = None,
         choch_fizzle_reclaim_candles: int | None = None,
         choch_fizzle_reclaim_origin_buffer_atr: float | None = None,
         choch_failed_fallback_suppress_candles: int | None = None,
@@ -869,6 +889,8 @@ class InternalStructureDetector(MarketStructureDetector):
             raise ValueError(
                 "choch_pending_fail_min_recovery_frac must be in (0, 1]"
             )
+        if choch_fail_level_buffer_atr is not None and choch_fail_level_buffer_atr < 0:
+            raise ValueError("choch_fail_level_buffer_atr must be non-negative")
         if choch_fizzle_reclaim_candles is not None and choch_fizzle_reclaim_candles < 1:
             raise ValueError("choch_fizzle_reclaim_candles must be at least 1")
         if (
@@ -954,6 +976,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._choch_pending_fail_min_recovery_frac = (
             choch_pending_fail_min_recovery_frac
         )
+        self._choch_fail_level_buffer_atr = choch_fail_level_buffer_atr
         self._choch_fizzle_reclaim_candles = choch_fizzle_reclaim_candles
         self._choch_fizzle_reclaim_origin_buffer_atr = (
             choch_fizzle_reclaim_origin_buffer_atr
@@ -1076,6 +1099,7 @@ class InternalStructureDetector(MarketStructureDetector):
             or self._stale_reanchor_displacement_atr is not None
             or self._choch_success_displacement_atr is not None
             or self._choch_fizzle_reclaim_origin_buffer_atr is not None
+            or self._choch_fail_level_buffer_atr is not None
         ) and len(candles) > 1:
             mean_tr_pct = fmean(
                 max(
@@ -2195,6 +2219,13 @@ class InternalStructureDetector(MarketStructureDetector):
                 # pre-CHoCH rally is mis-read as the reclaim -- see
                 # `bear_choch_arm_index`).
                 bear_fail_scan_start = max(prev_high_pivot_index + 1, bear_choch_arm_index + 1)
+                bear_fail_level = (
+                    self._fail_break_level(
+                        bear_fail_pivot.price, mean_tr_pct, bullish_reclaim=True
+                    )
+                    if bear_fail_pivot is not None and bear_fail_pivot is bear_choch_fail_ref
+                    else (bear_fail_pivot.price if bear_fail_pivot is not None else 0.0)
+                )
                 # A failure at a *structural* broken level (the pending-fail
                 # path) demands its own persistence: an ordinary retest of a
                 # genuine leg origin must not kill the reversal at base
@@ -2220,7 +2251,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         and confirms_break(
                             bear_fail_scan_start,
                             current_index,
-                            bear_fail_pivot.price,
+                            bear_fail_level,
                             bullish=True,
                             persistence=bear_fail_persistence,
                         )
@@ -2229,7 +2260,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             candles,
                             bear_fail_scan_start,
                             current_index,
-                            bear_fail_pivot.price,
+                            bear_fail_level,
                             bullish=True,
                             persistence_candles=bear_fail_persistence,
                         )
@@ -2254,7 +2285,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     and confirms_break(
                         bear_fail_scan_start,
                         current_index,
-                        bear_fail_pivot.price,
+                        bear_fail_level,
                         bullish=True,
                         persistence=bear_fail_persistence,
                     )
@@ -2269,7 +2300,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             candles,
                             bear_fail_scan_start,
                             current_index,
-                            bear_fail_pivot.price,
+                            bear_fail_level,
                             bullish=True,
                             persistence_candles=bear_fail_persistence,
                         )
@@ -3299,6 +3330,13 @@ class InternalStructureDetector(MarketStructureDetector):
                 # Mirror of the bearish case: the reclaim must come after the
                 # CHoCH formed, so start the scan past the arming pivot.
                 bull_fail_scan_start = max(prev_low_pivot_index + 1, bull_choch_arm_index + 1)
+                bull_fail_level = (
+                    self._fail_break_level(
+                        bull_fail_pivot.price, mean_tr_pct, bullish_reclaim=False
+                    )
+                    if bull_fail_pivot is not None and bull_fail_pivot is bull_choch_fail_ref
+                    else (bull_fail_pivot.price if bull_fail_pivot is not None else 0.0)
+                )
                 # Mirror of the bearish case: a structural-level failure (the
                 # pending-fail path) uses its own persistence; origin and
                 # weak-level reclaims keep the base.
@@ -3318,7 +3356,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         and confirms_break(
                             bull_fail_scan_start,
                             current_index,
-                            bull_fail_pivot.price,
+                            bull_fail_level,
                             bullish=False,
                             persistence=bull_fail_persistence,
                         )
@@ -3327,7 +3365,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             candles,
                             bull_fail_scan_start,
                             current_index,
-                            bull_fail_pivot.price,
+                            bull_fail_level,
                             bullish=False,
                             persistence_candles=bull_fail_persistence,
                         )
@@ -3352,7 +3390,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     and confirms_break(
                         bull_fail_scan_start,
                         current_index,
-                        bull_fail_pivot.price,
+                        bull_fail_level,
                         bullish=False,
                         persistence=bull_fail_persistence,
                     )
@@ -3367,7 +3405,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             candles,
                             bull_fail_scan_start,
                             current_index,
-                            bull_fail_pivot.price,
+                            bull_fail_level,
                             bullish=False,
                             persistence_candles=bull_fail_persistence,
                         )
@@ -4081,6 +4119,13 @@ class InternalStructureDetector(MarketStructureDetector):
                 ):
                     le_fail_pivot = None
                 le_fail_persistence = self._persistence_candles
+                le_fail_level = (
+                    self._fail_break_level(
+                        le_fail_pivot.price, mean_tr_pct, bullish_reclaim=False
+                    )
+                    if le_fail_pivot is not None and le_fail_pivot is bull_choch_fail_ref
+                    else (le_fail_pivot.price if le_fail_pivot is not None else 0.0)
+                )
                 if (
                     le_fail_pivot is not None
                     and le_fail_pivot is bull_choch_fail_ref
@@ -4096,7 +4141,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         and confirms_break(
                             _les,
                             last_index,
-                            le_fail_pivot.price,
+                            le_fail_level,
                             bullish=False,
                             persistence=le_fail_persistence,
                         )
@@ -4105,7 +4150,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             candles,
                             _les,
                             last_index,
-                            le_fail_pivot.price,
+                            le_fail_level,
                             bullish=False,
                             persistence_candles=le_fail_persistence,
                         )
@@ -4129,7 +4174,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     and confirms_break(
                         le_scan_start,
                         last_index,
-                        le_fail_pivot.price,
+                        le_fail_level,
                         bullish=False,
                         persistence=le_fail_persistence,
                     )
@@ -4138,7 +4183,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         candles,
                         le_scan_start,
                         last_index,
-                        le_fail_pivot.price,
+                        le_fail_level,
                         bullish=False,
                         persistence_candles=le_fail_persistence,
                     )
@@ -4174,6 +4219,13 @@ class InternalStructureDetector(MarketStructureDetector):
                 ):
                     le_fail_pivot = None
                 le_fail_persistence = self._persistence_candles
+                le_fail_level = (
+                    self._fail_break_level(
+                        le_fail_pivot.price, mean_tr_pct, bullish_reclaim=True
+                    )
+                    if le_fail_pivot is not None and le_fail_pivot is bear_choch_fail_ref
+                    else (le_fail_pivot.price if le_fail_pivot is not None else 0.0)
+                )
                 if (
                     le_fail_pivot is not None
                     and le_fail_pivot is bear_choch_fail_ref
@@ -4193,7 +4245,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         and confirms_break(
                             _les,
                             last_index,
-                            le_fail_pivot.price,
+                            le_fail_level,
                             bullish=True,
                             persistence=le_fail_persistence,
                         )
@@ -4202,7 +4254,7 @@ class InternalStructureDetector(MarketStructureDetector):
                             candles,
                             _les,
                             last_index,
-                            le_fail_pivot.price,
+                            le_fail_level,
                             bullish=True,
                             persistence_candles=le_fail_persistence,
                         )
@@ -4226,7 +4278,7 @@ class InternalStructureDetector(MarketStructureDetector):
                     and confirms_break(
                         le_scan_start,
                         last_index,
-                        le_fail_pivot.price,
+                        le_fail_level,
                         bullish=True,
                         persistence=le_fail_persistence,
                     )
@@ -4235,7 +4287,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         candles,
                         le_scan_start,
                         last_index,
-                        le_fail_pivot.price,
+                        le_fail_level,
                         bullish=True,
                         persistence_candles=le_fail_persistence,
                     )
@@ -4787,6 +4839,29 @@ class InternalStructureDetector(MarketStructureDetector):
             merged.append(fizzle_event)
         merged.sort(key=lambda e: e.timestamp)
         return merged
+
+    def _fail_break_level(
+        self,
+        level: float,
+        mean_tr_pct: float | None,
+        *,
+        bullish_reclaim: bool,
+    ) -> float:
+        """The level a CHoCH-failure reclaim must actually close beyond.
+
+        The bare level is the CHoCH's own reference, and price retests it
+        constantly: two closes a hair past it (0.37 mean-TR on the BTC 15m
+        2026-07-25 case) killed a reversal that then ran another 1.9%. Under
+        `choch_fail_level_buffer_atr` the reclaim is measured against the level
+        offset by a volatility-scaled noise band, so an ordinary retest no
+        longer invalidates the CHoCH while a genuine loss of the level still
+        does. Returns the level unchanged when the feature is off or the series
+        is too short to measure a range.
+        """
+        if self._choch_fail_level_buffer_atr is None or mean_tr_pct is None:
+            return level
+        frac = self._choch_fail_level_buffer_atr * mean_tr_pct
+        return level * (1.0 + frac) if bullish_reclaim else level * (1.0 - frac)
 
     def _displacement_success_threshold(self, mean_tr_pct: float) -> float:
         """The displacement (fraction of price) that retires a CHoCH origin.

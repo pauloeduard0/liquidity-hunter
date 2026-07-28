@@ -500,6 +500,21 @@ _CHOCH_PENDING_FAIL_PERSISTENCE: int | None = 6
 # has to gate, not merely postpone.
 _CHOCH_PENDING_FAIL_MIN_RECOVERY_FRAC: float | None = None
 
+# Volatility-scaled noise band on every CHoCH-failure reclaim level
+# (`InternalStructureDetector.choch_fail_level_buffer_atr`). The failure checks
+# all measure the reclaim against a bare price -- the CHoCH origin, or the very
+# level it broke -- and price retests those levels constantly, so two closes a
+# hair past one killed the reversal at base persistence. Measured on the BTC
+# 15m bullish CHoCH of 2026-07-25 18:00 (ref 64305.8, the 07-24 15:30 LH): four
+# closes reached 0.37 mean-TR below the level, the CHoCH was invalidated at
+# 20:30, and the same level re-fired an hour later into a 1.9% leg -- the ✕ was
+# pure noise. The buffer requires the reclaim to *clear* the level by N x the
+# series' mean true-range% before it counts, so an ordinary retest of the
+# counter-zone no longer negates a CHoCH while a genuine loss of the level
+# still does. Same volatility unit as the fizzle marker's origin buffer, which
+# solved the mirror over-fire one door down.
+_CHOCH_FAIL_LEVEL_BUFFER_ATR: float | None = 0.5
+
 # Weak-referenced CHoCH invalidation at the broken level itself
 # (`InternalStructureDetector.choch_weak_ref_fail_at_broken_level`). A CHoCH
 # fired against a *weak* reference (a synthetic re-anchor level or the
@@ -1992,6 +2007,8 @@ def _build_internal_detector(
         choch_pending_fail_at_broken_level=_CHOCH_PENDING_FAIL_AT_BROKEN_LEVEL,
         choch_pending_fail_persistence_candles=_CHOCH_PENDING_FAIL_PERSISTENCE,
         choch_pending_fail_min_recovery_frac=_CHOCH_PENDING_FAIL_MIN_RECOVERY_FRAC,
+        # See _CHOCH_FAIL_LEVEL_BUFFER_ATR.
+        choch_fail_level_buffer_atr=_CHOCH_FAIL_LEVEL_BUFFER_ATR,
         # A pending BOS discarded without emitting -- a phantom advance whose
         # confirming pullback came in too deep (below the prior BOS's confirming
         # pullback but still above the leg origin, so it neither emits nor

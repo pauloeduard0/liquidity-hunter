@@ -1377,12 +1377,14 @@ def test_btc_1d_crash_resolves_bearish_with_bottom_bos() -> None:
         for e in run.events
     )
     # January: the bullish CHoCH is invalidated by the crash's first leg
-    # (a real pending-fail, not a fizzle marker).
+    # (a real pending-fail, not a fizzle marker). It confirms on 01-19, the
+    # first close that clears the level by the `_CHOCH_FAIL_LEVEL_BUFFER_ATR`
+    # noise band -- the crash keeps going, so the reading is unchanged.
     assert any(
         e.event is StructureEvent.CHOCH_FAILED
         and not e.provisional
         and e.direction is MarketDirection.BULLISH
-        and e.timestamp == datetime(2026, 1, 18, tzinfo=UTC)
+        and e.timestamp == datetime(2026, 1, 19, tzinfo=UTC)
         for e in run.events
     )
     # ... and June prints the continuation BOS at the bottom.
@@ -1665,12 +1667,15 @@ def test_aave_1h_pending_choch_fails_at_broken_level() -> None:
         for e in run.events
     )
     # ... but dies for real once the rally sustains closes back above the
-    # 87.90 level it broke (no confirming BOS ever retired the level).
+    # 87.90 level it broke (no confirming BOS ever retired the level). The
+    # failure lands at 11:00, the first close that clears the level by the
+    # `_CHOCH_FAIL_LEVEL_BUFFER_ATR` band rather than by a hair; the rally runs
+    # to 98 either way, so the conclusion is untouched.
     assert any(
         e.event is StructureEvent.CHOCH_FAILED
         and not e.provisional
         and e.direction is MarketDirection.BEARISH
-        and e.timestamp == datetime(2026, 7, 9, 5, tzinfo=UTC)
+        and e.timestamp == datetime(2026, 7, 9, 11, tzinfo=UTC)
         and e.reference_price_level == pytest.approx(87.9)
         for e in run.events
     )
@@ -2333,8 +2338,16 @@ def test_mu_4h_rearm_off_crash_reads_as_sweeps_under_stuck_trend(
     suppression leaves the crash's first break with no reference at all and
     the dead-cat bounce pins the next one at the 875.67 leg origin, so the
     -19%% July collapse prints zero bearish BOS/CHoCH and the standing trend
-    stays bullish."""
+    stays bullish.
+
+    The buffer that keeps a CHoCH alive through an ordinary retest
+    (`_CHOCH_FAIL_LEVEL_BUFFER_ATR`) independently prevents this pathology --
+    the false 07-03 failure never fires and the collapse prints its bearish BOS
+    -- so it is switched off here: this lock is about what *re-arm* protects
+    against.
+    """
     monkeypatch.setattr(dashboard_data, "_CHOCH_FAILED_REARM", False)
+    monkeypatch.setattr(dashboard_data, "_CHOCH_FAIL_LEVEL_BUFFER_ATR", None)
     candles = _load_mu_4h_rearm_candles()
     provider = _FuturesLimitFakeProvider({TimeFrame.H4: candles})
 
@@ -2757,7 +2770,7 @@ def test_ethusdt_15m_failed_choch_refires_at_live_edge() -> None:
     structural 1935.29 (the higher low formed 01:30) and dives to 1917.90.
     Price then reclaims the level and holds above it for six hours -- a real
     reclaim by the calibrated pending-fail bar -- so a CHOCH_FAILED fires at
-    16:15 and arms 1935.29 as a re-arm reference.
+    16:30 and arms 1935.29 as a re-arm reference.
 
     From 22:15 price rolls back over and closes below 1935.29 for eleven
     consecutive candles (-3.5%, down to 1865). That is exactly what the re-arm
@@ -2818,7 +2831,7 @@ def test_ethusdt_15m_failed_choch_refires_at_live_edge() -> None:
     failure = next(
         e
         for e in run.events
-        if e.timestamp == datetime(2026, 7, 27, 16, 15, tzinfo=UTC)
+        if e.timestamp == datetime(2026, 7, 27, 16, 30, tzinfo=UTC)
         and e.event is StructureEvent.CHOCH_FAILED
     )
     assert failure.direction is MarketDirection.BEARISH
@@ -2907,7 +2920,7 @@ def test_run_internal_structure_stages_eth_15m_refire_intermediate_bos() -> None
     bos = _eth_refire_intermediate_bos(run)
     assert [e.reference_price_level for e in bos] == [pytest.approx(1917.9)]
     # Anchored at the close through the level, and its line starts at the ✕.
-    assert bos[0].reference_timestamp == datetime(2026, 7, 27, 16, 15, tzinfo=UTC)
+    assert bos[0].reference_timestamp == datetime(2026, 7, 27, 16, 30, tzinfo=UTC)
     assert bos[0].timestamp > datetime(2026, 7, 27, 16, 15, tzinfo=UTC)
 
 
@@ -3045,7 +3058,12 @@ def test_refire_worked_guard_counts_staged_bos_by_choice(
     (`_REFIRE_WORKED_COUNTS_STAGED_BOS`) rather than an accident of which
     stagers happen to be on: restrict the guard to machine-emitted BOS and the
     same fixture's cycles collapse.
+
+    `_CHOCH_FAIL_LEVEL_BUFFER_ATR` is off here: with it on, the fixture's
+    reclaims no longer clear the level and the `X -> refire -> X` cycle this
+    pins never forms in the first place.
     """
+    monkeypatch.setattr(dashboard_data, "_CHOCH_FAIL_LEVEL_BUFFER_ATR", None)
     provider = _FuturesLimitFakeProvider({TimeFrame.H1: _load_ena_1h_refire_worked_candles()})
 
     def run() -> list[MarketStructure]:
@@ -3279,3 +3297,92 @@ def test_run_internal_structure_ethbtc_4h_duplicate_kept_without_pass(
     # Both marks on the same floor -- the stacked pair the pass removes.
     assert sorted(e.provisional for e in july) == [False, True]
     assert {round(e.reference_price_level or 0, 6) for e in july} == {0.029793}
+
+
+# --- CHoCH-failure noise band (_CHOCH_FAIL_LEVEL_BUFFER_ATR) -----------------
+#
+# BTCUSDT M15, the structurally anchored production slice. The bullish CHoCH of
+# 2026-07-25 18:00 breaks the 64305.8 lower high formed 07-24 15:30 and holds
+# above it for ten candles. Four closes then dip a maximum of 0.37 mean-TR
+# (0.08%) below the level -- an ordinary retest of the counter-zone -- and the
+# bare-level failure check killed the reversal at base persistence. The same
+# level re-fired an hour later and the leg ran to 65555 (+1.9%), so the chart
+# showed a `CHoCH ✕ ▲` followed immediately by a `CHoCH ↻ ▲` at one price.
+
+
+def _load_btc_15m_fail_buffer_candles() -> list[Candle]:
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "btcusdt_15m_2026_07_25_choch_fail_buffer.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="BTCUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=row[5],
+            taker_buy_volume=row[6],
+        )
+        for row in rows
+    ]
+
+
+def _btc_fail_buffer_choch_events(
+    run: dashboard_data.InternalStructureRun,
+) -> list[MarketStructure]:
+    return [
+        e
+        for e in run.events
+        if e.direction is MarketDirection.BULLISH
+        and not e.provisional
+        and e.event
+        in (StructureEvent.CHANGE_OF_CHARACTER, StructureEvent.CHOCH_FAILED)
+        and e.timestamp >= datetime(2026, 7, 25, 17, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(64305.8)
+    ]
+
+
+def test_btc_15m_shallow_retest_does_not_negate_choch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 0.37-ATR dip back through the level is a retest, not an invalidation."""
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: _load_btc_15m_fail_buffer_candles()})
+
+    def run() -> dashboard_data.InternalStructureRun:
+        return _run_internal_structure(provider, "BTCUSDT", TimeFrame.M15, 1200, False)
+
+    # The pathology, with the noise band off: fire, die, re-fire at one level.
+    monkeypatch.setattr(dashboard_data, "_CHOCH_FAIL_LEVEL_BUFFER_ATR", None)
+    assert [
+        (e.event, e.timestamp) for e in _btc_fail_buffer_choch_events(run())
+    ] == [
+        (StructureEvent.CHANGE_OF_CHARACTER, datetime(2026, 7, 25, 18, tzinfo=UTC)),
+        (StructureEvent.CHOCH_FAILED, datetime(2026, 7, 25, 20, 30, tzinfo=UTC)),
+        (StructureEvent.CHANGE_OF_CHARACTER, datetime(2026, 7, 25, 21, 30, tzinfo=UTC)),
+    ]
+
+    # Wired: the reclaim never clears the level by the band, so the single
+    # CHoCH stands and its leg prints the staircase instead of a ✕.
+    monkeypatch.undo()
+    assert [
+        (e.event, e.timestamp) for e in _btc_fail_buffer_choch_events(run())
+    ] == [(StructureEvent.CHANGE_OF_CHARACTER, datetime(2026, 7, 25, 18, tzinfo=UTC))]
+    assert any(
+        e.event is StructureEvent.BREAK_OF_STRUCTURE
+        and e.direction is MarketDirection.BULLISH
+        and not e.provisional
+        and e.timestamp > datetime(2026, 7, 25, 21, tzinfo=UTC)
+        for e in run().events
+    )
