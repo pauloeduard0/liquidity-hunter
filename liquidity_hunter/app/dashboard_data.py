@@ -728,6 +728,14 @@ _STAGE_REFIRE_INTERMEDIATE_BOS = True
 # leg making new lows goes unmarked for the whole swing-lookback lag.
 _EMIT_PROVISIONAL_CONTINUATION_BOS = True
 
+# Keep a live-edge `BOS?` on the chart when a live-edge `CHoCH?` forms against
+# it, instead of letting the reversal erase it
+# (`InternalStructureDetector.keep_provisional_bos_under_reversal`). The pair is
+# the shape of the ordinary reversal, not a contradiction: the leg closes
+# through its floor -- confirming that fundo/topo -- and only then turns. The
+# erased BOS? is precisely the observation that dates the turn.
+_KEEP_PROVISIONAL_BOS_UNDER_REVERSAL = True
+
 # Whether `_drop_failed_refire_cycles`'s `refire_worked` guard accepts a
 # *staged* BOS as proof that a re-fired CHoCH's leg broke structure.
 #
@@ -1817,6 +1825,7 @@ def _build_internal_detector(
         # advance and its confirming pullback pivot. See
         # _EMIT_PROVISIONAL_CONTINUATION_BOS.
         emit_provisional_continuation_bos=_EMIT_PROVISIONAL_CONTINUATION_BOS,
+        keep_provisional_bos_under_reversal=_KEEP_PROVISIONAL_BOS_UNDER_REVERSAL,
         # Strong-close override for the BOS confluence filter (see the constant):
         # a decisive close at the candle's extreme passes even when the
         # shadow-balance test would reject it (a momentum breakout closing at its

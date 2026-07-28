@@ -2392,3 +2392,34 @@ between fetches, flipping an AAVE CHoCH from confirmed to provisional). Snapshot
 the candle series once and run both sides against it — a live-edge feature is
 exactly the kind whose measurement the live edge corrupts. Fixture:
 `btcusdt_15m_2026_07_28_prov_continuation.json`.
+
+## A forming reversal no longer erases the continuation it reversed
+
+Flag: `_KEEP_PROVISIONAL_BOS_UNDER_REVERSAL` (wired `True`) →
+`InternalStructureDetector.keep_provisional_bos_under_reversal`.
+
+The provisional block emitted at most one mark: when a live-edge `CHoCH?`
+formed, it set `prov_event = None`, on the reasoning that the two references sit
+on opposite sides of price and the pair would read as contradictory.
+
+It is not a contradiction — it is the *sequence* of the ordinary reversal. A
+turn is usually preceded by the leg closing through its own floor: the fundo is
+confirmed by a close, taking the stops resting under it, and only then does
+price leave. Erasing the `BOS?` when the `CHoCH?` appears destroys exactly the
+observation that dates the turn, and it disappears at the moment it carries the
+most information. Observed live on BTCUSDT M15 2026-07-28: `BOS?` at 13:30
+through the 63021.0 fundo, forming bullish `CHoCH?` at 15:15, and the chart kept
+only the second.
+
+Keeping both is safe for the chart because provisional marks are already
+excluded from line termination (`!other.provisional` in
+`MainChart.structureLineEndTime`) — a kept `BOS?` cannot hold back the forming
+reversal or any later confirmed event. It draws its own dimmed line and nothing
+else. When the reversal *confirms*, the trend flip discards the pending BOS and
+`stage_reversal_eaten_bos` stages the same level as a solid mark, so the
+observation survives the repaint rather than vanishing with it.
+
+**Measurement** (2026-07-28, BTC/ETH/SOL/NEAR/ENA/AAVE × 5m..1d = 42 combos,
+whole event stream, against a snapshotted series): **+7 marks, all
+`provisional=True` BOS**, no line removed, no reference altered, trend unchanged
+everywhere. Fixture: `btcusdt_15m_2026_07_28_keep_under_reversal.json`.

@@ -828,6 +828,7 @@ class InternalStructureDetector(MarketStructureDetector):
         stage_reversal_eaten_bos: bool = False,
         stage_superseded_continuation_bos: bool = False,
         bos_pullback_seed_choch_origin: bool = False,
+        keep_provisional_bos_under_reversal: bool = False,
     ) -> None:
         if persistence_candles < 1:
             raise ValueError("persistence_candles must be at least 1")
@@ -939,6 +940,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._emit_provisional_bos = emit_provisional_bos
         self._emit_provisional_first_bos = emit_provisional_first_bos
         self._emit_provisional_continuation_bos = emit_provisional_continuation_bos
+        self._keep_provisional_bos_under_reversal = keep_provisional_bos_under_reversal
         self._emit_provisional_choch = emit_provisional_choch
         self._emit_provisional_choch_weak = emit_provisional_choch_weak
         self._bos_confluence_strong_close_frac = bos_confluence_strong_close_frac
@@ -4555,10 +4557,18 @@ class InternalStructureDetector(MarketStructureDetector):
                         scope=StructureScope.INTERNAL,
                         provisional=True,
                     )
-                    # A live-edge reversal supersedes a live-edge continuation: the
-                    # two references sit on opposite sides of price, so a rare
-                    # same-tail double would draw a contradictory BOS?/CHoCH? pair.
-                    prov_event = None
+                    # A live-edge reversal normally supersedes a live-edge
+                    # continuation: the two references sit on opposite sides of
+                    # price, so the pair reads as contradictory. Under
+                    # `keep_provisional_bos_under_reversal` both are kept instead:
+                    # the pair is not a contradiction but the *sequence* of the
+                    # classic reversal -- the leg closed through its floor
+                    # (confirming that fundo/topo) and only then turned. Erasing
+                    # the BOS? destroys exactly the observation that dates the
+                    # turn. Provisional marks never terminate another event's
+                    # line, so the kept BOS? cannot hold back the forming CHoCH.
+                    if not self._keep_provisional_bos_under_reversal:
+                        prov_event = None
 
         # Fast-fizzle marker for the *standing* provisional CHoCH (additive; only
         # under `choch_fizzle_reclaim_candles`). If the standing CHoCH never

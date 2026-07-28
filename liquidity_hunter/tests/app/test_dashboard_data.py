@@ -3130,3 +3130,79 @@ def test_run_internal_structure_btc_15m_continuation_unmarked_without_flag(
     run = _run_internal_structure(provider, "BTCUSDT", TimeFrame.M15, 400, True)
 
     assert _btc_live_edge_provisional_bos(run) == []
+
+
+def _load_btc_15m_keep_under_reversal_candles() -> list[Candle]:
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "btcusdt_15m_2026_07_28_keep_under_reversal.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="BTCUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def _btc_keep_under_reversal_marks(
+    run: dashboard_data.InternalStructureRun,
+) -> tuple[list[MarketStructure], list[MarketStructure]]:
+    cutoff = datetime(2026, 7, 28, tzinfo=UTC)
+    live = [e for e in run.events if e.provisional and e.timestamp >= cutoff]
+    return (
+        [e for e in live if e.event is StructureEvent.BREAK_OF_STRUCTURE],
+        [e for e in live if e.event is StructureEvent.CHANGE_OF_CHARACTER],
+    )
+
+
+def test_run_internal_structure_keeps_btc_15m_bos_under_forming_reversal() -> None:
+    """A forming reversal no longer erases the continuation it reversed.
+
+    BTCUSDT M15 2026-07-28: the leg closed through its 63021.0 floor at 13:30
+    (the `BOS?`) and only then turned up into a forming bullish CHoCH at 15:15.
+    That order is the shape of the ordinary reversal -- the fundo is confirmed
+    by a close before price leaves it -- so both marks belong on the chart.
+    """
+    candles = _load_btc_15m_keep_under_reversal_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: candles})
+
+    run = _run_internal_structure(provider, "BTCUSDT", TimeFrame.M15, 400, True)
+
+    bos, choch = _btc_keep_under_reversal_marks(run)
+    assert [e.reference_price_level for e in bos] == [pytest.approx(63021.0)]
+    assert bos[0].direction is MarketDirection.BEARISH
+    assert bos[0].timestamp == datetime(2026, 7, 28, 13, 30, tzinfo=UTC)
+    # The reversal it sits under is still emitted, and still forming.
+    assert [e.direction for e in choch] == [MarketDirection.BULLISH]
+    assert choch[0].timestamp > bos[0].timestamp
+
+
+def test_run_internal_structure_btc_15m_bos_erased_by_reversal_without_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dashboard_data, "_KEEP_PROVISIONAL_BOS_UNDER_REVERSAL", False)
+    candles = _load_btc_15m_keep_under_reversal_candles()
+    provider = _FuturesLimitFakeProvider({TimeFrame.M15: candles})
+
+    run = _run_internal_structure(provider, "BTCUSDT", TimeFrame.M15, 400, True)
+
+    bos, choch = _btc_keep_under_reversal_marks(run)
+    assert bos == []
+    assert [e.direction for e in choch] == [MarketDirection.BULLISH]

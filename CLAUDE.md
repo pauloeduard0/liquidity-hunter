@@ -1851,7 +1851,12 @@ state in brief:
   standing-`pending_bos` route also covers a *continuation*, closing the hole
   where the advance had landed but the leg already had a confirmed BOS — the
   tail-scan route only fires before the advance, so a trending leg went unmarked
-  for the whole swing-lookback lag), fast-fizzle marker (with the origin-buffer gate
+  for the whole swing-lookback lag, and `keep_provisional_bos_under_reversal`:
+  a live-edge `CHoCH?` no longer erases the live-edge `BOS?` it reversed — the
+  pair is the *sequence* of the ordinary reversal, the leg closing through its
+  own floor before turning, and erasing it destroys the observation that dates
+  the turn; safe because provisional marks never terminate another event's
+  line), fast-fizzle marker (with the origin-buffer gate
   `choch_fizzle_reclaim_origin_buffer_atr` = 1.0: the fizzle reclaim must
   recover the leg *origin* ± N×mean-TR%, not merely retest the broken level —
   a routine pullback into the counter-zone no longer paints a `CHoCH✕`; the
