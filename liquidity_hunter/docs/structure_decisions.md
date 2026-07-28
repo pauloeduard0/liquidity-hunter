@@ -1695,6 +1695,71 @@ replay). Fixture `solusdt_15m_2026_07_01_07_16.json` locks both the batch
 cancel and the truncated live-edge marker; synthetic tests lock the close-vs-
 wick semantics.
 
+### Depth-gated pending-fail — built, measured, **rejected** (`choch_pending_fail_min_recovery_frac`, 2026-07-28)
+
+**Implemented, wired OFF.** The complaint that motivated it is real and the
+diagnosis holds; the fix does not survive its own measurement.
+
+**The asymmetry.** `choch_pending_fail_at_broken_level` is a pure *time* rule:
+six closes a hair above the broken level kill a pending CHoCH exactly as fast as
+six closes that gave the whole move back. Meanwhile the *fizzle marker* — which
+is merely cosmetic, never touching the trend — already demands the reclaim
+recover the leg **origin** ± 1 ATR (`choch_fizzle_reclaim_origin_buffer_atr`),
+added precisely so "a routine pullback into the counter-zone no longer paints a
+`CHoCH✕`". The stronger consequence had the weaker gate.
+
+**Static evidence looked strong.** Over the 89 structural pending-fail failures
+on the live matrix (BTC/ETH/SOL/NEAR/AAVE/ENA × 5m..1d), the reclaim's median
+recovery toward the origin is **37%**, and 56/89 do not reach half way. Scored
+against a forward proxy (did price close back through the level in the CHoCH's
+direction within 40 candles — i.e. was the failure premature?), failures whose
+reclaim recovered < 60% were premature **70%** of the time against **40%** for
+those at/above it. The motivating **ETHUSDT 15m 2026-07-27** case recovered 41%
+(level 1935.29, origin 1982.00, reclaim high 1954.48) and was followed by a
+−3.5% continuation of the CHoCH's own direction.
+
+**The parameter.** The reclaim must retrace at least this fraction of the way
+from the broken level back to the origin before the pending-fail path may fire.
+It sits on a continuum between the two pre-existing exits (`0` = today's bare
+level, `1` = the far origin reclaim the normal `CHOCH_FAILED` already waits
+for), so it *narrows* the shortcut rather than removing it. Scoped to the
+structural pending-fail path; origin and weak-level reclaims are the escape
+valves and stay unhardened.
+
+**Two implementation lessons worth keeping.**
+1. A *persistence-scaling* variant (shallow reclaim ⇒ proportionally more
+   closes) was built first and only **delays** the failure — ETH 15m moved
+   16:15 → 18:45 and still died before the real move. A reclaim that holds six
+   hours satisfies any inflated bar. Depth has to gate, not postpone.
+2. Gating the pivot loop alone is not enough: the **live-edge re-run**
+   (`choch_fail_live_edge`) is the same pending-fail path over final state, and
+   an ungated copy there simply becomes the door the shallow-reclaim failure
+   walks through (ETH still died at 16:15). Both sites must carry the gate.
+
+**Why it was rejected.** Live on the full pipeline the gate has **negative**
+discrimination. At `0.5`: 21/36 combos change, +202/−149 events, and of the 31
+failures it removes only **52%** were premature — *below* the 62% base rate —
+while the 58 it keeps run at **67%**, *above* it. It is removing the failures
+that were more often right and keeping the ones that were more often wrong.
+Every threshold 0.3→0.75 shows the same inversion (removed 47-60%, kept 63-67%).
+
+The static 70/40 split did not survive becoming an intervention: it was measured
+on the *baseline* event stream, where each failure is scored in isolation. Once
+the gate is live, blocking one failure rewrites all downstream structure, so the
+population it acts on is no longer the population that was measured. **A static
+correlation over a state machine's output is not evidence about a change to that
+state machine** — the same trap the range cycle-reset measurement avoided by
+running the full pipeline both ways.
+
+It does fix the two cases inspectable by eye — ETH 15m reads `CHoCH ▼ 14:30`
+standing with `trend=bearish` (no `✕`, the whole −3.5% crash being the CHoCH's
+own leg), and ENA 4h flips bearish → bullish, correctly (its 0.08605 bullish
+CHoCH rallied to 0.09325; the 07-25 "failure" was a dip to 0.08402 that
+recovered, so the baseline's failure was the wrong one). But two eyeballed wins
+against 21 combos of unmeasured churn is faith, not evidence. Kept in the code,
+default `None`, byte-for-byte identical off — revisit only with an outcome
+metric that survives the cascade.
+
 ### Failed-CHoCH re-activation (`choch_failed_rearm`, 2026-07-16)
 
 **Motivating case (MUUSDT H4, a new listing):** two bearish CHoCHs cancelled

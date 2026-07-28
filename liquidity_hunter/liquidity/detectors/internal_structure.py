@@ -551,6 +551,34 @@ class InternalStructureDetector(MarketStructureDetector):
     at the reclaimed level. With `False` the output is byte-for-byte
     identical.
 
+    `choch_pending_fail_min_recovery_frac` (default `None` = off) adds a
+    **depth** requirement to that pending-fail path, which is otherwise purely
+    a *time* rule: six closes a hair above the broken level kill the reversal
+    exactly as fast as six closes that gave the whole move back. But a
+    retracement into the counter-zone is ordinary behavior, not an
+    invalidation -- the same distinction
+    `choch_fizzle_reclaim_origin_buffer_atr` already draws for the (merely
+    cosmetic) fizzle marker, which demands the reclaim recover the leg
+    *origin*. The stronger consequence had the weaker gate.
+
+    When set, the reclaim must have retraced at least this fraction of the way
+    from the broken level back to the CHoCH's **origin** (the swing the
+    reversal launched from) before the pending-fail path may fire:
+    `frac = (peak - level) / (origin - level)` for a bearish CHoCH (mirrored
+    for bullish), where `peak` is the reclaim's extreme over the CHoCH's whole
+    life. The value sits on a continuum between the two pre-existing exits --
+    `0` is today's bare level, `1` is the far origin reclaim the normal
+    `CHOCH_FAILED` already waits for -- so it *narrows* the pending-fail
+    shortcut rather than removing it. A shallow reclaim no longer kills the
+    reversal early, but a deep one still does, well before the origin: the
+    stale-trend cases the shortcut exists for keep an exit.
+
+    Scoped to the structural pending-fail path only -- origin reclaims and
+    weak-level reclaims are the escape valves and are never hardened
+    (mirroring the barrier rule above) -- and skipped when no origin is armed
+    or the origin sits on the wrong side of the level. With `None` the output
+    is byte-for-byte identical.
+
     `bos_leg_origin_min_pullback_atr` (default `None` = off; requires
     `bos_leg_origin_choch_ref`) is the **shallow-pullback leg-origin
     promotion**. The leg origin a BOS promotes to the opposite CHoCH reference
@@ -786,6 +814,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_weak_ref_fail_at_broken_level: bool = False,
         choch_pending_fail_at_broken_level: bool = False,
         choch_pending_fail_persistence_candles: int | None = None,
+        choch_pending_fail_min_recovery_frac: float | None = None,
         choch_fizzle_reclaim_candles: int | None = None,
         choch_fizzle_reclaim_origin_buffer_atr: float | None = None,
         choch_failed_fallback_suppress_candles: int | None = None,
@@ -831,6 +860,12 @@ class InternalStructureDetector(MarketStructureDetector):
         ):
             raise ValueError(
                 "choch_pending_fail_persistence_candles must be at least 1"
+            )
+        if choch_pending_fail_min_recovery_frac is not None and not (
+            0 < choch_pending_fail_min_recovery_frac <= 1
+        ):
+            raise ValueError(
+                "choch_pending_fail_min_recovery_frac must be in (0, 1]"
             )
         if choch_fizzle_reclaim_candles is not None and choch_fizzle_reclaim_candles < 1:
             raise ValueError("choch_fizzle_reclaim_candles must be at least 1")
@@ -912,6 +947,9 @@ class InternalStructureDetector(MarketStructureDetector):
         self._choch_pending_fail_persistence_candles = (
             choch_pending_fail_persistence_candles
         )
+        self._choch_pending_fail_min_recovery_frac = (
+            choch_pending_fail_min_recovery_frac
+        )
         self._choch_fizzle_reclaim_candles = choch_fizzle_reclaim_candles
         self._choch_fizzle_reclaim_origin_buffer_atr = (
             choch_fizzle_reclaim_origin_buffer_atr
@@ -937,6 +975,47 @@ class InternalStructureDetector(MarketStructureDetector):
         # never mutating it), and it resolves CHOCH_FAILED correctly (the
         # trend reverts on failure). NEUTRAL until `detect()` runs.
         self.final_trend: MarketDirection = MarketDirection.NEUTRAL
+
+    def _pending_fail_recovery_ok(
+        self,
+        candles: Sequence[Candle],
+        start: int,
+        end: int,
+        *,
+        level: float,
+        origin: float | None,
+        bullish_reclaim: bool,
+    ) -> bool:
+        """Has the reclaim retraced deep enough to invalidate a pending CHoCH?
+
+        See `choch_pending_fail_min_recovery_frac`. Measures the reclaim's
+        extreme over `[start, end]` -- the sustained-break run that is about to
+        fail the CHoCH, *not* the CHoCH's whole life -- as a fraction of the
+        distance from the broken `level` back to the `origin` the reversal
+        launched from. The run window is the discriminating one: measured over
+        the whole life price has had time to drift back and the fraction stops
+        separating a retracement from an invalidation (58% vs a 62% base rate,
+        against 70/40 for the run window). Returns `True` (no opinion)
+        whenever the gate is off or the measurement is unavailable -- no origin
+        armed, an origin on the wrong side of the level, or an empty window --
+        so the caller never has to special-case it.
+        """
+        min_frac = self._choch_pending_fail_min_recovery_frac
+        if min_frac is None or origin is None or start > end:
+            return True
+        span = (origin - level) if bullish_reclaim else (level - origin)
+        if span <= 0:
+            return True
+        window = candles[start : end + 1]
+        if not window:
+            return True
+        peak = (
+            max(c.high for c in window)
+            if bullish_reclaim
+            else min(c.low for c in window)
+        )
+        recovered = ((peak - level) if bullish_reclaim else (level - peak)) / span
+        return recovered >= min_frac
 
     def detect(
         self,
@@ -2101,6 +2180,7 @@ class InternalStructureDetector(MarketStructureDetector):
                 # persistence. Origin reclaims and weak-level reclaims keep
                 # the base (the escape valve is never hardened).
                 bear_fail_persistence = self._persistence_candles
+                bear_pending_fail_ok = True
                 if (
                     bear_fail_pivot is not None
                     and bear_fail_pivot is bear_choch_fail_ref
@@ -2108,8 +2188,45 @@ class InternalStructureDetector(MarketStructureDetector):
                     and self._choch_pending_fail_persistence_candles is not None
                 ):
                     bear_fail_persistence = self._choch_pending_fail_persistence_candles
+                    # ...and the reclaim must also have retraced deep enough to
+                    # be an invalidation rather than an ordinary pullback into
+                    # the counter-zone (see
+                    # `choch_pending_fail_min_recovery_frac`). Measured over the
+                    # CHoCH's whole life, not just this pivot window.
+                    if (
+                        self._choch_pending_fail_min_recovery_frac is not None
+                        and bear_fail_scan_start <= current_index
+                        and confirms_break(
+                            bear_fail_scan_start,
+                            current_index,
+                            bear_fail_pivot.price,
+                            bullish=True,
+                            persistence=bear_fail_persistence,
+                        )
+                    ):
+                        _bi = find_sustained_break_index(
+                            candles,
+                            bear_fail_scan_start,
+                            current_index,
+                            bear_fail_pivot.price,
+                            bullish=True,
+                            persistence_candles=bear_fail_persistence,
+                        )
+                        bear_pending_fail_ok = self._pending_fail_recovery_ok(
+                            candles,
+                            _bi,
+                            min(_bi + bear_fail_persistence - 1, current_index),
+                            level=bear_fail_pivot.price,
+                            origin=(
+                                bear_choch_origin.price
+                                if bear_choch_origin is not None
+                                else None
+                            ),
+                            bullish_reclaim=True,
+                        )
                 if (
-                    trend is MarketDirection.BEARISH
+                    bear_pending_fail_ok
+                    and trend is MarketDirection.BEARISH
                     and bear_fail_pivot is not None
                     and price > bear_fail_pivot.price
                     and bear_fail_scan_start <= current_index
@@ -3165,6 +3282,7 @@ class InternalStructureDetector(MarketStructureDetector):
                 # pending-fail path) uses its own persistence; origin and
                 # weak-level reclaims keep the base.
                 bull_fail_persistence = self._persistence_candles
+                bull_pending_fail_ok = True
                 if (
                     bull_fail_pivot is not None
                     and bull_fail_pivot is bull_choch_fail_ref
@@ -3172,8 +3290,41 @@ class InternalStructureDetector(MarketStructureDetector):
                     and self._choch_pending_fail_persistence_candles is not None
                 ):
                     bull_fail_persistence = self._choch_pending_fail_persistence_candles
+                    # Mirror of the bearish case: the reclaim must also be deep.
+                    if (
+                        self._choch_pending_fail_min_recovery_frac is not None
+                        and bull_fail_scan_start <= current_index
+                        and confirms_break(
+                            bull_fail_scan_start,
+                            current_index,
+                            bull_fail_pivot.price,
+                            bullish=False,
+                            persistence=bull_fail_persistence,
+                        )
+                    ):
+                        _bi = find_sustained_break_index(
+                            candles,
+                            bull_fail_scan_start,
+                            current_index,
+                            bull_fail_pivot.price,
+                            bullish=False,
+                            persistence_candles=bull_fail_persistence,
+                        )
+                        bull_pending_fail_ok = self._pending_fail_recovery_ok(
+                            candles,
+                            _bi,
+                            min(_bi + bull_fail_persistence - 1, current_index),
+                            level=bull_fail_pivot.price,
+                            origin=(
+                                bull_choch_origin.price
+                                if bull_choch_origin is not None
+                                else None
+                            ),
+                            bullish_reclaim=False,
+                        )
                 if (
-                    trend is MarketDirection.BULLISH
+                    bull_pending_fail_ok
+                    and trend is MarketDirection.BULLISH
                     and bull_fail_pivot is not None
                     and price < bull_fail_pivot.price
                     and bull_fail_scan_start <= current_index
@@ -3887,6 +4038,7 @@ class InternalStructureDetector(MarketStructureDetector):
         live_edge_fail = False
         if self._choch_fail_live_edge and candles:
             last_index = len(candles) - 1
+            le_pending_fail_ok = True
             if trend is MarketDirection.BULLISH:
                 le_fail_pivot = (
                     bull_choch_fail_ref
@@ -3915,9 +4067,43 @@ class InternalStructureDetector(MarketStructureDetector):
                     and self._choch_pending_fail_persistence_candles is not None
                 ):
                     le_fail_persistence = self._choch_pending_fail_persistence_candles
+                    # Mirror of the bearish live-edge case: gate on depth too.
+                    _les = bull_choch_arm_index + 1
+                    if (
+                        self._choch_pending_fail_min_recovery_frac is not None
+                        and _les <= last_index
+                        and confirms_break(
+                            _les,
+                            last_index,
+                            le_fail_pivot.price,
+                            bullish=False,
+                            persistence=le_fail_persistence,
+                        )
+                    ):
+                        _bi = find_sustained_break_index(
+                            candles,
+                            _les,
+                            last_index,
+                            le_fail_pivot.price,
+                            bullish=False,
+                            persistence_candles=le_fail_persistence,
+                        )
+                        le_pending_fail_ok = self._pending_fail_recovery_ok(
+                            candles,
+                            _bi,
+                            min(_bi + le_fail_persistence - 1, last_index),
+                            level=le_fail_pivot.price,
+                            origin=(
+                                bull_choch_origin.price
+                                if bull_choch_origin is not None
+                                else None
+                            ),
+                            bullish_reclaim=False,
+                        )
                 le_scan_start = bull_choch_arm_index + 1
                 if (
-                    le_fail_pivot is not None
+                    le_pending_fail_ok
+                    and le_fail_pivot is not None
                     and le_scan_start <= last_index
                     and confirms_break(
                         le_scan_start,
@@ -3974,9 +4160,47 @@ class InternalStructureDetector(MarketStructureDetector):
                     and self._choch_pending_fail_persistence_candles is not None
                 ):
                     le_fail_persistence = self._choch_pending_fail_persistence_candles
+                    # The depth gate applies to the live-edge re-run too: it is
+                    # the same pending-fail path over final state, and leaving
+                    # it ungated just moves the shallow-reclaim failure to this
+                    # door (measured -- ETH 15m still died at 16:15 with the
+                    # pivot-loop gate alone).
+                    _les = bear_choch_arm_index + 1
+                    if (
+                        self._choch_pending_fail_min_recovery_frac is not None
+                        and _les <= last_index
+                        and confirms_break(
+                            _les,
+                            last_index,
+                            le_fail_pivot.price,
+                            bullish=True,
+                            persistence=le_fail_persistence,
+                        )
+                    ):
+                        _bi = find_sustained_break_index(
+                            candles,
+                            _les,
+                            last_index,
+                            le_fail_pivot.price,
+                            bullish=True,
+                            persistence_candles=le_fail_persistence,
+                        )
+                        le_pending_fail_ok = self._pending_fail_recovery_ok(
+                            candles,
+                            _bi,
+                            min(_bi + le_fail_persistence - 1, last_index),
+                            level=le_fail_pivot.price,
+                            origin=(
+                                bear_choch_origin.price
+                                if bear_choch_origin is not None
+                                else None
+                            ),
+                            bullish_reclaim=True,
+                        )
                 le_scan_start = bear_choch_arm_index + 1
                 if (
-                    le_fail_pivot is not None
+                    le_pending_fail_ok
+                    and le_fail_pivot is not None
                     and le_scan_start <= last_index
                     and confirms_break(
                         le_scan_start,

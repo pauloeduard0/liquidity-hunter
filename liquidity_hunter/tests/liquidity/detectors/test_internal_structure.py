@@ -2439,6 +2439,72 @@ def test_invalid_choch_pending_fail_persistence_raises() -> None:
         InternalStructureDetector(choch_pending_fail_persistence_candles=0)
 
 
+@pytest.mark.parametrize("frac", [0.0, -0.1, 1.5])
+def test_invalid_choch_pending_fail_min_recovery_frac_raises(frac: float) -> None:
+    with pytest.raises(ValueError, match="choch_pending_fail_min_recovery_frac"):
+        InternalStructureDetector(choch_pending_fail_min_recovery_frac=frac)
+
+
+def test_pending_fail_min_recovery_frac_defers_shallow_reclaim() -> None:
+    """A shallow reclaim of the broken level no longer fails a pending CHoCH.
+
+    The gate is wired OFF in production (measured and rejected -- see
+    `docs/structure_decisions.md`), so this covers the machinery rather than a
+    production behavior: with the same series, demanding that the reclaim
+    retrace most of the way back to the CHoCH's origin must remove at least one
+    `CHOCH_FAILED` that the ungated detector emits, and must never invent one.
+    """
+    rows = json.loads(
+        (Path(__file__).parent / "data" / "ethusdt_15m_2026_07_27_choch_refire.json").read_text()
+    )
+    candles = [
+        Candle(
+            symbol="ETHUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=row[5],
+            taker_buy_volume=row[6],
+        )
+        for row in rows
+    ]
+
+    def build(frac: float | None) -> InternalStructureDetector:
+        return InternalStructureDetector(
+            swing_lookback=5,
+            persistence_candles=2,
+            confluence_filter=False,
+            choch_pending_fail_at_broken_level=True,
+            choch_pending_fail_persistence_candles=6,
+            choch_pending_fail_min_recovery_frac=frac,
+        )
+
+    def failures(events: list[MarketStructure]) -> set[datetime]:
+        return {
+            e.timestamp
+            for e in events
+            if e.event is StructureEvent.CHOCH_FAILED and not e.provisional
+        }
+
+    ungated = failures(build(None).detect(candles))
+    gated = failures(build(0.9).detect(candles))
+
+    # The 2026-07-27 14:30 bearish CHoCH (level 1935.29, origin 1982.00) is
+    # reclaimed only to 1954.48 -- 41% of the way back -- so the gate defers its
+    # failure while the ungated detector emits it.
+    shallow = datetime(2026, 7, 27, 16, 15, tzinfo=UTC)
+    assert shallow in ungated, "fixture no longer produces the shallow-reclaim failure"
+    assert shallow not in gated, "the depth gate did not defer the shallow reclaim"
+    assert len(gated) < len(ungated)
+    # Deferring a failure rewrites downstream structure, so the gated run is not
+    # a subset -- it re-times some failures rather than only dropping them. That
+    # cascade is exactly why the static measurement did not survive the
+    # intervention (see `docs/structure_decisions.md`).
+
+
 def test_confirmed_trend_barrier_reclassifies_stop_hunt_reversal() -> None:
     """A single unsustained break against a *confirmed* trend must not flip
     it: the 06-18 premature bearish CHoCH and its 06-20 CHOCH_FAILED are

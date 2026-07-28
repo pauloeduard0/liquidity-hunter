@@ -469,6 +469,35 @@ _CHOCH_FIZZLE_RECLAIM_ORIGIN_BUFFER_ATR: float | None = 1.0
 _CHOCH_PENDING_FAIL_AT_BROKEN_LEVEL = True
 _CHOCH_PENDING_FAIL_PERSISTENCE: int | None = 6
 
+# Depth-scaled pending-fail persistence
+# (`InternalStructureDetector.choch_pending_fail_depth_full_frac` +
+# `choch_pending_fail_depth_max_scale`). The persistence above is a pure *time*
+# rule: six closes a hair above the broken level kill the reversal exactly as
+# fast as six closes that gave the whole move back. But a retracement into the
+# counter-zone is ordinary behavior -- the same distinction
+# `_CHOCH_FIZZLE_RECLAIM_ORIGIN_BUFFER_ATR` already draws for the merely
+# cosmetic fizzle marker, while the path that actually flips the trend had no
+# depth requirement at all. Measured 2026-07-27 (BTC/ETH/SOL/NEAR/AAVE/ENA x
+# 5m..1d): across 89 structural pending-fail failures the reclaim's median
+# recovery toward the CHoCH origin is just **37%**, and 56/89 do not reach half
+# way; failures whose reclaim recovered < 60% saw the CHoCH direction resume
+# within 40 candles 70% of the time (the failure was wrong), against 40% for
+# those at/above 60%. The motivating ETHUSDT 15m 2026-07-27 case recovered 41%
+# (level 1935.29, origin 1982.00, reclaim high 1954.48) and was followed by a
+# -3.5% continuation of the CHoCH's own direction.
+# The gate sits on a continuum between the two pre-existing exits: 0 is today's
+# bare level, 1 is the far origin reclaim the normal CHOCH_FAILED already waits
+# for. So it narrows the shortcut rather than removing it -- a deep reclaim
+# still fails the CHoCH well before the origin, which is what keeps the
+# stale-trend cases the shortcut exists for (the AAVEUSDT H1 +14% rally read as
+# sweeps: that rally ran all the way to the 97.4 origin, so it clears any
+# fraction of the 87.90 -> 97.4 span long before then).
+# A persistence-scaling variant was built first and measured: it only *delays*
+# the failure (ETH 15m moved 16:15 -> 18:45 and still died before the real
+# move), since a reclaim that holds six hours satisfies any inflated bar. Depth
+# has to gate, not merely postpone.
+_CHOCH_PENDING_FAIL_MIN_RECOVERY_FRAC: float | None = None
+
 # Weak-referenced CHoCH invalidation at the broken level itself
 # (`InternalStructureDetector.choch_weak_ref_fail_at_broken_level`). A CHoCH
 # fired against a *weak* reference (a synthetic re-anchor level or the
@@ -1711,6 +1740,7 @@ def _build_internal_detector(
         # _CHOCH_PENDING_FAIL_AT_BROKEN_LEVEL.
         choch_pending_fail_at_broken_level=_CHOCH_PENDING_FAIL_AT_BROKEN_LEVEL,
         choch_pending_fail_persistence_candles=_CHOCH_PENDING_FAIL_PERSISTENCE,
+        choch_pending_fail_min_recovery_frac=_CHOCH_PENDING_FAIL_MIN_RECOVERY_FRAC,
         # A pending BOS discarded without emitting -- a phantom advance whose
         # confirming pullback came in too deep (below the prior BOS's confirming
         # pullback but still above the leg origin, so it neither emits nor
