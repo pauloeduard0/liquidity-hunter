@@ -60,6 +60,10 @@ import {
   SUPERTREND_LINE_WIDTH,
   SUPERTREND_STOP_RUN_COLOR,
   SUPERTREND_UP_COLOR,
+  VP_BAR_MAX_PX,
+  VP_BAR_MIN_PX,
+  VP_MAX_LENGTH_BARS,
+  VP_RIGHT_MARGIN,
   VWAP_ANCHORED_COLORS,
   VWAP_ANCHORED_LINE_WIDTH,
   VWAP_BAND_1_COLOR,
@@ -182,11 +186,42 @@ const RESET_BAR_SPACING_PX = 8
 const RESET_RIGHT_MARGIN_BARS = 6
 const RESET_MIN_BARS = 60
 
+/**
+ * Keeps an overlay out of the price scale's autoscale.
+ *
+ * The candles are what the scale should frame. An annotation drawn at an old
+ * level — a structure line with no terminating event still running to the right
+ * edge, a swept pool, a band segment — has data points inside the visible
+ * window at a price far from it, and autoscale obediently zooms out to include
+ * them: on ETH 1H a June reference near 1712 opened the chart with the whole
+ * price action squeezed into a third of the pane. Overlays annotate the frame;
+ * they no longer set it.
+ */
+const OVERLAY_SCALE_EXEMPT = { autoscaleInfoProvider: () => null }
+
+/**
+ * How many bar-widths the volume profile occupies on the right of the pane.
+ * Mirrors `VolumeProfilePrimitive`'s own length formula (bar units, bounded in
+ * pixels) so the space the chart reserves is exactly the space the histogram
+ * takes — otherwise the profile paints over the most recent candles.
+ */
+function volumeProfileReservedBars(barSpacing: number): number {
+  if (barSpacing <= 0) return 0
+  const widthPx =
+    Math.min(Math.max(VP_MAX_LENGTH_BARS * barSpacing, VP_BAR_MIN_PX), VP_BAR_MAX_PX) +
+    VP_RIGHT_MARGIN
+  return Math.ceil(widthPx / barSpacing)
+}
+
 /** Logical range for the opening view of a series with `count` candles. */
-function resetViewRange(count: number, paneWidthPx: number): { from: number; to: number } {
+function resetViewRange(
+  count: number,
+  paneWidthPx: number,
+  reservedBars = 0,
+): { from: number; to: number } {
   const fitsOnScreen = paneWidthPx > 0 ? Math.floor(paneWidthPx / RESET_BAR_SPACING_PX) : count
-  const visible = Math.min(count, Math.max(RESET_MIN_BARS, fitsOnScreen))
-  return { from: count - visible, to: count - 1 + RESET_RIGHT_MARGIN_BARS }
+  const visible = Math.min(count, Math.max(RESET_MIN_BARS, fitsOnScreen - reservedBars))
+  return { from: count - visible, to: count - 1 + RESET_RIGHT_MARGIN_BARS + reservedBars }
 }
 
 function computeRSI(closes: number[], period: number): (number | null)[] {
@@ -1243,6 +1278,29 @@ export function MainChart({
     }
   }, [])
 
+  // Toggling the volume profile on/off after mount: slide the visible window so
+  // the histogram gets its own strip on the right instead of painting over the
+  // most recent candles (and hand the space back when it is turned off).
+  const vpReservedRef = useRef(0)
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const timeScale = chart.timeScale()
+    const range = timeScale.getVisibleLogicalRange()
+    if (!range) return
+    // Before the opening view is set, the bar width is still the library's
+    // default -- measure against the width the reset view will land on, so the
+    // space booked here and the space booked there are the same.
+    const barSpacing = hasFittedRef.current
+      ? timeScale.options().barSpacing
+      : RESET_BAR_SPACING_PX
+    const reserved = showVolumeProfile ? volumeProfileReservedBars(barSpacing) : 0
+    const delta = reserved - vpReservedRef.current
+    vpReservedRef.current = reserved
+    if (delta === 0 || !hasFittedRef.current) return
+    timeScale.setVisibleLogicalRange({ from: range.from + delta, to: range.to + delta })
+  }, [showVolumeProfile])
+
   // Toggle the volume-delta / RSI panes: give the main pane the full height and
   // move the visible time axis onto it while minimized, restore the split when open.
   useEffect(() => {
@@ -1503,6 +1561,7 @@ export function MainChart({
       const endTime = toChartTime(endCandle.timestamp)
 
       const divSeries = chart.addSeries(LineSeries, {
+        ...OVERLAY_SCALE_EXEMPT,
         color,
         lineWidth: 2,
         lineStyle: LineStyle.Dashed,
@@ -1599,6 +1658,7 @@ export function MainChart({
         const endTime = zone.invalidated_at ? toChartTime(zone.invalidated_at) : lastCandleTime
 
         const sweptSeries = chart.addSeries(LineSeries, {
+        ...OVERLAY_SCALE_EXEMPT,
           color: color + '4d',
           lineWidth: 1,
           lineStyle: LineStyle.Dotted,
@@ -1799,6 +1859,7 @@ export function MainChart({
       if (!fizzleMarker) {
         const isSweep = event.event === 'liquidity_sweep'
         const structureSeries = chart.addSeries(LineSeries, {
+        ...OVERLAY_SCALE_EXEMPT,
           color: lineColor,
           lineWidth: isSweep ? 2 : 1,
           lineStyle: isSweep
@@ -1913,6 +1974,7 @@ export function MainChart({
         : []) as readonly (readonly [{ time: Time; value: number }[], string])[]) {
         if (points.length === 0) continue
         const bandSeries = chart.addSeries(LineSeries, {
+        ...OVERLAY_SCALE_EXEMPT,
           color,
           lineWidth: 1,
           lineStyle: LineStyle.Dotted,
@@ -1924,6 +1986,7 @@ export function MainChart({
         overlaySeriesRef.current.push(bandSeries)
       }
       const vwapSeries = chart.addSeries(LineSeries, {
+        ...OVERLAY_SCALE_EXEMPT,
         color: VWAP_COLOR,
         lineWidth: VWAP_LINE_WIDTH,
         lastValueVisible: false,
@@ -1943,6 +2006,7 @@ export function MainChart({
       const color = VWAP_ANCHORED_COLORS[index % VWAP_ANCHORED_COLORS.length]
       for (const segment of buildVwapSegments(series)) {
         const anchoredSeries = chart.addSeries(LineSeries, {
+        ...OVERLAY_SCALE_EXEMPT,
           color,
           lineWidth: VWAP_ANCHORED_LINE_WIDTH,
           lineStyle: LineStyle.Dashed,
@@ -1963,6 +2027,7 @@ export function MainChart({
     // down with the rest of the overlays on the next render.
     for (const segment of showSupertrend ? buildSupertrendSegments(data.supertrend ?? []) : []) {
       const stSeries = chart.addSeries(LineSeries, {
+        ...OVERLAY_SCALE_EXEMPT,
         color: segment.direction === 'bullish' ? SUPERTREND_UP_COLOR : SUPERTREND_DOWN_COLOR,
         lineWidth: SUPERTREND_LINE_WIDTH,
         lastValueVisible: false,
@@ -1978,6 +2043,7 @@ export function MainChart({
     const stopRuns = showSupertrend ? (data.supertrend_breaks ?? []) : []
     for (const run of buildStopRunSegments(stopRuns)) {
       const runSeries = chart.addSeries(LineSeries, {
+        ...OVERLAY_SCALE_EXEMPT,
         color: SUPERTREND_STOP_RUN_COLOR,
         lineWidth: 2,
         lineStyle: LineStyle.Dashed,
@@ -2178,7 +2244,11 @@ export function MainChart({
     rangeBoxesPrimitiveRef.current?.setCandles(labelCandles)
 
     if (!hasFittedRef.current) {
-      const range = resetViewRange(data.candles.length, mainContainerRef.current?.clientWidth ?? 0)
+      const range = resetViewRange(
+        data.candles.length,
+        mainContainerRef.current?.clientWidth ?? 0,
+        profile ? volumeProfileReservedBars(RESET_BAR_SPACING_PX) : 0,
+      )
       chart.timeScale().setVisibleLogicalRange(range)
       deltaChart.timeScale().setVisibleLogicalRange(range)
       controlChartRef.current?.timeScale().setVisibleLogicalRange(range)
