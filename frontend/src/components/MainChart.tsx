@@ -567,6 +567,16 @@ function selectVisiblePoiZones(
 // would draw a jump nobody paid — so the points are split on their
 // `anchor_timestamp` and each run becomes its own series, the same break-on-
 // discontinuity treatment the Supertrend flip gets below.
+/**
+ * How much of the periodic VWAP is drawn. The average itself is the reading —
+ * the break-even of everyone who entered since the anchor — while the ±1σ/±2σ
+ * bands only describe how widely that volume was spread. On a pane already
+ * carrying the structure staircase, POI boxes and liquidation pools, four
+ * dotted band lines cost more attention than they return, so they sit behind a
+ * third press of the button rather than coming along with the line.
+ */
+export type VwapMode = 'off' | 'line' | 'bands'
+
 interface VwapSegment {
   value: { time: Time; value: number }[]
   upper1: { time: Time; value: number }[]
@@ -851,7 +861,7 @@ interface MainChartProps {
   showVolume?: boolean
   showRsiDivergence?: boolean
   showSupertrend?: boolean
-  showVwap?: boolean
+  vwapMode?: VwapMode
   showAnchoredVwap?: boolean
   showVolumeProfile?: boolean
   volumeProfileMode?: VolumeProfileMode
@@ -877,7 +887,7 @@ export function MainChart({
   showVolume = true,
   showRsiDivergence = false,
   showSupertrend = false,
-  showVwap = false,
+  vwapMode = 'off',
   showAnchoredVwap = false,
   showVolumeProfile = false,
   volumeProfileMode = 'value-area',
@@ -1891,14 +1901,16 @@ export function MainChart({
     // VWAP: what the tape paid, not where it went. The session line restarts
     // each UTC day (one series per accumulation, see `buildVwapSegments`); its
     // ±1σ/±2σ bands are how widely that day's volume was spread, drawn thin so
-    // the average itself stays the reading.
-    for (const segment of showVwap ? buildVwapSegments(data.vwap) : []) {
-      for (const [points, color] of [
-        [segment.upper2, VWAP_BAND_2_COLOR],
-        [segment.lower2, VWAP_BAND_2_COLOR],
-        [segment.upper1, VWAP_BAND_1_COLOR],
-        [segment.lower1, VWAP_BAND_1_COLOR],
-      ] as const) {
+    // the average itself stays the reading — and only in the `bands` mode.
+    for (const segment of vwapMode === 'off' ? [] : buildVwapSegments(data.vwap)) {
+      for (const [points, color] of (vwapMode === 'bands'
+        ? [
+            [segment.upper2, VWAP_BAND_2_COLOR],
+            [segment.lower2, VWAP_BAND_2_COLOR],
+            [segment.upper1, VWAP_BAND_1_COLOR],
+            [segment.lower1, VWAP_BAND_1_COLOR],
+          ]
+        : []) as readonly (readonly [{ time: Time; value: number }[], string])[]) {
         if (points.length === 0) continue
         const bandSeries = chart.addSeries(LineSeries, {
           color,
@@ -2174,7 +2186,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, showVwap, showAnchoredVwap, showVolumeProfile, volumeProfileMode])
+  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode])
 
   // Incremental live-price update: the forming candle, and the fixed-reference
   // series derived from it, refreshed in place on every poll. This runs on the

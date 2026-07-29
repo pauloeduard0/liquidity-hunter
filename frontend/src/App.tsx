@@ -5,6 +5,7 @@ import { BehaviorDivergencePanel } from './components/BehaviorDivergencePanel'
 import { KpiRow } from './components/KpiRow'
 import { Logo } from './components/Logo'
 import { MainChart } from './components/MainChart'
+import type { VwapMode } from './components/MainChart'
 import { ManipulationCyclesPanel } from './components/ManipulationCyclesPanel'
 import { MultiTimeframePanel } from './components/MultiTimeframePanel'
 import { NarrativePanel } from './components/NarrativePanel'
@@ -61,6 +62,13 @@ const TIMEFRAME_OPTIONS: { value: TimeFrame; label: string }[] = [
   { value: '1d', label: '1D' },
   { value: '1w', label: '1W' },
 ]
+
+// The `⌀ VWAP` button's plain click walks this cycle; see `vwapMode` below.
+const VWAP_MODE_CYCLE: Record<VwapMode, VwapMode> = {
+  off: 'line',
+  line: 'bands',
+  bands: 'off',
+}
 
 function LoadingSkeleton() {
   return (
@@ -145,7 +153,11 @@ function App() {
   const [volumeVisible, setVolumeVisible] = useState(true)
   const [rsiDivVisible, setRsiDivVisible] = useState(false)
   const [supertrendVisible, setSupertrendVisible] = useState(false)
-  const [vwapVisible, setVwapVisible] = useState(false)
+  // The periodic VWAP cycles through three states on plain click: off → the
+  // average alone → the average plus its ±1σ/±2σ bands. The line is the
+  // reading (a population's break-even); the bands are dispersion, worth a
+  // deliberate third press rather than riding along by default.
+  const [vwapMode, setVwapMode] = useState<VwapMode>('off')
   // Anchored VWAPs (the CHoCH / sweep break-evens) ride the same button
   // under a modifier, like the volume profile's delta mode.
   const [anchoredVwapVisible, setAnchoredVwapVisible] = useState(false)
@@ -572,16 +584,16 @@ function App() {
                         // crowd from the last CHoCH/sweep paid); plain click
                         // toggles the session line.
                         if (e.altKey || e.shiftKey) setAnchoredVwapVisible((v) => !v)
-                        else setVwapVisible((v) => !v)
+                        else setVwapMode((m) => VWAP_MODE_CYCLE[m])
                       }}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        vwapVisible || anchoredVwapVisible
+                        vwapMode !== 'off' || anchoredVwapVisible
                           ? 'bg-[#e0a13a22] text-[#e0a13a]'
                           : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
                       }`}
-                      title="Click: toggle the session VWAP (average price paid today, ±1σ/±2σ bands) · Alt/Shift-click: anchored VWAPs from the last CHoCH and sweep (that crowd's break-even)"
+                      title="Click: cycle the periodic VWAP — off → line (the average price paid since the anchor) → line + ±1σ/±2σ bands · Alt/Shift-click: anchored VWAPs from the last CHoCH and sweep (that crowd's break-even)"
                     >
-                      ⌀ VWAP{anchoredVwapVisible ? ' ⚓' : ''}
+                      ⌀ VWAP{vwapMode === 'bands' ? ' σ' : ''}{anchoredVwapVisible ? ' ⚓' : ''}
                     </button>
                     <button
                       type="button"
@@ -656,7 +668,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} showVwap={vwapVisible} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible} />
                 </div>
               </div>
 

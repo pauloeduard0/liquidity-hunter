@@ -1463,9 +1463,15 @@ selector.
   its ±1σ/±2σ bands as thin dotted lines. Each `data.anchored_vwaps` entry adds
   a dashed cyan/violet line titled `VWAP <label>` (`VWAP CHoCH ▼`, `VWAP
   Sweep ▲`), with `lastValueVisible` on so the price scale carries that crowd's
-  break-even. The `⌀ VWAP` toolbar button in `App.tsx` toggles the periodic line
-  on plain click (`showVwap`, default **off**) and the anchored ones on
-  Alt/Shift-click (`showAnchoredVwap`, shown as `⌀ VWAP ⚓`) — the same modifier
+  break-even. The `⌀ VWAP` toolbar button in `App.tsx` **cycles the periodic
+  VWAP through three states** on plain click (`vwapMode: VwapMode`, default
+  `'off'`, walked by `VWAP_MODE_CYCLE`): `off → line → line + bands → off`,
+  the band state shown as `⌀ VWAP σ`. The average is the reading (a
+  population's break-even); the ±σ bands only describe dispersion, so on a pane
+  already carrying the structure staircase, POI boxes and liquidation pools
+  they sit behind a deliberate third press instead of riding along with the
+  line. Alt/Shift-click still toggles the anchored ones
+  (`showAnchoredVwap`, shown as `⌀ VWAP ⚓`) — the same modifier
   pattern as `▤ VP` and `⊟ Liq`. Colors in `theme.ts` (`VWAP_*`).
 
   **Volume delta pane**: histogram bars colored by candle direction
