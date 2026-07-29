@@ -9,6 +9,7 @@ import { ManipulationCyclesPanel } from './components/ManipulationCyclesPanel'
 import { MultiTimeframePanel } from './components/MultiTimeframePanel'
 import { NarrativePanel } from './components/NarrativePanel'
 import type { DashboardData, MarketOverview, TimeFrame } from './types/dashboard'
+import { isChartBusy } from './utils/chartActivity'
 import { chartTimezoneLabel } from './utils/chartTime'
 import { formatPrice } from './utils/format'
 
@@ -17,6 +18,14 @@ const REFRESH_INTERVAL_MS = 5_000
 // the backend caches each timeframe with a proportional TTL — polling faster
 // than this only re-reads caches.
 const OVERVIEW_REFRESH_INTERVAL_MS = 30_000
+
+// A poll tick worth skipping: applying the snapshot is a synchronous burst, so
+// it is deferred while the user is dragging/zooming the chart (the moment the
+// stutter is felt) and while the tab is hidden (nobody is watching). Both cost
+// at most one interval — the next tick applies whatever is current then.
+function shouldDeferPoll(): boolean {
+  return document.hidden || isChartBusy()
+}
 
 // Snapshots already fetched this session, so switching back to a
 // symbol/timeframe renders instantly from cache (then revalidates on the next
@@ -188,7 +197,8 @@ function App() {
   useEffect(() => {
     let cancelled = false
 
-    const load = () => {
+    const load = (force = false) => {
+      if (!force && shouldDeferPoll()) return
       fetchDashboardData({ symbol, timeframe })
         .then((result) => {
           snapshotCache.set(snapshotKey(symbol, timeframe), result)
@@ -199,12 +209,18 @@ function App() {
         })
     }
 
-    load()
+    load(true)
     const interval = setInterval(load, REFRESH_INTERVAL_MS)
+    // Coming back to the tab shouldn't wait out a full interval on stale data.
+    const onVisible = () => {
+      if (!document.hidden) load(true)
+    }
+    document.addEventListener('visibilitychange', onVisible)
 
     return () => {
       cancelled = true
       clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [symbol, timeframe])
 
@@ -214,7 +230,8 @@ function App() {
 
     let cancelled = false
 
-    const load = () => {
+    const load = (force = false) => {
+      if (!force && shouldDeferPoll()) return
       fetchDashboardData({ symbol, timeframe: chartTimeframe })
         .then((result) => {
           snapshotCache.set(snapshotKey(symbol, chartTimeframe), result)
@@ -225,7 +242,7 @@ function App() {
         })
     }
 
-    load()
+    load(true)
     const interval = setInterval(load, REFRESH_INTERVAL_MS)
 
     return () => {

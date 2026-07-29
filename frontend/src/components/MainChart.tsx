@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import {
   CandlestickSeries,
   ColorType,
@@ -67,6 +67,11 @@ import {
   VWAP_COLOR,
   VWAP_LINE_WIDTH,
 } from '../theme'
+import {
+  markChartDragEnd,
+  markChartDragStart,
+  markChartGesture,
+} from '../utils/chartActivity'
 import { setChartTimezoneMode, toChartTime } from '../utils/chartTime'
 
 const TOP_N_ZONES = 5
@@ -132,6 +137,41 @@ const RSI_PERIOD = 14
 const DIV_PIVOT_LOOKBACK = 5
 const DIV_RANGE_LOWER = 5
 const DIV_RANGE_UPPER = 60
+
+// Series that only ever grow (or move) at their tail, one point per candle.
+// They are excluded from the redraw signature and collapsed to their length:
+// while a candle is still forming they change on every poll, and redrawing the
+// whole chart for the forming bar's last point is precisely the cost this
+// signature exists to avoid. The forming bar itself is kept current by the
+// incremental `update()` effect below; these lag by at most one candle, since a
+// closed candle changes the length and forces a full redraw.
+const TAIL_SERIES_FIELDS = new Set([
+  'candles',
+  'vwap',
+  'anchored_vwaps',
+  'supertrend',
+  'market_control',
+])
+
+/**
+ * A string that changes exactly when the chart's *drawn* content must be
+ * rebuilt — every structural payload, plus the candle window's shape (length
+ * and end points), but not the forming candle's OHLCV.
+ *
+ * The overlay rebuild (dozens of line series destroyed and recreated, four
+ * panes of `setData`, every primitive refreshed) is the expensive part of a
+ * refresh, and on a 5s poll it almost always redraws an identical picture. The
+ * big effect keys off this instead of the `data` object identity, so a poll
+ * that only advanced the live price does no work beyond the tail update.
+ */
+function drawSignature(data: DashboardData): string {
+  const { candles } = data
+  const shape = `${candles.length}|${candles[0]?.timestamp ?? ''}|${candles[candles.length - 1]?.timestamp ?? ''}`
+  const rest = JSON.stringify(data, (key, value) =>
+    TAIL_SERIES_FIELDS.has(key) ? (Array.isArray(value) ? value.length : value == null ? null : 1) : value,
+  )
+  return `${shape}|${rest}`
+}
 
 function computeRSI(closes: number[], period: number): (number | null)[] {
   const rsi: (number | null)[] = []
@@ -867,6 +907,15 @@ export function MainChart({
   // against the current minimize state. Kept in sync by the effect below.
   const showIndicatorsRef = useRef(showIndicators)
   const showControlRef = useRef(showControlOscillator)
+  // The redraw effect keys off `drawSig`, not `data`, so it reads the latest
+  // snapshot through this ref (fresher than the render that last changed the
+  // signature) instead of closing over a stale prop.
+  const dataRef = useRef(data)
+  const drawSig = useMemo(() => drawSignature(data), [data])
+  // Declared before the redraw effect so it has already landed when that one runs.
+  useEffect(() => {
+    dataRef.current = data
+  }, [data])
 
   useEffect(() => {
     const wrapper = wrapperRef.current
@@ -1108,6 +1157,16 @@ export function MainChart({
       })
     }
 
+    // Tell the pollers when the chart is under the user's hand, so a snapshot
+    // apply never lands mid-drag (see `utils/chartActivity`).
+    const onPointerDown = () => markChartDragStart()
+    const onPointerUp = () => markChartDragEnd()
+    const onWheel = () => markChartGesture()
+    wrapper.addEventListener('pointerdown', onPointerDown)
+    wrapper.addEventListener('wheel', onWheel, { passive: true })
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onPointerUp)
+
     const ro = new ResizeObserver(() => {
       const h = Math.max(wrapper.clientHeight, MIN_TOTAL_HEIGHT)
       const { mainHeight: mh, deltaHeight: dh, controlHeight: ch, rsiHeight: rh } = paneHeights(
@@ -1124,6 +1183,11 @@ export function MainChart({
 
     return () => {
       ro.disconnect()
+      wrapper.removeEventListener('pointerdown', onPointerDown)
+      wrapper.removeEventListener('wheel', onWheel)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointercancel', onPointerUp)
+      markChartDragEnd(0)
       chart.remove()
       deltaChart.remove()
       controlChart.remove()
@@ -1223,6 +1287,7 @@ export function MainChart({
   }, [showIndicators, showControlOscillator])
 
   useEffect(() => {
+    const data = dataRef.current
     const chart = chartRef.current
     const deltaChart = deltaChartRef.current
     const rsiChart = rsiChartRef.current
@@ -2092,7 +2157,76 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [data, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, showVwap, showAnchoredVwap, showVolumeProfile, volumeProfileMode])
+  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, showVwap, showAnchoredVwap, showVolumeProfile, volumeProfileMode])
+
+  // Incremental live-price update: the forming candle, and the fixed-reference
+  // series derived from it, refreshed in place on every poll. This runs on the
+  // `data` identity (i.e. every refresh) and is deliberately cheap — no series
+  // is created or destroyed, and nothing is re-laid-out — so the 5s live tick
+  // costs a handful of `update()` calls instead of a full chart rebuild. The
+  // structural picture is redrawn by the effect above, when `drawSig` changes.
+  useEffect(() => {
+    const series = seriesRef.current
+    const last = data.candles[data.candles.length - 1]
+    if (!series || !last) return
+
+    const time = toChartTime(last.timestamp)
+    series.update({
+      time,
+      open: last.open,
+      high: last.high,
+      low: last.low,
+      close: last.close,
+    })
+
+    if (showVolume) {
+      volumeSeriesRef.current?.update({
+        time,
+        value: last.volume,
+        color: last.close >= last.open ? VOLUME_UP_COLOR : VOLUME_DOWN_COLOR,
+      })
+    }
+
+    const deltaSeries = deltaSeriesRef.current
+    if (deltaSeries) {
+      const vsaSignal =
+        vsaMode === 'off'
+          ? undefined
+          : (data.volume_spread_signals ?? []).find((s) => s.timestamp === last.timestamp)
+      deltaSeries.update({
+        time,
+        value: 2 * last.taker_buy_volume - last.volume,
+        color:
+          (vsaSignal ? VSA_STYLES[vsaSignal.pattern]?.color : undefined) ??
+          (last.close >= last.open ? CANDLE_UP_COLOR : CANDLE_DOWN_COLOR),
+      })
+    }
+
+    const controlSeries = controlSeriesRef.current
+    const controlPoint = data.market_control?.series?.find((p) => p.timestamp === last.timestamp)
+    if (controlSeries && controlPoint) {
+      const controlColor: Record<string, string> = {
+        buyers: CONTROL_BUYERS_COLOR,
+        sellers: CONTROL_SELLERS_COLOR,
+        balanced: CONTROL_BALANCED_COLOR,
+      }
+      controlSeries.update({
+        time,
+        value: controlPoint.control_score,
+        color: controlColor[controlPoint.controller] ?? CONTROL_BALANCED_COLOR,
+      })
+    }
+
+    const rsiSeries = rsiSeriesRef.current
+    if (rsiSeries) {
+      const rsiValues = computeRSI(
+        data.candles.map((c) => c.close),
+        RSI_PERIOD,
+      )
+      const lastRsi = rsiValues[rsiValues.length - 1]
+      if (lastRsi !== null && lastRsi !== undefined) rsiSeries.update({ time, value: lastRsi })
+    }
+  }, [data, showVolume, vsaMode])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">
