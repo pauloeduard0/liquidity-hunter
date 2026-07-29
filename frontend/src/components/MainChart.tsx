@@ -173,6 +173,22 @@ function drawSignature(data: DashboardData): string {
   return `${shape}|${rest}`
 }
 
+// The chart's opening view — what TradingView's "reset chart view" (Alt+R)
+// lands on. `fitContent` is the wrong default here: the window is 1200 candles
+// wide, so fitting it all gives about a pixel per bar and the candles read as a
+// smear. Instead show the most recent stretch at a legible bar width, anchored
+// to the right with a small margin, and let the price scale auto-fit to it.
+const RESET_BAR_SPACING_PX = 8
+const RESET_RIGHT_MARGIN_BARS = 6
+const RESET_MIN_BARS = 60
+
+/** Logical range for the opening view of a series with `count` candles. */
+function resetViewRange(count: number, paneWidthPx: number): { from: number; to: number } {
+  const fitsOnScreen = paneWidthPx > 0 ? Math.floor(paneWidthPx / RESET_BAR_SPACING_PX) : count
+  const visible = Math.min(count, Math.max(RESET_MIN_BARS, fitsOnScreen))
+  return { from: count - visible, to: count - 1 + RESET_RIGHT_MARGIN_BARS }
+}
+
 function computeRSI(closes: number[], period: number): (number | null)[] {
   const rsi: (number | null)[] = []
   if (closes.length < period + 1) {
@@ -2150,10 +2166,11 @@ export function MainChart({
     rangeBoxesPrimitiveRef.current?.setCandles(labelCandles)
 
     if (!hasFittedRef.current) {
-      chart.timeScale().fitContent()
-      deltaChart.timeScale().fitContent()
-      controlChartRef.current?.timeScale().fitContent()
-      rsiChart.timeScale().fitContent()
+      const range = resetViewRange(data.candles.length, mainContainerRef.current?.clientWidth ?? 0)
+      chart.timeScale().setVisibleLogicalRange(range)
+      deltaChart.timeScale().setVisibleLogicalRange(range)
+      controlChartRef.current?.timeScale().setVisibleLogicalRange(range)
+      rsiChart.timeScale().setVisibleLogicalRange(range)
       hasFittedRef.current = true
     }
 
