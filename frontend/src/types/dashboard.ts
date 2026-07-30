@@ -209,6 +209,7 @@ export interface BehaviorDivergence {
   symbol: string
   timeframe: TimeFrame
   timestamp: string
+  window_start: string | null
   divergence_type: DivergenceType
   direction: MarketDirection
   price_level: number

@@ -198,6 +198,9 @@ and `validate_assignment=True`. New entities should follow this pattern.
 - **`BehaviorDivergence`** — an observed divergence between price movement
   and volume delta, defined in `core/domain/behavior_divergence.py`. Detects
   when institutional flow opposes visible price direction. Fields: `timestamp`,
+  `window_start` (first candle of the analysis window — the reading is a window
+  observation, so the span is part of it; `None` if the producer didn't record
+  it),
   `divergence_type` (`DivergenceType`: `DISTRIBUTION`/`ACCUMULATION`/
   `EXHAUSTION`/`ABSORPTION`), `direction` (apparent price direction),
   `price_level`, `volume_delta_avg`, `price_change_pct`, optional zone
@@ -850,8 +853,12 @@ documented in `liquidity_hunter/docs/psychology.md`.
   `list[BehaviorDivergence]` with four divergence types:
   - **Distribution**: price rising + negative VD near a buy-side zone →
     institutional selling into retail buying.
-  - **Accumulation**: price falling + positive VD near a sell-side zone →
-    institutional buying into retail panic.
+  - **Accumulation**: *no longer emitted* (removed 2026-07-29). The falling-price
+    mirror measured **against its own thesis** across 30 live combos — 22% hit
+    rate at 20 candles (mean −0.65%) vs distribution's 83% (+3.39%) on the same
+    sample: aggressive buying absorbed by a falling market is the falling-knife
+    signature, not accumulation. The `DivergenceType` member survives for a
+    producer that can measure it properly (trade-level flow).
   - **Exhaustion**: VD magnitude declining after a BOS while price continues
     trending → move losing momentum.
   - **Absorption**: high volume + small price movement near a zone → large
@@ -860,7 +867,10 @@ documented in `liquidity_hunter/docs/psychology.md`.
   timeframe from `_TIMEFRAME_WINDOW`: M1=20, M5=15, M15=10, M30=7, H1=7,
   H4=5, D1=5, W1=3), `proximity_pct` (default `0.02` = 2%),
   `min_price_change_pct` (default `0.005` = 0.5%), `min_vd_ratio` (default
-  `0.1` = 10% of average volume). Deduplication keeps only the
+  **`0.05`** = 5% of average volume; at the previous `0.1` the distribution
+  layer was effectively off — 3 events across 30 live combos. `proximity_pct`
+  is *not* the binding gate: widening it 0.02 → 0.05 moved the count by one).
+  Deduplication keeps only the
   highest-confidence event per type within a window-sized range.
 
 - **`psychology/analyzers/leverage_liquidation.py`** —
@@ -1419,9 +1429,10 @@ selector.
   the stale-line problem is solved by the staged breakout event that ends
   them at the range's resolution instead.
 
-  **Behavior divergence markers + arcs**: `distribution`/`accumulation`
+  **Behavior divergence markers + arcs**: `distribution`
   divergences draw arrow markers (`buildDivergenceMarkers`,
-  `DIVERGENCE_MARKER_SHAPES`), but `exhaustion`/`absorption` (`DIVERGENCE_ARC_TYPES`)
+  `DIVERGENCE_MARKER_SHAPES`; `accumulation` is no longer emitted, see the
+  analyzer), but `exhaustion`/`absorption` (`DIVERGENCE_ARC_TYPES`)
   are drawn as **curved arcs** instead (`buildDivergenceArcs` →
   `DivergenceArcPrimitive`): a dome above the candle **high** for a top reading,
   a bowl below the candle **low** for a bottom one. The side is resolved per

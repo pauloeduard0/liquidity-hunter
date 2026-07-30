@@ -25,6 +25,14 @@ class BehaviorDivergence(DomainModel):
     symbol: str
     timeframe: TimeFrame
     timestamp: datetime
+    window_start: datetime | None = None
+    """First candle of the analysis window the divergence was measured over.
+
+    The reading is a *window* observation — price moved one way while flow
+    moved the other — so the span is part of it, not decoration.  ``None``
+    when the producer did not record it.
+    """
+
     divergence_type: DivergenceType
     direction: MarketDirection
     price_level: float

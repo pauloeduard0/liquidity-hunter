@@ -140,9 +140,16 @@ class TestDistribution:
 
 
 class TestAccumulation:
-    """Price falling + positive VD near sell-side zone."""
+    """The falling-price mirror is no longer reported.
 
-    def test_accumulation_detected_near_sell_side_zone(self) -> None:
+    Price down + positive VD near a sell-side zone used to emit
+    ``DivergenceType.ACCUMULATION``.  Measured over 30 live combos its forward
+    returns ran against its own thesis (22% hit at 20 candles vs distribution's
+    83%) — it reads the falling-knife signature, not accumulation — so the
+    analyzer stopped emitting it (see ``_detect_zone_divergences``).
+    """
+
+    def test_falling_price_mirror_not_reported(self) -> None:
         zone = _zone(95.0, side=LiquiditySide.SELL_SIDE)
         candles = [
             _candle(0, 100, 101, 99, 99, volume=200, taker_buy_volume=140),
@@ -162,10 +169,7 @@ class TestAccumulation:
         results = analyzer.analyze(candles, vd, [zone], [])
 
         accum = [r for r in results if r.divergence_type == DivergenceType.ACCUMULATION]
-        assert len(accum) >= 1
-        assert accum[0].direction == MarketDirection.BEARISH
-        assert accum[0].nearest_zone_side == LiquiditySide.SELL_SIDE
-        assert accum[0].volume_delta_avg > 0
+        assert accum == []
 
 
 class TestExhaustion:

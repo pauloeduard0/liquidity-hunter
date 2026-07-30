@@ -51,8 +51,12 @@ class BehaviorDivergenceAnalyzer:
         Minimum absolute price change over a window for
         distribution/accumulation detection.
     min_vd_ratio:
-        Minimum ``abs(avg_vd) / avg_volume`` over a window for
-        distribution/accumulation detection.
+        Minimum ``abs(avg_vd) / avg_volume`` over a window for distribution
+        detection.  At the previous ``0.1`` the layer was effectively off —
+        3 events across 30 live combos (BTC/ETH/SOL/NEAR/AAVE × M5→D1);
+        ``0.05`` yields 12 without degrading their forward discrimination
+        (measured 2026-07-29).  ``proximity_pct`` is not the binding gate:
+        widening it 0.02 → 0.05 moved the count by one.
     """
 
     def __init__(
@@ -60,7 +64,7 @@ class BehaviorDivergenceAnalyzer:
         window_size: int | None = None,
         proximity_pct: float = 0.02,
         min_price_change_pct: float = 0.005,
-        min_vd_ratio: float = 0.1,
+        min_vd_ratio: float = 0.05,
     ) -> None:
         self._window_override = window_size
         self._proximity_pct = proximity_pct
@@ -95,7 +99,7 @@ class BehaviorDivergenceAnalyzer:
         return _deduplicate(sorted(results, key=lambda d: d.timestamp), window)
 
     # ------------------------------------------------------------------
-    # Distribution / Accumulation (zone-anchored)
+    # Distribution (zone-anchored)
     # ------------------------------------------------------------------
 
     def _detect_zone_divergences(
@@ -105,9 +109,23 @@ class BehaviorDivergenceAnalyzer:
         zones: list[LiquidityZone],
         window: int,
     ) -> list[BehaviorDivergence]:
+        """Price rose over the window while net taker flow sold, near a
+        buy-side pool — institutional distribution into retail buying.
+
+        The falling-price mirror (``DivergenceType.ACCUMULATION``: price down,
+        flow buying, near a sell-side pool) used to be reported here and was
+        **removed** on 2026-07-29: measured across 30 live combos
+        (BTC/ETH/SOL/NEAR/AAVE × M5→D1, 400 candles), its forward returns ran
+        *against* its own thesis at every threshold and horizon tested — 22%
+        hit rate at 20 candles, mean −0.65%, versus distribution's 83% / +3.39%
+        on the same sample. Aggressive buying absorbed by a falling market is
+        the falling-knife signature (bearish continuation), not accumulation,
+        so the reading was inverted rather than merely weak. The enum member
+        survives for producers that can measure it properly (trade-level flow);
+        this analyzer no longer emits it.
+        """
         active = [z for z in zones if not z.is_mitigated]
         buy_zones = [z for z in active if z.side == LiquiditySide.BUY_SIDE]
-        sell_zones = [z for z in active if z.side == LiquiditySide.SELL_SIDE]
         results: list[BehaviorDivergence] = []
 
         step = max(1, window // 2)
@@ -140,18 +158,16 @@ class BehaviorDivergenceAnalyzer:
             if price_rising == vd_positive:
                 continue
 
-            if price_rising:
-                nearest = self._find_nearest_zone(price_end, buy_zones)
-                if nearest is None:
-                    continue
-                div_type = DivergenceType.DISTRIBUTION
-                direction = MarketDirection.BULLISH
-            else:
-                nearest = self._find_nearest_zone(price_end, sell_zones)
-                if nearest is None:
-                    continue
-                div_type = DivergenceType.ACCUMULATION
-                direction = MarketDirection.BEARISH
+            # Only the rising-price half is reported (see the method's note on
+            # why the falling-price mirror was dropped).
+            if not price_rising:
+                continue
+
+            nearest = self._find_nearest_zone(price_end, buy_zones)
+            if nearest is None:
+                continue
+            div_type = DivergenceType.DISTRIBUTION
+            direction = MarketDirection.BULLISH
 
             zone_mid = (nearest.price_high + nearest.price_low) / 2
             confidence = self._divergence_confidence(
@@ -163,6 +179,7 @@ class BehaviorDivergenceAnalyzer:
                     symbol=candles[0].symbol,
                     timeframe=candles[0].timeframe,
                     timestamp=w_candles[-1].timestamp,
+                    window_start=w_candles[0].timestamp,
                     divergence_type=div_type,
                     direction=direction,
                     price_level=price_end,
@@ -241,6 +258,7 @@ class BehaviorDivergenceAnalyzer:
                     symbol=candles[0].symbol,
                     timeframe=candles[0].timeframe,
                     timestamp=candles[end_idx].timestamp,
+                    window_start=candles[bos_idx].timestamp,
                     divergence_type=DivergenceType.EXHAUSTION,
                     direction=bos.direction,
                     price_level=price_end,
@@ -313,6 +331,7 @@ class BehaviorDivergenceAnalyzer:
                     symbol=candles[0].symbol,
                     timeframe=candles[0].timeframe,
                     timestamp=w_candles[-1].timestamp,
+                    window_start=w_candles[0].timestamp,
                     divergence_type=DivergenceType.ABSORPTION,
                     direction=direction,
                     price_level=price_end,
@@ -403,12 +422,7 @@ def _describe_zone_divergence(
     avg_vd: float,
 ) -> str:
     pct = abs(price_change) * 100
-    if div_type == DivergenceType.DISTRIBUTION:
-        return (
-            f"Price rising {pct:.1f}% but volume delta negative"
-            f" ({avg_vd:+.1f}) — institutional distribution"
-        )
     return (
-        f"Price falling {pct:.1f}% but volume delta positive"
-        f" ({avg_vd:+.1f}) — institutional accumulation"
+        f"Price rising {pct:.1f}% but volume delta negative"
+        f" ({avg_vd:+.1f}) — institutional distribution"
     )
