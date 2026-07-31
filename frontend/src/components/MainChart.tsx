@@ -897,6 +897,8 @@ interface MainChartProps {
   showSweptZones?: boolean
   showOrderBlocks?: boolean
   showSweeps?: boolean
+  /** BOS/CHoCH/CHoCH ✕ lines and labels (the SMC structure staircase). */
+  showSmc?: boolean
   showEqlZones?: boolean
   showIndicators?: boolean
   showHuntWindow?: boolean
@@ -924,6 +926,7 @@ export function MainChart({
   showSweptZones = true,
   showOrderBlocks = true,
   showSweeps = true,
+  showSmc = true,
   showEqlZones = true,
   showIndicators = true,
   showHuntWindow = false,
@@ -1753,7 +1756,9 @@ export function MainChart({
     const structureEvents = scopeEvents.filter(
       (event) =>
         event.event in STRUCTURE_EVENT_STYLES &&
-        (event.event !== 'liquidity_sweep' || (showSweeps && recentSweeps.has(event))),
+        (event.event === 'liquidity_sweep'
+          ? showSweeps && recentSweeps.has(event)
+          : showSmc),
     )
 
     // The event that flipped this timeframe counter to its higher timeframe —
@@ -2317,7 +2322,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode, showRibbon])
+  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showSmc, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode, showRibbon])
 
   // Incremental live-price update: the forming candle, and the fixed-reference
   // series derived from it, refreshed in place on every poll. This runs on the
