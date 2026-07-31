@@ -164,6 +164,7 @@ function App() {
   const [volumeProfileVisible, setVolumeProfileVisible] = useState(false)
   const [volumeProfileDelta, setVolumeProfileDelta] = useState(false)
   const [controlOscVisible, setControlOscVisible] = useState(true)
+  const [ribbonVisible, setRibbonVisible] = useState(false)
   const [indicatorsVisible, setIndicatorsVisible] = useState(false)
   const [, setTick] = useState(0)
 
@@ -614,6 +615,27 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => {
+                        // The ribbon and the phase line are one reading split
+                        // across two panes, so turning it on opens the pane the
+                        // oscillator lives in -- otherwise half of it is
+                        // invisible and the toggle looks broken.
+                        setRibbonVisible((v) => {
+                          if (!v) setControlOscVisible(true)
+                          return !v
+                        })
+                      }}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        ribbonVisible
+                          ? 'bg-[#e0b34122] text-[#e0b341]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Tide — VWAP envelope coloured by SMC structure, desaturated when no fresh money backs the move, with the phase line over the control bars"
+                    >
+                      ◈ Tide
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setControlOscVisible((v) => !v)}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         controlOscVisible
@@ -668,7 +690,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible} showRibbon={ribbonVisible} />
                 </div>
               </div>
 

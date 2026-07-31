@@ -1663,6 +1663,46 @@ selector.
   (the reference study's `vp_right_offset`): the panes here are synced by
   logical range, so reserving future space would have to move every pane.
 
+- **`frontend/src/utils/tideRibbon.ts`** + **`frontend/src/charting/RibbonPrimitive.ts`**
+  — the **Tide** reading (as of 2026-07-30), the project's own composite,
+  derived entirely client-side from data `/api/dashboard` already returns.
+  The layers are of three different natures — structure is a *state*, control
+  a *windowed measurement*, VWAP a *place* — so they are never averaged; each
+  takes a visual channel on one geometry (the Saty pattern):
+  the **envelope** (VWAP ±1σ) is the shape, the **hue** is the internal
+  detector's standing trend (replayed by `structureTrendByCandle`, the same
+  rule the backend uses: provisional marks never mutate it, `CHOCH_FAILED`
+  reverts), and the **saturation** is `market_control`. A coloured but washed-out
+  ribbon is the reading: price trending structurally with nobody paying for it.
+  Drawn at `zOrder 'bottom'`, behind the candles; the midline (the VWAP itself)
+  is dashed while no side is *credited* with control.
+  Saturation reads `control_score` normalized against the **window's own p90**
+  (`convictionScale`), not `controller !== 'balanced'`: the credited-controller
+  flag fires on 13% of BTC 15m candles but 1% of BTC 4h and 4% of SOL 1h — a
+  channel that never varies carries nothing — while the score has usable range
+  (median |score| 6-13, p90 21-39). The cost is that saturation is *relative to
+  the visible window*, not comparable across symbols. Where there is no OI at
+  all the ribbon is grey — honest, but note Binance's ~30-day OI retention
+  leaves only ~15% of a 1200-candle H4 window covered (measured 2026-07-30;
+  within covered candles conviction is a uniform 0.26-0.34 median on every
+  timeframe, so the greyness is missing data, not a dead channel).
+  `buildPhase` feeds a **phase line** drawn over the control histogram on the
+  existing control pane — the "two overlaid" geometry, where the *gap* between
+  a stretched line and short grey bars is an extension nobody is funding.
+  0 = VWAP, ±50 = ±1σ, measured against the band on the side price actually
+  sits (a volume-weighted deviation over a skewed accumulation is not centred).
+  Clamped at **±150**: |phase| > 100 happens on 9-13% of candles (pinning one
+  bar in eight throws away resolution) while > 150 is 0.9-2.6%, a real tail.
+  `MIN_SPAN_FRAC` skips candles whose accumulation has near-zero dispersion —
+  a fresh anchor divides by σ≈0 and produced readings of 4.3e6 on BTC 15m, one
+  of which flattens the pane's autoscale.
+  Toggled by the `◈ Tide` toolbar button in `App.tsx` (`showRibbon`, default
+  **off**); turning it on also opens the control pane, since half the reading
+  lives there. Purely descriptive — a measurement of this project's own
+  sweep/raid events across 16 symbols × 3 timeframes found no entry trigger
+  worth encoding (`research/raid_reversal.py`), so Tide describes state and
+  never signals.
+
 - **`frontend/src/utils/chartTime.ts`** — the chart's timezone (as of
   2026-07-18). Lightweight Charts has no timezone support and renders every
   `UTCTimestamp` in UTC, so a 15m candle printed at 21:30 in São Paulo labeled

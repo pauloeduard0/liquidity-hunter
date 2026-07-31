@@ -32,6 +32,8 @@ import {
   type LiquidationBandInput,
 } from '../charting/LiquidationBandsPrimitive'
 import { EqlZonesPrimitive, type EqlZoneInput } from '../charting/EqlZonesPrimitive'
+import { RibbonPrimitive } from '../charting/RibbonPrimitive'
+import { buildPhase, buildRibbon } from '../utils/tideRibbon'
 import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
@@ -109,6 +111,12 @@ const PRICE_SCALE_MIN_WIDTH = 110
 const CONTROL_BUYERS_COLOR = '#26a69a'
 const CONTROL_SELLERS_COLOR = '#ef5350'
 const CONTROL_BALANCED_COLOR = '#4a5163'
+
+// The phase line sits over those bars. It gets its own hue rather than
+// repeating the structural trend the ribbon already carries -- the same colour
+// twice would add no information, and the line's job here is to be readable
+// *against* the control bars, not to restate them.
+const PHASE_NEUTRAL_COLOR = '#e0b341'
 
 // Split the available height across the panes. The volume-delta + RSI panes are
 // one group (`showIndicators`); the control oscillator toggles *independently*
@@ -901,6 +909,7 @@ interface MainChartProps {
   showVolumeProfile?: boolean
   volumeProfileMode?: VolumeProfileMode
   showControlOscillator?: boolean
+  showRibbon?: boolean
 }
 
 export function MainChart({
@@ -927,6 +936,7 @@ export function MainChart({
   showVolumeProfile = false,
   volumeProfileMode = 'value-area',
   showControlOscillator = false,
+  showRibbon = false,
 }: MainChartProps) {
   // Which clock this chart's times are drawn on -- local intraday, exchange
   // (UTC) on the daily/weekly bars. Set during render, before the effects below
@@ -960,6 +970,8 @@ export function MainChart({
   const volumeProfilePrimitiveRef = useRef<VolumeProfilePrimitive | null>(null)
   const liquidationBandsPrimitiveRef = useRef<LiquidationBandsPrimitive | null>(null)
   const eqlZonesPrimitiveRef = useRef<EqlZonesPrimitive | null>(null)
+  const ribbonPrimitiveRef = useRef<RibbonPrimitive | null>(null)
+  const phaseSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const divergenceArcsPrimitiveRef = useRef<DivergenceArcPrimitive | null>(null)
   const hasFittedRef = useRef(false)
@@ -1086,6 +1098,19 @@ export function MainChart({
     })
     controlSeriesRef.current = controlSeries
 
+    // The phase line rides *over* the control histogram on the same axis: the
+    // bars are how hard a side is pushing, the line is how far price has been
+    // carried inside its own envelope. The gap between them is the reading --
+    // a stretched line over short grey bars is an extension nobody is funding.
+    const phaseSeries = controlChart.addSeries(LineSeries, {
+      color: PHASE_NEUTRAL_COLOR,
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+    })
+    phaseSeriesRef.current = phaseSeries
+
     const rsiSeries = rsiChart.addSeries(LineSeries, {
       color: RSI_LINE_COLOR,
       lineWidth: 2,
@@ -1159,6 +1184,10 @@ export function MainChart({
     const eqlZonesPrimitive = new EqlZonesPrimitive()
     series.attachPrimitive(eqlZonesPrimitive)
     eqlZonesPrimitiveRef.current = eqlZonesPrimitive
+
+    const ribbonPrimitive = new RibbonPrimitive()
+    series.attachPrimitive(ribbonPrimitive)
+    ribbonPrimitiveRef.current = ribbonPrimitive
 
     const divergenceArcsPrimitive = new DivergenceArcPrimitive()
     series.attachPrimitive(divergenceArcsPrimitive)
@@ -1261,6 +1290,7 @@ export function MainChart({
       volumeSeriesRef.current = null
       deltaSeriesRef.current = null
       controlSeriesRef.current = null
+      phaseSeriesRef.current = null
       rsiSeriesRef.current = null
       overlaySeriesRef.current = []
       rsiOverlaySeriesRef.current = []
@@ -1631,6 +1661,37 @@ export function MainChart({
       })
     }
     eqlZonesPrimitiveRef.current?.setZones(eqlZones)
+
+    // Tide ribbon (VWAP envelope x structure x control). Cleared rather than
+    // hidden when off, so a toggled-off ribbon costs nothing to draw.
+    ribbonPrimitiveRef.current?.setSegments(
+      showRibbon
+        ? buildRibbon(data).map((b) => ({
+            time: toChartTime(b.timestamp),
+            upper: b.upper,
+            lower: b.lower,
+            mid: b.mid,
+            trend: b.trend,
+            conviction: b.conviction,
+            funded: b.controller !== 'balanced',
+          }))
+        : [],
+    )
+
+    // Phase oscillator, on the control pane's axis. Whitespace entries keep bar
+    // indices aligned with the other panes (same rule as the control histogram
+    // and RSI) -- the VWAP has no envelope for the first candles of a session.
+    const phaseSeries = phaseSeriesRef.current
+    if (phaseSeries) {
+      const phaseByTs = new Map(buildPhase(data).map((p) => [p.timestamp, p]))
+      phaseSeries.setData(
+        data.candles.map((candle) => {
+          const time = toChartTime(candle.timestamp)
+          const p = showRibbon ? phaseByTs.get(candle.timestamp) : undefined
+          return p ? { time, value: p.value } : { time }
+        }),
+      )
+    }
 
     // Swept (mitigated) zones
     if (showSweptZones && data.timeframe !== '5m') {
@@ -2256,7 +2317,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode])
+  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode, showRibbon])
 
   // Incremental live-price update: the forming candle, and the fixed-reference
   // series derived from it, refreshed in place on every poll. This runs on the
@@ -2314,6 +2375,16 @@ export function MainChart({
         value: controlPoint.control_score,
         color: controlColor[controlPoint.controller] ?? CONTROL_BALANCED_COLOR,
       })
+    }
+
+    // The phase reading moves with the live close, so the tail update has to
+    // recompute it rather than just carry the last value forward.
+    const phaseSeries = phaseSeriesRef.current
+    if (phaseSeries) {
+      const phaseLast = buildPhase(data).at(-1)
+      if (phaseLast && phaseLast.timestamp === last.timestamp) {
+        phaseSeries.update({ time, value: phaseLast.value })
+      }
     }
 
     const rsiSeries = rsiSeriesRef.current
