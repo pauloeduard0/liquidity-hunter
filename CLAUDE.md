@@ -1512,7 +1512,11 @@ selector.
   reverted the trend — a leg that dies by failure has no opposite CHoCH to end
   its BOS, the BTC 1D 2026-05 case); CHoCH lines at
   the next opposite-direction CHoCH (so a reversal clears stale references
-  rather than letting them run to the chart edge), and also at the next
+  rather than letting them run to the chart edge), at the next
+  opposite-direction BOS (a BOS only fires with the standing trend, so it is
+  positive proof the reference is spent — without this a *failed* opposite
+  CHoCH, excluded as "never took hold", let the old line run through a whole
+  counter-move that had already printed real BOS: BTCUSDT H1 2026-07), and also at the next
   same-direction BOS whose reference sits on the *wrong side* of the CHoCH's
   level (below it for a bullish CHoCH, above for bearish): the trend collapsed
   through the level and rebuilt from the other side — an excursion whose
@@ -1868,7 +1872,15 @@ state in brief:
   it can never confirm and the reverse-CHoCH reference family is never built;
   a persistent launch-pivot snapshot of the CHoCH origin seeds it, the ENAUSDT
   H4 2026-06 case where a −22% drop printed only sweeps under a stuck bullish
-  trend), leg-origin CHoCH reference family,
+  trend), leg-origin CHoCH reference family, leg-bound clamp on it
+  (`bos_leg_origin_leg_bound`: a `pullback_ref` snapshot that predates
+  `trend_flip_index` — carried in by the impulsive-leg `None`-inheritance or the
+  CHoCH-origin seed — is replaced by the leg's own last same-side pivot up to
+  the BOS close-break (else its raw extreme measured from `flip + 1`, since the
+  flip candle is the CHoCH's own impulse), so the reversal reference is the
+  higher low / lower high the leg built instead of the previous, already-consumed
+  cycle's level; the BTCUSDT H1 2026-07 case where the bullish leg's `CHoCH ▼`
+  fired four days late against the 07-16 bearish cycle),
   volatility-normalized release gap, new-cycle weak-ref barrier,
   confirmed-trend barrier (`choch_confirmed_trend_persistence_candles`,
   hysteresis: a trend is *pending* until an emitted BOS confirms it — cheap

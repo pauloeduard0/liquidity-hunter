@@ -2511,3 +2511,112 @@ failure:
 
 Fixture: `btcusdt_15m_2026_07_25_choch_fail_buffer.json`
 (`test_btc_15m_shallow_retest_does_not_negate_choch` pins both sides).
+
+## Leg-bound leg-origin CHoCH reference (`bos_leg_origin_leg_bound`, 2026-08-01)
+
+**Symptom (BTCUSDT H1, reported from the chart).** A bearish cycle
+(`CHoCH ▼` 07-16 07:00 → `BOS ▼` 07-16 23:00, reference 63833.0) was
+consumed and replaced by a bullish one (`CHoCH ▲` 07-20 15:00 →
+`BOS ▲` 07-21 06:00). Price then worked *below* the bullish BOS for six days
+with no reversal mark, and the eventual `CHoCH ▼` fired on **07-27 22:00
+against 63833.0** — the *previous, already-consumed* cycle's level, with
+`reference_timestamp` back on 07-16 12:00, so its line stretched across the
+whole bullish leg. The following `CHoCH ✕` and re-fire (`↻`) inherited the
+same stale level, visually interleaving two cycles.
+
+**Cause.** `bos_leg_origin_choch_ref` promotes the emitting BOS's
+`pending_bos.pullback_ref` to `validated_choch_<side>`. That field is a
+*snapshot* of the opposite side's trailing pivot taken at the state-advance,
+and two documented mechanisms carry a **pre-leg** pivot into it: the
+impulsive-leg `None`-inheritance and `bos_pullback_seed_choch_origin` (seeds
+the first pending of a CHoCH-launched leg with the CHoCH origin). At a flip
+the leg's own launch pullback has usually not confirmed a swing pivot yet, so
+the seed is a stale trailing level — here the 63833.0 low of 07-16, while the
+bullish leg's higher low was 65011.4 on 07-20 19:00. Instrumented at the
+07-21 BOS the promotion reads `val=None pend_leg=63833.0 origin=63833.0 ->
+63833.0`, and stays pinned there for the rest of the leg.
+
+This is the open item previously recorded as "stale leg-origin CHoCH ref"
+(NEAR M30 / BTC M15). The missing piece was a **discriminator between a stale
+and a legitimate pre-leg reference**; `trend_flip_index` (already maintained
+for the CHoCH timestamp clamp) is it.
+
+**Fix.** `leg_bound_origin(ref, end_index, low=…)`, applied at both leg-origin
+promotion sites with `end_index` at the BOS's **close-break** candle. A
+`pullback_ref` at or after `trend_flip_index` passes through untouched. One
+that predates the flip is replaced by:
+
+1. the **last confirmed pivot of that side inside the leg** (`[flip,
+   close-break]`) — the higher low / lower high the structure-breaking impulse
+   launched from, which is the level SMC reads a change of character against;
+2. failing that, the leg's raw extreme measured from **`flip + 1`** onward.
+
+Step 2's offset is load-bearing. With a symmetric `swing_lookback` the flip
+candle *is* the CHoCH's impulse, and its extreme dominates the left window of
+every following candle — so it both prevents the real pullback low from
+becoming a pivot and would then be selected as the "origin", putting the
+reversal reference a whole impulse deeper than the higher low the leg built.
+On the reported case: 64386.8 (the flip candle) vs **65011.4** (07-20 19:00),
+the level the user independently identified from the chart. Bounding
+`end_index` at the close-break rather than the confirming pullback pivot
+matters for the same reason in the other direction — the pivot forms *after*
+the break, and using it selected a post-BOS pullback (65505.0) instead.
+
+Nothing else changes: the state machine, the staircase, the
+candidate/validated promotion gate and the re-arm machinery are untouched —
+only *which price* the leg-origin promotion writes.
+
+**Measured** (BTC/ETH/SOL/NEAR × 15m/1h/4h, snapshot of 2026-08-01, full
+pipeline run on both sides of the flag):
+
+| | |
+|---|---|
+| net event change | **+40 / −18** across 12 combos |
+| `final_trend` flips | **0/12** |
+| suite | 701 green |
+
+The reported case resolves completely — the whole `CHoCH ▼ / ✕ / ↻` group
+collapses into one correctly-referenced reversal:
+
+```
+before:  07-27 22:00 CHoCH ▼ 63833.0 (refts 07-16) → ✕ 07-29 → ↻ 07-31
+after:   07-23 13:00 CHoCH ▼ 65011.4 (refts 07-20 19:00) → BOS ▼ ×3
+```
+
+Other structural gains: **SOL H1** (34→39) replaces a `CHoCH ▼ 75.73 / ✕ /
+re-fire` group stuck on a consumed level with a clean alternating sequence;
+**SOL 4H** (20→24) recovers the four-step staircase a late `CHoCH ▼ 83.31`
+had been swallowing; **NEAR H1** (28→27) collapses a stale-referenced
+`CHoCH ▲ 1.995` + `✕` + two BOS into one correct BOS; **BTC/ETH 4H** re-time
+and re-level a single CHoCH at identical event count.
+
+**Cost, honestly.** The tighter reference reverses earlier, and that shows on
+the fast end: **ETH H1** gains six CHoCH including a bearish/bullish pair five
+hours apart (07-27 22:00 / 07-28 03:00), and **ETH M15** churns a whole
+cluster (31→37) with three `✕` in it. No trend flipped, but this is the
+whipsaw the deeper leg-origin reference was originally chosen to avoid. The
+same logic is wired on every timeframe by explicit request; if the M5/M15
+noise proves objectionable in review, the natural knob is a per-timeframe gate
+on step 1 (fall back to the deeper raw extreme on the fast timeframes) rather
+than reverting the clamp, since the stale-cycle bug it fixes is timeframe
+independent.
+
+**Rejected alternative.** Using the *broken* level of the bullish BOS (the
+prior swing high) as the bearish-CHoCH reference — the literal reading of "it
+lost the BOS floor". That is a retest, not a change of character; SMC takes
+the last higher low, which is what step 1 selects.
+
+### Companion: a CHoCH line ends at the opposite-direction BOS (frontend)
+
+Independent of the above, `structureLineEndTime` excluded *failed* CHoCHs from
+terminating a line ("one that never took hold isn't the active reference").
+On the same BTC H1 window the 07-27 bearish CHoCH failed, so nothing
+terminated the bullish `CHoCH ▲` of 07-20 or its BOS until the 07-31 re-fire —
+both lines ran straight through a bearish leg that had already printed real
+BOS on 07-24 and 07-28.
+
+A non-provisional **opposite-direction BOS** now also ends a CHoCH line. A BOS
+is only emitted in the direction of the standing trend, so a bearish BOS is
+positive proof the trend is bearish and the bullish reversal reference is
+spent — regardless of what happened to the CHoCH that opened the excursion.
+Purely a rendering rule; no detector state involved.

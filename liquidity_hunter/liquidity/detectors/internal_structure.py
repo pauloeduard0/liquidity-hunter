@@ -816,6 +816,7 @@ class InternalStructureDetector(MarketStructureDetector):
         stage_wick_rejected_bos: bool = False,
         rollback_staircase_on_discard: bool = False,
         bos_leg_origin_choch_ref: bool = False,
+        bos_leg_origin_leg_bound: bool = False,
         bos_leg_origin_release_gap_pct: float | None = None,
         bos_leg_origin_release_gap_atr: float | None = None,
         bos_leg_origin_min_pullback_atr: float | None = None,
@@ -950,6 +951,7 @@ class InternalStructureDetector(MarketStructureDetector):
                 "choch_confirmed_trend_persistence_candles must be at least 1"
             )
         self._bos_leg_origin_choch_ref = bos_leg_origin_choch_ref
+        self._bos_leg_origin_leg_bound = bos_leg_origin_leg_bound
         self._bos_leg_origin_release_gap_pct = bos_leg_origin_release_gap_pct
         self._bos_leg_origin_release_gap_atr = bos_leg_origin_release_gap_atr
         self._bos_leg_origin_min_pullback_atr = bos_leg_origin_min_pullback_atr
@@ -1474,6 +1476,64 @@ class InternalStructureDetector(MarketStructureDetector):
         # *prior* leg, and stamping the CHoCH there back-dates it before the
         # very flip it reverses (the SOLUSDT 30m 2026-07-05 inverted pair).
         trend_flip_index = -1
+
+        def leg_bound_origin(ref: Pivot | None, end_index: int, *, low: bool) -> Pivot | None:
+            """Clamp a BOS's leg origin to the leg it actually belongs to.
+
+            The pending BOS's `pullback_ref` is a *snapshot* of the opposite
+            side's trailing pivot, and the impulsive-leg `None`-inheritance
+            (plus `bos_pullback_seed_choch_origin`) can carry a pivot formed
+            *before* the flip that started this leg -- the leg's real launch
+            extreme often has not confirmed a pivot yet at the flip. Promoting
+            that stale level as the reversal reference pins the next CHoCH to
+            a pre-leg price and draws its line back across the whole previous
+            cycle (BTCUSDT H1 2026-07: the 07-21 bullish BOS promoted a
+            63833.0 low from 07-16, so the reversal fired against the consumed
+            bearish cycle's level instead of the 63736.1 low the leg rose
+            from). A reference that predates `trend_flip_index` is replaced by
+            the leg's own last pivot of that side over `[flip, end_index]` --
+            the higher low (bullish leg) / lower high (bearish leg) the impulse
+            that broke structure actually launched from, which is the level SMC
+            reads a change of character against. The leg's raw extreme is only
+            the fallback for a leg with no confirmed pivot of that side yet
+            (the flip candle's own impulse); it is deeper, so it survives a
+            pullback the last pivot would already call a reversal.
+            """
+            if not self._bos_leg_origin_leg_bound or ref is None or trend_flip_index < 0:
+                return ref
+            ref_index = index_by_timestamp.get(ref.timestamp)
+            if ref_index is not None and ref_index >= trend_flip_index:
+                return ref
+            end = min(end_index, len(candles) - 1)
+            if end < trend_flip_index:
+                return ref
+            kind = "low" if low else "high"
+            flip_time = candles[trend_flip_index].timestamp
+            end_time = candles[end].timestamp
+            in_leg = [
+                Pivot(price=price, timestamp=timestamp)
+                for timestamp, pivot_kind, price in pivots
+                if pivot_kind == kind and flip_time <= timestamp <= end_time
+            ]
+            if in_leg:
+                return in_leg[-1]
+            # No confirmed pivot of that side formed inside the leg yet: fall
+            # back to its raw extreme, but measured from *after* the flip
+            # candle. That candle is the CHoCH's own impulse -- with a
+            # symmetric `swing_lookback` its extreme dominates the left window,
+            # so it both suppresses the pullback low from becoming a pivot and
+            # would then be picked here as the "origin", pushing the reversal
+            # reference a whole impulse deeper than the higher low the leg
+            # actually built (BTCUSDT H1 2026-07-20: the flip candle's 64386.8
+            # instead of the 65011.4 pullback the BOS impulse launched from).
+            start = min(trend_flip_index + 1, end)
+            segment = range(start, end + 1)
+            best = min(segment, key=lambda i: candles[i].low) if low else max(
+                segment, key=lambda i: candles[i].high
+            )
+            candle = candles[best]
+            return Pivot(price=candle.low if low else candle.high, timestamp=candle.timestamp)
+
         # Confirmed-trend barrier state (`choch_confirmed_trend_persistence_
         # candles`): False from the flip that set `trend` until an *emitted*
         # BOS in its direction -- or a displacement-success origin retirement,
@@ -1925,7 +1985,13 @@ class InternalStructureDetector(MarketStructureDetector):
                                 self._bos_leg_origin_choch_ref
                                 and pending_bos.pullback_ref is not None
                             ):
-                                validated_choch_high = pending_bos.pullback_ref
+                                validated_choch_high = leg_bound_origin(
+                                    pending_bos.pullback_ref,
+                                    index_by_timestamp.get(
+                                        pending_bos.close_break_timestamp, current_index
+                                    ),
+                                    low=False,
+                                )
                                 # Only a close-confirmed break makes the leg origin
                                 # *structural*: a continuation that merely wicked the
                                 # prior BOS level promotes it as a weak reference (so
@@ -3085,7 +3151,13 @@ class InternalStructureDetector(MarketStructureDetector):
                                 self._bos_leg_origin_choch_ref
                                 and pending_bos.pullback_ref is not None
                             ):
-                                validated_choch_low = pending_bos.pullback_ref
+                                validated_choch_low = leg_bound_origin(
+                                    pending_bos.pullback_ref,
+                                    index_by_timestamp.get(
+                                        pending_bos.close_break_timestamp, current_index
+                                    ),
+                                    low=True,
+                                )
                                 # Mirror of the bearish case: only a close-confirmed
                                 # break makes the leg origin structural; a wick-only
                                 # continuation promotes it as a weak reference.

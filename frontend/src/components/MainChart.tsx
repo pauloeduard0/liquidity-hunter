@@ -463,6 +463,25 @@ function structureLineEndTime(
         .map((other) => toChartTime(other.timestamp))
       candidates.push(...rebasedAt)
     }
+    // An opposite-direction BOS also ends the line. A BOS is only emitted in
+    // the direction of the standing trend, so a bearish BOS is proof the trend
+    // *is* bearish — the bullish reversal reference is spent, whether or not
+    // the CHoCH that opened that excursion later failed. Without this a failed
+    // opposite CHoCH (excluded above as "never took hold") lets the old line
+    // run straight through the whole counter-move: BTCUSDT H1 2026-07, where
+    // the bullish CHoCH of 07-20 and its BOS both ran to the 07-31 re-fire,
+    // across a bearish leg that had already printed real BOS on 07-24/07-28.
+    const reversedAt = allEvents
+      .filter(
+        (other) =>
+          other.scope === event.scope &&
+          other.event === 'break_of_structure' &&
+          !other.provisional &&
+          other.direction !== event.direction &&
+          toChartTime(other.timestamp) > eventTime,
+      )
+      .map((other) => toChartTime(other.timestamp))
+    candidates.push(...reversedAt)
     return candidates.length > 0 ? (Math.min(...candidates) as UTCTimestamp) : lastCandleTime
   }
 

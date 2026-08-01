@@ -320,6 +320,14 @@ _REANCHOR_MIN_PRICE_GAP_PCT = 0.003
 # preserving the un-stick behavior on impulsive legs that emit no BOS for long
 # stretches (e.g. the H4 February drop). 4% measured best: 5% degrades M15, 6%
 # loses the H4 April CHoCH.
+# Leg-bound clamp for the leg-origin CHoCH reference
+# (`InternalStructureDetector.bos_leg_origin_leg_bound`). A pending BOS's
+# `pullback_ref` snapshot can predate the flip that started its leg (the
+# impulsive-leg `None`-inheritance and the CHoCH-origin seed both carry a
+# pre-leg pivot forward), pinning the reversal reference to the *previous*
+# cycle's level. Clamped, the reference is the leg's own extreme.
+_BOS_LEG_ORIGIN_LEG_BOUND = True
+
 _BOS_LEG_ORIGIN_RELEASE_GAP_PCT = 0.04
 
 # Volatility-normalized release gap (`bos_leg_origin_release_gap_atr`, takes
@@ -1847,6 +1855,7 @@ def _build_internal_detector(
         # extreme. Once the leg runs away beyond the gap, the staleness
         # re-anchor regains authority (the un-stick pathologies stay fixed).
         bos_leg_origin_choch_ref=True,
+        bos_leg_origin_leg_bound=_BOS_LEG_ORIGIN_LEG_BOUND,
         bos_leg_origin_release_gap_pct=_BOS_LEG_ORIGIN_RELEASE_GAP_PCT,
         # Volatility-normalized release gap (takes precedence; the fixed pct
         # above is the fallback for series too short to measure a range).
