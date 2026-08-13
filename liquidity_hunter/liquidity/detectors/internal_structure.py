@@ -2236,6 +2236,26 @@ class InternalStructureDetector(MarketStructureDetector):
                 # failure scan): the pre-failure break was the original CHoCH's
                 # own evidence, already consumed.
                 choch_high_scan_start = prev_high_pivot_index + 1
+                # A break can only be confirmed by closes that come *after* the
+                # candle that formed the level: closes predating it are the
+                # level's own prehistory, not evidence against it. Without this
+                # the scan (which starts at the previous pivot, arbitrarily far
+                # back) confirms a reversal on candles from before the leg it
+                # reverses even existed -- the SOLUSDT 4h 2026-08-11 pair, where
+                # a bearish CHoCH against a *confirmed* bullish trend passed its
+                # barrier persistence on the pre-CHoCH sell-off's closes, with a
+                # single qualifying close of its own; its state reset then
+                # promoted a three-day-stale high as the opposite reference and
+                # the trend flipped back one candle later.
+                choch_high_ref_index = (
+                    index_by_timestamp.get(choch_high_ref.timestamp)
+                    if choch_high_ref is not None
+                    else None
+                )
+                if choch_high_ref_index is not None:
+                    choch_high_scan_start = max(
+                        choch_high_scan_start, choch_high_ref_index + 1
+                    )
                 if rearm_high_ref is not None and choch_high_ref is rearm_high_ref:
                     choch_high_scan_start = max(
                         choch_high_scan_start, bull_choch_rearm_arm_index + 1
@@ -3345,6 +3365,17 @@ class InternalStructureDetector(MarketStructureDetector):
                 # A re-fired CHoCH can only confirm on closes after the failure
                 # that armed it (mirror of the high side).
                 choch_low_scan_start = prev_low_pivot_index + 1
+                # Mirror of the high side: the confirming window starts after
+                # the candle that formed the reference level.
+                choch_low_ref_index = (
+                    index_by_timestamp.get(choch_low_ref.timestamp)
+                    if choch_low_ref is not None
+                    else None
+                )
+                if choch_low_ref_index is not None:
+                    choch_low_scan_start = max(
+                        choch_low_scan_start, choch_low_ref_index + 1
+                    )
                 if rearm_low_ref is not None and choch_low_ref is rearm_low_ref:
                     choch_low_scan_start = max(
                         choch_low_scan_start, bear_choch_rearm_arm_index + 1

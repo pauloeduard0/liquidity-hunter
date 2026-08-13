@@ -4218,26 +4218,44 @@ def _ena_seed_bearish_chochs(events: list[MarketStructure]) -> list[MarketStruct
     ]
 
 
-def test_pullback_seed_off_drop_has_no_bearish_choch() -> None:
-    """Off, the unconfirmable pending BOS leaves the bearish side with zero
-    references: the whole drop prints no bearish CHoCH (the trend can only
-    flip through the CHOCH_FAILED escape valve)."""
-    detector = _ena_4h_seed_detector(seed=False)
+@pytest.mark.parametrize("seed", [False, True])
+def test_ena_seed_drop_flips_through_the_failed_choch(seed: bool) -> None:
+    """The -22% drop flips the trend and prints its bearish staircase.
+
+    The bullish CHoCH that opens the window confirms on 06-16, on closes that
+    postdate the 0.08599 level itself -- the reference-formation clamp on the
+    CHoCH scan window rejects the earlier confirmation, which rode the closes
+    of the pre-collapse range (ENA came from 0.118, so every old close cleared
+    that level trivially). The rally then fails at its origin on 06-24 and the
+    resumed bearish leg prints the 0.07463 / 0.07012 staircase.
+
+    NOTE: under that clamp this fixture no longer discriminates
+    `bos_pullback_seed_choch_origin` (both settings produce this stream), so
+    the flag's own regression coverage -- the seeded pending confirming into a
+    bearish CHoCH at the 0.07869 launch fundo -- is currently unlocked and
+    needs a fresh fixture.
+    """
+    detector = _ena_4h_seed_detector(seed=seed)
     events = detector.detect(_load_ena_4h_seed_candles())
+
+    # The drop is expressed through the escape valve, not a fresh bearish CHoCH.
     assert _ena_seed_bearish_chochs(events) == []
-
-
-def test_pullback_seed_fires_bearish_choch_at_leg_launch_level() -> None:
-    """On, the seeded pending confirms at the first higher-low, the leg origin
-    becomes the bearish-CHoCH reference, and the reversal fires as a real
-    CHoCH at the 0.07869 launch fundo -- followed by a bearish BOS staircase."""
-    detector = _ena_4h_seed_detector(seed=True)
-    events = detector.detect(_load_ena_4h_seed_candles())
-    chochs = _ena_seed_bearish_chochs(events)
-    assert len(chochs) == 1
-    assert chochs[0].timestamp == datetime(2026, 6, 27, 16, tzinfo=UTC)
-    assert chochs[0].reference_price_level == pytest.approx(0.07869, abs=0.0002)
-    # The new bearish leg prints a real continuation BOS off the CHoCH.
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and not e.provisional
+        and e.timestamp == datetime(2026, 6, 16, 20, tzinfo=UTC)
+        and e.reference_price_level == pytest.approx(0.08599, abs=0.0002)
+        for e in events
+    )
+    assert any(
+        e.event is StructureEvent.CHOCH_FAILED
+        and e.direction is MarketDirection.BULLISH
+        and not e.provisional
+        and e.timestamp == datetime(2026, 6, 24, tzinfo=UTC)
+        for e in events
+    )
+    # The resumed bearish leg still prints its continuation staircase.
     assert any(
         e.event is StructureEvent.BREAK_OF_STRUCTURE
         and e.direction is MarketDirection.BEARISH

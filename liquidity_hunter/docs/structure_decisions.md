@@ -2620,3 +2620,62 @@ is only emitted in the direction of the standing trend, so a bearish BOS is
 positive proof the trend is bearish and the bullish reversal reference is
 spent — regardless of what happened to the CHoCH that opened the excursion.
 Purely a rendering rule; no detector state involved.
+
+## The CHoCH confirming window starts after its reference formed (2026-08-13)
+
+**Symptom.** SOLUSDT H4 showed three CHoCHs in four candles — `CHoCH ▲`
+(08-08 08:00, ref 75.28), `BOS ▲` (08-09), then `CHoCH ▼` (08-11 12:00, ref
+75.33) and `CHoCH ▲` (08-11 16:00, ref 74.82) in *consecutive* candles.
+Unreadable, and two of the three are artifacts.
+
+**Cause.** `confirms_break` for a CHoCH scanned from `prev_<side>_pivot_index
++ 1` — arbitrarily far back. The bearish CHoCH faced the confirmed-trend
+barrier (persistence 4) but met it on the closes of **08-06/08-07**, the
+sell-off that *preceded* the bullish CHoCH it claimed to reverse, and which
+also preceded the existence of the 75.33 level (formed 08-08 12:00). Its own
+post-flip evidence was a single close (08-11 12:00 at 74.87; the next candle
+closed back at 75.63). The timestamp attribution was already clamped to
+`trend_flip_index + 1`, with eligibility deliberately left unclamped to keep
+the state machine byte-identical — so the detector emitted an event stamped on
+a candle where no window qualifies.
+
+Then the second artifact: the phantom CHoCH's state reset promoted
+`choch_origin_high = active_high = 74.82 @ 08-05` — a level price had left
+behind three days earlier — as the bullish reference. The next high pivot
+"broke" it trivially and the trend flipped back one candle later.
+
+**Fix.** The CHoCH scan window now starts after the candle that *formed* the
+reference (`choch_<side>_ref_index + 1`, alongside the existing re-arm clamp).
+Closes predating a level are that level's prehistory, not evidence against it.
+Unconditional — an invariant, not a tunable, like the timestamp clamp.
+
+**Measured** (6 symbols × 15m/1h/4h/1d, whole-stream diff):
+
+| | |
+|---|---|
+| combos changed | 4/24 (SOL 15m, SOL 4h, ENA 4h, AAVE 15m) |
+| events | −27 / +23 |
+| `final_trend` | **unchanged in 24/24** |
+
+SOL H4 loses exactly the two artifacts (the pullback reads `lower_high`);
+AAVE M15 loses an equivalent `CHoCH ▲` + `✕` pair 15 minutes apart.
+
+**Cost.** ENA H4's June cycle is rewritten (20 events): its bullish CHoCH was
+*also* confirmed on pre-collapse closes (ENA came from 0.118, so any old close
+cleared 0.08599) and now fires on 06-16 instead of 06-13. The −22% drop is
+still captured, but through `CHOCH_FAILED` (06-24) + the bearish staircase
+rather than a fresh `CHoCH ▼` at the 0.07869 launch fundo. Consequence worth
+tracking: **`bos_pullback_seed_choch_origin` lost its discriminating fixture**
+— both settings now produce the same stream on that window, so the flag is
+wired but unlocked by tests until a fresh fixture is captured.
+
+**Still open (defect B).** The stale-origin promotion itself is untouched: a
+`choch_origin_<opposite>` inherited from a dead cycle can still be a level
+price already left behind. Here it stops firing only because the phantom that
+promoted it is gone. The natural guard is to reject, at the flip, an opposite
+reference the flip candle's close has already cleared.
+
+Regression locks: `test_choch_scan_window_starts_after_the_reference_level_
+formed` (`tests/app/test_dashboard_data.py`, production H4 wiring + fixture
+`solusdt_4h_2026_08_11_choch_window.json`) and the reshaped
+`test_ena_seed_drop_flips_through_the_failed_choch`.

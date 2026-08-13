@@ -3386,3 +3386,77 @@ def test_btc_15m_shallow_retest_does_not_negate_choch(
         and e.timestamp > datetime(2026, 7, 25, 21, tzinfo=UTC)
         for e in run().events
     )
+
+
+def _load_sol_4h_choch_window_candles() -> list[Candle]:
+    """SOLUSDT H4, the anchored detection slice through 2026-08-13.
+
+    The 08-08 bullish CHoCH (75.28) and its confirming 08-09 BOS, followed by
+    the 08-11 pullback that used to print two more CHoCHs in consecutive
+    candles. 5-column rows: ts_ms/open/high/low/close (volume is irrelevant to
+    structure detection).
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "solusdt_4h_2026_08_11_choch_window.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="SOLUSDT",
+            timeframe=TimeFrame.H4,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def test_choch_scan_window_starts_after_the_reference_level_formed() -> None:
+    """A CHoCH cannot be confirmed by closes that predate its own reference.
+
+    SOLUSDT H4 2026-08-11: a bearish CHoCH against a *confirmed* bullish trend
+    (barrier persistence 4) met that persistence on the 08-06/08-07 sell-off --
+    closes from before the 75.33 level existed -- while having a single
+    qualifying close of its own (08-11 12:00; the next candle closed back
+    above). Its state reset then promoted the stale 74.82 high of 08-05, a
+    level price had left behind three days earlier, as the opposite reference,
+    and the trend flipped back one candle later: three CHoCHs in four candles,
+    two of them artifacts of pre-flip evidence.
+    """
+    candles = _load_sol_4h_choch_window_candles()
+    detector = _build_internal_detector(TimeFrame.H4, confluence_filter=False)
+
+    events = detector.detect(candles)
+
+    # The 08-08 reversal and its confirming BOS stand.
+    assert any(
+        e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+        and not e.provisional
+        and e.timestamp == datetime(2026, 8, 8, 8, tzinfo=UTC)
+        for e in events
+    )
+    # The whipsaw pair does not.
+    assert [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and not e.provisional
+        and datetime(2026, 8, 10, tzinfo=UTC)
+        <= e.timestamp
+        <= datetime(2026, 8, 12, tzinfo=UTC)
+    ] == []
+    assert detector.final_trend is MarketDirection.BULLISH
