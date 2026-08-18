@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import {
+  BaselineSeries,
   CandlestickSeries,
   ColorType,
   HistogramSeries,
@@ -34,6 +35,8 @@ import {
 import { EqlZonesPrimitive, type EqlZoneInput } from '../charting/EqlZonesPrimitive'
 import { RibbonPrimitive } from '../charting/RibbonPrimitive'
 import { buildPhase, buildRibbon } from '../utils/tideRibbon'
+import type { DefendedMark } from '../utils/defendedLevels'
+import { buildDefenceLevels, buildDefendedMarks } from '../utils/defendedLevels'
 import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
@@ -61,6 +64,7 @@ import {
   SUPERTREND_DOWN_COLOR,
   SUPERTREND_LINE_WIDTH,
   SUPERTREND_STOP_RUN_COLOR,
+  DEFENDED_LEVEL_COLOR,
   SUPERTREND_UP_COLOR,
   VP_BAR_MAX_PX,
   VP_BAR_MIN_PX,
@@ -774,6 +778,25 @@ function buildStopRunMarkers(breaks: SupertrendBreak[]): SeriesMarker<Time>[] {
     )
 }
 
+// A defended level: the wick cleared the Tide envelope's edge into standing
+// levels from two or more families and the close came straight back inside.
+// Anchored on the raided side, so the mark sits where the stops were, and
+// labelled with how many families agreed — the count is the reading, since a
+// single family is usually the same wick told twice.
+function buildDefendedMarkers(marks: DefendedMark[]): SeriesMarker<Time>[] {
+  return marks.map(
+    (mark) =>
+      ({
+        time: toChartTime(mark.timestamp) as Time,
+        position: mark.side === 'top' ? 'aboveBar' : 'belowBar',
+        shape: 'circle',
+        color: DEFENDED_LEVEL_COLOR,
+        text: `⛨${mark.families.length}`,
+        size: 1,
+      }) as SeriesMarker<Time>,
+  )
+}
+
 function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker<Time>[] {
   return [...divergences]
     .filter((div) => !DIVERGENCE_ARC_TYPES.has(div.divergence_type))
@@ -973,6 +996,7 @@ interface MainChartProps {
   volumeProfileMode?: VolumeProfileMode
   showControlOscillator?: boolean
   showRibbon?: boolean
+  showDefendedLevels?: boolean
 }
 
 export function MainChart({
@@ -1001,6 +1025,7 @@ export function MainChart({
   volumeProfileMode = 'value-area',
   showControlOscillator = false,
   showRibbon = false,
+  showDefendedLevels = false,
 }: MainChartProps) {
   // Which clock this chart's times are drawn on -- local intraday, exchange
   // (UTC) on the daily/weekly bars. Set during render, before the effects below
@@ -1035,7 +1060,8 @@ export function MainChart({
   const liquidationBandsPrimitiveRef = useRef<LiquidationBandsPrimitive | null>(null)
   const eqlZonesPrimitiveRef = useRef<EqlZonesPrimitive | null>(null)
   const ribbonPrimitiveRef = useRef<RibbonPrimitive | null>(null)
-  const phaseSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const phaseSeriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
+  const phaseRailSeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const divergenceArcsPrimitiveRef = useRef<DivergenceArcPrimitive | null>(null)
   const hasFittedRef = useRef(false)
@@ -1166,14 +1192,46 @@ export function MainChart({
     // bars are how hard a side is pushing, the line is how far price has been
     // carried inside its own envelope. The gap between them is the reading --
     // a stretched line over short grey bars is an extension nobody is funding.
-    const phaseSeries = controlChart.addSeries(LineSeries, {
-      color: PHASE_NEUTRAL_COLOR,
+    // Baseline at zero -- the VWAP itself, the population's break-even. The
+    // line keeps its gold on both sides (it has to stay legible against bars
+    // that are already teal and red), and the *fill* to the baseline carries
+    // which side of break-even price is being carried on. That is not a
+    // restatement of the ribbon's hue: the ribbon says what the structure is
+    // doing, this says whether the crowd that entered since the anchor is
+    // holding a profit or a loss.
+    const phaseSeries = controlChart.addSeries(BaselineSeries, {
+      baseValue: { type: 'price', price: 0 },
       lineWidth: 2,
+      topLineColor: PHASE_NEUTRAL_COLOR,
+      bottomLineColor: PHASE_NEUTRAL_COLOR,
+      topFillColor1: PHASE_ABOVE_FILL,
+      topFillColor2: PHASE_FILL_FADE,
+      bottomFillColor1: PHASE_FILL_FADE,
+      bottomFillColor2: PHASE_BELOW_FILL,
       priceLineVisible: false,
       lastValueVisible: true,
       crosshairMarkerVisible: true,
     })
     phaseSeriesRef.current = phaseSeries
+
+    // The +/-1 sigma rails. Without them the line's level is unreadable -- a
+    // reading of 40 and one of 90 look the same on an autoscaled pane, yet one
+    // is price inside the envelope and the other is price outside it, which is
+    // the whole distinction the phase measures. They are a *scale*, not an
+    // overbought line: measured across six combos, |phase| exceeds 50 on about
+    // half of all candles (49-55%), because sigma is accumulated over a whole
+    // session while price walks away from the anchor. The tail worth noticing
+    // is |phase| > 100, at 9-13%.
+    phaseRailSeriesRef.current = [0, 1].map(() =>
+      controlChart.addSeries(LineSeries, {
+        color: PHASE_RAIL_COLOR,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      }),
+    )
 
     const rsiSeries = rsiChart.addSeries(LineSeries, {
       color: RSI_LINE_COLOR,
@@ -1355,6 +1413,7 @@ export function MainChart({
       deltaSeriesRef.current = null
       controlSeriesRef.current = null
       phaseSeriesRef.current = null
+      phaseRailSeriesRef.current = []
       rsiSeriesRef.current = null
       overlaySeriesRef.current = []
       rsiOverlaySeriesRef.current = []
@@ -1737,6 +1796,7 @@ export function MainChart({
             mid: b.mid,
             trend: b.trend,
             conviction: b.conviction,
+            controller: b.controller,
             funded: b.controller !== 'balanced',
           }))
         : [],
@@ -1755,6 +1815,28 @@ export function MainChart({
           return p ? { time, value: p.value } : { time }
         }),
       )
+
+      const [railUpper, railLower] = phaseRailSeriesRef.current
+      if (railUpper && railLower && data.candles.length >= 2) {
+        const firstTime = toChartTime(data.candles[0].timestamp)
+        const lastTime = toChartTime(data.candles[data.candles.length - 1].timestamp)
+        railUpper.setData(
+          showRibbon
+            ? [
+                { time: firstTime, value: 50 },
+                { time: lastTime, value: 50 },
+              ]
+            : [],
+        )
+        railLower.setData(
+          showRibbon
+            ? [
+                { time: firstTime, value: -50 },
+                { time: lastTime, value: -50 },
+              ]
+            : [],
+        )
+      }
     }
 
     // Swept (mitigated) zones
@@ -2196,7 +2278,25 @@ export function MainChart({
       : []
     const vsaMarkers = buildVsaMarkers(vsaSignals)
     const stopRunMarkers = buildStopRunMarkers(stopRuns)
-    const mergedMarkers = [...divMarkers, ...vsaMarkers, ...stopRunMarkers].sort(
+    // A structural level stands exactly as long as its line is drawn, so the
+    // evidence counted here is the evidence on screen. `structureLineEndTime`
+    // answers in chart time; map it back to the ISO timestamp the level rule
+    // compares against, and treat "runs to the edge" as still standing.
+    const defendedMarkers = showDefendedLevels
+      ? buildDefendedMarkers(
+          buildDefendedMarks(
+            data,
+            buildDefenceLevels(data, (event) => {
+              const end = structureLineEndTime(event, scopeEvents, lastCandleTime)
+              if (end >= lastCandleTime) return null
+              return (
+                scopeEvents.find((other) => toChartTime(other.timestamp) === end)?.timestamp ?? null
+              )
+            }),
+          ),
+        )
+      : []
+    const mergedMarkers = [...divMarkers, ...vsaMarkers, ...stopRunMarkers, ...defendedMarkers].sort(
       (a, b) => (a.time as number) - (b.time as number),
     )
     divergenceMarkersRef.current?.setMarkers(mergedMarkers)
@@ -2390,7 +2490,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showSmc, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode, showRibbon])
+  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showSmc, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode, showRibbon, showDefendedLevels])
 
   // Incremental live-price update: the forming candle, and the fixed-reference
   // series derived from it, refreshed in place on every poll. This runs on the

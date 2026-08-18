@@ -166,6 +166,7 @@ function App() {
   const [volumeProfileDelta, setVolumeProfileDelta] = useState(false)
   const [controlOscVisible, setControlOscVisible] = useState(true)
   const [ribbonVisible, setRibbonVisible] = useState(false)
+  const [defendedVisible, setDefendedVisible] = useState(false)
   const [indicatorsVisible, setIndicatorsVisible] = useState(false)
   const [, setTick] = useState(0)
 
@@ -649,6 +650,26 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => {
+                        // The mark is measured against the Tide envelope, so
+                        // turning it on brings up the band it refers to --
+                        // otherwise the wick's reference is invisible.
+                        setDefendedVisible((v) => {
+                          if (!v) setRibbonVisible(true)
+                          return !v
+                        })
+                      }}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        defendedVisible
+                          ? 'bg-[#ffca2822] text-[#ffca28]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Piso — nível testado na borda da fita e defendido: o pavio limpou ±1σ dentro de zonas de 2+ famílias e o candle fechou de volta. O número é quantas famílias concordaram."
+                    >
+                      ⛨ Piso
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setControlOscVisible((v) => !v)}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         controlOscVisible
@@ -703,7 +724,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showSmc={smcVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible} showRibbon={ribbonVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showSmc={smcVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible} showRibbon={ribbonVisible} showDefendedLevels={defendedVisible} />
                 </div>
               </div>
 

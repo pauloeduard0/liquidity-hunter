@@ -188,6 +188,10 @@ export const SUPERTREND_LINE_WIDTH = 2
 // so a false break reads the same way wherever it appears.
 export const SUPERTREND_STOP_RUN_COLOR = '#ab47bc'
 
+// A level that was tested at the Tide envelope's edge and held. Gold, so it
+// reads as the rare confluence it is against the purple stop-run marks.
+export const DEFENDED_LEVEL_COLOR = '#ffca28'
+
 // --- Volume profile (volume-at-price) ------------------------------------
 /**
  * Length of the heaviest band, measured in **chart bars** rather than pixels,
