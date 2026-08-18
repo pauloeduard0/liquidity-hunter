@@ -86,6 +86,13 @@ const MAX_INTERNAL_SWEEPS = 3
 // it as a short segment anchored at the sweep candle rather than a line that
 // runs to the next event / chart edge.
 const SWEEP_LINE_CANDLES = 6
+// A confirmed BOS marks a staircase step: the level it broke and the candle
+// that closed through it. Once that close prints, the level is consumed, so the
+// line stops a few candles past the break (room for the label) instead of
+// running to the next superseding event / chart edge — which was what made the
+// staircase overlap itself and clutter the pane. A superseding event still cuts
+// it shorter; provisional (`BOS?`) marks are unaffected, they are the live read.
+const BOS_LINE_TRAIL_CANDLES = 4
 // VSA 'recent' mode shows only signals within the last N candles — recent
 // context without cluttering the whole history.
 const VSA_RECENT_CANDLES = 120
@@ -132,6 +139,14 @@ const CONTROL_REGIME_COLORS: Record<string, string> = {
 // twice would add no information, and the line's job here is to be readable
 // *against* the control bars, not to restate them.
 const PHASE_NEUTRAL_COLOR = '#e0b341'
+// The fill between the line and the zero baseline. Faint on purpose: it tints
+// which side of break-even price is on without competing with the bars the
+// line is meant to be read against.
+const PHASE_ABOVE_FILL = 'rgba(38, 166, 154, 0.28)'
+const PHASE_BELOW_FILL = 'rgba(239, 83, 80, 0.28)'
+const PHASE_FILL_FADE = 'rgba(0, 0, 0, 0)'
+// The +/-1 sigma rails, dim enough to read as a scale rather than as a level.
+const PHASE_RAIL_COLOR = 'rgba(224, 179, 65, 0.28)'
 
 // Split the available height across the panes. The volume-delta + RSI panes are
 // one group (`showIndicators`); the control oscillator toggles *independently*
@@ -428,6 +443,7 @@ function structureLineEndTime(
   event: MarketStructure,
   allEvents: MarketStructure[],
   lastCandleTime: UTCTimestamp,
+  bosTrailEnd?: UTCTimestamp,
 ): UTCTimestamp {
   const eventTime = toChartTime(event.timestamp)
 
@@ -497,6 +513,26 @@ function structureLineEndTime(
       )
       .map((other) => toChartTime(other.timestamp))
     candidates.push(...reversedAt)
+    // The first *confirming* same-direction BOS also ends the line. Until one
+    // prints, the CHoCH is still provisional in substance — the level it broke
+    // is what a `choch_failed` / re-arm measures, and watching price retest it
+    // is half the flip read, so the line has to survive that window. Once the
+    // BOS confirms the reversal, the level stops governing anything and the
+    // staircase takes over; keeping the line to the *next CHoCH* (the old rule)
+    // is what let it run across dozens of candles it no longer describes. This
+    // subsumes the wrong-side rebase clause above, which stays as documentation
+    // of the case that motivated it.
+    const confirmedAt = allEvents
+      .filter(
+        (other) =>
+          other.scope === event.scope &&
+          other.event === 'break_of_structure' &&
+          !other.provisional &&
+          other.direction === event.direction &&
+          toChartTime(other.timestamp) > eventTime,
+      )
+      .map((other) => toChartTime(other.timestamp))
+    candidates.push(...confirmedAt)
     return candidates.length > 0 ? (Math.min(...candidates) as UTCTimestamp) : lastCandleTime
   }
 
@@ -520,6 +556,10 @@ function structureLineEndTime(
             !isFailedChoch(other, allEvents))),
     )
     .map((other) => toChartTime(other.timestamp))
+
+  // A confirmed BOS stops shortly after its own break candle (see
+  // BOS_LINE_TRAIL_CANDLES); a superseding event can still cut it shorter.
+  if (bosTrailEnd !== undefined) supersededAt.push(bosTrailEnd)
 
   return supersededAt.length > 0 ? (Math.min(...supersededAt) as UTCTimestamp) : lastCandleTime
 }
@@ -1866,7 +1906,19 @@ export function MainChart({
             : data.candles.length - 1
         endTime = toChartTime(data.candles[endIdx].timestamp)
       } else {
-        endTime = structureLineEndTime(event, scopeEvents, lastCandleTime)
+        // A *confirmed* BOS is bounded to a short segment past its break
+        // candle; a provisional `BOS?` keeps running to the edge (it is the
+        // live reading, and shortening it would hide what is still forming).
+        let bosTrailEnd: UTCTimestamp | undefined
+        if (event.event === 'break_of_structure' && event.provisional !== true) {
+          const idx = data.candles.findIndex((c) => c.timestamp === event.timestamp)
+          const endIdx =
+            idx >= 0
+              ? Math.min(idx + BOS_LINE_TRAIL_CANDLES, data.candles.length - 1)
+              : data.candles.length - 1
+          bosTrailEnd = toChartTime(data.candles[endIdx].timestamp)
+        }
+        endTime = structureLineEndTime(event, scopeEvents, lastCandleTime, bosTrailEnd)
       }
 
       const lineStartTime =
