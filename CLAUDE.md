@@ -992,8 +992,12 @@ documented in `liquidity_hunter/docs/psychology.md`.
   the controller" flag. Same `_TIMEFRAME_WINDOW` as `OIRegimeAnalyzer` so the
   two axes are measured over one horizon. Besides the current-window snapshot
   it also emits a **rolling `series`** (`list[MarketControlPoint]`:
-  `timestamp`, `control_score`, `controller` per candle with OI coverage) for
-  the chart oscillator. `MarketControlState`/`MarketControlPoint` live in
+  `timestamp`, `control_score`, `controller`, `regime` per candle with OI
+  coverage) for the chart oscillator. `regime` is on the point (not only the
+  snapshot) because `controller` alone cannot distinguish buy aggression backed
+  by fresh longs from buy aggression that is only shorts covering — both are
+  real observations, but only the first is *control*, and collapsing the second
+  into `BALANCED` made an exhaustion rally indistinguishable from a dead tape. `MarketControlState`/`MarketControlPoint` live in
   `core/domain/market_control.py`, the `MarketControlSide` enum in
   `core/domain/enums.py`.
 
@@ -1508,8 +1512,19 @@ selector.
   **Control oscillator pane** (CVD×OI): a 4th synced pane (order: main, delta,
   control, rsi — RSI stays the bottom pane carrying the time axis) drawing
   `data.market_control.series` as a signed histogram (`control_score`,
-  -100..100), colored by `controller` (buyers green / sellers red / balanced
-  dim) — "who is in control and how strongly" in one bar. It carves its slice
+  -100..100), colored by `regime` on **two channels**
+  (`CONTROL_REGIME_COLORS`): the *hue* is the aggressor side (green buying /
+  red selling), the *fill* is whose money is behind it — solid for the OI-rising
+  buildup quadrants, the same hue at ~30% alpha ("hollow", since a histogram
+  series has no stroke) for `short_covering`/`long_liquidation`. So a rally
+  carried by shorts covering draws as a washed-out green bar: price is being
+  pushed, but by participants leaving, not arriving — the exhaustion signature
+  that reads identically to a dead tape when colored by `controller` alone.
+  Grey `flat` unchanged. Measured 2026-08-18 (BTC/SOL × 15m/1h/4h): the exit
+  quadrants are 8-11% of intraday candles, comparable to the buildup ones, so
+  the channel roughly doubles the pane's non-grey information (H4 stays ~90%
+  grey — Binance's ~30-day OI retention, not a dead channel).
+  "Who is in control, how strongly, and with whose money" in one bar. It carves its slice
   out of the main pane (`CONTROL_CHART_RATIO`) and participates in the
   logical-range time sync but not crosshair sync. Toggled by the `⚑ Control`
   toolbar button (`showControlOscillator` prop, default **off**); turning it on
@@ -1771,8 +1786,10 @@ selector.
   **Liquidity Hunt**. The **Who's in Control** card (`controlCardProps`, from
   `data.market_control`) is the CVD×OI read: `buyers` → `▲ Buyers` (green,
   badge `⚠ DON'T FADE`), `sellers` → `▼ Sellers` (red, `⚠ DON'T FADE`),
-  `balanced` → `◆ Balanced` (amber `⚠ UNWIND` when covering/liquidation, else
-  slate); sub-line `CVD ±x% · OI ±y% · conviction N`, full `description` on
+  `balanced` → `▲ Shorts covering` / `▼ Longs exiting` (amber, badge
+  `⚠ UNWIND`) in the unwinding quadrants, plain slate `◆ Balanced` only when
+  genuinely flat — the domain `controller` stays `BALANCED` (no fresh money =
+  no control), the direction is named in presentation only; sub-line `CVD ±x% · OI ±y% · conviction N`, full `description` on
   hover. `huntCardProps` in
   `KpiRow.tsx` maps `data.liquidity_hunt.phase` to presentation:
   `none` → `◆ —` / "structure aligned with HTF"; `counter_trend` →

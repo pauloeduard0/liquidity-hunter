@@ -128,18 +128,24 @@ function controlCardProps(control: MarketControlState | null): Omit<KpiCardProps
       title: control.description,
     }
   }
-  // Balanced: distinguish exhaustion (aggression unwinding) from truly flat.
-  const exhausting =
+  // No credited controller. Truly flat reads "◆ Balanced", but an *unwinding*
+  // quadrant is not the same observation and shouldn't share the label: price
+  // is being pushed by positions closing, so the direction is named (with the
+  // arrow of the push) while the amber ⚠ UNWIND says nobody is funding it.
+  // `controller` in the domain stays BALANCED — this is presentation only.
+  const unwinding =
     control.regime === 'short_covering'
-      ? 'shorts covering'
+      ? '▲ Shorts covering'
       : control.regime === 'long_liquidation'
-        ? 'longs liquidating'
+        ? '▼ Longs exiting'
         : null
   return {
-    value: '◆ Balanced',
-    accent: exhausting ? '#ff9800' : '#8a8f9c',
-    badge: exhausting ? { text: '⚠ UNWIND', color: '#ff9800' } : undefined,
-    sub: exhausting ? `${exhausting} · ${oiCtx}` : oiCtx,
+    value: unwinding ?? '◆ Balanced',
+    accent: unwinding ? '#ff9800' : '#8a8f9c',
+    badge: unwinding ? { text: '⚠ UNWIND', color: '#ff9800' } : undefined,
+    sub: unwinding
+      ? `${oiCtx} · conviction ${control.conviction.toFixed(0)}`
+      : oiCtx,
     title: control.description,
   }
 }

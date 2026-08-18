@@ -83,6 +83,11 @@ export interface MarketControlPoint {
   timestamp: string
   control_score: number
   controller: MarketControlSide
+  /** The full CVD×OI quadrant. Distinguishes buy aggression backed by fresh
+   *  longs (`long_buildup`) from buy aggression that is only shorts covering
+   *  (`short_covering`) — both read `balanced`/`buyers` ambiguously on
+   *  `controller` alone. Drives the oscillator's solid-vs-hollow fill. */
+  regime: OIRegime
 }
 
 /** Who is in control of the tape right now, from CVD aggression × open interest

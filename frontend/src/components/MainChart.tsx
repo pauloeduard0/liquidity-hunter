@@ -106,11 +106,26 @@ const CONTROL_CHART_RATIO = 0.14
 const MIN_TOTAL_HEIGHT = 500
 const PRICE_SCALE_MIN_WIDTH = 110
 
-// Colors for the control oscillator (CVD × OI): buyers green, sellers red,
-// balanced (aggression unwinding / flat, no conviction-backed control) dim.
+// Colors for the control oscillator (CVD × OI). Two channels on one bar:
+// the *hue* is the aggressor side (green buying / red selling), the *fill* is
+// the nature of the flow -- solid where open interest confirms fresh money
+// (`*_buildup`), washed out where the aggression is only positions closing
+// (`short_covering` / `long_liquidation`). A rally carried by shorts covering
+// therefore draws as a hollow-looking green bar: price is being pushed, but by
+// people leaving, not by anyone arriving. A histogram series has no stroke, so
+// "hollow" is rendered as the same hue at low alpha.
 const CONTROL_BUYERS_COLOR = '#26a69a'
 const CONTROL_SELLERS_COLOR = '#ef5350'
 const CONTROL_BALANCED_COLOR = '#4a5163'
+// Exit-flow fill: same hue, ~30% alpha.
+const CONTROL_UNWIND_ALPHA = '4d'
+const CONTROL_REGIME_COLORS: Record<string, string> = {
+  long_buildup: CONTROL_BUYERS_COLOR,
+  short_buildup: CONTROL_SELLERS_COLOR,
+  short_covering: `${CONTROL_BUYERS_COLOR}${CONTROL_UNWIND_ALPHA}`,
+  long_liquidation: `${CONTROL_SELLERS_COLOR}${CONTROL_UNWIND_ALPHA}`,
+  flat: CONTROL_BALANCED_COLOR,
+}
 
 // The phase line sits over those bars. It gets its own hue rather than
 // repeating the structural trend the ribbon already carries -- the same colour
@@ -1499,15 +1514,11 @@ export function MainChart({
     )
 
     // Control oscillator (CVD aggression × OI): signed conviction per candle,
-    // colored by who is credited with control (buyers green / sellers red /
-    // balanced dim). A single histogram doubles as "who + how strongly".
+    // hue = the aggressor side, fill = whether open interest backs it (solid
+    // buildup vs washed-out covering/liquidation). A single histogram carries
+    // "who, how strongly, and with whose money".
     const controlSeries = controlSeriesRef.current
     if (controlSeries) {
-      const controlColor: Record<string, string> = {
-        buyers: CONTROL_BUYERS_COLOR,
-        sellers: CONTROL_SELLERS_COLOR,
-        balanced: CONTROL_BALANCED_COLOR,
-      }
       // Index the sparse control readings by candle timestamp, then emit an
       // entry for *every* candle -- a real bar where there's a reading, a
       // whitespace `{ time }` otherwise -- so bar indices match the main/delta
@@ -1520,7 +1531,11 @@ export function MainChart({
           const time = toChartTime(candle.timestamp)
           const p = controlByTs.get(candle.timestamp)
           return p
-            ? { time, value: p.control_score, color: controlColor[p.controller] ?? CONTROL_BALANCED_COLOR }
+            ? {
+                time,
+                value: p.control_score,
+                color: CONTROL_REGIME_COLORS[p.regime] ?? CONTROL_BALANCED_COLOR,
+              }
             : { time }
         }),
       )
@@ -2371,15 +2386,10 @@ export function MainChart({
     const controlSeries = controlSeriesRef.current
     const controlPoint = data.market_control?.series?.find((p) => p.timestamp === last.timestamp)
     if (controlSeries && controlPoint) {
-      const controlColor: Record<string, string> = {
-        buyers: CONTROL_BUYERS_COLOR,
-        sellers: CONTROL_SELLERS_COLOR,
-        balanced: CONTROL_BALANCED_COLOR,
-      }
       controlSeries.update({
         time,
         value: controlPoint.control_score,
-        color: controlColor[controlPoint.controller] ?? CONTROL_BALANCED_COLOR,
+        color: CONTROL_REGIME_COLORS[controlPoint.regime] ?? CONTROL_BALANCED_COLOR,
       })
     }
 

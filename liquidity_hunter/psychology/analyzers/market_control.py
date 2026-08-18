@@ -114,6 +114,7 @@ class MarketControlAnalyzer:
                     timestamp=candles[end].timestamp,
                     control_score=reading.control_score,
                     controller=reading.controller,
+                    regime=reading.regime,
                 )
             )
 

@@ -63,6 +63,15 @@ def _flip_series(
     ]
 
 
+def _regime_for(controller: MarketControlSide) -> OIRegime:
+    """The OI-rising quadrant a credited controller implies (FLAT if none)."""
+    if controller is MarketControlSide.BUYERS:
+        return OIRegime.LONG_BUILDUP
+    if controller is MarketControlSide.SELLERS:
+        return OIRegime.SHORT_BUILDUP
+    return OIRegime.FLAT
+
+
 def _control(
     controller: MarketControlSide, timestamps: list[datetime]
 ) -> MarketControlState:
@@ -82,7 +91,10 @@ def _control(
         description="",
         series=[
             MarketControlPoint(
-                timestamp=ts, control_score=50.0, controller=controller
+                timestamp=ts,
+                control_score=50.0,
+                controller=controller,
+                regime=_regime_for(controller),
             )
             for ts in timestamps
         ],

@@ -1283,6 +1283,13 @@ def _control_series(
             timestamp=T0 + H1 * i,
             control_score=40.0 if side is MarketControlSide.BUYERS else -40.0,
             controller=side,
+            regime=(
+                OIRegime.LONG_BUILDUP
+                if side is MarketControlSide.BUYERS
+                else OIRegime.SHORT_BUILDUP
+                if side is MarketControlSide.SELLERS
+                else OIRegime.FLAT
+            ),
         )
         for i, side in points
     ]

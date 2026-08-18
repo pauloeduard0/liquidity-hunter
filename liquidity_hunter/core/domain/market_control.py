@@ -23,13 +23,17 @@ class MarketControlPoint(DomainModel):
 
     ``control_score`` is the signed conviction (``[-100, 100]``, positive =
     buyers), ``controller`` the credited side at that candle (only the
-    OI-rising quadrants credit a side). Kept lightweight: the full context
-    lives on the snapshot :class:`MarketControlState`.
+    OI-rising quadrants credit a side), and ``regime`` the full quadrant — so a
+    consumer can tell *buy aggression on fresh longs* (``LONG_BUILDUP``) from
+    *buy aggression on shorts covering* (``SHORT_COVERING``), which both credit
+    differently but read identically on ``controller`` alone. Kept lightweight:
+    the full context lives on the snapshot :class:`MarketControlState`.
     """
 
     timestamp: datetime
     control_score: float = Field(ge=-100.0, le=100.0)
     controller: MarketControlSide
+    regime: OIRegime
 
 
 class MarketControlState(DomainModel):
