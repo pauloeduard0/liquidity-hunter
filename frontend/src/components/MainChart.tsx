@@ -37,7 +37,7 @@ import { RibbonPrimitive } from '../charting/RibbonPrimitive'
 import { buildPhase, buildRibbon } from '../utils/tideRibbon'
 import type { DefendedMark } from '../utils/defendedLevels'
 import { buildDefenceLevels, buildDefendedMarks } from '../utils/defendedLevels'
-import type { BehaviorDivergence, DashboardData, LiquidationBand, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
+import type { BehaviorDivergence, DashboardData, LiquidationBand, LiquidityZone, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -85,6 +85,11 @@ import {
 import { setChartTimezoneMode, toChartTime } from '../utils/chartTime'
 
 const TOP_N_ZONES = 5
+// How many already-taken pools stay on the chart. Measured across six
+// symbol/timeframe combos, a 1200-candle window accumulates 48-80 grabbed
+// pools -- drawing them all would bury the standing ones, and a pool grabbed
+// hundreds of candles ago is no longer anyone's memory.
+const MAX_GRABBED_POOLS = 4
 const MAX_INTERNAL_SWEEPS = 3
 // A sweep is a momentary stop-grab at a wick, not a standing reference: draw
 // it as a short segment anchored at the sweep candle rather than a line that
@@ -1747,24 +1752,66 @@ export function MainChart({
           )
           .slice(0, TOP_N_ZONES)
       : []
-    for (const scored of poolZones) {
+    // `ranked_zones` carries only pools that are still standing -- a scored
+    // target has to be reachable. So the pools that were *taken* have to be
+    // read from the full zone list, and there are far too many of them to draw
+    // (48-80 per chart, measured across six combos): only the latest few are
+    // still the market's memory, and a chart of every pool ever grabbed is a
+    // chart of nothing. These carry no score -- their reading is the moment
+    // they were consumed, not a distance to price.
+    // One candle routinely takes several stacked pools at once (four equal-high
+    // zones within a few ticks are one impulse, not four events), so the grabs
+    // are deduplicated per candle and side and the strongest pool represents
+    // each — otherwise the cap is spent drawing the same moment repeatedly.
+    const grabsByMoment = new Map<string, LiquidityZone>()
+    if (showEqlZones) {
+      for (const zone of data.liquidity_zones) {
+        if (zone.zone_type !== 'equal_highs' && zone.zone_type !== 'equal_lows') continue
+        if (!zone.is_mitigated || zone.invalidated_at === null) continue
+        const key = `${zone.invalidated_at}|${zone.zone_type}`
+        const kept = grabsByMoment.get(key)
+        if (!kept || zone.strength > kept.strength) grabsByMoment.set(key, zone)
+      }
+    }
+    const grabbedZones = [...grabsByMoment.values()]
+      .sort((a, b) => (a.invalidated_at! < b.invalidated_at! ? 1 : -1))
+      .slice(0, MAX_GRABBED_POOLS)
+    for (const scored of [
+      ...poolZones,
+      ...grabbedZones.map((zone) => ({ zone, score: null as number | null })),
+    ]) {
       const { zone, score } = scored
       const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
       const label = ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type
       // Strength (touch count) as filled dots: 3+ touches ●●●, 2 touches ●●.
       const dotCount = Math.max(2, Math.min(3, Math.round(zone.strength * 3)))
       const dots = '●'.repeat(dotCount)
-      const title = `${label} · ${dots} · ${score.toFixed(0)}`
+      // A standing pool is labelled by how good a target it is (its score); a
+      // taken one by what happened to it, which is the only thing left to say
+      // about it. `⚡` = the wick took the orders and the candle closed back
+      // inside; `✕` = the candle closed beyond and the level was spent.
+      const title = score !== null
+        ? `${label} · ${dots} · ${score.toFixed(0)}`
+        : `${label} · ${zone.sweep_rejected ? '⚡' : '✕'}`
       const startTime = toChartTime(zone.formed_at)
+      // A pool stops existing where it was taken, so the band stops there too
+      // — the moment of the grab is the reading, and a band running on to the
+      // right edge throws it away. Still-standing pools keep the sentinel.
+      const endTime = (
+        zone.invalidated_at
+          ? toChartTime(zone.invalidated_at)
+          : ((lastCandleTime + 9_999_999) as UTCTimestamp)
+      ) as Time
 
       eqlZones.push({
         x0: startTime as Time,
-        x1: (lastCandleTime + 9_999_999) as UTCTimestamp as Time,
+        x1: endTime,
         priceLow: zone.price_low,
         priceHigh: zone.price_high,
         color,
         strength: zone.strength,
         swept: zone.is_mitigated,
+        rejected: zone.sweep_rejected,
       })
       // Keep the label outside the band: EQH above its upper edge, EQL below
       // its lower edge — never inside the box, where it hides candles.
@@ -1776,7 +1823,7 @@ export function MainChart({
       const labelPrice = isEql ? zone.price_low : zone.price_high
       labels.push({
         time: startTime,
-        timeEnd: (lastCandleTime + 9_999_999) as UTCTimestamp as Time,
+        timeEnd: endTime,
         price: labelPrice,
         color,
         text: title,

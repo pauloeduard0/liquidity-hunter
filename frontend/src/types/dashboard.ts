@@ -133,7 +133,12 @@ export interface LiquidityZone {
   price_high: number
   price_low: number
   formed_at: string
+  /** First candle whose wick reached through the zone — the grab. */
   invalidated_at: string | null
+  /** First candle whose close landed beyond it — the level spent. */
+  breached_at: string | null
+  /** Whether the sweeping candle closed back inside — the grab handed back. */
+  sweep_rejected: boolean
   strength: number
   is_mitigated: boolean
 }

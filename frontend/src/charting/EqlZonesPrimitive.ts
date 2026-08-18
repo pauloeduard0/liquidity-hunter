@@ -13,7 +13,11 @@ import type { CanvasRenderingTarget2D } from 'fancy-canvas'
 export interface EqlZoneInput {
   /** Left edge: the candle that formed the pool. */
   x0: Time
-  /** Right edge: a far-future sentinel keeps the pool running to the edge. */
+  /**
+   * Right edge: the candle that took the pool, or a far-future sentinel while
+   * it is still standing. A pool that ends where it was taken says *when* the
+   * liquidity was consumed; one that runs to the edge only says it existed.
+   */
   x1: Time
   priceLow: number
   priceHigh: number
@@ -23,6 +27,8 @@ export interface EqlZoneInput {
   strength: number
   /** True once the pool has been swept (mitigated). */
   swept: boolean
+  /** True when the sweeping candle closed back inside — the grab handed back. */
+  rejected?: boolean
 }
 
 interface ResolvedZone {
@@ -33,6 +39,9 @@ interface ResolvedZone {
   rgb: [number, number, number]
   fillAlpha: number
   swept: boolean
+  rejected: boolean
+  /** Whether `x1` is a real candle rather than the running-to-the-edge sentinel. */
+  terminated: boolean
 }
 
 // A pool's band is intentionally subtle so candles stay legible; the border
@@ -43,6 +52,9 @@ const FILL_ALPHA_MAX = 0.16
 const SWEPT_ALPHA_FACTOR = 0.4
 // A degenerate pool (equal_high === equal_low) still needs a visible band.
 const MIN_BAND_HEIGHT = 3
+// The terminator bar reaches slightly past the band's edges, so a thin pool
+// still reads as a mark on the chart rather than as a thickened border.
+const TERMINATOR_OVERHANG = 3
 
 function hexToRgb(hex: string): [number, number, number] {
   const h = hex.replace('#', '')
@@ -89,6 +101,21 @@ class EqlZonesRenderer implements IPrimitivePaneRenderer {
         context.lineTo(right, top + height)
         context.stroke()
         context.setLineDash([])
+
+        // The terminator: the candle that took the pool. Without it a consumed
+        // band just stops, which reads as the chart running out of data rather
+        // than as liquidity being taken at a moment. A grab that was handed
+        // back on its own candle closes with a solid bar; one whose candle
+        // closed beyond gets a dotted bar, since nothing was defended there.
+        if (!zone.terminated || right >= mediaSize.width) continue
+        context.strokeStyle = `rgba(${r}, ${g}, ${b}, ${Math.min(1, zone.fillAlpha + 0.7).toFixed(3)})`
+        context.lineWidth = zone.rejected ? 2 : 1
+        context.setLineDash(zone.rejected ? [] : [2, 2])
+        context.beginPath()
+        context.moveTo(right, top - TERMINATOR_OVERHANG)
+        context.lineTo(right, top + height + TERMINATOR_OVERHANG)
+        context.stroke()
+        context.setLineDash([])
       }
     })
   }
@@ -116,14 +143,20 @@ class EqlZonesPaneView implements IPrimitivePaneView {
       let fillAlpha = FILL_ALPHA_MIN + t * (FILL_ALPHA_MAX - FILL_ALPHA_MIN)
       if (zone.swept) fillAlpha *= SWEPT_ALPHA_FACTOR
 
+      // The sentinel is far past the last candle, so it has no coordinate and
+      // the band is clamped to the pane's right edge; a real end candle does.
+      const x1 = timeScale.timeToCoordinate(zone.x1)
+
       resolved.push({
         x0: timeScale.timeToCoordinate(zone.x0),
-        x1: timeScale.timeToCoordinate(zone.x1),
+        x1,
         yTop,
         yBottom,
         rgb: hexToRgb(zone.color),
         fillAlpha,
         swept: zone.swept,
+        rejected: zone.rejected ?? false,
+        terminated: x1 !== null,
       })
     }
 
@@ -136,9 +169,11 @@ class EqlZonesPaneView implements IPrimitivePaneView {
  * Draws equal-high / equal-low liquidity pools as shaded horizontal bands on the
  * main pane: each spans the pool's full price thickness (`priceLow`→`priceHigh`,
  * the equal-level edges where resting orders sit) from its formation candle to
- * the right edge. Fill opacity scales with pool strength (touch count); swept
- * pools render ghosted with dashed edges. Attach once to the candlestick series
- * and call `setZones()` on each data refresh.
+ * the candle that took it — or to the right edge while it is still standing.
+ * Fill opacity scales with pool strength (touch count); swept pools render
+ * ghosted with dashed edges, closed by a terminator bar at the grab (solid when
+ * the sweep was handed back, dotted when a close spent the level). Attach once
+ * to the candlestick series and call `setZones()` on each data refresh.
  */
 export class EqlZonesPrimitive implements ISeriesPrimitive<Time> {
   chart: IChartApi | null = null
