@@ -519,12 +519,9 @@ function poiBoxEndTime(zone: POIZone, lastCandleTime: UTCTimestamp): UTCTimestam
     : ((lastCandleTime + 9_999_999) as UTCTimestamp)
 }
 
-// Short labels per MSB zone kind: order block / breaker block / mitigation block.
-const POI_KIND_LABELS: Record<string, string> = {
-  order_block: 'OB',
-  breaker_block: 'BB',
-  mitigation_block: 'MB',
-}
+// Only order blocks are drawn (see `selectVisiblePoiZones`), so every box
+// carries the same label; the direction is already in the box color.
+const POI_KIND_LABEL = 'OB'
 
 const DIVERGENCE_MARKER_SHAPES: Record<string, { shape: 'circle' | 'square' | 'arrowUp' | 'arrowDown'; position: 'aboveBar' | 'belowBar' }> = {
   distribution: { shape: 'arrowDown', position: 'aboveBar' },
@@ -593,35 +590,25 @@ function selectVisibleLiquidationBands(
   return selected
 }
 
-// Chart-only declutter for POI order blocks: an ACTIVE zone legitimately
-// extends to the right edge while armed, so over time far-from-price ones
-// accumulate as clutter. Keep only the most recent few per direction, and only
-// those within a price window derived from the *visible candle range* — not a
-// fixed % of price, which would need retuning per asset/timeframe volatility.
-// Invalidated zones are dropped (the script deletes broken boxes). Each MSB
-// emits up to two same-direction zones (OB + breaker/mitigation block), so
-// the cap covers two full breaks per direction.
-const POI_MAX_ACTIVE_PER_DIRECTION = 4
-const POI_PRICE_WINDOW_RANGE_FRACTION = 0.35
-
-function selectVisiblePoiZones(
-  zones: POIZone[],
-  currentPrice: number,
-  visiblePriceRange: number,
-): POIZone[] {
-  const window = visiblePriceRange * POI_PRICE_WINDOW_RANGE_FRACTION
-  // Distance from current price to the zone itself (0 when price is inside it).
-  const distance = (z: POIZone) =>
-    Math.max(z.price_low - currentPrice, currentPrice - z.price_high, 0)
-  const active = zones.filter((z) => z.status === 'active' && distance(z) <= window)
-  const byRecency = (a: POIZone, b: POIZone) =>
-    Date.parse(b.created_at) - Date.parse(a.created_at)
-  const takeRecent = (direction: POIZone['direction']) =>
-    active
-      .filter((z) => z.direction === direction)
-      .sort(byRecency)
-      .slice(0, POI_MAX_ACTIVE_PER_DIRECTION)
-  return [...takeRecent('bullish'), ...takeRecent('bearish')]
+// Which POI zones the chart draws. This used to be a declutter pass — a cap
+// per direction plus a price window around the last close — because ACTIVE
+// zones piled up: the detector retired a box only when price closed through
+// *that* box, so every shelf the market never revisited stayed armed forever
+// and the pane filled with stale rectangles.
+//
+// The pile-up was a porting gap, not a display problem, and it is fixed at the
+// source now (see `POIDetector`'s queue retirement, which follows the
+// indicator's own rule: a break retires the *oldest* box of its queue). A chart
+// carries 0-5 surviving order blocks, so there is nothing left to declutter and
+// the chart shows exactly what survives — no cap, no distance window, which
+// would now be a second, invented filter on top of the indicator's.
+//
+// The one thing still filtered here is *kind*: only order blocks are drawn.
+// Each MSB also emits a breaker/mitigation block from the same break, sitting a
+// few ticks away and doubling the ink for one observation. The full set stays in
+// `poi_zones` for the API and for the liquidation map's entry anchors.
+function selectVisiblePoiZones(zones: POIZone[]): POIZone[] {
+  return zones.filter((z) => z.status === 'active' && z.kind === 'order_block')
 }
 
 // VWAP: each accumulation is its own line. A session series restarts at every
@@ -1989,17 +1976,12 @@ export function MainChart({
 
     // POI order block zones (MSB-anchored; box starts at the OB candle)
     {
-      const visiblePriceRange =
-        Math.max(...data.candles.map((c) => c.high)) -
-        Math.min(...data.candles.map((c) => c.low))
       const poiBoxes: POIBox[] = []
-      for (const zone of showOrderBlocks
-        ? selectVisiblePoiZones(data.poi_zones ?? [], data.current_price, visiblePriceRange)
-        : []) {
+      for (const zone of showOrderBlocks ? selectVisiblePoiZones(data.poi_zones ?? []) : []) {
         const style = POI_BOX_STYLES[zone.direction] ?? POI_BOX_STYLES.bearish
         const endTime = poiBoxEndTime(zone, lastCandleTime)
         // No direction arrow: the box color already encodes it.
-        const kindLabel = POI_KIND_LABELS[zone.kind] ?? 'OB'
+        const kindLabel = POI_KIND_LABEL
 
         poiBoxes.push({
           x0: toChartTime(zone.ob_candle_timestamp),

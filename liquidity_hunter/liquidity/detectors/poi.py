@@ -49,10 +49,29 @@ MITIGATION_BLOCK. All zones span the anchor candle's full high-low range.
 Zone lifecycle
 --------------
 ACTIVE -> INVALIDATED
-  A single candle *close* beyond the far boundary (below ``price_low`` for
-  a bullish zone, above ``price_high`` for a bearish one) retires the zone,
-  checked from the creation candle onward. Price trading back inside the
-  zone does not retire it. Identical for all zone kinds.
+
+A zone is broken by a single candle *close* beyond its far boundary (below
+``price_low`` for a bullish zone, above ``price_high`` for a bearish one);
+price trading back inside it does not break it. But a broken zone does not
+retire *itself*. The indicator holds its boxes in four FIFO arrays (Bu-OB,
+Be-OB, Bu-BB, Be-BB) and its delete helper shifts the array's **front**, so
+each break retires the **oldest** box of that queue, and a box that stays
+broken keeps shifting the queue on every later bar until it reaches the front
+itself. The effect is a running cull that keeps only the recent, unbroken
+shelves: a chart carries a handful of zones rather than every level the market
+never came back to.
+
+This asymmetry is what a per-zone reading of the rule gets wrong. Measured on
+ZECUSDT H1 (1500 candles, 2026-08-18): retiring each broken zone individually
+leaves 10 active zones, while the queue rule leaves 4 -- three order blocks,
+matching the three boxes the indicator draws on the same series. ``retire_fifo``
+switches back to the per-zone rule for callers that want it.
+
+The indicator seeds each array with five ``na`` slots, so its first five
+retirements per queue delete nothing. That is not reproduced: over a production
+window the placeholders are consumed long before the visible range and change
+nothing (verified on ZECUSDT H1: identical zones either way), while on a short
+series they would suppress retirement entirely.
 """
 
 from dataclasses import dataclass
@@ -74,6 +93,11 @@ from liquidity_hunter.core.domain.poi_zone import POIZone
 class _Pivot:
     price: float
     index: int
+
+
+def _queue_key(kind: POIZoneKind) -> str:
+    """Which of the indicator's four box arrays a zone belongs to."""
+    return "ob" if kind is POIZoneKind.ORDER_BLOCK else "bb"
 
 
 @dataclass
@@ -103,15 +127,25 @@ class POIDetector:
     fib_factor:
         Fraction of the preceding leg's height a new pivot must exceed the
         broken pivot by to confirm an MSB. Default 0.33.
+    retire_fifo:
+        Whether a break retires the oldest zone of its queue (the indicator's
+        rule, default) rather than the broken zone itself. See the module
+        docstring's "Zone lifecycle".
     """
 
-    def __init__(self, pivot_len: int = 9, fib_factor: float = 0.33) -> None:
+    def __init__(
+        self,
+        pivot_len: int = 9,
+        fib_factor: float = 0.33,
+        retire_fifo: bool = True,
+    ) -> None:
         if pivot_len < 2:
             raise ValueError("pivot_len must be >= 2")
         if not 0.0 <= fib_factor <= 1.0:
             raise ValueError("fib_factor must be within [0, 1]")
         self._pivot_len = pivot_len
         self._fib_factor = fib_factor
+        self._retire_fifo = retire_fifo
 
     def detect(self, candles: list[Candle]) -> list[POIZone]:
         plen = self._pivot_len
@@ -153,6 +187,11 @@ class POIDetector:
         bu_ob_idx = be_ob_idx = bu_bb_idx = be_bb_idx = 0
 
         zones: list[_ZoneState] = []
+        live: dict[tuple[MarketDirection, str], list[_ZoneState | None]] = {
+            (direction, key): []
+            for direction in (MarketDirection.BULLISH, MarketDirection.BEARISH)
+            for key in ("ob", "bb")
+        }
 
         for i in range(n):
             # --- pivot value windows (barssince the previous signal, min 1) ---
@@ -231,31 +270,38 @@ class POIDetector:
 
             # --- zone creation on the MSB flip ---
             if flipped == MarketDirection.BULLISH:
-                self._append_zone(zones, candles, flipped, POIZoneKind.ORDER_BLOCK, bu_ob_idx, i)
+                self._append_zone(
+                    zones, candles, flipped, POIZoneKind.ORDER_BLOCK, bu_ob_idx, i, live
+                )
                 bb_kind = (
                     POIZoneKind.BREAKER_BLOCK
                     if l0 < l1
                     else POIZoneKind.MITIGATION_BLOCK
                 )
-                self._append_zone(zones, candles, flipped, bb_kind, bu_bb_idx, i)
+                self._append_zone(zones, candles, flipped, bb_kind, bu_bb_idx, i, live)
             elif flipped == MarketDirection.BEARISH:
-                self._append_zone(zones, candles, flipped, POIZoneKind.ORDER_BLOCK, be_ob_idx, i)
+                self._append_zone(
+                    zones, candles, flipped, POIZoneKind.ORDER_BLOCK, be_ob_idx, i, live
+                )
                 bb_kind = (
                     POIZoneKind.BREAKER_BLOCK
                     if h0 > h1
                     else POIZoneKind.MITIGATION_BLOCK
                 )
-                self._append_zone(zones, candles, flipped, bb_kind, be_bb_idx, i)
+                self._append_zone(zones, candles, flipped, bb_kind, be_bb_idx, i, live)
 
             # --- lifecycle (checked from the creation candle onward) ---
-            for zone in zones:
-                if zone.invalidated_index is not None:
-                    continue
-                if zone.direction == MarketDirection.BULLISH:
-                    if closes[i] < zone.price_low:
+            if self._retire_fifo:
+                self._retire_oldest_on_break(live, closes[i], i)
+            else:
+                for zone in zones:
+                    if zone.invalidated_index is not None:
+                        continue
+                    if zone.direction == MarketDirection.BULLISH:
+                        if closes[i] < zone.price_low:
+                            zone.invalidated_index = i
+                    elif closes[i] > zone.price_high:
                         zone.invalidated_index = i
-                elif closes[i] > zone.price_high:
-                    zone.invalidated_index = i
 
             # --- signal trackers feed the *next* bar's windows (to_up[1]) ---
             if to_up[i]:
@@ -301,17 +347,48 @@ class POIDetector:
         kind: POIZoneKind,
         anchor_index: int,
         msb_index: int,
+        live: dict[tuple[MarketDirection, str], list[_ZoneState | None]] | None = None,
     ) -> None:
         anchor = candles[anchor_index]
         if anchor.high <= anchor.low:
             return  # degenerate candle with no range
-        zones.append(
-            _ZoneState(
-                direction=direction,
-                kind=kind,
-                price_low=anchor.low,
-                price_high=anchor.high,
-                created_index=msb_index,
-                ob_candle_index=anchor_index,
-            )
+        zone = _ZoneState(
+            direction=direction,
+            kind=kind,
+            price_low=anchor.low,
+            price_high=anchor.high,
+            created_index=msb_index,
+            ob_candle_index=anchor_index,
         )
+        zones.append(zone)
+        if live is not None:
+            live[(direction, _queue_key(kind))].append(zone)
+
+    @staticmethod
+    def _retire_oldest_on_break(
+        live: dict[tuple[MarketDirection, str], list[_ZoneState | None]],
+        close: float,
+        index: int,
+    ) -> None:
+        """Retire the oldest zone of a queue for each broken zone in it.
+
+        The indicator's own retirement rule (see the module docstring's
+        "Zone lifecycle"): a broken box does not delete *itself*, it shifts the
+        **front** of its array. So a break retires the oldest box of that queue,
+        and the broken one keeps triggering a shift on every later bar it stays
+        broken -- draining the queue until it reaches the front itself.
+        """
+        for queue in live.values():
+            broken = 0
+            for zone in queue:
+                if zone is None:
+                    continue
+                if zone.direction == MarketDirection.BULLISH:
+                    if close < zone.price_low:
+                        broken += 1
+                elif close > zone.price_high:
+                    broken += 1
+            for _ in range(min(broken, len(queue))):
+                retired = queue.pop(0)
+                if retired is not None and retired.invalidated_index is None:
+                    retired.invalidated_index = index

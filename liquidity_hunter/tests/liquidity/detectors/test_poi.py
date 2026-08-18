@@ -14,6 +14,7 @@ from liquidity_hunter.core.domain import (
     TimeFrame,
 )
 from liquidity_hunter.liquidity import POIDetector
+from liquidity_hunter.liquidity.detectors.poi import _ZoneState
 
 SYMBOL = "BTCUSDT"
 TF = TimeFrame.H1
@@ -316,3 +317,60 @@ class TestEdgeCases:
             POIDetector(pivot_len=1)
         with pytest.raises(ValueError):
             POIDetector(fib_factor=1.5)
+
+
+class TestQueueRetirement:
+    """The indicator retires the *oldest* box of a queue, not the broken one.
+
+    See the module docstring's "Zone lifecycle": the delete helper shifts the
+    array's front, so a break of a recent box culls the stalest one, and a box
+    that stays broken keeps draining the queue on every later bar.
+    """
+
+    @staticmethod
+    def _zone(price_low: float, price_high: float) -> _ZoneState:
+        return _ZoneState(
+            direction=MarketDirection.BULLISH,
+            kind=POIZoneKind.ORDER_BLOCK,
+            price_low=price_low,
+            price_high=price_high,
+            created_index=0,
+            ob_candle_index=0,
+        )
+
+    def test_break_retires_the_oldest_zone_not_the_broken_one(self) -> None:
+        oldest = self._zone(90.0, 92.0)
+        newest = self._zone(100.0, 102.0)
+        queue: list[_ZoneState | None] = [oldest, newest]
+
+        # A close below 100 breaks only the *newest* zone...
+        POIDetector._retire_oldest_on_break(
+            {(MarketDirection.BULLISH, "ob"): queue}, 99.0, 7
+        )
+
+        # ...but the oldest is the one retired, and the broken one stays armed.
+        assert oldest.invalidated_index == 7
+        assert newest.invalidated_index is None
+        assert queue == [newest]
+
+    def test_a_zone_that_stays_broken_keeps_draining_the_queue(self) -> None:
+        zones = [self._zone(90.0 + 10 * i, 92.0 + 10 * i) for i in range(3)]
+        queue: list[_ZoneState | None] = list(zones)
+        live = {(MarketDirection.BULLISH, "ob"): queue}
+
+        # 99.0 stays below the newest two zones on both bars: two shifts each.
+        POIDetector._retire_oldest_on_break(live, 99.0, 7)
+        assert [z.invalidated_index for z in zones] == [7, 7, None]
+        POIDetector._retire_oldest_on_break(live, 99.0, 8)
+        assert zones[2].invalidated_index == 8
+        assert queue == []
+
+    def test_retire_fifo_false_restores_per_zone_retirement(self) -> None:
+        candles = [
+            *_bullish_msb_candles(),
+            _candle(26, 104.5, 104.7, 96.5, 96.8),
+        ]
+        zones = POIDetector(pivot_len=3, retire_fifo=False).detect(candles)
+
+        assert zones[2].status == POIZoneStatus.INVALIDATED
+        assert zones[2].invalidated_at == _ts(26)

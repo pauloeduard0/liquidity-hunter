@@ -165,8 +165,9 @@ and `validate_assignment=True`. New entities should follow this pattern.
   anchor candle — the box's left edge), `status` (`POIZoneStatus`:
   `ACTIVE`/`INVALIDATED`), `invalidated_at`. A single candle *close* beyond
   the far boundary (below `price_low` for bullish, above `price_high` for
-  bearish) invalidates the zone; price touching back inside does not retire
-  it. Identical lifecycle for all kinds.
+  bearish) *breaks* the zone; price touching back inside does not. A broken
+  zone does not retire itself, though — it retires the **oldest** zone of its
+  queue (see `POIDetector`). Identical lifecycle for all kinds.
 - **`ConsolidationRange`** — an observed lateral consolidation, defined in
   `core/domain/consolidation.py`: a stretch of candles with **no structure
   advance** where price oscillated inside a volatility-bounded box (at least
@@ -770,11 +771,26 @@ re-exported from `liquidity_hunter.data`.
   (bullish `l0 < l1`, bearish `h0 > h1`), else mitigation. Because the scans
   are running state, an anchor persists from earlier windows when the
   current window has no matching candle (faithful to the indicator). All
-  zones span the anchor candle's full high-low range. Lifecycle (all
-  kinds): `ACTIVE → INVALIDATED` on a **single close** beyond the far
-  boundary, checked from the creation candle onward; touches inside the
-  zone never retire it. There is no MITIGATED state and no RTO sweep events
-  (removed with the old CHoCH→BOS detector).
+  zones span the anchor candle's full high-low range.
+
+  **Lifecycle (all kinds)**: a **single close** beyond the far boundary
+  *breaks* a zone (touches inside never do), but a broken zone does not retire
+  *itself*. The indicator holds its boxes in four FIFO arrays (Bu-OB, Be-OB,
+  Bu-BB, Be-BB) whose delete helper shifts the array's **front**, so each break
+  retires the **oldest** box of that queue, and a box that stays broken keeps
+  shifting the queue every later bar until it reaches the front itself — a
+  running cull that leaves only the recent, unbroken shelves. Reading the rule
+  per zone instead was the port's one divergence from the on-chart picture, and
+  it was the cause of the accumulated-box clutter: measured on ZECUSDT H1
+  (1500 candles, 2026-08-18), per-zone retirement leaves 10 active zones while
+  the queue rule leaves 4 — three order blocks, exactly the three boxes the
+  indicator draws on the same series. `retire_fifo=False` restores the per-zone
+  rule. The indicator's five `na` array slots (which make its first five
+  retirements per queue delete nothing) are deliberately *not* reproduced: they
+  are consumed long before a production window's visible range (verified
+  identical on ZECUSDT H1) and would suppress retirement entirely on a short
+  series. There is no MITIGATED state and no RTO sweep events (removed with the
+  old CHoCH→BOS detector).
 
 - **`liquidity/detectors/consolidation.py`** — `detect_consolidation_ranges`
   and `stage_breakout_events`,
@@ -1592,9 +1608,13 @@ selector.
   (`ob_candle_timestamp`) and its right edge extends to `invalidated_at` (the
   candle whose close broke the zone); while the zone is ACTIVE, a far-future
   sentinel timestamp is used so `timeToCoordinate` returns `null` and the
-  right edge is clamped to `mediaSize.width` (full pane width). Only ACTIVE
-  zones are drawn (`selectVisiblePoiZones` drops invalidated ones and keeps
-  the most recent few per direction near price).
+  right edge is clamped to `mediaSize.width` (full pane width).
+  `selectVisiblePoiZones` keeps ACTIVE **order blocks** only: breaker/mitigation
+  blocks sit a few ticks from the order block of the same MSB and double the ink
+  for one observation (they stay in `poi_zones` for the API and the liquidation
+  map's entry anchors). It applies no cap and no distance window — the
+  detector's queue retirement leaves 0-5 zones per chart, so the chart draws
+  exactly what survives rather than filtering the indicator a second time.
   Also reused for manipulation cycle accumulation boxes (second instance) and
   consolidation range boxes (third instance).
 
