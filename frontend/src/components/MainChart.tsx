@@ -94,6 +94,13 @@ const NEAREST_POOLS_PER_SIDE = 2
 // pools -- drawing them all would bury the standing ones, and a pool grabbed
 // hundreds of candles ago is no longer anyone's memory.
 const MAX_GRABBED_POOLS = 3
+// A grab that took only order blocks has no pool band to draw (the POI layer
+// already draws that box), so it used to be a bare label pinned at the level
+// — floating in the candles, reading as a stray price. It gets the sweep's
+// treatment instead: a short dashed segment at the level, ending where it was
+// taken, which both marks the level and gives the label a segment to slide
+// along and dodge the candles with.
+const OB_GRAB_LINE_CANDLES = 6
 // Only a notably deep sweep prints its depth. Measured across BTC/ETH/SOL/BNB
 // x 15m/1h/4h (325 grabs), excursion beyond the level runs p25 0.34, p50 0.71,
 // p75 1.15, p90 1.96 ATR -- so 1.5 is the top ~17%, the ones that ran rather
@@ -1849,8 +1856,23 @@ export function MainChart({
       // addition — the same restraint the fizzle marker uses.
       if (zone === null) {
         const at = toChartTime(grab!.timestamp)
+        const grabIdx = grabIndexByTime.get(grab!.timestamp)
+        const startIdx = grabIdx === undefined ? undefined : Math.max(0, grabIdx - OB_GRAB_LINE_CANDLES)
+        const from =
+          startIdx === undefined ? at : toChartTime(data.candles[startIdx].timestamp)
+        const obSeries = chart.addSeries(LineSeries, {
+          ...OVERLAY_SCALE_EXEMPT,
+          color: color + '99',
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        })
+        obSeries.setData(lineFrom(from, at, grab!.price_level, firstCandleTime))
+        overlaySeriesRef.current.push(obSeries)
         labels.push({
-          time: at,
+          time: from,
           timeEnd: at,
           price: grab!.price_level,
           color,
