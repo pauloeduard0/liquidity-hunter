@@ -14,11 +14,13 @@ from collections import defaultdict
 from datetime import datetime
 
 from liquidity_hunter.core.domain import (
+    Candle,
     LiquidityGrab,
     LiquidityGrabOutcome,
     LiquidityPoolKind,
     LiquiditySide,
     LiquidityZone,
+    LiquidityZoneType,
     MarketDirection,
     POIZone,
     TimeFrame,
@@ -41,18 +43,30 @@ class _Contribution:
         self.outcome = outcome
 
 
+#: Only grouped pools count. A standalone swing high or low is a single
+#: pivot, not a pool -- the same reason the chart refuses to draw them, and
+#: the same mistake the old swing_lookback of 2 was making when it grouped
+#: noise into levels that measured worse than random. Counting them here
+#: inflates the one number a grab exists to report: how much was resting.
+_POOL_ZONE_TYPES = frozenset(
+    {LiquidityZoneType.EQUAL_HIGHS, LiquidityZoneType.EQUAL_LOWS}
+)
+
+
 def build_liquidity_grabs(
     *,
     symbol: str,
     timeframe: TimeFrame,
     liquidity_zones: list[LiquidityZone],
     poi_zones: list[POIZone],
+    candles: list[Candle],
 ) -> list[LiquidityGrab]:
     """Collapse every consumed pool into one grab per candle and side."""
     by_moment: dict[tuple[datetime, LiquiditySide], list[_Contribution]] = defaultdict(list)
+    closes = {candle.timestamp: candle.close for candle in candles}
 
     for zone in liquidity_zones:
-        if zone.invalidated_at is None:
+        if zone.invalidated_at is None or zone.zone_type not in _POOL_ZONE_TYPES:
             continue
         # The pool's own edge is the level that was resting: the top of a
         # buy-side pool, the bottom of a sell-side one.
@@ -77,6 +91,19 @@ def build_liquidity_grabs(
         bullish = poi.direction is MarketDirection.BULLISH
         side = LiquiditySide.SELL_SIDE if bullish else LiquiditySide.BUY_SIDE
         level = poi.price_low if bullish else poi.price_high
+        # `invalidated_at` is not proof that price took *this* box. The POI
+        # queue retires the **oldest** zone of its side when any zone breaks
+        # (the indicator's `array.shift`, which is what unclogged the chart),
+        # so the retired box is often a different, further level that nothing
+        # reached. A grab claims price went there, so the claim is checked:
+        # the candle has to close beyond this zone's own far boundary.
+        close = closes.get(poi.invalidated_at)
+        if close is None:
+            continue
+        if bullish and close >= level:
+            continue
+        if not bullish and close <= level:
+            continue
         by_moment[(poi.invalidated_at, side)].append(
             _Contribution(LiquidityPoolKind.ORDER_BLOCK, level, LiquidityGrabOutcome.SPENT)
         )

@@ -2691,6 +2691,7 @@ def load_dashboard_data(
             timeframe=timeframe,
             liquidity_zones=liquidity_zones,
             poi_zones=poi_zones,
+            candles=candles,
         ),
     )
 

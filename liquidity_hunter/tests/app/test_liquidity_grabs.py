@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from liquidity_hunter.app.liquidity_grabs import build_liquidity_grabs
 from liquidity_hunter.core.domain import (
+    Candle,
     LiquidityGrab,
     LiquidityGrabOutcome,
     LiquidityPoolKind,
@@ -65,11 +66,37 @@ def _block(
     )
 
 
+def _candle(hour: int, close: float) -> Candle:
+    return Candle(
+        symbol=SYMBOL,
+        timeframe=TF,
+        timestamp=_ts(hour),
+        open=close,
+        high=close + 5,
+        low=close - 5,
+        close=close,
+        volume=10.0,
+        taker_buy_volume=5.0,
+    )
+
+
+#: Closes far outside every zone the fixtures use, on both sides, so an order
+#: block's "did price actually close beyond this box" check passes unless a
+#: test sets up otherwise.
+_CANDLES = [_candle(h, 80.0) for h in range(3, 8)] + [_candle(h, 130.0) for h in (8, 9)]
+
+
 def _build(
-    zones: list[LiquidityZone], blocks: list[POIZone]
+    zones: list[LiquidityZone],
+    blocks: list[POIZone],
+    candles: list[Candle] | None = None,
 ) -> list[LiquidityGrab]:
     return build_liquidity_grabs(
-        symbol=SYMBOL, timeframe=TF, liquidity_zones=zones, poi_zones=blocks
+        symbol=SYMBOL,
+        timeframe=TF,
+        liquidity_zones=zones,
+        poi_zones=blocks,
+        candles=_CANDLES if candles is None else candles,
     )
 
 
@@ -172,7 +199,7 @@ def test_order_block_side_follows_the_boundary_that_was_broken() -> None:
         direction=MarketDirection.BEARISH,
         price_low=110.0,
         price_high=112.0,
-        invalidated_at=_ts(6),
+        invalidated_at=_ts(8),
     )
 
     demand, supply = _build([], [bullish, bearish])
@@ -197,3 +224,39 @@ def test_grabs_come_back_in_time_order() -> None:
     grabs = _build(zones, [])
 
     assert [g.timestamp for g in grabs] == [_ts(3), _ts(6), _ts(9)]
+
+
+def test_lone_swing_points_are_not_pools() -> None:
+    """A single pivot is not resting liquidity, and must not pad the count."""
+    zones = [
+        _pool(invalidated_at=_ts(5)),
+        _pool(
+            zone_type=LiquidityZoneType.SWING_HIGH,
+            price_low=101.5,
+            price_high=101.5,
+            invalidated_at=_ts(5),
+        ),
+        _pool(
+            zone_type=LiquidityZoneType.SWING_HIGH,
+            price_low=102.0,
+            price_high=102.0,
+            invalidated_at=_ts(5),
+        ),
+    ]
+
+    (grab,) = _build(zones, [])
+
+    assert grab.pool_count == 1
+    assert grab.price_level == 101.0
+
+
+def test_order_block_retired_by_the_queue_is_not_a_grab() -> None:
+    """FIFO retirement culls the oldest box, which price may never have reached.
+
+    `POIZone.invalidated_at` is set when *some* zone of that queue broke, so
+    it is bookkeeping, not evidence. Only a close beyond this box's own far
+    boundary says price went there.
+    """
+    untouched = _block(price_low=40.0, price_high=45.0, invalidated_at=_ts(5))
+
+    assert _build([], [untouched]) == []
