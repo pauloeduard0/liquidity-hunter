@@ -101,7 +101,8 @@ def _build(
 
 
 def test_standing_pools_produce_no_grab() -> None:
-    assert _build([_pool()], [_block()]) == []
+    # A block price never closed beyond (every candle closes above 40).
+    assert _build([_pool()], [_block(price_low=40.0, price_high=45.0)]) == []
 
 
 def test_grab_reports_the_pool_edge_that_was_resting() -> None:
@@ -149,16 +150,18 @@ def test_one_candle_taking_stacked_pools_is_one_grab() -> None:
 
 
 def test_grab_carries_every_kind_it_consumed() -> None:
+    # The pool is swept at hour 3, the same candle whose close (80) first
+    # lands below the block's floor.
     zones = [
         _pool(
             zone_type=LiquidityZoneType.EQUAL_LOWS,
             side=LiquiditySide.SELL_SIDE,
             price_low=90.5,
             price_high=91.0,
-            invalidated_at=_ts(5),
+            invalidated_at=_ts(3),
         )
     ]
-    blocks = [_block(price_low=90.0, price_high=92.0, invalidated_at=_ts(5))]
+    blocks = [_block(price_low=90.0, price_high=92.0)]
 
     (grab,) = _build(zones, blocks)
 
@@ -194,12 +197,9 @@ def test_a_spent_pool_makes_the_whole_moment_spent() -> None:
 
 
 def test_order_block_side_follows_the_boundary_that_was_broken() -> None:
-    bullish = _block(direction=MarketDirection.BULLISH, invalidated_at=_ts(5))
+    bullish = _block(direction=MarketDirection.BULLISH)
     bearish = _block(
-        direction=MarketDirection.BEARISH,
-        price_low=110.0,
-        price_high=112.0,
-        invalidated_at=_ts(8),
+        direction=MarketDirection.BEARISH, price_low=110.0, price_high=112.0
     )
 
     demand, supply = _build([], [bullish, bearish])
@@ -260,6 +260,31 @@ def test_order_block_retired_by_the_queue_is_not_a_grab() -> None:
     untouched = _block(price_low=40.0, price_high=45.0, invalidated_at=_ts(5))
 
     assert _build([], [untouched]) == []
+
+
+def test_order_block_grab_is_dated_at_the_first_close_beyond_it() -> None:
+    """Not at `invalidated_at`, which is when the queue got around to it.
+
+    Measured on BTCUSDT 1h: a block broken on 10 Aug carried a stamp of
+    19 Aug, so its tombstone landed on a rally nine days after the break.
+    Checking that the stamped candle closes beyond does not catch it either --
+    once price has left a box behind, every later candle closes beyond it.
+    """
+    late_stamp = _block(price_low=90.0, price_high=92.0, invalidated_at=_ts(9))
+
+    (grab,) = _build([], [late_stamp])
+
+    # Hour 3 is the first candle closing below 90, hours 4-9 all close beyond.
+    assert grab.timestamp == _ts(3)
+
+
+def test_a_break_before_the_window_is_not_an_event_in_it() -> None:
+    early = _block(price_low=90.0, price_high=92.0, invalidated_at=_ts(5))
+
+    # A series that never closes below the block's floor.
+    calm = [_candle(hour, 95.0) for hour in range(3, 8)]
+
+    assert _build([], [early], candles=calm) == []
 
 
 def test_excursion_measures_the_wick_beyond_the_level_in_atr() -> None:

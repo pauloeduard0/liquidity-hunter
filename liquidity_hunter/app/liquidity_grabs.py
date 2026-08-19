@@ -65,7 +65,6 @@ def build_liquidity_grabs(
 ) -> list[LiquidityGrab]:
     """Collapse every consumed pool into one grab per candle and side."""
     by_moment: dict[tuple[datetime, LiquiditySide], list[_Contribution]] = defaultdict(list)
-    closes = {candle.timestamp: candle.close for candle in candles}
     by_timestamp = {candle.timestamp: candle for candle in candles}
     # One volatility unit for the whole window, so depths are comparable
     # between grabs of the same chart (and, being a ratio, roughly between
@@ -90,30 +89,33 @@ def build_liquidity_grabs(
         )
 
     for poi in poi_zones:
-        if poi.invalidated_at is None:
-            continue
-        # An order block retires on a *close* beyond its far boundary, so the
-        # zone's own record only ever describes a spent level -- there is no
-        # rejected order block to report, because a wick back into the box
-        # never retires it. The far boundary is what was taken: the bottom of
-        # a bullish (demand) block, the top of a bearish one.
+        # `invalidated_at` says nothing about when this box was taken. The POI
+        # queue retires the **oldest** zone of a side whenever any zone breaks
+        # (the indicator's `array.shift`, the rule that unclogged the chart),
+        # so the field records when the queue got around to this box -- often
+        # days after price left it. Measured on BTCUSDT 1h: a bearish block at
+        # 65091-65230 was closed through on 10 Aug and stamped 19 Aug, nine
+        # days later, which put its tombstone on the wrong rally.
+        #
+        # Checking that the stamped candle closes beyond the box does not fix
+        # it either: once price has left a box behind, *every* later candle
+        # closes beyond it. The grab is the **first** close past the far
+        # boundary, so that is what is searched for -- from the anchor candle
+        # forward, and only within this window (a break before the series
+        # starts is not an event in it).
         bullish = poi.direction is MarketDirection.BULLISH
         side = LiquiditySide.SELL_SIDE if bullish else LiquiditySide.BUY_SIDE
         level = poi.price_low if bullish else poi.price_high
-        # `invalidated_at` is not proof that price took *this* box. The POI
-        # queue retires the **oldest** zone of its side when any zone breaks
-        # (the indicator's `array.shift`, which is what unclogged the chart),
-        # so the retired box is often a different, further level that nothing
-        # reached. A grab claims price went there, so the claim is checked:
-        # the candle has to close beyond this zone's own far boundary.
-        close = closes.get(poi.invalidated_at)
-        if close is None:
+        broken_at: datetime | None = None
+        for candle in candles:
+            if candle.timestamp < poi.ob_candle_timestamp:
+                continue
+            if (candle.close < level) if bullish else (candle.close > level):
+                broken_at = candle.timestamp
+                break
+        if broken_at is None:
             continue
-        if bullish and close >= level:
-            continue
-        if not bullish and close <= level:
-            continue
-        by_moment[(poi.invalidated_at, side)].append(
+        by_moment[(broken_at, side)].append(
             _Contribution(LiquidityPoolKind.ORDER_BLOCK, level, LiquidityGrabOutcome.SPENT)
         )
 
@@ -132,13 +134,13 @@ def build_liquidity_grabs(
             if all(c.outcome is LiquidityGrabOutcome.REJECTED for c in contributions)
             else LiquidityGrabOutcome.SPENT
         )
-        candle = by_timestamp.get(timestamp)
+        grab_candle = by_timestamp.get(timestamp)
         excursion: float | None = None
-        if candle is not None and atr > 0:
+        if grab_candle is not None and atr > 0:
             beyond = (
-                candle.high - price_level
+                grab_candle.high - price_level
                 if side is LiquiditySide.BUY_SIDE
-                else price_level - candle.low
+                else price_level - grab_candle.low
             )
             excursion = max(0.0, beyond) / atr
         grabs.append(
