@@ -139,8 +139,6 @@ function App() {
   // 'off'. Order: recent -> full -> off -> recent.
   const [vsaMode, setVsaMode] = useState<'off' | 'recent' | 'full'>('recent')
   const [heatmapVisible, setHeatmapVisible] = useState(false)
-  const [liquidationVisible, setLiquidationVisible] = useState(false)
-  const [liquidationLiveOnly, setLiquidationLiveOnly] = useState(false)
   const [sweptZonesVisible, setSweptZonesVisible] = useState(false)
   const [huntWindowVisible, setHuntWindowVisible] = useState(false)
   const [continuationWindowVisible, setContinuationWindowVisible] = useState(false)
@@ -490,22 +488,6 @@ function App() {
                     </button>
                     <button
                       type="button"
-                      onClick={(e) => {
-                        // Alt/Shift-click toggles "live pools only"; plain click toggles visibility.
-                        if (e.altKey || e.shiftKey) setLiquidationLiveOnly((v) => !v)
-                        else setLiquidationVisible((v) => !v)
-                      }}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        liquidationVisible
-                          ? 'bg-[#26c6da22] text-[#26c6da]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Click: toggle liquidation bands · Alt/Shift-click: live pools only"
-                    >
-                      ⊟ Liq{liquidationLiveOnly ? ' •' : ''}
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => setSweptZonesVisible((v) => !v)}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         sweptZonesVisible
@@ -724,7 +706,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showLiquidationBands={liquidationVisible} liquidationLiveOnly={liquidationLiveOnly} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showSmc={smcVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible} showRibbon={ribbonVisible} showDefendedLevels={defendedVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showSmc={smcVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible} showRibbon={ribbonVisible} showDefendedLevels={defendedVisible} />
                 </div>
               </div>
 

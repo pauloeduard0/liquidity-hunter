@@ -28,16 +28,12 @@ import {
   type VolumeProfileBar,
   type VolumeProfileMode,
 } from '../charting/VolumeProfilePrimitive'
-import {
-  LiquidationBandsPrimitive,
-  type LiquidationBandInput,
-} from '../charting/LiquidationBandsPrimitive'
 import { EqlZonesPrimitive, type EqlZoneInput } from '../charting/EqlZonesPrimitive'
 import { RibbonPrimitive } from '../charting/RibbonPrimitive'
 import { buildPhase, buildRibbon, structureTrendByCandle } from '../utils/tideRibbon'
 import type { DefendedMark } from '../utils/defendedLevels'
 import { buildDefenceLevels, buildDefendedMarks } from '../utils/defendedLevels'
-import type { BehaviorDivergence, DashboardData, LiquidationBand, LiquidityZone, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
+import type { BehaviorDivergence, DashboardData, LiquidityZone, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -605,13 +601,6 @@ const DIVERGENCE_MARKER_SHAPES: Record<string, { shape: 'circle' | 'square' | 'a
 // bearish top exhaustion, a bowl below for a bullish exhaustion/absorption.
 const DIVERGENCE_ARC_TYPES = new Set(['exhaustion', 'absorption'])
 
-// Chart-only declutter for liquidation bands: the API returns the full set
-// (including far/old liquidations, kept for the backtest), but the chart shows
-// only what's actionable near current price — the still-live (untriggered)
-// pools plus a few of the most recent hits for context.
-const LIQ_PRICE_WINDOW = 0.08 // ±8% of current price
-const LIQ_MAX_BANDS = 12
-const LIQ_MAX_RECENT_HITS = 4
 
 /** Interleave two pre-sorted lists, keeping both sides represented. */
 function balancedTake<T>(above: T[], below: T[], budget: number): T[] {
@@ -625,42 +614,6 @@ function balancedTake<T>(above: T[], below: T[], budget: number): T[] {
   return out
 }
 
-function selectVisibleLiquidationBands(
-  bands: LiquidationBand[],
-  currentPrice: number,
-  liveOnly: boolean,
-): LiquidationBand[] {
-  const mid = (b: LiquidationBand) => (b.price_low + b.price_high) / 2
-  const inWindow = bands.filter(
-    (b) => Math.abs(mid(b) - currentPrice) <= currentPrice * LIQ_PRICE_WINDOW,
-  )
-  // Relevance blends proximity to current price (dominant) with intensity, so
-  // the nearest live pools always surface instead of far-but-strong ones.
-  const relevance = (b: LiquidationBand) => {
-    const distPct = Math.abs(mid(b) - currentPrice) / currentPrice
-    const proximity = Math.max(0, 1 - distPct / LIQ_PRICE_WINDOW)
-    return 0.6 * proximity + 0.4 * (b.intensity / 100)
-  }
-  const byRelevance = (a: LiquidationBand, b: LiquidationBand) => relevance(b) - relevance(a)
-  const live = inWindow.filter((b) => b.end_time === null)
-  const hits = liveOnly
-    ? []
-    : inWindow
-        .filter((b) => b.end_time !== null)
-        .sort((a, b) => Date.parse(b.end_time as string) - Date.parse(a.end_time as string))
-
-  // Reserve a few slots for recent hits (context), then fill with live pools
-  // balanced across both sides of price so above and below stay visible.
-  const recentHits = hits.slice(0, LIQ_MAX_RECENT_HITS)
-  const liveBudget = LIQ_MAX_BANDS - recentHits.length
-  const above = live.filter((b) => mid(b) >= currentPrice).sort(byRelevance)
-  const below = live.filter((b) => mid(b) < currentPrice).sort(byRelevance)
-  const selected = [...balancedTake(above, below, liveBudget), ...recentHits]
-  if (selected.length < LIQ_MAX_BANDS) {
-    selected.push(...hits.slice(recentHits.length, recentHits.length + (LIQ_MAX_BANDS - selected.length)))
-  }
-  return selected
-}
 
 // Which POI zones the chart draws. This used to be a declutter pass — a cap
 // per direction plus a price window around the last close — because ACTIVE
@@ -989,8 +942,6 @@ interface MainChartProps {
   showDivergenceMarkers?: boolean
   vsaMode?: 'off' | 'recent' | 'full'
   showHeatmap?: boolean
-  showLiquidationBands?: boolean
-  liquidationLiveOnly?: boolean
   showSweptZones?: boolean
   showOrderBlocks?: boolean
   showSweeps?: boolean
@@ -1019,8 +970,6 @@ export function MainChart({
   showDivergenceMarkers = true,
   vsaMode = 'recent',
   showHeatmap = true,
-  showLiquidationBands = true,
-  liquidationLiveOnly = false,
   showSweptZones = true,
   showOrderBlocks = true,
   showSweeps = true,
@@ -1070,7 +1019,6 @@ export function MainChart({
   const rangeBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const heatmapPrimitiveRef = useRef<HeatmapStripPrimitive | null>(null)
   const volumeProfilePrimitiveRef = useRef<VolumeProfilePrimitive | null>(null)
-  const liquidationBandsPrimitiveRef = useRef<LiquidationBandsPrimitive | null>(null)
   const eqlZonesPrimitiveRef = useRef<EqlZonesPrimitive | null>(null)
   const ribbonPrimitiveRef = useRef<RibbonPrimitive | null>(null)
   const phaseSeriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
@@ -1312,10 +1260,6 @@ export function MainChart({
     series.attachPrimitive(volumeProfilePrimitive)
     volumeProfilePrimitiveRef.current = volumeProfilePrimitive
 
-    const liquidationBandsPrimitive = new LiquidationBandsPrimitive()
-    series.attachPrimitive(liquidationBandsPrimitive)
-    liquidationBandsPrimitiveRef.current = liquidationBandsPrimitive
-
     const eqlZonesPrimitive = new EqlZonesPrimitive()
     series.attachPrimitive(eqlZonesPrimitive)
     eqlZonesPrimitiveRef.current = eqlZonesPrimitive
@@ -1437,7 +1381,6 @@ export function MainChart({
       rangeBoxesPrimitiveRef.current = null
       heatmapPrimitiveRef.current = null
       volumeProfilePrimitiveRef.current = null
-      liquidationBandsPrimitiveRef.current = null
       divergenceMarkersRef.current = null
       divergenceArcsPrimitiveRef.current = null
       hasFittedRef.current = false
@@ -2474,28 +2417,6 @@ export function MainChart({
       volumeProfileMode,
     )
 
-    // Leverage liquidation bands (time-bounded: entry formation -> liq hit).
-    // Declutter to the relevant subset near current price (full set stays in
-    // the API for the backtest).
-    const liquidationBands: LiquidationBandInput[] =
-      showLiquidationBands && data.liquidation_map
-        ? selectVisibleLiquidationBands(
-            data.liquidation_map.bands,
-            data.current_price,
-            liquidationLiveOnly,
-          ).map((band) => ({
-            x0: toChartTime(band.start_time) as Time,
-            x1: (band.end_time
-              ? toChartTime(band.end_time)
-              : ((lastCandleTime + 9_999_999) as UTCTimestamp)) as Time,
-            priceLow: band.price_low,
-            priceHigh: band.price_high,
-            intensity: band.intensity,
-            leverage: band.leverage,
-            hit: band.end_time !== null,
-          }))
-        : []
-    liquidationBandsPrimitiveRef.current?.setBands(liquidationBands)
 
     // Liquidity-hunt window: full-height shading from the counter-trend flip
     // to the capture that concluded the hunt (right edge while still running).
@@ -2616,7 +2537,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showLiquidationBands, liquidationLiveOnly, showSweptZones, showOrderBlocks, showSweeps, showSmc, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode, showRibbon, showDefendedLevels])
+  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showSweptZones, showOrderBlocks, showSweeps, showSmc, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode, showRibbon, showDefendedLevels])
 
   // Incremental live-price update: the forming candle, and the fixed-reference
   // series derived from it, refreshed in place on every poll. This runs on the

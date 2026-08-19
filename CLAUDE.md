@@ -1503,7 +1503,7 @@ selector.
   they sit behind a deliberate third press instead of riding along with the
   line. Alt/Shift-click still toggles the anchored ones
   (`showAnchoredVwap`, shown as `⌀ VWAP ⚓`) — the same modifier
-  pattern as `▤ VP` and `⊟ Liq`. Colors in `theme.ts` (`VWAP_*`).
+  pattern as `▤ VP`. Colors in `theme.ts` (`VWAP_*`).
 
   **Volume delta pane**: histogram bars colored by candle direction
   (`CANDLE_UP_COLOR`/`CANDLE_DOWN_COLOR`), computed as
@@ -1633,31 +1633,18 @@ selector.
   Also reused for manipulation cycle accumulation boxes (second instance) and
   consolidation range boxes (third instance).
 
-- **`frontend/src/charting/LiquidationBandsPrimitive.ts`** —
-  `LiquidationBandsPrimitive` implements `ISeriesPrimitive` and draws
-  leverage-liquidation bands as **time-bounded** horizontal boxes on the main
-  pane (modeled on `POIBoxesPrimitive`): each spans `x0` (entry-cluster
-  formation) to `x1` (liquidation-hit time, or a far-future sentinel →
-  clamped to the right edge if still live). Color encodes the **leverage tier**
-  (`LIQUIDATION_LEVERAGE_COLORS`, warmer = higher leverage: 10x amber → 100x
-  crimson — the estimator emits only one side per snapshot, so color is free
-  to encode leverage rather than side), opacity scales with `intensity`
-  between `LIQUIDATION_MIN_ALPHA` and `LIQUIDATION_MAX_ALPHA`, with a center
-  line and a leverage tag (`10x`/`25x`/…) at the left edge. Toggled by the
-  `showLiquidationBands` prop (the `⊟ Liq` toolbar button in `App.tsx`).
-  `MainChart.selectVisibleLiquidationBands` declutters the render to a relevant
-  subset near current price — still-live (untriggered) pools plus a few most
-  recent hits — within `LIQ_PRICE_WINDOW` (±8%), capped at `LIQ_MAX_BANDS` (12),
-  **balanced across both sides of price** (`balancedTake`, so above/below stay
-  visible) and ranked by a **proximity-weighted relevance** (0.6 proximity +
-  0.4 intensity) so the nearest live pools surface instead of far-but-strong
-  ones. The **full** band
-  set stays in `liquidation_map.bands` (API) for backtesting; only the chart is
-  filtered. Live pools render with a solid center line; already-hit (consumed)
-  levels render fainter with a dashed line (`HIT_ALPHA_FACTOR`); the leverage
-  tag is drawn only above `TAG_MIN_INTENSITY`. The `⊟ Liq` toolbar button
-  toggles visibility on plain click; Alt/Shift-click toggles a "live pools only"
-  mode (`liquidationLiveOnly`, shown as `⊟ Liq •`).
+- **Leverage liquidation bands are no longer drawn** (removed 2026-08-19).
+  `LiquidationBandsPrimitive` and the `⊟ Liq` toolbar button are gone. The
+  bands are a *projection*, not observed data: the estimator takes the equal-level
+  and order-block anchors already on the chart and offsets each by a fixed
+  maintenance-margin distance per leverage tier, so as an overlay the layer is
+  largely collinear with the levels it was derived from. Its only objective test
+  agrees: reaction framing measured no edge (lift 0.89-0.99) and the target
+  framing's 1.22x clustering lift was one symbol over 42 days, never broadened
+  (see `docs/` and the backtest in `app/liquidation_backtest.py`). The
+  `LeverageLiquidationMap` itself stays — it feeds `LiquidityHuntEngine`'s
+  targets (`LiquidityHuntTargetKind.LIQUIDATION_BAND`), the defended-levels
+  families, and the API/backtest — it is only the chart layer that was retired.
 
 - **`frontend/src/charting/VolumeProfilePrimitive.ts`** —
   `VolumeProfilePrimitive` draws `data.volume_profile` as a thin-line histogram
@@ -1696,7 +1683,7 @@ selector.
   rather than being the default picture. The `▤ VP` toolbar button in `App.tsx`
   toggles visibility on plain click (`showVolumeProfile`, default **off**) and
   swaps to delta colouring on Alt/Shift-click (shown as `▤ VP Δ`), the same
-  pattern as `⊟ Liq`.
+  pattern the retired `⊟ Liq` button used.
 
   The anchor is the pane's right edge rather than a bar offset into the future
   (the reference study's `vp_right_offset`): the panes here are synced by
