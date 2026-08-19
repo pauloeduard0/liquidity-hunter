@@ -100,20 +100,36 @@ def build_liquidity_grabs(
         # Checking that the stamped candle closes beyond the box does not fix
         # it either: once price has left a box behind, *every* later candle
         # closes beyond it. The grab is the **first** close past the far
-        # boundary, so that is what is searched for -- from the anchor candle
-        # forward, and only within this window (a break before the series
-        # starts is not an event in it).
+        # boundary, so that is what is searched for -- from the candle that
+        # *confirmed* the box forward, and only within this window (a break
+        # before the series starts is not an event in it).
+        #
+        # `created_at`, not `ob_candle_timestamp`: the anchor candle is chosen
+        # in hindsight, when the MSB confirms, and price moving through that
+        # level in between broke nothing -- there was no box there yet. On
+        # BTCUSDT 1h that lag is a day and a half, and it dated the 65091-65230
+        # block's grab to 10 Aug when the box only existed from the 11th.
         bullish = poi.direction is MarketDirection.BULLISH
         side = LiquiditySide.SELL_SIDE if bullish else LiquiditySide.BUY_SIDE
         level = poi.price_low if bullish else poi.price_high
         broken_at: datetime | None = None
         for candle in candles:
-            if candle.timestamp < poi.ob_candle_timestamp:
+            if candle.timestamp < poi.created_at:
                 continue
             if (candle.close < level) if bullish else (candle.close > level):
                 broken_at = candle.timestamp
                 break
         if broken_at is None:
+            continue
+        # ...and the box has to still be on the board when it breaks. FIFO
+        # retirement removes a box because *another* one broke, and a retired
+        # box is gone from the chart and from the indicator's picture -- price
+        # closing past that level later is not a grab, there is nothing left
+        # resting there. Without this the scan reaches back into buried
+        # history: BTCUSDT 1h stamped today's rally as taking a 22 Jul block
+        # at 66364 that the queue had retired on 3 Aug, an excursion of 14 ATR
+        # -- the tell that the level was ancient.
+        if poi.invalidated_at is not None and broken_at > poi.invalidated_at:
             continue
         by_moment[(broken_at, side)].append(
             _Contribution(LiquidityPoolKind.ORDER_BLOCK, level, LiquidityGrabOutcome.SPENT)

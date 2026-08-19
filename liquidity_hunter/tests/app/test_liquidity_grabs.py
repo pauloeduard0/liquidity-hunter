@@ -319,3 +319,22 @@ def test_excursion_is_none_without_candles() -> None:
     (grab,) = _build([zone], [], candles=[])
 
     assert grab.excursion_atr is None
+
+
+def test_a_block_retired_before_it_broke_is_not_a_grab() -> None:
+    """FIFO retirement takes a box off the board because *another* one broke.
+
+    Price closing past that level afterwards takes nothing: there is no box
+    left there. BTCUSDT 1h stamped a rally as taking a block retired sixteen
+    days earlier, at an excursion of 14 ATR -- the tell that the level was
+    buried history.
+    """
+    # Retired at hour 4; price first closes above its top at hour 8.
+    retired = _block(
+        direction=MarketDirection.BEARISH,
+        price_low=110.0,
+        price_high=112.0,
+        invalidated_at=_ts(4),
+    )
+
+    assert _build([], [retired]) == []
