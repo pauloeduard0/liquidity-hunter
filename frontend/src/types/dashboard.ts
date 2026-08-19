@@ -444,6 +444,7 @@ export interface LiquidityGrab {
   /** How far beyond the level the grabbing candle reached, in mean-true-range
    *  units of its own series. Null when the series has no volatility. */
   excursion_atr: number | null
+  block_level: number | null
 }
 
 export interface ConsolidationRange {

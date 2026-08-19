@@ -96,11 +96,20 @@ const NEAREST_POOLS_PER_SIDE = 2
 const MAX_GRABBED_POOLS = 3
 // A grab that took only order blocks has no pool band to draw (the POI layer
 // already draws that box), so it used to be a bare label pinned at the level
-// — floating in the candles, reading as a stray price. It gets the sweep's
-// treatment instead: a short dashed segment at the level, ending where it was
-// taken, which both marks the level and gives the label a segment to slide
-// along and dodge the candles with.
-const OB_GRAB_LINE_CANDLES = 6
+// — floating in the candles, reading as a stray price. It gets a dashed
+// segment at the broken boundary instead, which both marks the level and
+// gives the label a segment to slide along and dodge the candles with.
+//
+// That segment runs from the block's own anchor candle to the candle that
+// closed through it: the same span the POI box covers, so the tombstone sits
+// *on* the block it names rather than beside it. This is the equal-level
+// band's convention (`formed_at` → grab, after the 12-bar clip was reverted
+// on visual review): where a level stood is half the reading, and a stub
+// floating a few bars behind the break says nothing about which block was
+// taken — often nothing is drawn there at all, since a taken block has
+// usually been retired from the queue and is no longer on the chart.
+// The fallback below covers a grab whose block has left the window.
+const OB_GRAB_FALLBACK_CANDLES = 6
 // Only a notably deep sweep prints its depth. Measured across BTC/ETH/SOL/BNB
 // x 15m/1h/4h (325 grabs), excursion beyond the level runs p25 0.34, p50 0.71,
 // p75 1.15, p90 1.96 ATR -- so 1.5 is the top ~17%, the ones that ran rather
@@ -1808,6 +1817,27 @@ export function MainChart({
       }
       return best
     }
+    // The block a grab took, so its tombstone can be anchored to it. Matched
+    // by the boundary that broke — `price_low` for a bullish block, the far
+    // side price had to close through — on the same side, and formed before
+    // the break. The most recent such block wins: the grab is the *first*
+    // close past that level, so an older block at the same price was already
+    // gone by then.
+    const sourceBlock = (grab: LiquidityGrab): POIZone | null => {
+      let best: POIZone | null = null
+      for (const poi of data.poi_zones ?? []) {
+        if (poi.kind !== 'order_block') continue
+        const bullish = poi.direction === 'bullish'
+        const side = bullish ? 'sell_side' : 'buy_side'
+        if (side !== grab.side) continue
+        const level = bullish ? poi.price_low : poi.price_high
+        const target = grab.block_level ?? grab.price_level
+        if (Math.abs(level - target) > 1e-9) continue
+        if (poi.ob_candle_timestamp >= grab.timestamp) continue
+        if (!best || poi.ob_candle_timestamp > best.ob_candle_timestamp) best = poi
+      }
+      return best
+    }
     for (const scored of [
       ...poolZones.map((s) => ({ zone: s.zone, score: s.score, grab: null as LiquidityGrab | null })),
       ...grabs.map((grab) => ({ zone: backingZone(grab), score: null as number | null, grab })),
@@ -1850,16 +1880,32 @@ export function MainChart({
         const mark = grab !== null ? (grab.outcome === 'rejected' ? '⚡' : '✕') : '✕'
         title = `${label} · ${mark}${count}${block}${depth}`
       }
-      // An order-block-only grab draws no band: the POI layer already draws
-      // that box up to the same invalidation, so a second rectangle over it
-      // would be the same wick told twice. The tombstone label alone is the
-      // addition — the same restraint the fizzle marker uses.
-      if (zone === null) {
-        const at = toChartTime(grab!.timestamp)
-        const grabIdx = grabIndexByTime.get(grab!.timestamp)
-        const startIdx = grabIdx === undefined ? undefined : Math.max(0, grabIdx - OB_GRAB_LINE_CANDLES)
-        const from =
-          startIdx === undefined ? at : toChartTime(data.candles[startIdx].timestamp)
+      // The order block gets its own tombstone at its own boundary, drawn from
+      // the block's anchor candle to the close that took it — the span the POI
+      // box covers, so the mark sits *on* the box it names. No band: the POI
+      // layer already draws that rectangle up to the same invalidation, and a
+      // second one over it would be the same wick told twice (the restraint
+      // the fizzle marker uses).
+      //
+      // It is drawn whether or not equal levels went with it. A candle that
+      // takes stacked pools reports `price_level` as the furthest one reached,
+      // which is usually an equal level well past the block, so folding the
+      // block into that label left the one pool a reader can point at on the
+      // chart with no coordinate — present only as a `▣` in someone else's
+      // tombstone, at someone else's price. `block_level` carries its own.
+      const blockLevel = grab?.block_level ?? null
+      if (grab !== null && blockLevel !== null) {
+        const at = toChartTime(grab.timestamp)
+        const box = sourceBlock(grab)
+        let from: Time
+        if (box !== null) {
+          from = toChartTime(box.ob_candle_timestamp)
+        } else {
+          const grabIdx = grabIndexByTime.get(grab.timestamp)
+          const startIdx =
+            grabIdx === undefined ? undefined : Math.max(0, grabIdx - OB_GRAB_FALLBACK_CANDLES)
+          from = startIdx === undefined ? at : toChartTime(data.candles[startIdx].timestamp)
+        }
         const obSeries = chart.addSeries(LineSeries, {
           ...OVERLAY_SCALE_EXEMPT,
           color: color + '99',
@@ -1869,18 +1915,21 @@ export function MainChart({
           priceLineVisible: false,
           crosshairMarkerVisible: false,
         })
-        obSeries.setData(lineFrom(from, at, grab!.price_level, firstCandleTime))
+        obSeries.setData(lineFrom(from, at, blockLevel, firstCandleTime))
         overlaySeriesRef.current.push(obSeries)
+        // A block is only ever spent: the box breaks on a *close* beyond it,
+        // so there is no handed-back reading for it and the mark is always ✕.
         labels.push({
           time: from,
           timeEnd: at,
-          price: grab!.price_level,
+          price: blockLevel,
           color,
-          text: title,
+          text: zone === null ? title : 'OB · ✕',
           below: !buySide,
         })
-        continue
+        if (zone === null) continue
       }
+      if (zone === null) continue
       // The band runs from the pool's first touch to where it was taken: the
       // stretch it stood is part of the reading, since a level that held for
       // 200 candles before being grabbed is a different pool from one grabbed

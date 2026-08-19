@@ -24,6 +24,7 @@ from liquidity_hunter.core.domain import (
     LiquidityZoneType,
     MarketDirection,
     POIZone,
+    POIZoneKind,
     TimeFrame,
 )
 from liquidity_hunter.indicators.supertrend import true_range_series
@@ -89,6 +90,15 @@ def build_liquidity_grabs(
         )
 
     for poi in poi_zones:
+        # Order blocks only. Each MSB also emits a breaker or mitigation block
+        # from the same break, sitting a few ticks from the order block, and a
+        # grab of one is a grab of the same observation told a second time --
+        # the reason the chart draws only order blocks. Measured across
+        # BTC/ETH/SOL x 15m/1h/4h, only ~35% of the tombstones marked `OB` were
+        # naming an actual order block; the rest pinned a level a few ticks
+        # away from any box on the screen, which is what gave them away.
+        if poi.kind is not POIZoneKind.ORDER_BLOCK:
+            continue
         # `invalidated_at` says nothing about when this box was taken. The POI
         # queue retires the **oldest** zone of a side whenever any zone breaks
         # (the indicator's `array.shift`, the rule that unclogged the chart),
@@ -150,6 +160,20 @@ def build_liquidity_grabs(
             if all(c.outcome is LiquidityGrabOutcome.REJECTED for c in contributions)
             else LiquidityGrabOutcome.SPENT
         )
+        # The order block's own edge, so a grouped grab can still point at the
+        # box: the furthest block level when the moment took more than one.
+        block_levels = [
+            c.price_level for c in contributions if c.kind is LiquidityPoolKind.ORDER_BLOCK
+        ]
+        block_level = (
+            None
+            if not block_levels
+            else (
+                max(block_levels)
+                if side is LiquiditySide.BUY_SIDE
+                else min(block_levels)
+            )
+        )
         grab_candle = by_timestamp.get(timestamp)
         excursion: float | None = None
         if grab_candle is not None and atr > 0:
@@ -170,6 +194,7 @@ def build_liquidity_grabs(
                 pool_count=len(contributions),
                 outcome=outcome,
                 excursion_atr=excursion,
+                block_level=block_level,
             )
         )
 

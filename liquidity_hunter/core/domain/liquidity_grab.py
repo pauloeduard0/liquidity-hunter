@@ -55,6 +55,15 @@ class LiquidityGrab(DomainModel):
     #: that followed, not the grab. `None` when the series carries no
     #: volatility to normalize against.
     excursion_atr: float | None = Field(default=None, ge=0.0)
+    #: The order block's own boundary, when one was among the pools taken.
+    #: `price_level` reports the furthest level reached, which on a candle
+    #: that took stacked pools is usually an equal level well past the block
+    #: -- so the block itself, the one pool a reader can point at on the
+    #: chart as a drawn box, would have no coordinate of its own. It gets one
+    #: here. `None` when no order block was involved (then `price_level` is
+    #: already the whole story), and equal to `price_level` when the block was
+    #: the furthest thing taken.
+    block_level: float | None = Field(default=None, gt=0)
 
     @property
     def was_rejected(self) -> bool:
