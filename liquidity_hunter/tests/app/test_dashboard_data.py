@@ -39,11 +39,13 @@ from liquidity_hunter.data.providers.base import FuturesDataProvider, OHLCVProvi
 from liquidity_hunter.liquidity import InternalStructureDetector
 from liquidity_hunter.tests.liquidity.detectors._factories import make_candle, make_series
 
-HIGHS = [
-    100.0, 101.0, 102.0, 110.0, 103.0, 102.0, 101.0,
-    100.0, 101.0, 102.0, 110.0, 103.0, 102.0, 101.0, 100.0,
-]
-LOWS = [h - 5 for h in HIGHS]
+# Two equal highs (110 at index 10 and 21) and one swing low (90 at index
+# 16), each with ten flat candles either side so they are pivots under the
+# equal-level detectors' production lookback of 10.
+HIGHS = [102.0] * 33
+HIGHS[10] = HIGHS[21] = 110.0
+LOWS = [high - 5 for high in HIGHS]
+LOWS[16] = 90.0
 
 _FUTURES_TS = datetime(2026, 6, 22, tzinfo=UTC)
 
@@ -450,7 +452,10 @@ def test_load_dashboard_data_skips_narrative_when_disabled() -> None:
 
 
 def test_load_dashboard_data_populates_oi_analysis() -> None:
-    candles = make_series(HIGHS, LOWS, symbol="BTCUSDT")
+    # This test needs a falling tail, not pivots: its own series, so the
+    # equal-level fixture stays free to change shape.
+    oi_highs = [102.0 - i * 0.1 for i in range(33)]
+    candles = make_series(oi_highs, [high - 5 for high in oi_highs], symbol="BTCUSDT")
     # An OI sample per candle, steadily rising, while the series tail drifts
     # down (the last window's closes fall ~1%): price down + OI up.
     oi_points = [

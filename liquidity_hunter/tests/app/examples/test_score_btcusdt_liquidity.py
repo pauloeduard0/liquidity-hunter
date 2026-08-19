@@ -5,8 +5,13 @@ from liquidity_hunter.core.domain import Candle, TimeFrame
 from liquidity_hunter.data.providers.base import OHLCVProvider
 from liquidity_hunter.tests.liquidity.detectors._factories import make_series
 
-HIGHS = [100, 101, 102, 110, 103, 102, 101, 100, 101, 102, 110, 103, 102, 101, 100]
+# Two equal highs (110) and one swing low (90), each with ten flat
+# candles either side so they are pivots under the equal-level
+# detectors' production lookback of 10.
+HIGHS = [102.0] * 33
+HIGHS[10] = HIGHS[21] = 110.0
 LOWS = [h - 5 for h in HIGHS]
+LOWS[16] = 90.0
 
 
 class _FakeProvider(OHLCVProvider):
@@ -32,5 +37,5 @@ def test_main_scores_and_ranks_zones(capsys) -> None:
     assert all(0.0 <= score <= 100.0 for score in scores)
 
     captured = capsys.readouterr()
-    assert "Current price: 97.50" in captured.out
+    assert "Current price: 99.50" in captured.out
     assert captured.out.count("Score:") == 4

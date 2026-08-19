@@ -17,8 +17,11 @@ class LiquidityScoringEngine:
        linearly from 100 (at the current price) to 0 at `max_distance_pct`
        away, and stays at 0 beyond that.
     2. **Touch score** — `zone.strength * 100`. For equal-level zones,
-       `strength` already reflects the number of touches; for swing points
-       it reflects prominence.
+       `strength` reflects the volume that changed hands at the level while
+       the pool formed (measured to separate defended pools from drained
+       ones, unlike the touch count it replaced — see
+       `liquidity.detectors.equal_levels`); for swing points it reflects
+       prominence.
     3. **Timeframe score** — `timeframe_weights[zone.timeframe] * 100`.
        Higher timeframes represent more structurally significant liquidity.
 
