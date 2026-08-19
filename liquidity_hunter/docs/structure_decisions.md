@@ -2755,3 +2755,59 @@ and the live guard cannot stop a graze from printing while it is still fresh.
 
 Regression fixture: `tests/liquidity/detectors/data/solusdt_4h_2026_07_20_08_19.json`
 (184 real H4 candles), locked in `tests/app/test_dashboard_data.py`.
+
+## Equal-level pools: the 2026-08-19 re-calibration
+
+**The measurement harness changed before the parameters did.** The earlier
+calibration (swing_lookback 2 → 10) was made against forward *rejection*
+excursion after a grab, with a control matched only on side. Both halves
+mislead:
+
+- Four measurements since — the liquidation-map backtest, `raid_reversal`,
+  `excursion_atr`, and the grab `quality` probe — agree that these levels are
+  **targets price seeks, not places it turns**. Calibrating on rejection was
+  scoring the levels on the one thing they do not do.
+- A control matched only on side credits **volatility clustering** to the
+  event. This is what inverted the `excursion_atr` result: measured against a
+  side-only control, depth looked like it predicted a 1.65× retrace; against a
+  control also matched on the grabbing candle's true range, the same data gave
+  0.77.
+
+The corrected harness measures the **directional share** — of everything price
+travelled in the 10 candles after the grab, what fraction went the grab's own
+way. It is scale-free, so a volatile stretch cannot inflate it, and it asks the
+question the levels answer.
+
+Measured over 7 symbols × 15m/1h/4h:
+
+| lookback | tolerance | pools/chart | lift | combos > 1 |
+|---|---|---|---|---|
+| 10 | 0.05% (old production) | 9 | 1.26 | **10/20** |
+| 5 | 0.05% | 27 | 1.30 | 19/21 |
+| 5 | **0.50 ATR** (wired) | 38 | **1.41** | 19/21 |
+| 2 | 0.50 ATR | 60 | 1.51 | 21/21 |
+| 2 | 1.00 ATR | 40 | 1.82 | 21/21 |
+| 2 | 2.50 ATR | 19 | 2.11 | 21/21 |
+
+Two findings:
+
+1. **The old wiring wins in half its charts.** Aggregate lift 1.26 hides a
+   per-combo median of 1.01 — a coin flip per chart. The monotonic climb with
+   lookback that justified it does not survive the corrected harness.
+2. **The dial that matters is the tolerance, expressed in volatility.** With
+   `tolerance_atr` set, the lookback barely moves the result. A fixed 0.05%
+   also produced wildly uneven coverage across assets (BTC 15m 17 zones,
+   ADA 15m 2, SOL 4h 2) — literally a different question per chart; at 0.5 ATR
+   every combo lands in the 31-43 range.
+
+Tolerance keeps improving past 0.5 ATR, but so does the band it draws — 0.36
+ATR tall at 0.5, 0.78 at 1.0, **2.12 at 2.5**. A two-ATR "pool" is a region,
+and the measurement then only restates that swing breaks continue. Lookback 2
+measured slightly better and was passed over: it triples the pool count, which
+is what strangles the hunt's all-captured gate.
+
+Verified before wiring: across the same 21 combos the **hunt phase is
+unchanged in all of them**, and mapped pools rise where they exist (BNB 1h
+4 → 6, BNB 4h 2 → 3, ADA 15m 2 → 4). The extra coverage costs the chart
+nothing — the render picks the nearest two standing pools per side plus three
+grabs, so pool count is a question for the engines, not for ink.

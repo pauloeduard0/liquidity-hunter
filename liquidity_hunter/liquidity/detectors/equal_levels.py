@@ -34,6 +34,7 @@ import statistics
 from datetime import datetime
 
 from liquidity_hunter.core.domain import Candle, LiquiditySide, LiquidityZone, LiquidityZoneType
+from liquidity_hunter.indicators.supertrend import true_range_series
 from liquidity_hunter.liquidity.detectors.base import LiquidityZoneDetector
 from liquidity_hunter.liquidity.detectors.swing_points import SwingHighDetector, SwingLowDetector
 
@@ -55,14 +56,40 @@ class _EqualLevelDetector(LiquidityZoneDetector):
         tolerance_pct: float = 0.0005,
         min_touches: int = 2,
         swing_lookback: int = 10,
+        tolerance_atr: float | None = None,
     ) -> None:
+        """Group swing points into equal-level pools.
+
+        ``tolerance_atr``, when given, replaces ``tolerance_pct`` with N times
+        the series' own mean true range as a fraction of price. "Equal" is a
+        statement about what the market treats as one level, and that scale is
+        volatility, not a constant: 0.05% is several candles' range on a calm
+        BTC hour and a rounding error on a volatile alt, so a fixed percent
+        asks a different question of every chart. It is the same fix the hunt's
+        proximity and the consolidation height cap already carry.
+        """
         if tolerance_pct < 0:
             raise ValueError("tolerance_pct must be >= 0")
+        if tolerance_atr is not None and tolerance_atr < 0:
+            raise ValueError("tolerance_atr must be >= 0")
         if min_touches < 2:
             raise ValueError("min_touches must be >= 2")
         self._tolerance_pct = tolerance_pct
+        self._tolerance_atr = tolerance_atr
         self._min_touches = min_touches
         self._swing_detector = self._make_swing_detector(swing_lookback)
+
+    def _resolve_tolerance(self, candles: list[Candle]) -> float:
+        """The relative tolerance this series gets."""
+        if self._tolerance_atr is None or not candles:
+            return self._tolerance_pct
+        ranges = true_range_series(candles)
+        mean_tr_pct = statistics.mean(
+            true_range / candle.close
+            for true_range, candle in zip(ranges, candles, strict=True)
+            if candle.close > 0
+        )
+        return mean_tr_pct * self._tolerance_atr if mean_tr_pct > 0 else self._tolerance_pct
 
     def _make_swing_detector(self, swing_lookback: int) -> LiquidityZoneDetector:
         raise NotImplementedError
@@ -73,9 +100,10 @@ class _EqualLevelDetector(LiquidityZoneDetector):
             return []
 
         mean_volume = statistics.mean(candle.volume for candle in candles)
+        tolerance = self._resolve_tolerance(candles)
 
         zones: list[LiquidityZone] = []
-        for group in self._group_by_tolerance(swings):
+        for group in self._group_by_tolerance(swings, tolerance):
             if len(group) < self._min_touches:
                 continue
 
@@ -130,13 +158,16 @@ class _EqualLevelDetector(LiquidityZoneDetector):
         )
         return min(1.0, area_volume / (mean_volume * _VOLUME_SATURATION))
 
-    def _group_by_tolerance(self, swings: list[LiquidityZone]) -> list[list[LiquidityZone]]:
+    @staticmethod
+    def _group_by_tolerance(
+        swings: list[LiquidityZone], tolerance: float
+    ) -> list[list[LiquidityZone]]:
         ordered = sorted(swings, key=lambda swing: swing.price_high)
         groups: list[list[LiquidityZone]] = []
         for swing in ordered:
             if groups:
                 anchor = groups[-1][0].price_high
-                if abs(swing.price_high - anchor) <= anchor * self._tolerance_pct:
+                if abs(swing.price_high - anchor) <= anchor * tolerance:
                     groups[-1].append(swing)
                     continue
             groups.append([swing])

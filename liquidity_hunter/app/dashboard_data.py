@@ -2389,6 +2389,50 @@ def default_ohlcv_provider() -> OHLCVProvider:
     return FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(), BinanceDataProvider())
 
 
+#: Equal-level pool wiring, re-calibrated 2026-08-19 against a corrected
+#: harness (see `docs/`): forward *directional share* -- of everything price
+#: travelled in the 10 candles after the grab, how much went the grab's own way
+#: -- against a control matched on side and on the grabbing candle's true
+#: range. The previous calibration used forward *rejection* excursion with a
+#: side-only control, and both halves are now known to mislead: four
+#: measurements since say these levels are targets price seeks rather than
+#: places it turns, and an unmatched control credits volatility clustering to
+#: the event.
+#:
+#: Measured over 7 symbols x 15m/1h/4h: the old wiring (lookback 10, a fixed
+#: 0.05% tolerance) lifts 1.26 in aggregate but wins in only 10 of 20 combos,
+#: with a per-combo median of 1.01 -- a coin flip per chart. With the tolerance
+#: expressed in volatility the lookback barely matters at all, which is what
+#: dissolves the monotonic climb that bought the old 10. This pair lifts 1.41
+#: and wins in 19 of 21 combos, and restores coverage (9 -> ~38 pools a chart)
+#: that the chart no longer has to pay for: the render picks the nearest two
+#: standing pools per side and three grabs, so pool count is a question for the
+#: engines, not for ink.
+#:
+#: Tolerance keeps climbing past this (1.82 at 1.0 ATR, 2.11 at 2.5) but so
+#: does the band it draws: 0.36 ATR tall here, 0.78 at 1.0, 2.12 at 2.5 -- and
+#: a two-ATR "pool" is a region, at which point the measurement is just saying
+#: that swing breaks continue. Lookback 2 measured slightly better (1.51, 21/21)
+#: and was passed over: it triples the pool count, which is what strangles the
+#: hunt's all-captured gate.
+_EQ_SWING_LOOKBACK = 5
+_EQ_TOLERANCE_ATR = 0.5
+
+
+def _equal_high_detector() -> EqualHighDetector:
+    """The production equal-high detector (shared with `app.overview`)."""
+    return EqualHighDetector(
+        swing_lookback=_EQ_SWING_LOOKBACK, tolerance_atr=_EQ_TOLERANCE_ATR
+    )
+
+
+def _equal_low_detector() -> EqualLowDetector:
+    """The production equal-low detector (shared with `app.overview`)."""
+    return EqualLowDetector(
+        swing_lookback=_EQ_SWING_LOOKBACK, tolerance_atr=_EQ_TOLERANCE_ATR
+    )
+
+
 def load_dashboard_data(
     provider: OHLCVProvider | None = None,
     symbol: str = "BTCUSDT",
@@ -2443,8 +2487,8 @@ def load_dashboard_data(
         [
             *SwingHighDetector().detect(candles),
             *SwingLowDetector().detect(candles),
-            *EqualHighDetector().detect(candles),
-            *EqualLowDetector().detect(candles),
+            *_equal_high_detector().detect(candles),
+            *_equal_low_detector().detect(candles),
         ],
         candles,
     )

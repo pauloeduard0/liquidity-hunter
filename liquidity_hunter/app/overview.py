@@ -33,6 +33,8 @@ from liquidity_hunter.app.dashboard_data import (
     _HIGHER_TIMEFRAME_MAP,
     _HUNT_PROXIMITY_ATR,
     DashboardData,
+    _equal_high_detector,
+    _equal_low_detector,
     _run_internal_structure,
     default_ohlcv_provider,
 )
@@ -51,11 +53,7 @@ from liquidity_hunter.core.domain import (
     TimeframeOverview,
 )
 from liquidity_hunter.data import OHLCVProvider
-from liquidity_hunter.liquidity import (
-    EqualHighDetector,
-    EqualLowDetector,
-    mark_swept_zones,
-)
+from liquidity_hunter.liquidity import mark_swept_zones
 from liquidity_hunter.psychology import RetailBiasEstimate
 
 # The default ladder, fine -> coarse. Every timeframe's `_HIGHER_TIMEFRAME_MAP`
@@ -128,8 +126,8 @@ def load_timeframe_structure(
     run = _run_internal_structure(provider, symbol, timeframe, limit, confluence_filter)
     liquidity_zones = mark_swept_zones(
         [
-            *EqualHighDetector().detect(run.candles),
-            *EqualLowDetector().detect(run.candles),
+            *_equal_high_detector().detect(run.candles),
+            *_equal_low_detector().detect(run.candles),
         ],
         run.candles,
     )

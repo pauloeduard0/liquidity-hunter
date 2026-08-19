@@ -136,3 +136,43 @@ class TestAreaVolumeStrength:
 
         assert scaled[0].strength == pytest.approx(quiet[0].strength)
         assert 0.0 <= scaled[0].strength <= 1.0
+
+
+def test_tolerance_atr_is_measured_in_the_series_own_volatility() -> None:
+    """The grouping width is N true ranges, not a constant percent.
+
+    Same two pivots, same series: whether they are "equal" depends only on how
+    many of this market's true ranges separate them, which is the whole point
+    -- a fixed percent asks a different question of a calm chart than of a
+    violent one.
+    """
+    candles = [
+        make_candle(index, high=100.1, low=99.9, close=100.0) for index in range(21)
+    ]
+    candles[5] = make_candle(5, high=102.0, low=99.9, close=100.0)
+    candles[15] = make_candle(15, high=102.408, low=99.9, close=100.0)  # 0.4% above
+
+    def zones(tolerance_atr: float) -> int:
+        detector = EqualHighDetector(
+            min_touches=2, swing_lookback=3, tolerance_atr=tolerance_atr
+        )
+        return len(detector.detect(candles))
+
+    # Half a true range does not span the gap; two of them do.
+    assert zones(0.5) == 0
+    assert zones(2.0) == 1
+
+
+def test_tolerance_atr_overrides_the_fixed_percent() -> None:
+    candles = [
+        make_candle(index, high=100.1, low=99.9, close=100.0) for index in range(21)
+    ]
+    candles[5] = make_candle(5, high=102.0, low=99.9, close=100.0)
+    candles[15] = make_candle(15, high=102.408, low=99.9, close=100.0)
+
+    # A percent wide enough to group them, overridden by a much tighter ATR.
+    detector = EqualHighDetector(
+        tolerance_pct=0.05, min_touches=2, swing_lookback=3, tolerance_atr=0.5
+    )
+
+    assert detector.detect(candles) == []

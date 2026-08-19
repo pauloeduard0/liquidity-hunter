@@ -452,9 +452,18 @@ re-exported from `liquidity_hunter.data`.
   returning point zones (`price_high == price_low`) with `strength` derived
   from prominence relative to the candle range.
 - **`liquidity/detectors/equal_levels.py`** — `EqualHighDetector` /
-  `EqualLowDetector`: group swing points within a configurable
-  `tolerance_pct` (relative tolerance) into equal-level zones, requiring
-  `min_touches` (default 2); `strength` scales with touch count.
+  `EqualLowDetector`: group swing points into equal-level zones, requiring
+  `min_touches` (default 2). Grouping width is either a fixed relative
+  `tolerance_pct` or, when `tolerance_atr` is given, N × the series' own mean
+  true-range percent — production wires the latter
+  (`_EQ_TOLERANCE_ATR` = 0.5, `_EQ_SWING_LOOKBACK` = 5, shared by
+  `load_dashboard_data` and `app.overview` through `_equal_high_detector` /
+  `_equal_low_detector`), since "equal" is a statement about what a market
+  treats as one level and that scale is volatility, not a constant. `strength`
+  is the volume traded inside the band during the pool's construction window,
+  normalized against the series (touch count saturated at 1.0 with three
+  touches). Calibration and the corrected measurement harness are in
+  `docs/structure_decisions.md`.
 - **`liquidity/detectors/base.py`** — also defines `MarketStructureDetector`,
   the abstract port for structure detectors
   (`detect(candles) -> list[MarketStructure]`).
