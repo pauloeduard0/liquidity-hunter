@@ -3465,3 +3465,111 @@ def test_choch_scan_window_starts_after_the_reference_level_formed() -> None:
         <= datetime(2026, 8, 12, tzinfo=UTC)
     ] == []
     assert detector.final_trend is MarketDirection.BULLISH
+
+
+# --- Provisional-CHoCH staleness + noise guards (SOLUSDT H4, 2026-08) --------
+#
+# The chart showed a dimmed `CHoCH? v` at 75.33 broken on 2026-08-15 still
+# drawn on 08-19 -- 25 candles and +6% later, sitting under the bullish leg's
+# own `BOS?` at a new high, against a standing bullish `CHoCH` from 08-08. Two
+# independent causes, one fix each:
+#   * the emission scans the tail for the *first* sustained close-break and
+#     never re-checks it, so a reclaimed forming reversal survives forever
+#     (`_PROVISIONAL_CHOCH_REQUIRE_LIVE`);
+#   * at the production `persistence_candles = 2` the break was two closes
+#     0.17% under a bare reference, reclaimed on the very next candle
+#     (`_PROVISIONAL_CHOCH_BREAK_BUFFER_ATR`).
+
+
+def _load_sol_4h_prov_candles() -> list[Candle]:
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "solusdt_4h_2026_07_20_08_19.json"
+    )
+    with data_path.open() as f:
+        rows = json.load(f)
+    return [
+        Candle(
+            symbol="SOLUSDT",
+            timeframe=TimeFrame.H4,
+            timestamp=datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+            open=row[1],
+            high=row[2],
+            low=row[3],
+            close=row[4],
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for row in rows
+    ]
+
+
+def _sol_4h_provisional(
+    monkeypatch: pytest.MonkeyPatch, *, live: bool, buffer_atr: float | None
+) -> list[MarketStructure]:
+    monkeypatch.setattr(dashboard_data, "_PROVISIONAL_CHOCH_REQUIRE_LIVE", live)
+    monkeypatch.setattr(
+        dashboard_data, "_PROVISIONAL_CHOCH_BREAK_BUFFER_ATR", buffer_atr
+    )
+    events = _build_internal_detector(TimeFrame.H4, confluence_filter=False).detect(
+        _load_sol_4h_prov_candles()
+    )
+    return [e for e in events if e.provisional]
+
+
+def test_sol_4h_stale_provisional_choch_without_the_guards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reported bug, reproduced: with both guards off the reclaimed bearish
+    break of 2026-08-15 is still emitted at the live edge, alongside the bullish
+    `BOS?` of the leg that walked +6% away from it."""
+    provisional = _sol_4h_provisional(monkeypatch, live=False, buffer_atr=None)
+    stale = [
+        e for e in provisional if e.event is StructureEvent.CHANGE_OF_CHARACTER
+    ]
+    assert len(stale) == 1
+    assert stale[0].direction is MarketDirection.BEARISH
+    assert stale[0].timestamp == datetime(2026, 8, 15, 4, tzinfo=UTC)
+    assert stale[0].reference_price_level == 75.33
+    # The leg it supposedly reversed kept going, and says so.
+    assert any(e.event is StructureEvent.BREAK_OF_STRUCTURE for e in provisional)
+
+
+@pytest.mark.parametrize(
+    ("live", "buffer_atr"),
+    [(True, None), (False, 0.5), (True, 0.5)],
+)
+def test_sol_4h_guards_retire_the_stale_provisional_choch(
+    monkeypatch: pytest.MonkeyPatch, live: bool, buffer_atr: float | None
+) -> None:
+    """Either guard alone retires it (they attack independent causes of the same
+    mark), and together they do too. The leg's own provisional BOS -- a live-edge
+    mark that IS still standing -- is untouched, so this is a retirement of the
+    stale mark, not of the provisional layer."""
+    provisional = _sol_4h_provisional(monkeypatch, live=live, buffer_atr=buffer_atr)
+    assert [e.event for e in provisional] == [StructureEvent.BREAK_OF_STRUCTURE]
+    assert provisional[0].direction is MarketDirection.BULLISH
+
+
+def test_provisional_choch_guards_require_the_provisional_choch_flag() -> None:
+    with pytest.raises(
+        ValueError, match="provisional_choch_require_live requires emit_provisional_choch"
+    ):
+        InternalStructureDetector(provisional_choch_require_live=True)
+    with pytest.raises(
+        ValueError,
+        match="provisional_choch_break_buffer_atr requires emit_provisional_choch",
+    ):
+        InternalStructureDetector(provisional_choch_break_buffer_atr=0.5)
+    with pytest.raises(
+        ValueError, match="provisional_choch_break_buffer_atr must be non-negative"
+    ):
+        InternalStructureDetector(
+            emit_provisional_choch=True, provisional_choch_break_buffer_atr=-0.1
+        )

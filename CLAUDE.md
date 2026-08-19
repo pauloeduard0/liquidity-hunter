@@ -1955,7 +1955,15 @@ state in brief:
   pair is the *sequence* of the ordinary reversal, the leg closing through its
   own floor before turning, and erasing it destroys the observation that dates
   the turn; safe because provisional marks never terminate another event's
-  line), fast-fizzle marker (with the origin-buffer gate
+  line, and the two staleness/noise guards on the live-edge `CHoCH?`:
+  `provisional_choch_require_live` — a *sustained* reclaim of the bare
+  reference retires every break that predates it, honouring the repaint the
+  emission always promised, and `provisional_choch_break_buffer_atr` = 0.5 —
+  the break must clear the reference by N×mean-TR%, mirroring
+  `choch_fail_level_buffer_atr` on the failure side; at `persistence_candles=2`
+  a bare level was cleared by two closes 0.17% beyond it, and the resulting mark
+  then sat mid-chart for 25 candles under a +6% rally, the SOLUSDT H4 2026-08-15
+  case), fast-fizzle marker (with the origin-buffer gate
   `choch_fizzle_reclaim_origin_buffer_atr` = 1.0: the fizzle reclaim must
   recover the leg *origin* ± N×mean-TR%, not merely retest the broken level —
   a routine pullback into the counter-zone no longer paints a `CHoCH✕`; the

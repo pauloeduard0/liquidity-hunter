@@ -675,6 +675,29 @@ class InternalStructureDetector(MarketStructureDetector):
     mark carries `reference_structural=False` so the frontend can style it as
     weak+forming. With `False` the output is byte-for-byte identical.
 
+    `provisional_choch_require_live` (default `False`; requires
+    `emit_provisional_choch`) makes the provisional live-edge CHoCH honour the
+    repaint its own contract promises. The emission scans the tail since the
+    last advance for the *first* sustained close-break of the reference and
+    emits it -- with nothing checking that the break is still standing at the
+    live edge. A forming reversal that was reclaimed therefore survives
+    indefinitely, drifting mid-chart as price walks the other way (SOLUSDT H4:
+    a `CHoCH? v` broken on 2026-08-15 still drawn on 08-19, 25 candles and +6%
+    later, under a bullish `BOS?` at a new high). With the flag, a *sustained*
+    reclaim of the bare reference (`persistence_candles` closes back on the
+    other side, the same bar the break demanded) invalidates every break that
+    predates it; a later break past the reclaim still emits, so a genuine
+    second attempt is not suppressed.
+
+    `provisional_choch_break_buffer_atr` (default `None` = off; requires
+    `emit_provisional_choch`) puts a noise band of N x mean-TR% on the *break*
+    side of the provisional reference, the mirror of `choch_fail_level_buffer_atr`
+    on the failure side. At the production `persistence_candles = 2` a bare
+    reference is cleared by two closes a hair beyond it -- the SOLUSDT H4 mark
+    above was two closes 0.17% under 75.33, reclaimed on the very next candle --
+    so the band is what stops a graze from printing a forming reversal at all.
+    The reclaim check stays on the bare price.
+
     `choch_failed_fallback_suppress_candles` (default `None` = off) is the
     **post-failure fallback suppression**. A failed-CHoCH flip arms no
     blind-spot origin (one-shot, anti-ping-pong), so the cold-start
@@ -829,6 +852,8 @@ class InternalStructureDetector(MarketStructureDetector):
         emit_provisional_continuation_bos: bool = False,
         emit_provisional_choch: bool = False,
         emit_provisional_choch_weak: bool = False,
+        provisional_choch_require_live: bool = False,
+        provisional_choch_break_buffer_atr: float | None = None,
         bos_confluence_strong_close_frac: float | None = None,
         choch_origin_leg_extreme: bool = False,
         bos_first_floor_leg_extreme: bool = False,
@@ -877,6 +902,19 @@ class InternalStructureDetector(MarketStructureDetector):
             )
         if emit_provisional_choch_weak and not emit_provisional_choch:
             raise ValueError("emit_provisional_choch_weak requires emit_provisional_choch")
+        if provisional_choch_require_live and not emit_provisional_choch:
+            raise ValueError(
+                "provisional_choch_require_live requires emit_provisional_choch"
+            )
+        if provisional_choch_break_buffer_atr is not None:
+            if not emit_provisional_choch:
+                raise ValueError(
+                    "provisional_choch_break_buffer_atr requires emit_provisional_choch"
+                )
+            if provisional_choch_break_buffer_atr < 0:
+                raise ValueError(
+                    "provisional_choch_break_buffer_atr must be non-negative"
+                )
         if (
             choch_pending_fail_persistence_candles is not None
             and choch_pending_fail_persistence_candles < 1
@@ -967,6 +1005,8 @@ class InternalStructureDetector(MarketStructureDetector):
         self._keep_provisional_bos_under_reversal = keep_provisional_bos_under_reversal
         self._emit_provisional_choch = emit_provisional_choch
         self._emit_provisional_choch_weak = emit_provisional_choch_weak
+        self._provisional_choch_require_live = provisional_choch_require_live
+        self._provisional_choch_break_buffer_atr = provisional_choch_break_buffer_atr
         self._bos_confluence_strong_close_frac = bos_confluence_strong_close_frac
         self._choch_origin_leg_extreme = choch_origin_leg_extreme
         self._bos_first_floor_leg_extreme = bos_first_floor_leg_extreme
@@ -1102,6 +1142,7 @@ class InternalStructureDetector(MarketStructureDetector):
             or self._choch_success_displacement_atr is not None
             or self._choch_fizzle_reclaim_origin_buffer_atr is not None
             or self._choch_fail_level_buffer_atr is not None
+            or self._provisional_choch_break_buffer_atr is not None
         ) and len(candles) > 1:
             mean_tr_pct = fmean(
                 max(
@@ -4677,15 +4718,61 @@ class InternalStructureDetector(MarketStructureDetector):
                 # level entirely (a break candle earlier than the reference --
                 # the floating mid-chart `CHoCH?` label).
                 eligible = [c for c in tail if c.timestamp > ref.timestamp]
+                # The level the break must clear. `provisional_choch_break_buffer_atr`
+                # widens it into a noise band (N x mean-TR%) on the break side: at
+                # `persistence_candles = 2` a pair of closes a hair beyond a bare
+                # reference qualifies as "sustained", so an ordinary graze printed a
+                # forming reversal (SOLUSDT H4 2026-08-15: two closes 0.17% under a
+                # 75.33 reference, reclaimed the very next candle). Mirror of the
+                # `choch_fail_level_buffer_atr` band on the failure side.
+                break_level = ref.price
+                if (
+                    self._provisional_choch_break_buffer_atr is not None
+                    and mean_tr_pct is not None
+                    and mean_tr_pct > 0
+                ):
+                    band = ref.price * self._provisional_choch_break_buffer_atr * mean_tr_pct
+                    break_level = ref.price - band if bearish_choch else ref.price + band
+
+                def _beyond(candle: Candle) -> bool:
+                    return (
+                        candle.close < break_level
+                        if bearish_choch
+                        else candle.close > break_level
+                    )
+
+                def _reclaimed(candle: Candle) -> bool:
+                    # The reclaim is the escape valve, measured against the bare
+                    # reference (never hardened -- same discipline as the origin
+                    # reclaim of a `CHOCH_FAILED`).
+                    return (
+                        candle.close > ref.price
+                        if bearish_choch
+                        else candle.close < ref.price
+                    )
+
+                # Under `provisional_choch_require_live` the mark must still be
+                # standing at the last candle: a *sustained* reclaim of the
+                # reference (the same bar the break demanded, back on the other
+                # side) means the forming reversal died, and a break that predates
+                # it is stale. The emission contract always promised this repaint
+                # ("if price reclaims the level it simply disappears"); without the
+                # guard the first break of the tail was emitted forever, surviving
+                # even a later same-leg `BOS?` at a new extreme (the SOLUSDT H4 case,
+                # where a 08-15 `CHoCH? v` sat under a +6% rally four days later).
+                last_reclaim_i = -1
+                if self._provisional_choch_require_live:
+                    for i in range(len(eligible) - need, -1, -1):
+                        if all(_reclaimed(c) for c in eligible[i : i + need]):
+                            last_reclaim_i = i
+                            break
                 # First candle that STARTS a run of `need` consecutive closes
                 # beyond the reference (the sustained break the confirmed CHoCH
-                # also demands; the pivot lag is all it has not yet cleared).
+                # also demands; the pivot lag is all it has not yet cleared) and,
+                # under the live guard, one that no later reclaim has undone.
                 break_i: int | None = None
-                for i in range(len(eligible) - need + 1):
-                    if all(
-                        (c.close < ref.price if bearish_choch else c.close > ref.price)
-                        for c in eligible[i : i + need]
-                    ):
+                for i in range(last_reclaim_i + 1, len(eligible) - need + 1):
+                    if all(_beyond(c) for c in eligible[i : i + need]):
                         break_i = i
                         break
                 if break_i is not None:

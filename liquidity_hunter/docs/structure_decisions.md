@@ -2679,3 +2679,79 @@ Regression locks: `test_choch_scan_window_starts_after_the_reference_level_
 formed` (`tests/app/test_dashboard_data.py`, production H4 wiring + fixture
 `solusdt_4h_2026_08_11_choch_window.json`) and the reshaped
 `test_ena_seed_drop_flips_through_the_failed_choch`.
+
+## A stale `CHoCH?` under a rallying leg (2026-08-19)
+
+**Report** (SOLUSDT H4): a dimmed bearish `CHoCH? ⊕ ✦3~` drawn just below the
+standing bullish `CHoCH ⊕ ⚠ ✦5`, "sujando a visualização" — the bullish
+reversal is the one in control.
+
+**What the pipeline actually held:**
+
+```
+2026-08-08 08:00  CHoCH ▲   ref=75.28  structural   ← the standing reversal
+2026-08-09 12:00  BOS   ▲   ref=76.82               ← confirmed it
+2026-08-15 04:00  CHoCH ▼   ref=75.33  provisional  ← the intruder
+2026-08-19 12:00  BOS   ▲   ref=77.88  provisional  ← the leg, at a new high
+```
+
+The bearish mark is not a confirmed CHoCH — it is a **live-edge provisional**
+that went stale. Its closes:
+
+```
+08-15 04:00  75.20   below 75.33
+08-15 08:00  75.20   below        → 2 candles = "sustained break"
+08-15 12:00  75.49   reclaimed, the very next candle
+...
+08-19 12:00  79.89   +6%, new high
+```
+
+Two independent causes, each with a precedent in the codebase:
+
+1. **No staleness guard.** The emission scans the tail since the last advance
+   for the *first* sustained close-break of the reference and emits it; nothing
+   re-checks that the break is still standing at the live edge. The block's own
+   comment promises the repaint — *"if price reclaims the level it simply
+   disappears"* — but it was never implemented, so the mark survived 25 candles,
+   a full reclaim, and a same-leg `BOS?` at a new extreme.
+2. **`persistence_candles = 2` against a bare level.** Two closes **0.17%**
+   under the reference cleared it. This is the same class the failure side
+   already fixed with `choch_fail_level_buffer_atr` (0.5 × mean-TR%); the
+   provisional break path had kept the naked price.
+
+**Fix** — two detector flags, wired ON in `load_dashboard_data`:
+
+- `provisional_choch_require_live` (`_PROVISIONAL_CHOCH_REQUIRE_LIVE`): a
+  *sustained* reclaim of the **bare** reference (`persistence_candles` closes
+  back on the other side, the same bar the break demanded) invalidates every
+  break that predates it. A later break past the reclaim still emits, so a
+  genuine second attempt is not suppressed. The reclaim stays on the bare price
+  — the escape valve is never hardened, the same discipline as a
+  `CHOCH_FAILED`'s origin reclaim.
+- `provisional_choch_break_buffer_atr` (`_PROVISIONAL_CHOCH_BREAK_BUFFER_ATR` =
+  **0.5**): the break must *clear* the reference by N × mean-TR%, mirroring
+  `choch_fail_level_buffer_atr` on the failure side. The reclaim check is
+  unaffected.
+
+**Measurement** (BTC/ETH/SOL/NEAR/AAVE × 15m/1h/4h/1d, 20 combos, 2026-08-19),
+diffing the whole internal event stream:
+
+| variant | combos changed | removed | added |
+|---|---|---|---|
+| live guard only | 2/20 | 2 | 0 |
+| buffer only | 3/20 | 3 | 1 |
+| both | 3/20 | 3 | 1 |
+
+Removed: the SOL H4 mark, and an ETH H4 bearish `CHoCH?` at 1846.17 (same
+shape). Added: nothing new — AAVE 1h's live-edge `CHoCH?` moved **one candle
+later** (11:00 → 12:00), the buffer correctly waiting for the close that
+actually clears the level. No confirmed event, no `final_trend`, and no
+non-provisional mark changed anywhere.
+
+The two guards converge on the same marks from different directions (a graze
+that should never have printed vs. a break that died afterwards), which is why
+both are kept: the buffer cannot retire a *deep* break that is later reclaimed,
+and the live guard cannot stop a graze from printing while it is still fresh.
+
+Regression fixture: `tests/liquidity/detectors/data/solusdt_4h_2026_07_20_08_19.json`
+(184 real H4 candles), locked in `tests/app/test_dashboard_data.py`.

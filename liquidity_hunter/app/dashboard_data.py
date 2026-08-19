@@ -291,6 +291,20 @@ _CONSOLIDATION_RANGE_RESET_CYCLE = False
 # on top of the provisional `?`).
 _EMIT_PROVISIONAL_CHOCH_WEAK = True
 
+# Staleness + noise guards on the provisional (live-edge) CHoCH
+# (`InternalStructureDetector.provisional_choch_require_live` /
+# `provisional_choch_break_buffer_atr`). The emission scans the tail for the
+# *first* sustained close-break of the reference; nothing checked that the
+# break was still standing, so a reclaimed forming reversal drifted mid-chart
+# indefinitely (SOLUSDT H4: a `CHoCH? v` broken 2026-08-15 still drawn on
+# 08-19, under a bullish `BOS?` at a new high). The live guard drops any break
+# a *sustained* reclaim of the bare reference has undone; the buffer stops the
+# graze from printing at all -- at `persistence_candles = 2` the SOL mark was
+# two closes 0.17% under the level. Same 0.5 x mean-TR% band the failure side
+# already uses (`_CHOCH_FAIL_LEVEL_BUFFER_ATR`).
+_PROVISIONAL_CHOCH_REQUIRE_LIVE = True
+_PROVISIONAL_CHOCH_BREAK_BUFFER_ATR = 0.5
+
 # Impulse-BOS staging threshold for the internal detector
 # (`InternalStructureDetector.impulse_bos_displacement_pct`). A clean impulsive
 # leg advances the state machine at each lower low / higher high but, with no
@@ -1936,6 +1950,11 @@ def _build_internal_detector(
         # forming reversal after a displacement release is invisible. See
         # _EMIT_PROVISIONAL_CHOCH_WEAK.
         emit_provisional_choch_weak=_EMIT_PROVISIONAL_CHOCH_WEAK,
+        # ... but only while the break still stands (a sustained reclaim of the
+        # reference retires it) and only when the break cleared the level by more
+        # than the noise band. See _PROVISIONAL_CHOCH_REQUIRE_LIVE.
+        provisional_choch_require_live=_PROVISIONAL_CHOCH_REQUIRE_LIVE,
+        provisional_choch_break_buffer_atr=_PROVISIONAL_CHOCH_BREAK_BUFFER_ATR,
         # Fast-fizzle invalidation: a provisional CHoCH that reclaims its own
         # broken level (sustained close) within this many candles never took hold
         # -- fail it there rather than hanging until the far leg origin is
