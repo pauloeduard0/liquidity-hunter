@@ -2811,3 +2811,39 @@ unchanged in all of them**, and mapped pools rise where they exist (BNB 1h
 4 → 6, BNB 4h 2 → 3, ADA 15m 2 → 4). The extra coverage costs the chart
 nothing — the render picks the nearest two standing pools per side plus three
 grabs, so pool count is a question for the engines, not for ink.
+
+### Touch count and `strength` (same day, same harness)
+
+Two parameters that had never been swept, measured on the directional-share
+harness above:
+
+**`min_touches`.** Overall lift by setting: 2 → 1.41 (38 pools a chart),
+**3 → 1.48** (26), 4 → 1.37 (14, and only 14/21 combos). By touch count the
+split is sharp: a 2-touch pool lifts **1.22** and accounts for 197 of 525
+grabs, a 3-touch pool **1.69**. Two pivots landing near each other is the
+coincidence the detector's own module docstring warns about; three is where a
+level starts behaving like one. Wired at 3.
+
+Past three the lift *falls* (4-5 → 1.46, 6+ → 1.35): a pool revisited many
+times is a pool already drained, the same inversion the revisit-count
+hypothesis showed. So this is a **threshold, not a slope** — nothing ranks
+pools by touch count.
+
+**`strength` does not rank anything.** Adopted on reasoning (touch counting
+saturated at 1.0 for almost every pool), never measured. It is a third of the
+composite score (`touch_score = strength × 100`) and the dots on the chart
+label. By quartile of the raw construction-window volume — no ceiling, so the
+channel cannot hide behind saturation — the lift is 1.50 / 1.47 / 1.50 /
+**1.17**: flat across three quartiles and *worse* at the top. The volume that
+changed hands at a level says nothing about what price does when it returns.
+
+The ceiling was also mis-set: `_VOLUME_SATURATION` was 40 against a measured
+p25 of 42 (p50 70, p75 118), pinning **44% of pools at 1.00** — the same dead
+channel touch counting had, with a different number. Raised to the measured
+p75 so the number varies honestly. It stays descriptive; the measurement above
+is the reason nothing new was built on it.
+
+Hunt phases across the 21 combos are unchanged in 20 of them under
+`min_touches=3`. The one that moves is LINKUSDT 4h (counter-trend → captured
+3/3), and it moves because the weak two-touch pools that were keeping its leg
+"not yet cleaned" are exactly the cohort measuring 1.22.

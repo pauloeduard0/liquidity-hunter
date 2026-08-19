@@ -193,8 +193,10 @@ def test_load_dashboard_data_assembles_research_snapshot() -> None:
     assert data.market_structure_events == []
     assert isinstance(data.internal_structure_events, list)
 
-    # 2 swing highs + 1 swing low + 1 equal-highs zone (see detector tests)
-    assert len(data.liquidity_zones) == 4
+    # 2 swing highs + 1 swing low. The two equal highs no longer group into a
+    # pool: production asks for three touches (`_EQ_MIN_TOUCHES`), two pivots
+    # near each other being the coincidence the detector warns about.
+    assert len(data.liquidity_zones) == 3
     assert len(data.ranked_zones) == len(data.liquidity_zones)
     scores = [scored.score for scored in data.ranked_zones]
     assert scores == sorted(scores, reverse=True)

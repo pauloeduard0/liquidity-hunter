@@ -2415,6 +2415,15 @@ def default_ohlcv_provider() -> OHLCVProvider:
 #: that swing breaks continue. Lookback 2 measured slightly better (1.51, 21/21)
 #: and was passed over: it triples the pool count, which is what strangles the
 #: hunt's all-captured gate.
+#: A pool needs three touches, not two. Measured on the same harness by touch
+#: count: 2 touches lift 1.22 (and 197 of 525 grabs), 3 touches **1.69**, 4-5
+#: 1.46, 6+ 1.35. Two pivots that happen to land near each other are the
+#: coincidence the detector's own docstring warns about; three is where a level
+#: starts behaving like one. Past three the lift *falls* — a pool revisited
+#: many times is a pool already drained — so this is a threshold, not a slope,
+#: and nothing ranks pools by touches. Wiring it costs coverage (38 -> 26 pools
+#: a chart) and returns 1.41 -> 1.48 overall.
+_EQ_MIN_TOUCHES = 3
 _EQ_SWING_LOOKBACK = 5
 _EQ_TOLERANCE_ATR = 0.5
 
@@ -2422,14 +2431,18 @@ _EQ_TOLERANCE_ATR = 0.5
 def _equal_high_detector() -> EqualHighDetector:
     """The production equal-high detector (shared with `app.overview`)."""
     return EqualHighDetector(
-        swing_lookback=_EQ_SWING_LOOKBACK, tolerance_atr=_EQ_TOLERANCE_ATR
+        min_touches=_EQ_MIN_TOUCHES,
+        swing_lookback=_EQ_SWING_LOOKBACK,
+        tolerance_atr=_EQ_TOLERANCE_ATR,
     )
 
 
 def _equal_low_detector() -> EqualLowDetector:
     """The production equal-low detector (shared with `app.overview`)."""
     return EqualLowDetector(
-        swing_lookback=_EQ_SWING_LOOKBACK, tolerance_atr=_EQ_TOLERANCE_ATR
+        min_touches=_EQ_MIN_TOUCHES,
+        swing_lookback=_EQ_SWING_LOOKBACK,
+        tolerance_atr=_EQ_TOLERANCE_ATR,
     )
 
 

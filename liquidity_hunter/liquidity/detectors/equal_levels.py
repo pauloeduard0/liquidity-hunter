@@ -39,10 +39,18 @@ from liquidity_hunter.liquidity.detectors.base import LiquidityZoneDetector
 from liquidity_hunter.liquidity.detectors.swing_points import SwingHighDetector, SwingLowDetector
 
 #: Area volume, in units of the series' mean candle volume, at which
-#: `strength` saturates to 1.0. The measured median construction-window
-#: volume is ~21 mean-candles, so this puts a typical pool near 0.5 and
-#: leaves room above it — the point of the channel is to *vary*.
-_VOLUME_SATURATION = 40.0
+#: `strength` saturates to 1.0.
+#:
+#: Set at the measured p75 of live pools (2026-08-19, 7 symbols x 15m/1h/4h,
+#: p25 42 / p50 70 / p75 118): the previous 40 sat *below* the p25, which
+#: pinned 44% of pools at 1.00 — the same dead channel that touch counting had,
+#: with a different number. Note what this does and does not claim: measured
+#: against forward directional share, the volume traded at a level does **not**
+#: discriminate (1.50 / 1.47 / 1.50 / 1.17 by quartile of the raw quantity —
+#: flat, and worse at the top). So this is a channel that varies honestly, not
+#: a ranking anyone should trust; what does separate pools is the touch count,
+#: and it separates as a *threshold* rather than a slope (see `min_touches`).
+_VOLUME_SATURATION = 118.0
 
 
 class _EqualLevelDetector(LiquidityZoneDetector):

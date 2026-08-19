@@ -3,7 +3,11 @@
 import pytest
 
 from liquidity_hunter.core.domain import Candle, LiquiditySide, LiquidityZoneType
-from liquidity_hunter.liquidity.detectors.equal_levels import EqualHighDetector, EqualLowDetector
+from liquidity_hunter.liquidity.detectors.equal_levels import (
+    _VOLUME_SATURATION,
+    EqualHighDetector,
+    EqualLowDetector,
+)
 from liquidity_hunter.tests.liquidity.detectors._factories import make_candle, make_series
 
 # These fixtures place their pivots three candles apart from the series
@@ -37,7 +41,7 @@ def test_equal_high_detector_groups_identical_swings() -> None:
     assert zone.formed_at == candles[10].timestamp
     # Only the two touching candles reach the band, each carrying the
     # series' mean volume: 2 / _VOLUME_SATURATION.
-    assert zone.strength == pytest.approx(2 / 40)
+    assert zone.strength == pytest.approx(2 / _VOLUME_SATURATION)
 
 
 def test_equal_high_detector_respects_tolerance() -> None:
