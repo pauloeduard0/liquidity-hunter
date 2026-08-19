@@ -34,7 +34,7 @@ import {
 } from '../charting/LiquidationBandsPrimitive'
 import { EqlZonesPrimitive, type EqlZoneInput } from '../charting/EqlZonesPrimitive'
 import { RibbonPrimitive } from '../charting/RibbonPrimitive'
-import { buildPhase, buildRibbon } from '../utils/tideRibbon'
+import { buildPhase, buildRibbon, structureTrendByCandle } from '../utils/tideRibbon'
 import type { DefendedMark } from '../utils/defendedLevels'
 import { buildDefenceLevels, buildDefendedMarks } from '../utils/defendedLevels'
 import type { BehaviorDivergence, DashboardData, LiquidationBand, LiquidityZone, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
@@ -84,12 +84,20 @@ import {
 } from '../utils/chartActivity'
 import { setChartTimezoneMode, toChartTime } from '../utils/chartTime'
 
-const TOP_N_ZONES = 5
+// Standing pools are drawn as *targets*: the ones price can still hunt. So
+// the selection is the nearest few beyond price on each side, not the top of
+// a global score — the composite score mixes distance with touch and
+// timeframe weight, so a far pool with a strong volume history outranks the
+// one price is actually walking into, and ranking both sides together lets
+// one of them take every slot. Nearest-per-side is ordinal, which is what
+// this needs: a fixed distance filter (3 ATR) was measured on the defended
+// levels work and removed a whole real staircase at 6.9/9.7/12 ATR.
+const NEAREST_POOLS_PER_SIDE = 2
 // How many already-taken pools stay on the chart. Measured across six
 // symbol/timeframe combos, a 1200-candle window accumulates 48-80 grabbed
 // pools -- drawing them all would bury the standing ones, and a pool grabbed
 // hundreds of candles ago is no longer anyone's memory.
-const MAX_GRABBED_POOLS = 4
+const MAX_GRABBED_POOLS = 3
 const MAX_INTERNAL_SWEEPS = 3
 // A sweep is a momentary stop-grab at a wick, not a standing reference: draw
 // it as a short segment anchored at the sweep candle rather than a line that
@@ -605,9 +613,9 @@ const LIQ_PRICE_WINDOW = 0.08 // ±8% of current price
 const LIQ_MAX_BANDS = 12
 const LIQ_MAX_RECENT_HITS = 4
 
-/** Interleave two intensity-sorted lists, keeping both sides represented. */
-function balancedTake(above: LiquidationBand[], below: LiquidationBand[], budget: number): LiquidationBand[] {
-  const out: LiquidationBand[] = []
+/** Interleave two pre-sorted lists, keeping both sides represented. */
+function balancedTake<T>(above: T[], below: T[], budget: number): T[] {
+  const out: T[] = []
   let i = 0
   while (out.length < budget && (i < above.length || i < below.length)) {
     if (i < below.length) out.push(below[i])
@@ -1745,13 +1753,31 @@ export function MainChart({
     // Only equal-level pools are drawn; standalone swing highs/lows are single
     // pivots (weaker resting liquidity) that just clutter the chart — they still
     // feed scoring/heatmap etc. on the backend, only the render drops them.
-    const poolZones = showEqlZones
-      ? data.ranked_zones
-          .filter(
-            (s) => s.zone.zone_type === 'equal_highs' || s.zone.zone_type === 'equal_lows',
-          )
-          .slice(0, TOP_N_ZONES)
+    const eqPrice = data.candles[data.candles.length - 1].close
+    const standing = showEqlZones
+      ? data.ranked_zones.filter(
+          (s) => s.zone.zone_type === 'equal_highs' || s.zone.zone_type === 'equal_lows',
+        )
       : []
+    // A pool is a target only on the side it is hunted from: buy-side liquidity
+    // rests above price, sell-side below. One that price has already passed
+    // through is behind the market, not ahead of it.
+    const distance = (s: (typeof standing)[number]) =>
+      s.zone.zone_type === 'equal_highs'
+        ? s.zone.price_low - eqPrice
+        : eqPrice - s.zone.price_high
+    const byProximity = (
+      side: 'equal_highs' | 'equal_lows',
+    ): typeof standing =>
+      standing
+        .filter((s) => s.zone.zone_type === side && distance(s) > 0)
+        .sort((a, b) => distance(a) - distance(b))
+        .slice(0, NEAREST_POOLS_PER_SIDE)
+    const poolZones = balancedTake(
+      byProximity('equal_highs'),
+      byProximity('equal_lows'),
+      NEAREST_POOLS_PER_SIDE * 2,
+    )
     // `ranked_zones` carries only pools that are still standing -- a scored
     // target has to be reachable. So the pools that were *taken* have to be
     // read from the full zone list, and there are far too many of them to draw
@@ -1763,6 +1789,7 @@ export function MainChart({
     // zones within a few ticks are one impulse, not four events), so the grabs
     // are deduplicated per candle and side and the strongest pool represents
     // each — otherwise the cap is spent drawing the same moment repeatedly.
+    const grabIndexByTime = new Map(data.candles.map((c, i) => [c.timestamp, i]))
     const grabsByMoment = new Map<string, LiquidityZone>()
     if (showEqlZones) {
       for (const zone of data.liquidity_zones) {
@@ -1773,7 +1800,49 @@ export function MainChart({
         if (!kept || zone.strength > kept.strength) grabsByMoment.set(key, zone)
       }
     }
+    // The staircase belongs to the *context* price is in now: grabs taken
+    // since the last structural advance, on the side the current trend
+    // consumes (a bullish leg takes buy-side pools above it, a bearish one
+    // sell-side pools below).
+    //
+    // The anchor is the last non-provisional BOS/CHoCH rather than the trend
+    // flip. A leg runs for hundreds of candles and advances several times
+    // inside itself; a step taken before the latest advance belongs to a
+    // context the structure has already superseded, and price has moved on
+    // from it. "The context changed" has a name in this project — it is the
+    // advance — so the scope reuses the event stream the chart already draws
+    // instead of a recency dial.
+    //
+    // Scoping to a fixed recent window instead was tried and is wrong, even
+    // though it draws more: a leg that has since flipped leaves its staircase
+    // standing behind price, and on BTCUSDT 30m that put four rising EQH steps
+    // on a chart whose live leg had been falling for 40 candles. Steps from a
+    // dead leg are not context, they are the previous answer to a question
+    // nobody is asking any more.
+    //
+    // The cost is real and accepted: an empty staircase is the honest reading
+    // of a context that has not taken a pool — the layer says "no steps yet",
+    // not "no data".
+    const trendByCandle = structureTrendByCandle(data)
+    const currentTrend = trendByCandle.get(data.candles[data.candles.length - 1].timestamp)
+    const lastAdvance = data.internal_structure_events
+      .filter(
+        (e) =>
+          !e.provisional &&
+          (e.event === 'break_of_structure' ||
+            e.event === 'change_of_character'),
+      )
+      .reduce<string | null>((latest, e) => (latest === null || e.timestamp > latest ? e.timestamp : latest), null)
+    const scopeStart =
+      lastAdvance !== null ? (grabIndexByTime.get(lastAdvance) ?? 0) : 0
+    const grabbedSide = currentTrend === 'bullish' ? 'equal_highs' : 'equal_lows'
     const grabbedZones = [...grabsByMoment.values()]
+      .filter((zone) => {
+        if (currentTrend !== 'bullish' && currentTrend !== 'bearish') return false
+        if (zone.zone_type !== grabbedSide) return false
+        const grabbedAt = grabIndexByTime.get(zone.invalidated_at!)
+        return grabbedAt !== undefined && grabbedAt >= scopeStart
+      })
       .sort((a, b) => (a.invalidated_at! < b.invalidated_at! ? 1 : -1))
       .slice(0, MAX_GRABBED_POOLS)
     for (const scored of [
@@ -1783,8 +1852,11 @@ export function MainChart({
       const { zone, score } = scored
       const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
       const label = ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type
-      // Strength (touch count) as filled dots: 3+ touches ●●●, 2 touches ●●.
-      const dotCount = Math.max(2, Math.min(3, Math.round(zone.strength * 3)))
+      // Strength as filled dots. It reports the volume that changed hands at
+      // the level while the pool formed, relative to the window — so ●●● is a
+      // level the market actually traded at, not merely one it touched three
+      // times. The old touch count was pinned at ●●● for almost every pool.
+      const dotCount = Math.max(1, Math.min(3, Math.ceil(zone.strength * 3)))
       const dots = '●'.repeat(dotCount)
       // A standing pool is labelled by how good a target it is (its score); a
       // taken one by what happened to it, which is the only thing left to say
@@ -1793,6 +1865,13 @@ export function MainChart({
       const title = score !== null
         ? `${label} · ${dots} · ${score.toFixed(0)}`
         : `${label} · ${zone.sweep_rejected ? '⚡' : '✕'}`
+      // The band runs from the pool's first touch to where it was taken: the
+      // stretch it stood is part of the reading, since a level that held for
+      // 200 candles before being grabbed is a different pool from one grabbed
+      // on the next bar. Clipping a taken pool to the bars just before the
+      // grab was tried (to keep an ascending run of grabs from reading as
+      // parallel rails) and reverted on visual review — it left each step as a
+      // stub floating with no level behind it.
       const startTime = toChartTime(zone.formed_at)
       // A pool stops existing where it was taken, so the band stops there too
       // — the moment of the grab is the reading, and a band running on to the
