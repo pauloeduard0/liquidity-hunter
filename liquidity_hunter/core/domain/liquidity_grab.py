@@ -47,6 +47,14 @@ class LiquidityGrab(DomainModel):
     #: How many individual pools this one candle consumed.
     pool_count: int = Field(ge=1)
     outcome: LiquidityGrabOutcome
+    #: How far beyond the level the grabbing candle reached, in mean-true-range
+    #: units of its own series. The depth of the sweep: what separates a wick
+    #: that grazed the level from one that ran a long way past it before the
+    #: candle was done. Read on the grabbing candle alone -- extending the
+    #: measurement forward while price stays beyond would measure the trend
+    #: that followed, not the grab. `None` when the series carries no
+    #: volatility to normalize against.
+    excursion_atr: float | None = Field(default=None, ge=0.0)
 
     @property
     def was_rejected(self) -> bool:

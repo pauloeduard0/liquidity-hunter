@@ -94,6 +94,15 @@ const NEAREST_POOLS_PER_SIDE = 2
 // pools -- drawing them all would bury the standing ones, and a pool grabbed
 // hundreds of candles ago is no longer anyone's memory.
 const MAX_GRABBED_POOLS = 3
+// Only a notably deep sweep prints its depth. Measured across BTC/ETH/SOL/BNB
+// x 15m/1h/4h (325 grabs), excursion beyond the level runs p25 0.34, p50 0.71,
+// p75 1.15, p90 1.96 ATR -- so 1.5 is the top ~17%, the ones that ran rather
+// than grazed. Below it the number restates the outcome mark: a candle that
+// closed beyond a level is mechanically deeper than one that closed back
+// inside (in 11 of 12 combos, and of the 56 grabs past 1.5 ATR not one was
+// handed back), so printing a depth on every tombstone would spend a label on
+// a fact the mark already carries.
+const DEEP_GRAB_ATR = 1.5
 const MAX_INTERNAL_SWEEPS = 3
 // A sweep is a momentary stop-grab at a wick, not a standing reference: draw
 // it as a short segment anchored at the sweep candle rather than a line that
@@ -1825,9 +1834,14 @@ export function MainChart({
         // stacked levels are how much was resting there, and the `▣` says an
         // order block was among them.
         const count = grab !== null && grab.pool_count > 1 ? ` ×${grab.pool_count}` : ''
+        // How far past the level it ran, where that is the notable part.
+        const depth =
+          grab?.excursion_atr != null && grab.excursion_atr >= DEEP_GRAB_ATR
+            ? ` ${grab.excursion_atr.toFixed(1)}atr`
+            : ''
         const block = grab !== null && grab.kinds.includes('order_block') && zone !== null ? ' ▣' : ''
         const mark = grab !== null ? (grab.outcome === 'rejected' ? '⚡' : '✕') : '✕'
-        title = `${label} · ${mark}${count}${block}`
+        title = `${label} · ${mark}${count}${block}${depth}`
       }
       // An order-block-only grab draws no band: the POI layer already draws
       // that box up to the same invalidation, so a second rectangle over it

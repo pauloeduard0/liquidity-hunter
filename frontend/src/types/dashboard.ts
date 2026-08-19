@@ -441,6 +441,9 @@ export interface LiquidityGrab {
   kinds: LiquidityPoolKind[]
   pool_count: number
   outcome: LiquidityGrabOutcome
+  /** How far beyond the level the grabbing candle reached, in mean-true-range
+   *  units of its own series. Null when the series has no volatility. */
+  excursion_atr: number | null
 }
 
 export interface ConsolidationRange {

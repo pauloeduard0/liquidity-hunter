@@ -12,6 +12,7 @@ decluttering.
 
 from collections import defaultdict
 from datetime import datetime
+from statistics import fmean
 
 from liquidity_hunter.core.domain import (
     Candle,
@@ -25,6 +26,7 @@ from liquidity_hunter.core.domain import (
     POIZone,
     TimeFrame,
 )
+from liquidity_hunter.indicators.supertrend import true_range_series
 
 _KIND_ORDER = {kind: i for i, kind in enumerate(LiquidityPoolKind)}
 
@@ -64,6 +66,13 @@ def build_liquidity_grabs(
     """Collapse every consumed pool into one grab per candle and side."""
     by_moment: dict[tuple[datetime, LiquiditySide], list[_Contribution]] = defaultdict(list)
     closes = {candle.timestamp: candle.close for candle in candles}
+    by_timestamp = {candle.timestamp: candle for candle in candles}
+    # One volatility unit for the whole window, so depths are comparable
+    # between grabs of the same chart (and, being a ratio, roughly between
+    # charts). A per-candle ATR would make a grab in a quiet stretch look
+    # deeper than the same distance in a violent one, which is backwards:
+    # the point is how far price went, measured in what this market moves.
+    atr = fmean(true_range_series(candles)) if candles else 0.0
 
     for zone in liquidity_zones:
         if zone.invalidated_at is None or zone.zone_type not in _POOL_ZONE_TYPES:
@@ -123,6 +132,15 @@ def build_liquidity_grabs(
             if all(c.outcome is LiquidityGrabOutcome.REJECTED for c in contributions)
             else LiquidityGrabOutcome.SPENT
         )
+        candle = by_timestamp.get(timestamp)
+        excursion: float | None = None
+        if candle is not None and atr > 0:
+            beyond = (
+                candle.high - price_level
+                if side is LiquiditySide.BUY_SIDE
+                else price_level - candle.low
+            )
+            excursion = max(0.0, beyond) / atr
         grabs.append(
             LiquidityGrab(
                 symbol=symbol,
@@ -133,6 +151,7 @@ def build_liquidity_grabs(
                 kinds=kinds,
                 pool_count=len(contributions),
                 outcome=outcome,
+                excursion_atr=excursion,
             )
         )
 

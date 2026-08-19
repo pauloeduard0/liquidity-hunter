@@ -260,3 +260,37 @@ def test_order_block_retired_by_the_queue_is_not_a_grab() -> None:
     untouched = _block(price_low=40.0, price_high=45.0, invalidated_at=_ts(5))
 
     assert _build([], [untouched]) == []
+
+
+def test_excursion_measures_the_wick_beyond_the_level_in_atr() -> None:
+    """Depth of the sweep, normalized by what this market moves."""
+    # Every fixture candle spans 10 (high = close + 5, low = close - 5), and
+    # the gap between the two closes is bigger, so the mean true range is
+    # driven by that jump -- measure against what the helper actually builds.
+    from statistics import fmean
+
+    from liquidity_hunter.indicators.supertrend import true_range_series
+
+    atr = fmean(true_range_series(_CANDLES))
+    # The candle at hour 8 closes at 130, so its high is 135.
+    zone = _pool(price_low=100.0, price_high=101.0, invalidated_at=_ts(8))
+
+    (grab,) = _build([zone], [])
+
+    assert grab.excursion_atr == (135.0 - 101.0) / atr
+
+
+def test_a_grab_that_did_not_reach_beyond_the_level_has_no_depth() -> None:
+    zone = _pool(price_low=200.0, price_high=201.0, invalidated_at=_ts(8))
+
+    (grab,) = _build([zone], [])
+
+    assert grab.excursion_atr == 0.0
+
+
+def test_excursion_is_none_without_candles() -> None:
+    zone = _pool(invalidated_at=_ts(5))
+
+    (grab,) = _build([zone], [], candles=[])
+
+    assert grab.excursion_atr is None
