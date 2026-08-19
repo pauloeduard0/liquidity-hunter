@@ -24,6 +24,30 @@ class MarketDirection(str, Enum):
     NEUTRAL = "neutral"
 
 
+class LiquidityPoolKind(str, Enum):
+    """What kind of pool held the liquidity a grab consumed."""
+
+    EQUAL_LEVEL = "equal_level"
+    ORDER_BLOCK = "order_block"
+
+
+class LiquidityGrabOutcome(str, Enum):
+    """What the grab left behind.
+
+    Read locally, on the grabbing candle itself: `REJECTED` = the wick took
+    the orders and the candle closed back outside, so the level survives as
+    memory; `SPENT` = the candle closed beyond and the level stopped being a
+    pool. Measured across six symbol/timeframe combos, reading rejection over
+    the rest of the series instead is degenerate -- in 1200 candles almost
+    every level is eventually closed through, leaving 1-8 rejected pools of
+    48-80. The local reading splits 40-50%, which is the question a grab
+    actually asks.
+    """
+
+    REJECTED = "rejected"
+    SPENT = "spent"
+
+
 class LiquiditySide(str, Enum):
     """Which side of price a liquidity zone rests on."""
 

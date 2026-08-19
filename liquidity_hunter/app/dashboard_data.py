@@ -10,12 +10,14 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from statistics import fmean
 
+from liquidity_hunter.app.liquidity_grabs import build_liquidity_grabs
 from liquidity_hunter.core.domain import (
     Candle,
     ConsolidationRange,
     ConsolidationStatus,
     FundingRate,
     LeverageLiquidationMap,
+    LiquidityGrab,
     LiquidityHeatmap,
     LiquidityHuntEpisode,
     LiquidityHuntState,
@@ -959,6 +961,11 @@ class DashboardData:
     # (see `_detect_consolidations`): where the structure detector was
     # *correctly* silent because price was ranging, made explicit.
     consolidation_ranges: list[ConsolidationRange] = field(default_factory=list)
+    # Every moment in the window where price took resting liquidity, whatever
+    # kind of pool held it (equal levels, order blocks), one entry per candle
+    # and side (see `app.liquidity_grabs`). The full stream: which few belong
+    # on a chart is presentation.
+    liquidity_grabs: list[LiquidityGrab] = field(default_factory=list)
     # Per-event confluence tally for each confirmed BOS/CHoCH (VSA + OB + OI +
     # volume delta + preceding sweep), from `StructureConfluenceEngine`. A
     # descriptive confidence read on the structure, keyed to the event.
@@ -2660,6 +2667,12 @@ def load_dashboard_data(
         oi_analysis=oi_analysis,
         market_control=market_control,
         consolidation_ranges=internal_run.consolidation_ranges,
+        liquidity_grabs=build_liquidity_grabs(
+            symbol=symbol,
+            timeframe=timeframe,
+            liquidity_zones=liquidity_zones,
+            poi_zones=poi_zones,
+        ),
     )
 
     from liquidity_hunter.app.liquidity_hunt import LiquidityHuntEngine

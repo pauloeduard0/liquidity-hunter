@@ -15,8 +15,10 @@ from liquidity_hunter.core.domain.enums import (
     ConsolidationStatus,
     DivergenceType,
     HuntCaptureQuality,
+    LiquidityGrabOutcome,
     LiquidityHuntPhase,
     LiquidityHuntTargetKind,
+    LiquidityPoolKind,
     LiquiditySide,
     LiquidityZoneType,
     ManipulationCycleStatus,
@@ -46,6 +48,7 @@ from liquidity_hunter.core.domain.liquidation import (
     LeverageLiquidationMap,
     LiquidationBand,
 )
+from liquidity_hunter.core.domain.liquidity_grab import LiquidityGrab
 from liquidity_hunter.core.domain.liquidity_heatmap import HeatmapBucket, LiquidityHeatmap
 from liquidity_hunter.core.domain.liquidity_hunt import (
     LiquidityHuntEpisode,
@@ -95,12 +98,15 @@ __all__ = [
     "HuntCaptureQuality",
     "LeverageLiquidationMap",
     "LiquidationBand",
+    "LiquidityGrab",
+    "LiquidityGrabOutcome",
     "LiquidityHeatmap",
     "LiquidityHuntEpisode",
     "LiquidityHuntPhase",
     "LiquidityHuntState",
     "LiquidityHuntTarget",
     "LiquidityHuntTargetKind",
+    "LiquidityPoolKind",
     "LiquiditySide",
     "LiquidityZone",
     "LiquidityZoneType",

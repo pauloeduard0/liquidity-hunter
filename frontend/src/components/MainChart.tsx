@@ -33,7 +33,7 @@ import { RibbonPrimitive } from '../charting/RibbonPrimitive'
 import { buildPhase, buildRibbon, structureTrendByCandle } from '../utils/tideRibbon'
 import type { DefendedMark } from '../utils/defendedLevels'
 import { buildDefenceLevels, buildDefendedMarks } from '../utils/defendedLevels'
-import type { BehaviorDivergence, DashboardData, LiquidityZone, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
+import type { BehaviorDivergence, DashboardData, LiquidityGrab, LiquiditySide, LiquidityZone, LiquidityZoneType, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -1721,28 +1721,15 @@ export function MainChart({
       byProximity('equal_lows'),
       NEAREST_POOLS_PER_SIDE * 2,
     )
-    // `ranked_zones` carries only pools that are still standing -- a scored
-    // target has to be reachable. So the pools that were *taken* have to be
-    // read from the full zone list, and there are far too many of them to draw
-    // (48-80 per chart, measured across six combos): only the latest few are
-    // still the market's memory, and a chart of every pool ever grabbed is a
-    // chart of nothing. These carry no score -- their reading is the moment
-    // they were consumed, not a distance to price.
-    // One candle routinely takes several stacked pools at once (four equal-high
-    // zones within a few ticks are one impulse, not four events), so the grabs
-    // are deduplicated per candle and side and the strongest pool represents
-    // each — otherwise the cap is spent drawing the same moment repeatedly.
+    // What price has already taken is read from `data.liquidity_grabs`, the
+    // unified stream: one entry per candle and side, carrying every kind of
+    // pool that moment consumed. The layers each knew separately that a level
+    // of theirs was gone — an equal-level pool by `invalidated_at`, an order
+    // block by the same field on its own zone, and the order block said so by
+    // silently ceasing to draw — so a candle that took four stacked highs and
+    // the block behind them told five stories in two vocabularies. It is one
+    // event, and the kinds are its evidence.
     const grabIndexByTime = new Map(data.candles.map((c, i) => [c.timestamp, i]))
-    const grabsByMoment = new Map<string, LiquidityZone>()
-    if (showEqlZones) {
-      for (const zone of data.liquidity_zones) {
-        if (zone.zone_type !== 'equal_highs' && zone.zone_type !== 'equal_lows') continue
-        if (!zone.is_mitigated || zone.invalidated_at === null) continue
-        const key = `${zone.invalidated_at}|${zone.zone_type}`
-        const kept = grabsByMoment.get(key)
-        if (!kept || zone.strength > kept.strength) grabsByMoment.set(key, zone)
-      }
-    }
     // The staircase belongs to the *context* price is in now: grabs taken
     // since the last structural advance, on the side the current trend
     // consumes (a bullish leg takes buy-side pools above it, a bearish one
@@ -1772,42 +1759,92 @@ export function MainChart({
       .filter(
         (e) =>
           !e.provisional &&
-          (e.event === 'break_of_structure' ||
-            e.event === 'change_of_character'),
+          (e.event === 'break_of_structure' || e.event === 'change_of_character'),
       )
-      .reduce<string | null>((latest, e) => (latest === null || e.timestamp > latest ? e.timestamp : latest), null)
-    const scopeStart =
-      lastAdvance !== null ? (grabIndexByTime.get(lastAdvance) ?? 0) : 0
-    const grabbedSide = currentTrend === 'bullish' ? 'equal_highs' : 'equal_lows'
-    const grabbedZones = [...grabsByMoment.values()]
-      .filter((zone) => {
-        if (currentTrend !== 'bullish' && currentTrend !== 'bearish') return false
-        if (zone.zone_type !== grabbedSide) return false
-        const grabbedAt = grabIndexByTime.get(zone.invalidated_at!)
-        return grabbedAt !== undefined && grabbedAt >= scopeStart
-      })
-      .sort((a, b) => (a.invalidated_at! < b.invalidated_at! ? 1 : -1))
-      .slice(0, MAX_GRABBED_POOLS)
+      .reduce<string | null>(
+        (latest, e) => (latest === null || e.timestamp > latest ? e.timestamp : latest),
+        null,
+      )
+    const scopeStart = lastAdvance !== null ? (grabIndexByTime.get(lastAdvance) ?? 0) : 0
+    const grabbedSide: LiquiditySide = currentTrend === 'bullish' ? 'buy_side' : 'sell_side'
+    const grabs = showEqlZones
+      ? data.liquidity_grabs
+          .filter((grab) => {
+            if (currentTrend !== 'bullish' && currentTrend !== 'bearish') return false
+            if (grab.side !== grabbedSide) return false
+            const at = grabIndexByTime.get(grab.timestamp)
+            return at !== undefined && at >= scopeStart
+          })
+          .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
+          .slice(0, MAX_GRABBED_POOLS)
+      : []
+    // An equal-level grab is drawn as the pool's own band, ending where it was
+    // taken, so the level it stood at is visible. An order-block-only grab
+    // draws a label alone: the POI layer already draws that box up to the same
+    // invalidation, and a second rectangle over it would be the one wick told
+    // twice — the same restraint the fizzle marker uses.
+    const backingZone = (grab: LiquidityGrab): LiquidityZone | null => {
+      let best: LiquidityZone | null = null
+      for (const zone of data.liquidity_zones) {
+        if (zone.zone_type !== 'equal_highs' && zone.zone_type !== 'equal_lows') continue
+        if (zone.invalidated_at !== grab.timestamp || zone.side !== grab.side) continue
+        if (!best || zone.strength > best.strength) best = zone
+      }
+      return best
+    }
     for (const scored of [
-      ...poolZones,
-      ...grabbedZones.map((zone) => ({ zone, score: null as number | null })),
+      ...poolZones.map((s) => ({ zone: s.zone, score: s.score, grab: null as LiquidityGrab | null })),
+      ...grabs.map((grab) => ({ zone: backingZone(grab), score: null as number | null, grab })),
     ]) {
-      const { zone, score } = scored
-      const color = ZONE_COLORS[zone.zone_type] ?? DEFAULT_ZONE_COLOR
-      const label = ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type
-      // Strength as filled dots. It reports the volume that changed hands at
-      // the level while the pool formed, relative to the window — so ●●● is a
-      // level the market actually traded at, not merely one it touched three
-      // times. The old touch count was pinned at ●●● for almost every pool.
-      const dotCount = Math.max(1, Math.min(3, Math.ceil(zone.strength * 3)))
-      const dots = '●'.repeat(dotCount)
-      // A standing pool is labelled by how good a target it is (its score); a
-      // taken one by what happened to it, which is the only thing left to say
-      // about it. `⚡` = the wick took the orders and the candle closed back
-      // inside; `✕` = the candle closed beyond and the level was spent.
-      const title = score !== null
-        ? `${label} · ${dots} · ${score.toFixed(0)}`
-        : `${label} · ${zone.sweep_rejected ? '⚡' : '✕'}`
+      const { score, grab } = scored
+      const zone = scored.zone
+      const buySide = grab !== null ? grab.side === 'buy_side' : zone!.zone_type === 'equal_highs'
+      const zoneType: LiquidityZoneType = buySide ? 'equal_highs' : 'equal_lows'
+      const color = ZONE_COLORS[zoneType] ?? DEFAULT_ZONE_COLOR
+      // A grab of order blocks alone is named for what it took, since no
+      // equal-level pool was involved; otherwise the pool keeps its own name
+      // and the block rides along in the count.
+      const label =
+        grab !== null && zone === null
+          ? 'OB'
+          : (ZONE_TYPE_LABELS[zoneType] ?? zoneType)
+      let title: string
+      if (score !== null && zone !== null) {
+        // A standing pool is labelled by how good a target it is. Strength as
+        // filled dots: it reports the volume that changed hands at the level
+        // while the pool formed, relative to the window — so ●●● is a level
+        // the market actually traded at, not merely one it touched three
+        // times. The old touch count was pinned at ●●● for almost every pool.
+        const dotCount = Math.max(1, Math.min(3, Math.ceil(zone.strength * 3)))
+        title = `${label} · ${'●'.repeat(dotCount)} · ${score.toFixed(0)}`
+      } else {
+        // A taken one is labelled by what happened to it, which is the only
+        // thing left to say about it. `⚡` = the wick took the orders and the
+        // candle closed back outside; `✕` = a close landed beyond and the
+        // level was spent. `×n` counts the pools this one candle consumed —
+        // stacked levels are how much was resting there, and the `▣` says an
+        // order block was among them.
+        const count = grab !== null && grab.pool_count > 1 ? ` ×${grab.pool_count}` : ''
+        const block = grab !== null && grab.kinds.includes('order_block') && zone !== null ? ' ▣' : ''
+        const mark = grab !== null ? (grab.outcome === 'rejected' ? '⚡' : '✕') : '✕'
+        title = `${label} · ${mark}${count}${block}`
+      }
+      // An order-block-only grab draws no band: the POI layer already draws
+      // that box up to the same invalidation, so a second rectangle over it
+      // would be the same wick told twice. The tombstone label alone is the
+      // addition — the same restraint the fizzle marker uses.
+      if (zone === null) {
+        const at = toChartTime(grab!.timestamp)
+        labels.push({
+          time: at,
+          timeEnd: at,
+          price: grab!.price_level,
+          color,
+          text: title,
+          below: !buySide,
+        })
+        continue
+      }
       // The band runs from the pool's first touch to where it was taken: the
       // stretch it stood is part of the reading, since a level that held for
       // 200 candles before being grabbed is a different pool from one grabbed
@@ -1842,11 +1879,10 @@ export function MainChart({
       // of pinning at the formation candle, where VSA markers cluster and
       // crowd the read.
       const isEql = zone.zone_type === 'equal_lows'
-      const labelPrice = isEql ? zone.price_low : zone.price_high
       labels.push({
         time: startTime,
         timeEnd: endTime,
-        price: labelPrice,
+        price: isEql ? zone.price_low : zone.price_high,
         color,
         text: title,
         below: isEql,

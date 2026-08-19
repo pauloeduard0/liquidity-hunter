@@ -427,6 +427,22 @@ export type ConsolidationStatus = 'active' | 'resolved'
 /** A confirmed lateral consolidation: a stretch with no structure advance where
  *  price oscillated inside a volatility-bounded box. Where the detector was
  *  *correctly* silent (a range has no BOS/CHoCH), made explicit. */
+export type LiquidityPoolKind = 'equal_level' | 'order_block'
+
+export type LiquidityGrabOutcome = 'rejected' | 'spent'
+
+/** One candle that took resting liquidity, whatever kind of pool held it. */
+export interface LiquidityGrab {
+  symbol: string
+  timeframe: TimeFrame
+  timestamp: string
+  price_level: number
+  side: LiquiditySide
+  kinds: LiquidityPoolKind[]
+  pool_count: number
+  outcome: LiquidityGrabOutcome
+}
+
 export interface ConsolidationRange {
   symbol: string
   timeframe: TimeFrame
@@ -604,5 +620,6 @@ export interface DashboardData {
   liquidity_hunt_history: LiquidityHuntEpisode[]
   liquidity_continuation_history: LiquidityHuntEpisode[]
   consolidation_ranges: ConsolidationRange[]
+  liquidity_grabs: LiquidityGrab[]
   structure_confluence: StructureConfluence[]
 }

@@ -13,6 +13,7 @@ from liquidity_hunter.core.domain import (
     Candle,
     ConsolidationRange,
     LeverageLiquidationMap,
+    LiquidityGrab,
     LiquidityHeatmap,
     LiquidityHuntEpisode,
     LiquidityHuntState,
@@ -73,4 +74,5 @@ class DashboardDataResponse(BaseModel):
         default_factory=list
     )
     consolidation_ranges: list[ConsolidationRange] = []
+    liquidity_grabs: list[LiquidityGrab] = []
     structure_confluence: list[StructureConfluence] = []
