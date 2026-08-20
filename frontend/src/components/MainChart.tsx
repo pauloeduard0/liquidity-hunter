@@ -9,8 +9,10 @@ import {
   CrosshairMode,
   createChart,
   createSeriesMarkers,
+  type DeepPartial,
   type IChartApi,
   type ISeriesApi,
+  type PriceFormat,
   type ISeriesMarkersPluginApi,
   type SeriesMarker,
   type SeriesType,
@@ -79,6 +81,7 @@ import {
   markChartGesture,
 } from '../utils/chartActivity'
 import { setChartTimezoneMode, toChartTime } from '../utils/chartTime'
+import { formatCompactPrice, usesCompactPrices } from '../utils/format'
 
 // Standing pools are drawn as *targets*: the ones price can still hunt. So
 // the selection is the nearest few beyond price on each side, not the top of
@@ -408,6 +411,22 @@ function priceFormatFor(ref: number): { precision: number; minMove: number } {
   const exponent = Math.floor(Math.log10(ref))
   const precision = Math.min(8, Math.max(2, 4 - exponent))
   return { precision, minMove: 10 ** -precision }
+}
+
+// The price axis and the crosshair label go through the series' own format, so
+// a market-cap chart needs the abbreviated scale declared here too — otherwise
+// the readout says 7.17M while the axis beside it says 7,166,059.96.
+function seriesPriceFormat(ref: number): DeepPartial<PriceFormat> {
+  if (usesCompactPrices()) {
+    return {
+      type: 'custom',
+      formatter: formatCompactPrice,
+      // The axis still picks its own gridline steps; this is the smallest
+      // difference it may show, ~10 market-cap units at the 500K end.
+      minMove: 0.01,
+    }
+  }
+  return { type: 'price', ...priceFormatFor(ref) }
 }
 
 function lineFrom(
@@ -1527,10 +1546,7 @@ export function MainChart({
     // pairs (ETHBTC, ENAUSDT) don't collapse onto 0.01 ticks. Use the latest
     // close as the reference magnitude (stable within a window).
     series.applyOptions({
-      priceFormat: {
-        type: 'price',
-        ...priceFormatFor(data.candles[data.candles.length - 1].close),
-      },
+      priceFormat: seriesPriceFormat(data.candles[data.candles.length - 1].close),
     })
 
     series.setData(

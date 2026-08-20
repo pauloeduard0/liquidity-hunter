@@ -12,7 +12,7 @@ import { NarrativePanel } from './components/NarrativePanel'
 import type { DashboardData, MarketOverview, TimeFrame } from './types/dashboard'
 import { isChartBusy } from './utils/chartActivity'
 import { chartTimezoneLabel } from './utils/chartTime'
-import { formatPrice } from './utils/format'
+import { formatPrice, setPriceFormatMode } from './utils/format'
 
 const REFRESH_INTERVAL_MS = 5_000
 // The ladder's readings change at most once per candle (per timeframe), and
@@ -189,6 +189,12 @@ function App() {
   // Gating on the field itself rather than on the symbol keeps it truthful for
   // every source: the pane is available exactly when there is a reading.
   const controlAvailable = (chartData ?? data)?.market_control != null
+
+  // An on-chain symbol is charted by market cap, so every price on screen
+  // switches to the abbreviated scale (7.17M / 500.00K). Set here, before the
+  // children that format prices render, and driven by the symbol rather than
+  // by the data so it is already right while a snapshot is loading.
+  setPriceFormatMode(symbol)
 
   // Switching keeps the current snapshot on screen (dimmed via the staleness
   // check below) instead of tearing down to the skeleton; if the target combo

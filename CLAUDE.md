@@ -1823,6 +1823,22 @@ selector.
   worth encoding (`research/raid_reversal.py`), so Tide describes state and
   never signals.
 
+- **`frontend/src/utils/format.ts`** — every price on screen (the OHLC
+  readout, KPI cards, sidebar panels, chart labels) goes through `formatPrice`,
+  which by default keeps ~5 significant digits so a low-priced pair (ETHBTC
+  ~0.03) doesn't collapse onto a 2-decimal grid. An **on-chain symbol is
+  charted by market cap**, though, where that rule renders `7,166,059.96` — so
+  `setPriceFormatMode(symbol)` (called by `App` during render, driven by the
+  symbol rather than the data so it is right while a snapshot loads) switches
+  those to an abbreviated scale: `7.17M` / `500.00K` / `1.23B`, two decimals
+  throughout (~10 market-cap units of resolution at the 500K end, enough to
+  separate two structure levels). Module state, for the same reason
+  `chartTime` keeps its offset that way — a chart mixing `7.17M` with
+  `7,166,059.96` reads as two instruments. `MainChart.seriesPriceFormat`
+  declares the same scale on the candlestick series (`type: 'custom'`), since
+  the price axis and crosshair label are formatted by the series, not by
+  `formatPrice`. `isOnchainSymbol` mirrors the backend's `is_onchain_symbol`.
+
 - **`frontend/src/utils/chartTime.ts`** — the chart's timezone (as of
   2026-07-18). Lightweight Charts has no timezone support and renders every
   `UTCTimestamp` in UTC, so a 15m candle printed at 21:30 in São Paulo labeled
