@@ -22,7 +22,7 @@ import {
 
 import { LineLabelsPrimitive, type LineLabel } from '../charting/LineLabelsPrimitive'
 import { HuntWindowPrimitive, type HuntWindow } from '../charting/HuntWindowPrimitive'
-import { DivergenceArcPrimitive, type DivergenceArc } from '../charting/DivergenceArcPrimitive'
+import { DivergenceMarksPrimitive, type DivergenceMark } from '../charting/DivergenceMarksPrimitive'
 import { POIBoxesPrimitive, type POIBox } from '../charting/POIBoxesPrimitive'
 import { HeatmapStripPrimitive, type HeatmapBand } from '../charting/HeatmapStripPrimitive'
 import {
@@ -637,15 +637,15 @@ function poiBoxEndTime(zone: POIZone, lastCandleTime: UTCTimestamp): UTCTimestam
 // carries the same label; the direction is already in the box color.
 const POI_KIND_LABEL = 'OB'
 
-const DIVERGENCE_MARKER_SHAPES: Record<string, { shape: 'circle' | 'square' | 'arrowUp' | 'arrowDown'; position: 'aboveBar' | 'belowBar' }> = {
-  distribution: { shape: 'arrowDown', position: 'aboveBar' },
-  accumulation: { shape: 'arrowUp', position: 'belowBar' },
+// Every divergence type is drawn by DivergenceMarksPrimitive, as one small
+// glyph hanging off the candle's extreme. The *shape* carries the type; the
+// fill is reserved for VSA confluence, so the two channels never compete.
+const DIVERGENCE_GLYPHS: Record<string, DivergenceMark['glyph']> = {
+  distribution: 'triangle',
+  accumulation: 'triangle',
+  exhaustion: 'diamond',
+  absorption: 'square',
 }
-
-// Exhaustion / absorption divergences are drawn as curved arcs (via
-// DivergenceArcPrimitive) rather than markers — a dome above price for a
-// bearish top exhaustion, a bowl below for a bullish exhaustion/absorption.
-const DIVERGENCE_ARC_TYPES = new Set(['exhaustion', 'absorption'])
 
 
 /** Interleave two pre-sorted lists, keeping both sides represented. */
@@ -809,26 +809,6 @@ function buildDefendedMarkers(marks: DefendedMark[]): SeriesMarker<Time>[] {
   )
 }
 
-function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker<Time>[] {
-  return [...divergences]
-    .filter((div) => !DIVERGENCE_ARC_TYPES.has(div.divergence_type))
-    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
-    .map((div) => {
-      const style = DIVERGENCE_STYLES[div.divergence_type]
-      const markerStyle = DIVERGENCE_MARKER_SHAPES[div.divergence_type] ?? DIVERGENCE_MARKER_SHAPES.distribution
-      const dirIcon = div.direction === 'bullish' ? '▲' : '▼'
-      return {
-        time: toChartTime(div.timestamp) as Time,
-        position: markerStyle.position,
-        shape: markerStyle.shape,
-        color: style?.color ?? DIVERGENCE_BASE_COLOR,
-        text: `${style?.label ?? div.divergence_type} ${dirIcon}`,
-        // Same weight as the VSA marks: the divergence keeps a colour of its
-        // own, so it does not also need extra mass to be found.
-        size: 1,
-      } as SeriesMarker<Time>
-    })
-}
 
 // Which extreme a VSA reversal pattern reads at — the top (above price) or the
 // bottom (below). Lets a VSA signal be matched to a same-side divergence arc.
@@ -848,16 +828,14 @@ const VSA_PATTERN_SIDE: Record<string, 'above' | 'below'> = {
 // arc is drawn reinforced (✦). Neither base layer is modified.
 const CONFLUENCE_WINDOW_BARS = 3
 
-// Exhaustion/absorption arcs: dome above price for a bearish (top) reading,
-// bowl below for a bullish one (bottom exhaustion / absorption). A same-side
-// VSA reversal within CONFLUENCE_WINDOW_BARS marks the arc as `strong`.
-function buildDivergenceArcs(
+// One mark per divergence, anchored to the candle's extreme. A same-side VSA
+// reversal within CONFLUENCE_WINDOW_BARS marks it as `strong` — drawn filled
+// with a ✦, the only state of this layer meant to catch the eye.
+function buildDivergenceMarks(
   divergences: BehaviorDivergence[],
   vsaSignals: VolumeSpreadSignal[],
   candles: DashboardData['candles'],
-): DivergenceArc[] {
-  // Anchor each arc to the candle's extreme (high above / low below) rather
-  // than its close, so the curve clears the wick with a little breathing room.
+): DivergenceMark[] {
   const byTime = new Map(candles.map((c) => [c.timestamp, c]))
   const indexByTime = new Map(candles.map((c, i) => [c.timestamp, i]))
 
@@ -870,21 +848,20 @@ function buildDivergenceArcs(
   }
 
   return [...divergences]
-    .filter((div) => DIVERGENCE_ARC_TYPES.has(div.divergence_type))
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
     .map((div) => {
-      // Which side the arc hugs depends on the type's direction semantics:
-      // exhaustion.direction is the fading trend (bullish → top exhausting →
-      // dome above); absorption.direction is the net flow (bullish → buyers
-      // absorbing at support → bowl below). So they map oppositely.
+      // Which side the mark hangs off depends on the type's direction
+      // semantics: exhaustion.direction is the fading trend (bullish → top
+      // exhausting → above); absorption.direction is the net flow (bullish →
+      // buyers absorbing at support → below), so the two map oppositely.
+      // Distribution/accumulation read at the top/bottom they name.
       const bullish = div.direction === 'bullish'
-      const side: DivergenceArc['side'] =
-        div.divergence_type === 'exhaustion'
-          ? bullish
-            ? 'above'
-            : 'below'
-          : bullish
-            ? 'below'
-            : 'above'
+      let side: DivergenceMark['side']
+      if (div.divergence_type === 'absorption') side = bullish ? 'below' : 'above'
+      else if (div.divergence_type === 'accumulation') side = 'below'
+      else if (div.divergence_type === 'distribution') side = 'above'
+      else side = bullish ? 'above' : 'below'
+
       const candle = byTime.get(div.timestamp)
       const price = candle
         ? side === 'above'
@@ -899,6 +876,7 @@ function buildDivergenceArcs(
         time: toChartTime(div.timestamp) as Time,
         price,
         side,
+        glyph: DIVERGENCE_GLYPHS[div.divergence_type] ?? 'diamond',
         color: DIVERGENCE_STYLES[div.divergence_type]?.color ?? DIVERGENCE_BASE_COLOR,
         strong,
       }
@@ -1075,7 +1053,7 @@ export function MainChart({
   const phaseSeriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
   const phaseRailSeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
-  const divergenceArcsPrimitiveRef = useRef<DivergenceArcPrimitive | null>(null)
+  const divergenceMarksPrimitiveRef = useRef<DivergenceMarksPrimitive | null>(null)
   const hasFittedRef = useRef(false)
   const isSyncingRef = useRef(false)
   // Read by the ResizeObserver (created once) so it recomputes pane heights
@@ -1319,9 +1297,9 @@ export function MainChart({
     series.attachPrimitive(ribbonPrimitive)
     ribbonPrimitiveRef.current = ribbonPrimitive
 
-    const divergenceArcsPrimitive = new DivergenceArcPrimitive()
-    series.attachPrimitive(divergenceArcsPrimitive)
-    divergenceArcsPrimitiveRef.current = divergenceArcsPrimitive
+    const divergenceMarksPrimitive = new DivergenceMarksPrimitive()
+    series.attachPrimitive(divergenceMarksPrimitive)
+    divergenceMarksPrimitiveRef.current = divergenceMarksPrimitive
 
     const divergenceMarkers = createSeriesMarkers(series)
     divergenceMarkersRef.current = divergenceMarkers
@@ -1433,7 +1411,7 @@ export function MainChart({
       heatmapPrimitiveRef.current = null
       volumeProfilePrimitiveRef.current = null
       divergenceMarkersRef.current = null
-      divergenceArcsPrimitiveRef.current = null
+      divergenceMarksPrimitiveRef.current = null
       hasFittedRef.current = false
     }
   }, [])
@@ -2507,9 +2485,6 @@ export function MainChart({
 
     // Behavior divergence + VSA markers share one marker plugin (a series
     // holds a single marker set), merged and re-sorted ascending by time.
-    const divMarkers = showDivergenceMarkers
-      ? buildDivergenceMarkers(data.behavior_divergences ?? [])
-      : []
     const vsaMarkers = buildVsaMarkers(vsaSignals)
     const stopRunMarkers = buildStopRunMarkers(stopRuns)
     // A structural level stands exactly as long as its line is drawn, so the
@@ -2530,15 +2505,16 @@ export function MainChart({
           ),
         )
       : []
-    const mergedMarkers = [...divMarkers, ...vsaMarkers, ...stopRunMarkers, ...defendedMarkers].sort(
+    const mergedMarkers = [...vsaMarkers, ...stopRunMarkers, ...defendedMarkers].sort(
       (a, b) => (a.time as number) - (b.time as number),
     )
     divergenceMarkersRef.current?.setMarkers(mergedMarkers)
 
-    // Exhaustion/absorption divergences render as curved arcs, not markers.
-    divergenceArcsPrimitiveRef.current?.setArcs(
+    // Every divergence renders through the marks primitive, not the shared
+    // marker plugin: it needs the whisker anchoring it to the wick.
+    divergenceMarksPrimitiveRef.current?.setMarks(
       showDivergenceMarkers
-        ? buildDivergenceArcs(
+        ? buildDivergenceMarks(
             data.behavior_divergences ?? [],
             data.volume_spread_signals ?? [],
             data.candles,

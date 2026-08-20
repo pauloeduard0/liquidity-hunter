@@ -106,8 +106,14 @@ export const CONSOLIDATION_BOX_STYLES: Record<string, { border: string; fill: st
  * accent: it is the rarest reading on the chart, so it keeps a real colour,
  * and the hue is free now that the pools went sand — it stays clear of the
  * whole cool half of the palette, which the VWAP family owns.
+ *
+ * It is a *light* rose rather than a deep one because the layer's geometry is
+ * now a ~7px glyph: on this background a small mark is read by luminance far
+ * more than by saturation, so lightness is what makes it glow. A darker,
+ * more saturated pink measured as "washed out" at this size for exactly that
+ * reason — the ink was strong, the light was not.
  */
-export const DIVERGENCE_BASE_COLOR = '#ff6fb5'
+export const DIVERGENCE_BASE_COLOR = '#ff8fc9'
 
 export const DIVERGENCE_STYLES: Record<string, { label: string; color: string; bg: string; icon: string }> = {
   distribution: { label: 'DIST', color: DIVERGENCE_BASE_COLOR, bg: `${DIVERGENCE_BASE_COLOR}15`, icon: '▼' },
