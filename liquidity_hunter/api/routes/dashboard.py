@@ -12,12 +12,20 @@ from liquidity_hunter.app.dashboard_data import (
     load_dashboard_data,
 )
 from liquidity_hunter.core.domain import TimeFrame
+from liquidity_hunter.data import is_onchain_symbol
 
 router = APIRouter(tags=["dashboard"])
 
 # Shorter than `cache.DEFAULT_TTL_SECONDS`: the frontend polls this endpoint
 # to keep the chart/price near-live, so a long TTL would make it feel frozen.
 _cache: TTLCache[DashboardData] = TTLCache(ttl_seconds=10.0)
+
+# On-chain symbols come from GeckoTerminal's free tier, whose per-IP rate limit
+# a 10s poll exhausts (each miss costs two klines requests, and the overview
+# ladder is spending the same budget). Its CDN caches a response for 60s
+# anyway, so polling faster than that cannot return anything new -- it only
+# buys 429s.
+_ONCHAIN_TTL_SECONDS = 60.0
 
 
 @router.get("/api/dashboard", response_model=DashboardDataResponse)
@@ -49,5 +57,6 @@ def get_dashboard(
             swing_lookback=swing_lookback,
             compute_narrative=narrative,
         ),
+        ttl_seconds=_ONCHAIN_TTL_SECONDS if is_onchain_symbol(symbol) else None,
     )
     return DashboardDataResponse.model_validate(data)

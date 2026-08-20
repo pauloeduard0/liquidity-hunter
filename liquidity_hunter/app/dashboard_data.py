@@ -8,6 +8,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from functools import lru_cache
 from statistics import fmean
 
 from liquidity_hunter.app.liquidity_grabs import build_liquidity_grabs
@@ -52,7 +53,10 @@ from liquidity_hunter.data import (
     BinanceFuturesOHLCVProvider,
     FallbackOHLCVProvider,
     FuturesDataProvider,
+    GeckoTerminalDataProvider,
     OHLCVProvider,
+    RoutingOHLCVProvider,
+    is_onchain_symbol,
 )
 from liquidity_hunter.data.exceptions import DataProviderError
 from liquidity_hunter.indicators import (
@@ -911,6 +915,7 @@ _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER = 300
 # offset). See `_structural_anchor_index`.
 _STRUCTURAL_ANCHOR_REGION = 300
 
+
 @dataclass(frozen=True)
 class DashboardData:
     """A snapshot of research data for a single symbol/timeframe."""
@@ -964,9 +969,7 @@ class DashboardData:
     # separate stream from `liquidity_hunt_history` — a different regime with
     # its own meaning, drawn in its own colour, never mixed with the
     # counter-trend hunt.
-    liquidity_continuation_history: list[LiquidityHuntEpisode] = field(
-        default_factory=list
-    )
+    liquidity_continuation_history: list[LiquidityHuntEpisode] = field(default_factory=list)
     # The anchor timeframe `higher_timeframe_direction` was measured on (the
     # `_HIGHER_TIMEFRAME_MAP` pair; None for the top timeframe, whose direction
     # falls back to the current series' own internal trend). Exposed so the
@@ -1088,12 +1091,9 @@ def _leg_launch_rescue_index(
         dies = (
             other.event is StructureEvent.CHANGE_OF_CHARACTER
             and other.direction is not event.direction
-        ) or (
-            other.event is StructureEvent.CHOCH_FAILED and other.direction is event.direction
-        )
+        ) or (other.event is StructureEvent.CHOCH_FAILED and other.direction is event.direction)
         if not dies and not (
-            other.event is StructureEvent.BREAK_OF_STRUCTURE
-            and other.direction is event.direction
+            other.event is StructureEvent.BREAK_OF_STRUCTURE and other.direction is event.direction
         ):
             continue
         if not dies:
@@ -1524,9 +1524,7 @@ def _stage_refire_intermediate_bos(
         )
         if end is None:
             continue
-        close_idx = find_close_break_index(
-            candles, start + 1, end, prior_extreme, bullish=bullish
-        )
+        close_idx = find_close_break_index(candles, start + 1, end, prior_extreme, bullish=bullish)
         if close_idx is None:
             continue
         # Nothing to add if a real same-direction BOS already stands between the
@@ -1603,10 +1601,7 @@ def _drop_failed_refire_cycles(
 
     dropped: set[int] = set()
     for i, event in enumerate(events):
-        if (
-            event.event is not StructureEvent.CHANGE_OF_CHARACTER
-            or event.provisional
-        ):
+        if event.event is not StructureEvent.CHANGE_OF_CHARACTER or event.provisional:
             continue
         # A re-fire carries the failure's timestamp as its reference anchor.
         # A CHoCH can also re-attempt the *same level* through a structural
@@ -1752,11 +1747,7 @@ def _drop_duplicated_provisional_bos(
     return [
         e
         for e in events
-        if not (
-            e.event is StructureEvent.BREAK_OF_STRUCTURE
-            and e.provisional
-            and duplicated(e)
-        )
+        if not (e.event is StructureEvent.BREAK_OF_STRUCTURE and e.provisional and duplicated(e))
     ]
 
 
@@ -1786,8 +1777,7 @@ def _drop_superseded_provisional_choch(
         event.timestamp
         for event in events
         if not event.provisional
-        and event.event
-        in (StructureEvent.BREAK_OF_STRUCTURE, StructureEvent.CHANGE_OF_CHARACTER)
+        and event.event in (StructureEvent.BREAK_OF_STRUCTURE, StructureEvent.CHANGE_OF_CHARACTER)
     ]
     return [
         event
@@ -2144,9 +2134,7 @@ def _run_internal_structure(
         # level's story is already told by the original failure, so drop the
         # pair (re-fire + its own failure). Runs after the fizzle pass so a
         # *resumed* re-fire (its fizzle dropped above) is never collapsed.
-        events = _drop_failed_refire_cycles(
-            events, staged_bos_keys=detector.last_staged_bos_keys
-        )
+        events = _drop_failed_refire_cycles(events, staged_bos_keys=detector.last_staged_bos_keys)
         # Strictly additive, and last: a re-fired CHoCH's leg gets the staircase
         # step it broke through (see the function's note on why it cannot run
         # inside the passes above).
@@ -2174,9 +2162,7 @@ def _run_internal_structure(
         # the boxes against the replayed stream so the drawn ranges stay
         # consistent (the re-detection's own resets are discarded -- a single
         # re-seed pass, not a fixpoint).
-        scoped_resets = _scope_resets_to_live_range(
-            range_resets, all_ranges, internal_candles
-        )
+        scoped_resets = _scope_resets_to_live_range(range_resets, all_ranges, internal_candles)
         if scoped_resets:
             all_events = run_passes(scoped_resets)
             all_ranges, _ = _detect_consolidations(all_events, internal_candles)
@@ -2271,9 +2257,7 @@ def _scope_resets_to_live_range(
     segments, every reset with a candle index at or after the active range's
     start belongs to it, and no resolved range's resets do.
     """
-    active = next(
-        (r for r in ranges if r.status is ConsolidationStatus.ACTIVE), None
-    )
+    active = next((r for r in ranges if r.status is ConsolidationStatus.ACTIVE), None)
     if active is None:
         return []
     index_by_timestamp = {candle.timestamp: index for index, candle in enumerate(candles)}
@@ -2386,14 +2370,36 @@ def _build_anchored_vwaps(
     return series
 
 
+@lru_cache(maxsize=1)
 def default_ohlcv_provider() -> OHLCVProvider:
-    """The production candle source.
+    """The production candle source, built once and shared.
+
+    Memoized because every provider here wraps a ccxt exchange, and a fresh
+    ccxt exchange re-downloads Binance's ~1MB `exchangeInfo` the first time a
+    unified method needs its markets. Per-request construction paid that on
+    *every* call -- a cold overview (seven timeframes) plus a dashboard load
+    fired a dozen of them at once and the concurrent bulk was enough to time
+    ccxt's own requests out, which surfaces as a wave of retry warnings and a
+    UI that looks stuck. The instances hold no per-request state: they issue
+    stateless public GETs, the same reason the prefetch pool can share them
+    across threads.
 
     Perpetual-futures candles (aligned with the futures-derived
     liquidation/OI/funding analysis, and a 1500-candle per-request window vs
-    spot's 1000), falling back to spot for symbols without a perpetual.
+    spot's 1000), falling back to spot for symbols without a perpetual, and to
+    GeckoTerminal for on-chain symbols (a `network:address` pair or a bare
+    token/pool address), which no exchange lists at all.
     """
-    return FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(), BinanceDataProvider())
+    return RoutingOHLCVProvider(
+        exchange=FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(), BinanceDataProvider()),
+        onchain=GeckoTerminalDataProvider(),
+    )
+
+
+@lru_cache(maxsize=1)
+def default_futures_provider() -> FuturesDataProvider:
+    """The production futures-state source, shared for the same reason."""
+    return BinanceFuturesDataProvider()
 
 
 #: Equal-level pool wiring, re-calibrated 2026-08-19 against a corrected
@@ -2472,7 +2478,7 @@ def load_dashboard_data(
     if provider is None:
         provider = default_ohlcv_provider()
     if futures_provider is None:
-        futures_provider = BinanceFuturesDataProvider()
+        futures_provider = default_futures_provider()
 
     htf = _HIGHER_TIMEFRAME_MAP.get(timeframe)
 
@@ -2497,9 +2503,7 @@ def load_dashboard_data(
         else None
     )
 
-    internal_run = _run_internal_structure(
-        provider, symbol, timeframe, limit, confluence_filter
-    )
+    internal_run = _run_internal_structure(provider, symbol, timeframe, limit, confluence_filter)
     buffered_candles = internal_run.buffered_candles
     candles = internal_run.candles
 
@@ -2559,6 +2563,7 @@ def load_dashboard_data(
 
     htf_poi_zones: list[POIZone] = []
     higher_timeframe_events: list[MarketStructure] = []
+    htf_run: InternalStructureRun | None = None
     if htf_run_future is not None:
         # The higher-timeframe trend comes from the *internal* detector run on
         # the HTF series with that timeframe's own production wiring (params +
@@ -2573,7 +2578,18 @@ def load_dashboard_data(
         # State-machine trend, not the last event's direction: the latter flips
         # on a descriptive HL/LH pivot or a LIQUIDITY_SWEEP whose `direction`
         # is the pivot/wick side rather than the standing trend.
-        htf_run = htf_run_future.result()
+        try:
+            htf_run = htf_run_future.result()
+        except DataProviderError:
+            # The higher timeframe is context, not the subject of the
+            # snapshot: an unreachable (or rate-limited) venue there degrades
+            # to the top-timeframe fallback below rather than failing the whole
+            # dashboard, the same graceful degradation the futures block uses.
+            logger.warning(
+                "Higher-timeframe data unavailable for %s; reading its trend as aligned", symbol
+            )
+            htf_run = None
+    if htf_run is not None:
         higher_timeframe_direction = htf_run.trend
         # The HTF event stream (its visible window spans a much wider calendar
         # range than the current TF's), so the hunt can replay the HTF trend up
@@ -2589,10 +2605,10 @@ def load_dashboard_data(
             if z.status == POIZoneStatus.ACTIVE
         ]
     else:
-        # Top timeframe (no higher TF): degrade to the current series' own
-        # internal trend, so downstream comparisons (the liquidity hunt's
-        # counter-trend check) read "aligned" rather than pitting two
-        # different methodologies against each other.
+        # Top timeframe (no higher TF), or an HTF fetch that failed: degrade to
+        # the current series' own internal trend, so downstream comparisons
+        # (the liquidity hunt's counter-trend check) read "aligned" rather than
+        # pitting two different methodologies against each other.
         higher_timeframe_direction = internal_run.trend
 
     retail_bias = RetailTrapAnalyzer().analyze(
@@ -2810,6 +2826,13 @@ def _fetch_futures_state(
     renders for spot-only symbols — the liquidation map and OI analysis both
     become ``None``.
     """
+    if is_onchain_symbol(symbol):
+        # An on-chain pool has no perpetual contract behind it: no open
+        # interest, no funding, no crowd long/short ratio. Skipping the fetch
+        # outright is the same degradation the `except` below performs, minus
+        # three requests that can only fail.
+        logger.info("Skipping futures state for on-chain symbol %s", symbol)
+        return None
     try:
         # The three endpoints are independent; the paginated OI history is the
         # slow one, so funding and long/short ride alongside it.

@@ -361,6 +361,58 @@ Full architecture rationale, including SOLID notes, is documented in
   leveraged flow. Its `max_fetch_limit` is **1500** (vs spot's 1000), so one
   request covers a larger window. Symbols with no perpetual contract raise
   `DataProviderRequestError`.
+- **`data/providers/geckoterminal.py`** — `GeckoTerminalDataProvider`, an
+  `OHLCVProvider` for **on-chain (DEX) pairs** — memecoins in particular, which
+  no exchange lists. Symbols are `"<network>:<address>"` (e.g.
+  `"solana:Ge87…pump"`) or a bare address; a *token* address resolves to its
+  deepest pool by USD reserve (liquidity is fragmented across dozens of pools,
+  so "the chart" is the deepest one), a *pool* address is used directly. Both
+  resolutions are cached per symbol. `denomination` (`PriceDenomination`,
+  default **`MARKET_CAP`**) scales the USD price by the token's supply — a
+  constant factor, so every structural reading is identical to the USD chart
+  and only the axis changes; `USD` and `QUOTE` (priced in the pool's quote
+  token) are the alternatives. M30 and W1 have no native GeckoTerminal period
+  and are **resampled** (`_RESAMPLED_FROM`) from M15 pairs / D1 weeks (Monday
+  00:00 UTC buckets), so the whole M5→W1 ladder works; one upstream request
+  then yields N times fewer bars there. `max_fetch_limit` is 1000.
+  Two source-imposed gaps, both degrading gracefully rather than being faked:
+  an on-chain OHLCV row has **no taker split**, so `taker_buy_volume` is half
+  the candle's volume and `volume_delta` reads a flat zero (CVD, VSA,
+  `MarketControlAnalyzer`, the profile's delta colouring all go quiet — a
+  "green candle = 60% buying" proxy would feed invented flow to layers that
+  read it as measured); and there is **no futures state** for a pool, so
+  `_fetch_futures_state` skips the fetch outright for an on-chain symbol
+  (`oi_analysis=None`, `liquidation_map=None`, `market_control=None`).
+  Volume is USD, not base units.
+  **Rate limiting is the operational constraint** (measured 2026-08-20): the
+  free tier's per-IP budget is small, and a 429 body points at CoinGecko's paid
+  plans. Its CDN, though, caches a response for 60s (`s-maxage=60`) and an edge
+  `HIT` never reaches the limiter — so the fix is to *not repeat requests*, not
+  to retry harder. Four mechanisms, module-scoped because
+  `default_ohlcv_provider()` builds a fresh provider per API call:
+  a **response cache** by URL (`_RESPONSE_CACHE_TTL_SECONDS` = 50, just inside
+  the CDN window), **single-flight** locks so concurrent callers of one URL
+  fetch it once, a **metadata cache** for pool resolution and token supply
+  (`_METADATA_TTL_SECONDS` = 1h — properties of the asset, not of a request),
+  and a **global cooldown** opened by any 429 (`_COOLDOWN_AFTER_429_SECONDS` =
+  8) so every thread stands down together instead of each retrying into the
+  same spent limiter. `clear_caches()` resets all of them (tests). On top,
+  requests are spaced process-wide (2.2s) and retried on a 7-rung ladder, and
+  the higher-timeframe run in `load_dashboard_data` degrades to "aligned" on a
+  `DataProviderError` rather than failing the snapshot. The API layer widens
+  its TTLs for on-chain symbols (`dashboard._ONCHAIN_TTL_SECONDS` = 60,
+  `overview._ONCHAIN_MIN_SNAPSHOT_TTL_SECONDS` = 180): polling faster than the
+  source's own cache window cannot return anything new, it only buys 429s.
+  Measured end to end on the Jimothy pool: cold dashboard **54s → 6.9s**, a
+  repeat and a timeframe switch effectively free (both reuse the ladder's
+  cached URLs), cold 7-timeframe overview **3m40 → 90s**.
+- **`data/providers/routing.py`** — `RoutingOHLCVProvider(exchange, onchain)`
+  plus `is_onchain_symbol`: sends `<network>:<address>` symbols and bare
+  base58/0x addresses to the on-chain source and everything else to the
+  exchange chain, capping each request to its own source's limit (the
+  `FallbackOHLCVProvider` shape). `load_dashboard_data`'s default provider is
+  `RoutingOHLCVProvider(FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(),
+  BinanceDataProvider()), GeckoTerminalDataProvider())`.
 - **`data/providers/fallback.py`** — `FallbackOHLCVProvider(primary, secondary)`:
   an `OHLCVProvider` that tries `primary` and falls back to `secondary` on
   `DataProviderRequestError` (e.g. a symbol with no perpetual), clamping the
@@ -375,8 +427,9 @@ limit; `klines_row_to_candle` (in `binance.py`) is the shared 12-column row →
 `Candle` parser used by both the spot and futures providers.
 
 `BinanceDataProvider`, `BinanceFuturesOHLCVProvider`, `FallbackOHLCVProvider`,
-`OHLCVProvider`, `BinanceFuturesDataProvider`, and `FuturesDataProvider` are
-re-exported from `liquidity_hunter.data`.
+`OHLCVProvider`, `BinanceFuturesDataProvider`, `FuturesDataProvider`,
+`GeckoTerminalDataProvider`, `PriceDenomination`, `RoutingOHLCVProvider`, and
+`is_onchain_symbol` are re-exported from `liquidity_hunter.data`.
 
 ### Indicators layer (`liquidity_hunter/indicators`)
 
@@ -1361,6 +1414,19 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
     composes both over the default ladder `OVERVIEW_TIMEFRAMES` (M5→W1).
   Purely descriptive throughout: a state reading per timeframe, not a signal.
 
+`default_ohlcv_provider()` and `default_futures_provider()` are **memoized**
+(`lru_cache`), so the whole process shares one instance of each. A fresh
+`BinanceFuturesDataProvider` re-downloads Binance's ~1MB `fapi/v1/exchangeInfo`
+the first time a ccxt *unified* method loads its markets, and the futures state
+is fetched per dashboard load: measured 2026-08-20, the futures fetch costs
+1.1-1.5s with a per-request provider versus 0.60s warm on a shared one, and a
+cold overview (seven timeframes) plus a dashboard load fired several of those
+1MB downloads concurrently. The klines path is unaffected either way (the
+implicit `publicGetKlines`/`fapiPublicGetKlines` endpoints never load markets —
+measured, the ladder costs ~1s both ways). The providers hold no per-request
+state, only stateless public GETs, the same property that lets the prefetch
+pool share them across threads.
+
 `load_dashboard_data` also accepts **`compute_narrative`** (default `True`;
 `False` skips the `NarrativeEngine` synthesis entirely, `narrative=None`) and
 its buffered-fetch + internal-detection front half now lives in
@@ -1540,9 +1606,15 @@ selector.
   "Who is in control, how strongly, and with whose money" in one bar. It carves its slice
   out of the main pane (`CONTROL_CHART_RATIO`) and participates in the
   logical-range time sync but not crosshair sync. Toggled by the `⚑ Control`
-  toolbar button (`showControlOscillator` prop, default **off**); turning it on
+  toolbar button (`showControlOscillator` prop); turning it on
   also opens the indicator panes (it lives in that group, hidden when they're
-  minimized).
+  minimized). The button is **disabled, and the pane forced closed, whenever
+  `data.market_control` is null** (`controlAvailable` in `App.tsx`) — an
+  on-chain pool has no open interest, and neither does a spot-only pair, so
+  both axes of the reading are missing and the pane would render empty. The
+  gate reads the field rather than the symbol, so it is right for every source;
+  the `◈ Tide` toggle honours it too (it no longer opens a pane with nothing in
+  it, though the ribbon itself still draws, grey, on the main pane).
 
   **RSI pane**: RSI(14) line with 70/30 reference lines and regular
   divergence detection (bullish: price LL + RSI HL below 50; bearish:

@@ -51,6 +51,15 @@ const SYMBOL_OPTIONS: { value: string; label: string }[] = [
   { value: 'ETHBTC', label: 'ETH/BTC' },
   { value: 'MUUSDT', label: 'MU' },
   { value: 'ZECUSDT', label: 'ZEC' },
+  // On-chain pairs: `<network>:<token address>`, served by GeckoTerminal
+  // instead of Binance (see `RoutingOHLCVProvider`). Priced in market cap,
+  // the axis a memecoin is actually read on. No futures layers behind these
+  // (no OI, funding, or liquidation map) and no volume delta -- an on-chain
+  // OHLCV row carries no taker split.
+  {
+    value: 'solana:Ge87EtsjwRQbHaqQmKRno69RFTwh9bfSsm99XNxTpump',
+    label: 'JIMOTHY',
+  },
 ]
 
 const TIMEFRAME_OPTIONS: { value: TimeFrame; label: string }[] = [
@@ -173,6 +182,13 @@ function App() {
   // The rendered snapshot lags the selection while a first-visit combo loads;
   // dim the dashboard and show the loading pill instead of a skeleton.
   const dataStale = data !== null && (data.symbol !== symbol || data.timeframe !== timeframe)
+
+  // The control oscillator is CVD aggression crossed with open interest, and
+  // an on-chain pool has no open interest at all (nor does a spot-only pair),
+  // so `market_control` comes back null and the pane would render empty.
+  // Gating on the field itself rather than on the symbol keeps it truthful for
+  // every source: the pane is available exactly when there is a reading.
+  const controlAvailable = (chartData ?? data)?.market_control != null
 
   // Switching keeps the current snapshot on screen (dimmed via the staleness
   // check below) instead of tearing down to the skeleton; if the target combo
@@ -617,7 +633,7 @@ function App() {
                         // oscillator lives in -- otherwise half of it is
                         // invisible and the toggle looks broken.
                         setRibbonVisible((v) => {
-                          if (!v) setControlOscVisible(true)
+                          if (!v && controlAvailable) setControlOscVisible(true)
                           return !v
                         })
                       }}
@@ -652,13 +668,20 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      disabled={!controlAvailable}
                       onClick={() => setControlOscVisible((v) => !v)}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        controlOscVisible
-                          ? 'bg-[#26a69a22] text-[#26a69a]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                        !controlAvailable
+                          ? 'cursor-not-allowed bg-[#1a1f2e] text-[#3a4051]'
+                          : controlOscVisible
+                            ? 'bg-[#26a69a22] text-[#26a69a]'
+                            : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
                       }`}
-                      title="Toggle the control oscillator pane (CVD aggression × OI — who is in control, and how strongly)"
+                      title={
+                        controlAvailable
+                          ? 'Toggle the control oscillator pane (CVD aggression × OI — who is in control, and how strongly)'
+                          : 'Sem open interest nesta fonte (par on-chain ou spot) — não há leitura de controle para desenhar'
+                      }
                     >
                       ⚑ Control
                     </button>
@@ -706,7 +729,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showSmc={smcVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible} showRibbon={ribbonVisible} showDefendedLevels={defendedVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showSmc={smcVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible && controlAvailable} showRibbon={ribbonVisible} showDefendedLevels={defendedVisible} />
                 </div>
               </div>
 

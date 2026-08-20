@@ -12,6 +12,7 @@ from liquidity_hunter.app.overview import (
     load_timeframe_structure,
 )
 from liquidity_hunter.core.domain import MarketOverview, TimeFrame
+from liquidity_hunter.data import is_onchain_symbol
 
 router = APIRouter(tags=["overview"])
 
@@ -32,6 +33,11 @@ _SNAPSHOT_TTL_SECONDS: dict[TimeFrame, float] = {
 }
 _DEFAULT_SNAPSHOT_TTL_SECONDS = 60.0
 
+#: An on-chain ladder costs seven GeckoTerminal fetches against a tight shared
+#: rate limit, so the fast intraday rungs are floored: refreshing M5 every 30s
+#: spends budget the whole ladder needs, and the source's own CDN window is 60s.
+_ONCHAIN_MIN_SNAPSHOT_TTL_SECONDS = 180.0
+
 _snapshot_cache: TTLCache[TimeframeStructureSnapshot] = TTLCache()
 
 
@@ -47,8 +53,15 @@ def get_overview(symbol: str = "BTCUSDT") -> MarketOverview:
         _snapshot_cache.get_or_set(
             (symbol, timeframe),
             partial(load_timeframe_structure, symbol=symbol, timeframe=timeframe),
-            ttl_seconds=_SNAPSHOT_TTL_SECONDS.get(timeframe, _DEFAULT_SNAPSHOT_TTL_SECONDS),
+            ttl_seconds=_snapshot_ttl(symbol, timeframe),
         )
         for timeframe in OVERVIEW_TIMEFRAMES
     ]
     return build_overview(symbol, snapshots)
+
+
+def _snapshot_ttl(symbol: str, timeframe: TimeFrame) -> float:
+    ttl = _SNAPSHOT_TTL_SECONDS.get(timeframe, _DEFAULT_SNAPSHOT_TTL_SECONDS)
+    if is_onchain_symbol(symbol):
+        return max(ttl, _ONCHAIN_MIN_SNAPSHOT_TTL_SECONDS)
+    return ttl

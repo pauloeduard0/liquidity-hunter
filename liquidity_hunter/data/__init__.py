@@ -10,7 +10,11 @@ from liquidity_hunter.data.providers import (
     BinanceFuturesOHLCVProvider,
     FallbackOHLCVProvider,
     FuturesDataProvider,
+    GeckoTerminalDataProvider,
     OHLCVProvider,
+    PriceDenomination,
+    RoutingOHLCVProvider,
+    is_onchain_symbol,
 )
 
 __all__ = [
@@ -19,5 +23,9 @@ __all__ = [
     "BinanceFuturesOHLCVProvider",
     "FallbackOHLCVProvider",
     "FuturesDataProvider",
+    "GeckoTerminalDataProvider",
     "OHLCVProvider",
+    "PriceDenomination",
+    "RoutingOHLCVProvider",
+    "is_onchain_symbol",
 ]
