@@ -14,10 +14,15 @@ export const CANDLE_UP_COLOR = '#9598a1'
 export const CANDLE_DOWN_COLOR = '#da4d4d'
 
 export const ZONE_COLORS: Record<string, string> = {
-  // Liquidity pools use a pink/cyan pair, deliberately clear of the OB boxes'
-  // red/blue (POI_BOX_STYLES) so the two layers never read as the same thing.
-  equal_highs: '#ff6fb5',  // pink — buy-side pool above price
-  equal_lows: '#28c9e6',   // cyan — sell-side pool below price
+  // **One hue for both sides of the pool layer.** EQH and EQL are the same
+  // observation — resting stops — and which side they sit on is already told
+  // by where they are relative to price, so the old pink/cyan pair spent two
+  // saturated colours saying nothing. The sand tone puts them in the same
+  // family as the Sweep (`STRUCTURE_EVENT_STYLES.liquidity_sweep`), which is
+  // the same story one candle later, and stays clear of the neutral grey the
+  // OB boxes and VSA marks now use.
+  equal_highs: '#c9a86a',
+  equal_lows: '#c9a86a',
   swing_high: '#ffa15a',
   swing_low: '#19d3f3',
   order_block: '#ab63fa',
@@ -63,12 +68,17 @@ export const TREND_ICONS: Record<string, string> = {
   neutral: '▬',
 }
 
-/** POI order block box colors — border and fill (TradingView style).
- *  Kept deliberately faint: the zone is context behind the candles, so the
- *  fill sits near ~7% alpha and the border is a translucent hairline. */
+/** POI order block box colors — border and fill.
+ *  **Neutral for both directions**, the same choice already made for the
+ *  consolidation box: the OB is the layer that occupies the most pixels on
+ *  screen, so it is the one that gains most by reading as background. Its
+ *  side is obvious from where it sits relative to price, and the old bearish
+ *  red (`#ef5350`) was a hair from the down candle's own red (`#da4d4d`), so
+ *  a tall supply box turned into a stain over the candles instead of framing
+ *  them. */
 export const POI_BOX_STYLES: Record<string, { border: string; fill: string }> = {
-  bullish: { border: '#5b9cf699', fill: '#2979ff12' },  // soft blue demand zone
-  bearish: { border: '#ef535099', fill: '#ef535012' },  // soft red supply zone
+  bullish: { border: '#8a94a666', fill: '#8a94a610' },
+  bearish: { border: '#8a94a666', fill: '#8a94a610' },
 }
 
 /** Manipulation cycle accumulation box colors by status. */
@@ -85,31 +95,53 @@ export const CONSOLIDATION_BOX_STYLES: Record<string, { border: string; fill: st
   resolved: { border: '#90a4ae66', fill: '#90a4ae0a' },
 }
 
-/** Behavior divergence type colors and marker shapes. */
+/**
+ * Behavior divergence styles.
+ *
+ * **One hue for the layer**, the same discipline applied to VSA and the pools:
+ * every divergence is one statement — *the flow contradicts the price* — and
+ * the four members differ in which contradiction, which the label and the
+ * geometry already carry (`distribution` draws a marker, `exhaustion` a dome
+ * above the high, `absorption` a bowl below the low). Pink is the layer's own
+ * accent: it is the rarest reading on the chart, so it keeps a real colour,
+ * and the hue is free now that the pools went sand — it stays clear of the
+ * whole cool half of the palette, which the VWAP family owns.
+ */
+export const DIVERGENCE_BASE_COLOR = '#ff6fb5'
+
 export const DIVERGENCE_STYLES: Record<string, { label: string; color: string; bg: string; icon: string }> = {
-  distribution: { label: 'DIST', color: '#ef5350', bg: '#ef535015', icon: '▼' },
-  accumulation: { label: 'ACCUM', color: '#26a69a', bg: '#26a69a15', icon: '▲' },
-  exhaustion: { label: 'EXHAUST', color: '#ffb74d', bg: '#ffb74d15', icon: '◇' },
-  absorption: { label: 'ABSORB', color: '#ab63fa', bg: '#ab63fa15', icon: '◆' },
+  distribution: { label: 'DIST', color: DIVERGENCE_BASE_COLOR, bg: `${DIVERGENCE_BASE_COLOR}15`, icon: '▼' },
+  accumulation: { label: 'ACCUM', color: DIVERGENCE_BASE_COLOR, bg: `${DIVERGENCE_BASE_COLOR}15`, icon: '▲' },
+  exhaustion: { label: 'EXHAUST', color: DIVERGENCE_BASE_COLOR, bg: `${DIVERGENCE_BASE_COLOR}15`, icon: '◇' },
+  absorption: { label: 'ABSORB', color: DIVERGENCE_BASE_COLOR, bg: `${DIVERGENCE_BASE_COLOR}15`, icon: '◆' },
 }
 
 /**
- * Volume-Spread-Analysis (VSA) pattern styles — the color a candle's volume
- * bar is tinted with (and the label drawn above/below the candle) when the
- * VSA analyzer flags it. Climax = high-energy alert (magenta), thrust =
- * rejection (amber), no-supply/no-demand = quiet/low-energy (muted grey).
- * `above`/`below` place the chart marker on the side the pattern reads from.
+ * Volume-Spread-Analysis (VSA) pattern styles — the tint of a candle's volume
+ * bar (and the mark drawn above/below the candle) when the VSA analyzer flags
+ * it.
+ *
+ * **One hue for the whole layer.** Climax vs thrust vs no-supply is a
+ * difference of *degree* (how hard the candle rejected), not of kind, so it
+ * rides the *weight* channel instead of the hue channel: climax opaque,
+ * thrust ~70%, no-supply/no-demand ~45%. The direction is already carried by
+ * `position` (above/below the bar) and the pattern name by `label`, so a
+ * second and third saturated colour bought nothing and put VSA at the same
+ * visual volume as the structure staircase — the only layer that should read
+ * as primary.
  */
+export const VSA_BASE_COLOR = '#9aa4b8'
+
 export const VSA_STYLES: Record<
   string,
   { label: string; color: string; position: 'aboveBar' | 'belowBar' }
 > = {
-  selling_climax: { label: 'S.Climax', color: '#e040fb', position: 'belowBar' },
-  buying_climax: { label: 'B.Climax', color: '#e040fb', position: 'aboveBar' },
-  down_thrust: { label: 'D.Thrust', color: '#ffb74d', position: 'belowBar' },
-  up_thrust: { label: 'U.Thrust', color: '#ffb74d', position: 'aboveBar' },
-  no_supply: { label: 'NoSupply', color: '#8a94a6', position: 'belowBar' },
-  no_demand: { label: 'NoDemand', color: '#8a94a6', position: 'aboveBar' },
+  selling_climax: { label: 'S.Climax', color: `${VSA_BASE_COLOR}ff`, position: 'belowBar' },
+  buying_climax: { label: 'B.Climax', color: `${VSA_BASE_COLOR}ff`, position: 'aboveBar' },
+  down_thrust: { label: 'D.Thrust', color: `${VSA_BASE_COLOR}b3`, position: 'belowBar' },
+  up_thrust: { label: 'U.Thrust', color: `${VSA_BASE_COLOR}b3`, position: 'aboveBar' },
+  no_supply: { label: 'NoSupply', color: `${VSA_BASE_COLOR}73`, position: 'belowBar' },
+  no_demand: { label: 'NoDemand', color: `${VSA_BASE_COLOR}73`, position: 'aboveBar' },
 }
 
 /**
@@ -229,18 +261,32 @@ export const VP_DELTA_SELL_COLOR = 'rgba(239, 83, 80, 0.75)'
 
 // --- VWAP (average price paid since an anchor) ----------------------------
 /**
- * The session line: neutral gold, so it reads as a reference the whole tape
- * shares rather than as a directional call like the Supertrend band.
+ * The session line: a desaturated ice blue. It used to be gold, which
+ * collided with the sand the equal-level pools now use — and a *level someone
+ * is defending* and *the average price a population paid* must never read as
+ * the same family. The cool half of the palette is the free one (the OB boxes
+ * went neutral grey, the divergences went pink), and it carries the right
+ * tone for this layer: a reference the whole tape shares, not a directional
+ * call like the Supertrend band.
+ *
+ * Low saturation is the point rather than a compromise: this line crosses the
+ * entire width of the pane, so it is the layer with the most ink on screen
+ * after the candles themselves, and it earns its place by receding behind
+ * them. A saturated blue was tried first and read as a fourth thing shouting.
  */
-export const VWAP_COLOR = '#e0a13a'
-export const VWAP_LINE_WIDTH = 2
+export const VWAP_COLOR = '#8fb0c9'
+/** A hairline, for the same reason the colour is desaturated: this is the
+ *  widest-running overlay on the pane, so it reads as a reference rather than
+ *  as a plotted series. */
+export const VWAP_LINE_WIDTH = 1
 /** ±1σ / ±2σ of the accumulation — how widely the session's volume paid. */
-export const VWAP_BAND_1_COLOR = 'rgba(224, 161, 58, 0.45)'
-export const VWAP_BAND_2_COLOR = 'rgba(224, 161, 58, 0.22)'
+export const VWAP_BAND_1_COLOR = 'rgba(143, 176, 201, 0.40)'
+export const VWAP_BAND_2_COLOR = 'rgba(143, 176, 201, 0.20)'
 /**
- * Anchored VWAPs (a CHoCH, a sweep): cyan, distinct from the session line
- * because they answer a different question — not "what did today pay" but
- * "what does the crowd that entered on that event hold".
+ * Anchored VWAPs (a CHoCH, a sweep): cyan and violet — the same cool family
+ * as the session line, since they are the same kind of reading, but distinct
+ * within it because they answer a different question: not "what did today
+ * pay" but "what does the crowd that entered on that event hold".
  */
 export const VWAP_ANCHORED_COLORS = ['#4dd0e1', '#9575cd']
 export const VWAP_ANCHORED_LINE_WIDTH = 2

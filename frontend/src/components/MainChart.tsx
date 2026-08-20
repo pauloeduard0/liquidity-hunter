@@ -44,6 +44,7 @@ import {
   DEFAULT_ZONE_COLOR,
   FONT_COLOR,
   DIVERGENCE_STYLES,
+  DIVERGENCE_BASE_COLOR,
   MANIPULATION_BOX_STYLES,
   POI_BOX_STYLES,
   RSI_DIV_BEARISH_COLOR,
@@ -57,6 +58,7 @@ import {
   VOLUME_DOWN_COLOR,
   VOLUME_UP_COLOR,
   VSA_STYLES,
+  VSA_BASE_COLOR,
   ZONE_COLORS,
   ZONE_TYPE_LABELS,
   SUPERTREND_DOWN_COLOR,
@@ -819,9 +821,11 @@ function buildDivergenceMarkers(divergences: BehaviorDivergence[]): SeriesMarker
         time: toChartTime(div.timestamp) as Time,
         position: markerStyle.position,
         shape: markerStyle.shape,
-        color: style?.color ?? '#888888',
+        color: style?.color ?? DIVERGENCE_BASE_COLOR,
         text: `${style?.label ?? div.divergence_type} ${dirIcon}`,
-        size: 1.5,
+        // Same weight as the VSA marks: the divergence keeps a colour of its
+        // own, so it does not also need extra mass to be found.
+        size: 1,
       } as SeriesMarker<Time>
     })
 }
@@ -895,7 +899,7 @@ function buildDivergenceArcs(
         time: toChartTime(div.timestamp) as Time,
         price,
         side,
-        color: DIVERGENCE_STYLES[div.divergence_type]?.color ?? '#888888',
+        color: DIVERGENCE_STYLES[div.divergence_type]?.color ?? DIVERGENCE_BASE_COLOR,
         strong,
       }
     })
@@ -909,10 +913,13 @@ function buildVsaMarkers(signals: VolumeSpreadSignal[]): SeriesMarker<Time>[] {
       return {
         time: toChartTime(sig.timestamp) as Time,
         position: style?.position ?? 'aboveBar',
-        shape: sig.direction === 'bullish' ? 'arrowUp' : 'arrowDown',
-        color: style?.color ?? '#8a94a6',
-        // Label-less: the arrow + its VSA colour identify the pattern; the
-        // text above the arrows was cluttering the chart.
+        // A dot, not an arrow: the arrow gave every VSA candle the mass of a
+        // structure marker. The side (above/below) already carries the
+        // direction, and the tint carries how hard the candle rejected.
+        shape: 'circle',
+        color: style?.color ?? VSA_BASE_COLOR,
+        // Label-less: the mark + its VSA tint identify the pattern; the
+        // text above the marks was cluttering the chart.
         text: '',
         size: 1,
       } as SeriesMarker<Time>
@@ -1594,7 +1601,7 @@ export function MainChart({
 
     const vsaColorByTs = new Map<string, string>()
     for (const sig of vsaSignals) {
-      vsaColorByTs.set(sig.timestamp, VSA_STYLES[sig.pattern]?.color ?? '#8a94a6')
+      vsaColorByTs.set(sig.timestamp, VSA_STYLES[sig.pattern]?.color ?? VSA_BASE_COLOR)
     }
     deltaSeries.setData(
       data.candles.map((candle) => {
