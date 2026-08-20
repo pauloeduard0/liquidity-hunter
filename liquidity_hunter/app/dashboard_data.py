@@ -11,6 +11,7 @@ from datetime import datetime
 from statistics import fmean
 
 from liquidity_hunter.app.liquidity_grabs import build_liquidity_grabs
+from liquidity_hunter.app.sweep_context import build_sweep_contexts
 from liquidity_hunter.core.domain import (
     Candle,
     ConsolidationRange,
@@ -36,6 +37,7 @@ from liquidity_hunter.core.domain import (
     StructureScope,
     SupertrendBreak,
     SupertrendPoint,
+    SweepContext,
     TimeFrame,
     VolumeProfile,
     VolumeSpreadSignal,
@@ -980,6 +982,11 @@ class DashboardData:
     # and side (see `app.liquidity_grabs`). The full stream: which few belong
     # on a chart is presentation.
     liquidity_grabs: list[LiquidityGrab] = field(default_factory=list)
+    # What each confirmed `LIQUIDITY_SWEEP` of `internal_structure_events`
+    # actually swept (see `app.sweep_context`): whether its extreme landed in
+    # a facing, pre-existing order block, and how deep it went. Keyed to the
+    # event by `event_timestamp`, the way `oi_analysis.qualified_events` is.
+    sweep_contexts: list[SweepContext] = field(default_factory=list)
     # Per-event confluence tally for each confirmed BOS/CHoCH (VSA + OB + OI +
     # volume delta + preceding sweep), from `StructureConfluenceEngine`. A
     # descriptive confidence read on the structure, keyed to the event.
@@ -2747,6 +2754,13 @@ def load_dashboard_data(
             symbol=symbol,
             timeframe=timeframe,
             liquidity_zones=liquidity_zones,
+            poi_zones=poi_zones,
+            candles=candles,
+        ),
+        sweep_contexts=build_sweep_contexts(
+            symbol=symbol,
+            timeframe=timeframe,
+            structure_events=internal_structure_events,
             poi_zones=poi_zones,
             candles=candles,
         ),

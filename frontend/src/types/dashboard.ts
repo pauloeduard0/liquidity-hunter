@@ -431,6 +431,28 @@ export type LiquidityPoolKind = 'equal_level' | 'order_block'
 
 export type LiquidityGrabOutcome = 'rejected' | 'spent'
 
+/**
+ * What one `liquidity_sweep` actually swept.
+ *
+ * The event itself is a residual category of the structure detector -- a
+ * counter-trend break that failed the CHoCH persistence check -- so it knows
+ * a level was poked, not whether anything was resting there. Keyed to the
+ * event by `event_timestamp`, the way `OIQualifiedEvent` is.
+ */
+export interface SweepContext {
+  symbol: string
+  timeframe: TimeFrame
+  event_timestamp: string
+  direction: MarketDirection
+  swept_extreme: number
+  /** The extreme landed in a facing, pre-existing order block. */
+  in_order_block: boolean
+  block_low: number | null
+  block_high: number | null
+  /** Depth past the broken reference, in mean-true-range units. */
+  excursion_atr: number | null
+}
+
 /** One candle that took resting liquidity, whatever kind of pool held it. */
 export interface LiquidityGrab {
   symbol: string
@@ -625,5 +647,6 @@ export interface DashboardData {
   liquidity_continuation_history: LiquidityHuntEpisode[]
   consolidation_ranges: ConsolidationRange[]
   liquidity_grabs: LiquidityGrab[]
+  sweep_contexts: SweepContext[]
   structure_confluence: StructureConfluence[]
 }

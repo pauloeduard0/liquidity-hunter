@@ -27,6 +27,7 @@ from liquidity_hunter.core.domain import (
     StructureConfluence,
     SupertrendBreak,
     SupertrendPoint,
+    SweepContext,
     TimeFrame,
     VolumeProfile,
     VolumeSpreadSignal,
@@ -75,4 +76,5 @@ class DashboardDataResponse(BaseModel):
     )
     consolidation_ranges: list[ConsolidationRange] = []
     liquidity_grabs: list[LiquidityGrab] = []
+    sweep_contexts: list[SweepContext] = []
     structure_confluence: list[StructureConfluence] = []

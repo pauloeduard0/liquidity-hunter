@@ -2114,6 +2114,23 @@ export function MainChart({
       }
     }
 
+    // Pool context per sweep (keyed by timestamp): the sweeps whose extreme
+    // landed inside a facing, pre-existing order block. Badged `▣` -- the box
+    // the wick ran into is already drawn on this pane, so the badge says
+    // "this sweep and that box are the same event".
+    //
+    // Only this half of `sweep_contexts` is drawn. Measured across 12 symbols
+    // x 15m/1h/4h, an annotated sweep's extreme survived uncrossed for the
+    // next 5 candles 76% of the time against a direction-matched control's
+    // 60% (59% vs 45% at 10 candles), and the separation is gone by 20-40 --
+    // a reading about the candles right after the sweep. The bare sweeps,
+    // which are most of them, keep the label they always had: marking both
+    // the same way is what would erase the difference.
+    const sweepInBlock = new Set<string>()
+    for (const context of data.sweep_contexts ?? []) {
+      if (context.in_order_block) sweepInBlock.add(context.event_timestamp)
+    }
+
     // Structure-confluence badge per event (keyed by timestamp + type): how
     // many orthogonal reads (VSA / OB / OI / volume delta / sweep) confirm the
     // break. Shown as `✦N` for 2+ confirming factors — a single factor is too
@@ -2299,6 +2316,10 @@ export function MainChart({
       // (reversal patterns pin to the bar's high/low). Hanging the sweep label
       // on the wick-tip side stacks it on the VSA arrow. Flip it to the inside
       // (toward the candle body) so the two layers read apart.
+      // `▣`: this sweep's wick ran into an order block drawn on the pane.
+      const blockSuffix =
+        event.event === 'liquidity_sweep' && sweepInBlock.has(event.timestamp) ? ' ▣' : ''
+
       const labelBelow =
         event.event === 'liquidity_sweep'
           ? event.direction === 'bullish'
@@ -2309,7 +2330,7 @@ export function MainChart({
         price: linePrice,
         color: lineColor,
         below: labelBelow,
-        text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''}${directionIcon ? ` ${directionIcon}` : ''}${oiSuffix ? ` ${oiSuffix}` : ''}${counterHtfFlip ? ' ⚠' : ''}${confluenceSuffix}`,
+        text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''}${directionIcon ? ` ${directionIcon}` : ''}${oiSuffix ? ` ${oiSuffix}` : ''}${blockSuffix}${counterHtfFlip ? ' ⚠' : ''}${confluenceSuffix}`,
       })
     }
 
