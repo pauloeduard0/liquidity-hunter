@@ -1208,6 +1208,15 @@ poetry run python -m liquidity_hunter.app.examples.estimate_btcusdt_retail_bias
   opposite-side exact (a first-BOS floor is the reversal's opposite-polarity
   extreme) → range-straddle — used both here (to fill a `None` the detector's
   own-side scan left) and by the provisional-BOS path in the detector.
+  A pass **`_repolarize_weak_failure_bos`** (internal stream only, after the BOS
+  passes) re-points a BOS whose `reference_price_level` equals a preceding
+  non-provisional opposite-direction `CHOCH_FAILED`'s level — the weak-level
+  failure re-seeds the resumed staircase at the reclaimed level, which has the
+  *opposite* polarity and already carries the ✕'s own line — onto the last
+  formed `LOWER_HIGH`/`HIGHER_LOW` since the failure's reference that the break
+  candle actually **closes beyond**. Cosmetic and strictly non-subtractive (the
+  in-detector variant was measured and rejected: it drops six BOS across the
+  live matrix). See `docs/structure_decisions.md`.
   A third pass, **`_drop_resumed_fizzle_markers`** (internal stream only, after
   the BOS passes), drops a fast-fizzle `CHOCH_FAILED` marker followed by a
   chart-surviving same-direction BOS **or by a candle closing beyond the marked

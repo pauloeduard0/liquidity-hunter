@@ -2847,3 +2847,57 @@ Hunt phases across the 21 combos are unchanged in 20 of them under
 `min_touches=3`. The one that moves is LINKUSDT 4h (counter-trend → captured
 3/3), and it moves because the weak two-touch pools that were keeping its leg
 "not yet cleaned" are exactly the cohort measuring 1.22.
+
+---
+
+## Weak-failure BOS polarity (`_repolarize_weak_failure_bos`, 2026-08-20)
+
+**Symptom.** JIMOTHY 1H, 2026-08-11: a weak (`reference_structural=False`)
+bearish CHoCH fired against the trailing sweep low at **5,936,038**, failed six
+hours later at the same level, and the bullish BOS that followed reported
+**5,936,038** as the level it broke — a *low* named as the top a bullish
+continuation broke, drawing a third line on the exact price the `CHoCH ✕`
+already occupied (weak `CHoCH* ▼`, its `✕`, and the `BOS ▲`, all at one price).
+
+**Cause.** `internal_structure`'s `weak_level_failure` branch re-seeds the
+resumed staircase's *reported* floor at the reclaimed level, which is genuine
+(the failure close-confirmed the break) but of the opposite polarity. The branch
+already avoids this when the flip window recorded eaten breaks
+(`eaten_gate_high`); with none recorded it falls through to the failure level.
+
+The upstream reason the CHoCH was weak at all: the bullish leg ran
+3,623,960 → 19,317,318 as a single impulse with **no confirmed BOS**, so
+`validated_choch_low` was never built and the reversal check fell back to the
+trailing `active_low`.
+
+**Rejected: seeding the leg extreme in the detector.** Setting
+`prev_bull_bos_extreme` to `active_high` at the failure (flag
+`weak_failure_floor_leg_extreme`) fixes the polarity but **costs marks**: the
+seed happens before the leg exists, so `_reanchor_bos_close_break` drops any
+BOS whose leg never closed beyond the new floor. Measured over 8 symbols × 4
+timeframes: 11/32 combos changed, **6 BOS lost** (ETH 4h, SOL 1h, SOL 4h,
+ENA 15m, ZEC 15m, NEAR 1h) and one duplicated reference on HYPE 1h. Subtractive
+— rejected.
+
+**Adopted: a composition pass.** `_repolarize_weak_failure_bos` runs after the
+BOS passes and re-points a BOS whose `reference_price_level` equals a preceding
+non-provisional opposite-direction `CHOCH_FAILED`'s level, onto the **last
+formed** pivot label of its own polarity (`LOWER_HIGH` for bullish,
+`HIGHER_LOW` for bearish) since the failure's reference — and **only one the
+break candle actually closes beyond**. That close test is what makes it safe:
+the candle is known here, so a level the leg did not clear is simply not a
+candidate and the mark keeps its original floor. Cosmetic and strictly
+non-subtractive.
+
+**Measured** (same matrix, ON vs OFF): **10/32 combos changed, event count
+identical in every one** — no additions, no removals, no timestamp changes, no
+`final_trend` flips. Nine real re-points (BTC 1d, SOL 1h, SOL 1d, NEAR 1h,
+NEAR 4h, ENA 4h, ZEC 15m, ZEC 4h, HYPE 1h), each moving the floor to a nearer
+level of the correct polarity; the ENA 15m/4h deltas are live-edge data jitter
+between runs, not the pass. On the motivating case the BOS now reports
+**6,839,748** (the 08-11 11:00 LH) anchored at that pivot. 776 tests pass.
+
+**Deferred**: the upstream gap — an impulsive leg with no pullback pivot builds
+no reversal reference, so its next CHoCH is weak by construction. And "a brutal
+move exhausts the cycle" (the user's second observation) has no counterpart in
+the project beyond the `choch_origin` displacement retirement.

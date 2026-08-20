@@ -14,6 +14,7 @@ from liquidity_hunter.app.dashboard_data import (
     _drop_resumed_fizzle_markers,
     _drop_superseded_provisional_choch,
     _reanchor_bos_close_break,
+    _repolarize_weak_failure_bos,
     _run_internal_structure,
     _scope_resets_to_live_range,
     _structural_anchor_index,
@@ -1043,6 +1044,98 @@ def test_drop_pre_break_reference_bos_same_timestamp_judges_earlier_reference_fi
     )
 
     assert _drop_pre_break_reference_bos([staged, first_of_leg]) == [first_of_leg]
+
+
+def _weak_failure_stream() -> tuple[list[MarketStructure], list[Candle]]:
+    """The JIMOTHY 1H shape: weak CHoCH -> failure -> resumed bullish BOS.
+
+    The failure's level (90.0) is a *low*, and the BOS inherits it as the top
+    it broke; the LOWER_HIGH at :30 (95.0) is the level the break candle
+    actually cleared.
+    """
+
+    def event(
+        minute: int,
+        kind: StructureEvent,
+        direction: MarketDirection,
+        *,
+        price: float,
+        reference: float | None = None,
+        reference_minute: int | None = None,
+    ) -> MarketStructure:
+        return MarketStructure(
+            symbol="BTCUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime(2026, 7, 2, 0, minute, tzinfo=UTC),
+            event=kind,
+            direction=direction,
+            price_level=price,
+            reference_price_level=reference,
+            reference_timestamp=(
+                datetime(2026, 7, 2, 0, reference_minute, tzinfo=UTC)
+                if reference_minute is not None
+                else None
+            ),
+            scope=StructureScope.INTERNAL,
+        )
+
+    events = [
+        event(30, StructureEvent.LOWER_HIGH, MarketDirection.BEARISH, price=95.0),
+        event(
+            40,
+            StructureEvent.CHOCH_FAILED,
+            MarketDirection.BEARISH,
+            price=99.0,
+            reference=90.0,
+            reference_minute=20,
+        ),
+        event(
+            50,
+            StructureEvent.BREAK_OF_STRUCTURE,
+            MarketDirection.BULLISH,
+            price=110.0,
+            reference=90.0,
+            reference_minute=20,
+        ),
+    ]
+    candles = [
+        Candle(
+            symbol="BTCUSDT",
+            timeframe=TimeFrame.M15,
+            timestamp=datetime(2026, 7, 2, 0, 50, tzinfo=UTC),
+            open=96.0,
+            high=110.0,
+            low=96.0,
+            close=105.0,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+    ]
+    return events, candles
+
+
+def test_repolarize_weak_failure_bos_repoints_to_last_formed_pivot() -> None:
+    # The BOS inherited the failure's own level (a low) as the top it broke --
+    # the same price the `CHoCH X` already draws. It is re-pointed at the last
+    # LOWER_HIGH the break candle closed above (95.0 < close 105.0), and
+    # nothing is dropped.
+    events, candles = _weak_failure_stream()
+
+    result = _repolarize_weak_failure_bos(events, candles)
+
+    assert [e.timestamp for e in result] == [e.timestamp for e in events]
+    assert result[2].reference_price_level == 95.0
+    assert result[2].reference_timestamp == events[0].timestamp
+
+
+def test_repolarize_weak_failure_bos_keeps_floor_the_break_did_not_clear() -> None:
+    # The only candidate pivot sits *above* the break candle's close: the leg
+    # never cleared it, so it is not the level the BOS broke and the original
+    # floor stands (the pass is never subtractive and never invents a level).
+    events, candles = _weak_failure_stream()
+    events[0] = events[0].model_copy(update={"price_level": 130.0})
+
+    assert _repolarize_weak_failure_bos(events, candles) == events
 
 
 def test_drop_resumed_fizzle_markers_drops_marker_before_same_direction_bos() -> None:

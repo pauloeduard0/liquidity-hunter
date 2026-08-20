@@ -1351,6 +1351,106 @@ def _drop_pre_break_reference_bos(
     return result
 
 
+def _repolarize_weak_failure_bos(
+    events: list[MarketStructure],
+    candles: list[Candle],
+) -> list[MarketStructure]:
+    """Re-point a BOS that inherited a weak ``CHOCH_FAILED``'s level as its floor.
+
+    A *weak*-level CHoCH failure re-seeds the resumed staircase's reported floor
+    at the reclaimed level (``internal_structure``'s ``weak_level_failure``
+    branch): the failure itself close-confirmed that break, so it is a genuine
+    floor. But that level has the **opposite polarity** to the trend it now
+    floors -- a bullish continuation ends up naming a *low* as the top it broke,
+    and draws its line on the exact price the ``CHoCH ✕`` already occupies.
+    On the JIMOTHY 1H pool (2026-08-11) that stacked three lines on 5,936,038:
+    the weak ``CHoCH* ▼``, its ``✕``, and the bullish BOS that followed.
+
+    The break itself is real -- only the level it *reports* is wrong -- so this
+    re-points rather than drops: the floor becomes the **last formed** pivot of
+    the BOS's own polarity between the failure's reference and the break (a
+    ``LOWER_HIGH`` for a bullish BOS, ``HIGHER_LOW`` for a bearish one), and
+    only one the break candle actually **closes beyond**. That close test is
+    what makes the pass safe: an in-detector seed of the same level was measured
+    (2026-08-20) to cost six BOS across the live matrix, dropped by
+    ``_reanchor_bos_close_break`` when the resumed leg never closed past the new
+    floor. Here the candle is known, so a level it did not clear is simply not a
+    candidate and the mark keeps its original floor.
+
+    Cosmetic and strictly non-subtractive: timestamps, directions, and the event
+    set are untouched; only ``reference_price_level``/``reference_timestamp``
+    move. Runs after the BOS passes so it only re-points chart-surviving marks.
+    """
+    if not candles:
+        return events
+
+    close_by_timestamp = {candle.timestamp: candle.close for candle in candles}
+    #: The pivot label carrying the level a continuation of each direction breaks.
+    pivot_event = {
+        MarketDirection.BULLISH: StructureEvent.LOWER_HIGH,
+        MarketDirection.BEARISH: StructureEvent.HIGHER_LOW,
+    }
+
+    repointed: list[MarketStructure] = []
+    for index, event in enumerate(events):
+        if (
+            event.event is not StructureEvent.BREAK_OF_STRUCTURE
+            or event.reference_price_level is None
+        ):
+            repointed.append(event)
+            continue
+        # The failure this BOS inherited its floor from: the most recent
+        # non-provisional CHOCH_FAILED before it, of the *opposite* direction
+        # (a failure's direction is the failed CHoCH's, i.e. counter to the
+        # trend that resumed), reporting the very same level.
+        failure = next(
+            (
+                other
+                for other in reversed(events[:index])
+                if other.event is StructureEvent.CHOCH_FAILED
+                and not other.provisional
+                and other.direction is not event.direction
+                and other.reference_price_level == event.reference_price_level
+            ),
+            None,
+        )
+        if failure is None:
+            repointed.append(event)
+            continue
+        break_close = close_by_timestamp.get(event.timestamp)
+        if break_close is None:
+            repointed.append(event)
+            continue
+        window_start = failure.reference_timestamp or failure.timestamp
+        bullish = event.direction is MarketDirection.BULLISH
+        floor = next(
+            (
+                other
+                for other in reversed(events[:index])
+                if other.event is pivot_event[event.direction]
+                and other.timestamp >= window_start
+                and (
+                    break_close > other.price_level
+                    if bullish
+                    else break_close < other.price_level
+                )
+            ),
+            None,
+        )
+        if floor is None:
+            repointed.append(event)
+            continue
+        repointed.append(
+            event.model_copy(
+                update={
+                    "reference_price_level": floor.price_level,
+                    "reference_timestamp": floor.timestamp,
+                }
+            )
+        )
+    return repointed
+
+
 def _drop_resumed_fizzle_markers(
     events: list[MarketStructure],
     candles: list[Candle],
@@ -2130,6 +2230,10 @@ def _run_internal_structure(
         # the reversal recovered from, not a fizzle. Runs after the BOS passes
         # so only chart-surviving BOS count.
         events = _drop_resumed_fizzle_markers(events, internal_candles)
+        # A weak-level CHoCH failure hands the resumed staircase a floor of the
+        # opposite polarity, on the failure's own price. Re-point that first
+        # continuation at the last formed pivot it actually closed beyond.
+        events = _repolarize_weak_failure_bos(events, internal_candles)
         # A re-fired CHoCH that itself failed added no standing structure: the
         # level's story is already told by the original failure, so drop the
         # pair (re-fire + its own failure). Runs after the fizzle pass so a
