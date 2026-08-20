@@ -2714,8 +2714,11 @@ export function MainChart({
     }
 
     // The phase reading moves with the live close, so the tail update has to
-    // recompute it rather than just carry the last value forward.
-    const phaseSeries = phaseSeriesRef.current
+    // recompute it rather than just carry the last value forward. Gated on
+    // `showRibbon` like the full redraw: without the gate this poll wrote a
+    // point into the otherwise-empty phase series, painting a lone gold stub
+    // and its last-value label on the control pane with the ribbon off.
+    const phaseSeries = showRibbon ? phaseSeriesRef.current : null
     if (phaseSeries) {
       const phaseLast = buildPhase(data).at(-1)
       if (phaseLast && phaseLast.timestamp === last.timestamp) {
@@ -2732,7 +2735,7 @@ export function MainChart({
       const lastRsi = rsiValues[rsiValues.length - 1]
       if (lastRsi !== null && lastRsi !== undefined) rsiSeries.update({ time, value: lastRsi })
     }
-  }, [data, showVolume, vsaMode])
+  }, [data, showVolume, vsaMode, showRibbon])
 
   return (
     <div ref={wrapperRef} className="flex min-h-0 w-full flex-1 flex-col">
