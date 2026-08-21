@@ -63,13 +63,12 @@ def test_control_matrix(
     assert state.window_candles == WINDOW
 
 
-def test_buyers_control_flags_fade_warning_and_positive_score() -> None:
+def test_buyers_control_has_positive_score() -> None:
     candles = _candles([0.85] * 5)
     state = _analyzer().analyze(candles, _oi(candles, [1000, 1010, 1020, 1030, 1040]))
 
     assert state is not None
     assert state.controller is MarketControlSide.BUYERS
-    assert state.fade_warning is True
     assert state.control_score > 0  # sign = aggressor side (buyers)
     assert state.conviction == pytest.approx(abs(state.control_score))
 
@@ -91,7 +90,8 @@ def test_oi_confirmed_control_beats_diverging_conviction() -> None:
 
     assert confirmed is not None and diverging is not None
     assert confirmed.control_score > diverging.control_score
-    assert diverging.fade_warning is False  # covering is not conviction-backed control
+    # Covering is not conviction-backed control: no side is credited.
+    assert diverging.controller is MarketControlSide.BALANCED
 
 
 def test_below_floor_is_flat_balanced_but_score_stays_continuous() -> None:

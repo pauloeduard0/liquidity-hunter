@@ -94,8 +94,9 @@ export interface MarketControlPoint {
  *  (mirror of `core.domain.MarketControlState`). `control_score` is the signed
  *  conviction oscillator in [-100, 100]: sign = aggressor side (positive =
  *  buyers), magnitude = conviction (amplified when OI confirms, attenuated when
- *  it diverges). `fade_warning` is true when new money backs the aggression —
- *  an entry against the controller is the high-risk trade this reading flags. */
+ *  it diverges). Descriptive: the quadrant states what just happened on the
+ *  tape, not what happens next — a `fade_warning` flag was removed from the
+ *  model once the claim behind it was measured and did not hold. */
 export interface MarketControlState {
   symbol: string
   timeframe: TimeFrame
@@ -107,7 +108,6 @@ export interface MarketControlState {
   oi_change_pct: number
   conviction: number
   control_score: number
-  fade_warning: boolean
   window_candles: number
   description: string
   series: MarketControlPoint[]

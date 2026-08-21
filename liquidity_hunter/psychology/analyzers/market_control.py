@@ -133,7 +133,6 @@ class MarketControlAnalyzer:
             oi_change_pct=final.oi_change,
             conviction=abs(final.control_score),
             control_score=final.control_score,
-            fade_warning=final.controller is not MarketControlSide.BALANCED,
             window_candles=window,
             description=_describe(
                 final.controller,

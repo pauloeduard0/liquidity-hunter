@@ -86,7 +86,6 @@ def _control(
         oi_change_pct=0.01,
         conviction=50.0,
         control_score=50.0,
-        fade_warning=True,
         window_candles=5,
         description="",
         series=[

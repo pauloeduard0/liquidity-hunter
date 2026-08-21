@@ -1070,9 +1070,11 @@ documented in `liquidity_hunter/docs/psychology.md`.
   quadrants** (fresh money behind the aggression); covering/liquidation are
   position-closing → `BALANCED`. `control_score` is the signed conviction
   oscillator in `[-100, 100]` (sign = aggressor side, magnitude = conviction:
-  amplified when OI confirms, attenuated when it diverges); `fade_warning` is
-  `True` exactly when a side is credited — the high-risk "don't enter against
-  the controller" flag. Same `_TIMEFRAME_WINDOW` as `OIRegimeAnalyzer` so the
+  amplified when OI confirms, attenuated when it diverges). A `fade_warning`
+  field (`True` exactly when a side was credited — the "don't enter against the
+  controller" flag) was **removed 2026-08-21**: the claim did not survive
+  measurement (see the badge note under the KPI row), and it was pure redundancy
+  over `controller` that no consumer read. Same `_TIMEFRAME_WINDOW` as `OIRegimeAnalyzer` so the
   two axes are measured over one horizon, and the window's OI is read at the
   last candle's **close** (`_oi_at_close`) — an OI sample carries the OI at its
   own timestamp, so the sample sharing a candle's timestamp is that candle's

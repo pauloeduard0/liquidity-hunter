@@ -52,10 +52,17 @@ class MarketControlState(DomainModel):
     behind the aggression). ``control_score`` is the signed *conviction
     oscillator* in ``[-100, 100]``: its sign is the aggressor side (positive =
     buyers), its magnitude is the conviction — amplified when OI confirms the
-    aggression, attenuated when OI diverges (unwinding). ``fade_warning`` is
-    ``True`` exactly when new money backs the aggression (``controller`` is not
-    ``BALANCED``): trading against a conviction-backed side is the high-risk
-    entry this reading exists to flag.
+    aggression, attenuated when OI diverges (unwinding).
+
+    Descriptive throughout: the quadrant states what just happened on the tape,
+    and nothing here is evidence about what happens next. A ``fade_warning``
+    flag once lived on this model — ``True`` whenever a side was credited — and
+    was removed (2026-08-21) after the claim behind it was measured and did not
+    hold (`research/control_continuation.py`): a break carried by new money
+    never beat one carried by exit flow on the direction hit rate, at any
+    horizon from 5 to 100 candles, and both sat at or below a control matched on
+    symbol, timeframe and direction. It was also pure redundancy — exactly
+    ``controller is not BALANCED`` — and no consumer read it.
     """
 
     symbol: str
@@ -68,7 +75,6 @@ class MarketControlState(DomainModel):
     oi_change_pct: float  # fractional OI change over the window
     conviction: float = Field(ge=0.0, le=100.0)  # |control_score|, the oscillator height
     control_score: float = Field(ge=-100.0, le=100.0)  # signed: sign = side, |·| = conviction
-    fade_warning: bool  # new money backs the aggression — entering against is high-risk
     window_candles: int = Field(gt=0)
     description: str
     # Per-candle control_score over the visible window, for the chart

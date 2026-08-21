@@ -1200,7 +1200,6 @@ def _control(controller: MarketControlSide) -> MarketControlState:
         oi_change_pct=0.01,
         conviction=40.0,
         control_score=40.0 if controller is not MarketControlSide.SELLERS else -40.0,
-        fade_warning=controller is not MarketControlSide.BALANCED,
         window_candles=5,
         description="",
     )
@@ -1304,7 +1303,6 @@ def _control_series(
         oi_change_pct=0.01,
         conviction=40.0,
         control_score=series[-1].control_score,
-        fade_warning=series[-1].controller is not MarketControlSide.BALANCED,
         window_candles=5,
         description="",
         series=series,
