@@ -1878,7 +1878,23 @@ export function MainChart({
             ? ` ${grab.excursion_atr.toFixed(1)}atr`
             : ''
         const block = grab !== null && grab.kinds.includes('order_block') && zone !== null ? ' ▣' : ''
-        const mark = grab !== null ? (grab.outcome === 'rejected' ? '⚡' : '✕') : '✕'
+        // A rejection also carries whether it *survived* — the level was
+        // handed back and stayed handed back for the confirmation window.
+        // `⚡` is the confirmed one; `⚡✕` took the orders and then let the
+        // next candle close straight through (31% of them, measured), so
+        // both facts are on the label rather than the first one alone; `⚡?`
+        // is the live edge, where the window has not elapsed and the honest
+        // answer is not yet.
+        const mark =
+          grab === null
+            ? '✕'
+            : grab.outcome !== 'rejected'
+              ? '✕'
+              : grab.rejection_confirmed === true
+                ? '⚡'
+                : grab.rejection_confirmed === false
+                  ? '⚡✕'
+                  : '⚡?'
         title = `${label} · ${mark}${count}${block}${depth}`
       }
       // The order block gets its own tombstone at its own boundary, drawn from

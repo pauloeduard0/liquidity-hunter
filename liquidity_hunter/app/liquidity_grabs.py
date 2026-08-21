@@ -55,6 +55,43 @@ _POOL_ZONE_TYPES = frozenset(
     {LiquidityZoneType.EQUAL_HIGHS, LiquidityZoneType.EQUAL_LOWS}
 )
 
+#: How many candles a rejection has to survive to be *confirmed* -- the grab
+#: candle plus the ones after it, all closing back on the pool's own side of
+#: the level. Two, measured: across 10 symbols x 5m/15m/1h/4h, 31% of the
+#: rejections drawn today are closed through by the very next candle and 41%
+#: by the third, while the second candle carries essentially the whole gain
+#: in how the surviving mark behaves (held@5 39% -> 47% -> 50%, MFE/MAE
+#: 0.46 -> 0.56 -> 0.54). Depth 3 buys nothing and costs a fifth of the
+#: coverage. See `research/grab_confirm.py`.
+REJECTION_CONFIRM_CANDLES = 2
+
+
+def _confirm_rejection(
+    timestamp: datetime,
+    price_level: float,
+    side: LiquiditySide,
+    *,
+    candles: list[Candle],
+    index_of: dict[datetime, int],
+) -> bool | None:
+    """Whether the handed-back level stayed handed back for the window.
+
+    `None` when the window has not elapsed -- at the live edge the answer is
+    not knowable yet, and guessing it would be the one thing the outcome
+    field is careful not to do.
+    """
+    start = index_of.get(timestamp)
+    if start is None:
+        return None
+    window = candles[start : start + REJECTION_CONFIRM_CANDLES]
+    if len(window) < REJECTION_CONFIRM_CANDLES:
+        return None
+    buy_side = side is LiquiditySide.BUY_SIDE
+    return all(
+        (candle.close <= price_level) if buy_side else (candle.close >= price_level)
+        for candle in window
+    )
+
 
 def build_liquidity_grabs(
     *,
@@ -67,6 +104,7 @@ def build_liquidity_grabs(
     """Collapse every consumed pool into one grab per candle and side."""
     by_moment: dict[tuple[datetime, LiquiditySide], list[_Contribution]] = defaultdict(list)
     by_timestamp = {candle.timestamp: candle for candle in candles}
+    index_of = {candle.timestamp: i for i, candle in enumerate(candles)}
     # One volatility unit for the whole window, so depths are comparable
     # between grabs of the same chart (and, being a ratio, roughly between
     # charts). A per-candle ATR would make a grab in a quiet stretch look
@@ -174,6 +212,13 @@ def build_liquidity_grabs(
                 else min(block_levels)
             )
         )
+        rejection_confirmed = (
+            None
+            if outcome is not LiquidityGrabOutcome.REJECTED
+            else _confirm_rejection(
+                timestamp, price_level, side, candles=candles, index_of=index_of
+            )
+        )
         grab_candle = by_timestamp.get(timestamp)
         excursion: float | None = None
         if grab_candle is not None and atr > 0:
@@ -194,6 +239,7 @@ def build_liquidity_grabs(
                 pool_count=len(contributions),
                 outcome=outcome,
                 excursion_atr=excursion,
+                rejection_confirmed=rejection_confirmed,
                 block_level=block_level,
             )
         )

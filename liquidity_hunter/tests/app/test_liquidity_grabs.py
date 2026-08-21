@@ -338,3 +338,66 @@ def test_a_block_retired_before_it_broke_is_not_a_grab() -> None:
     )
 
     assert _build([], [retired]) == []
+
+
+class TestRejectionConfirmation:
+    """The second look at a `REJECTED` grab, which never moves `outcome`."""
+
+    def test_rejection_that_stays_inside_is_confirmed(self) -> None:
+        # A buy-side pool at 101 taken on hour 5; both hour 5 and hour 6
+        # close below it, so the level really was handed back.
+        candles = [_candle(h, 80.0) for h in range(3, 9)]
+        (grab,) = _build(
+            [_pool(invalidated_at=_ts(5), sweep_rejected=True)], [], candles
+        )
+
+        assert grab.outcome is LiquidityGrabOutcome.REJECTED
+        assert grab.rejection_confirmed is True
+
+    def test_next_candle_closing_through_falsifies_it(self) -> None:
+        # The grab candle closes back inside (the local reading stands), but
+        # the next one closes beyond the level: the tombstone the outcome
+        # alone would draw says "handed back" about a level that was spent.
+        candles = [_candle(h, 80.0) for h in range(3, 6)] + [
+            _candle(6, 130.0),
+            _candle(7, 130.0),
+        ]
+        (grab,) = _build(
+            [_pool(invalidated_at=_ts(5), sweep_rejected=True)], [], candles
+        )
+
+        assert grab.outcome is LiquidityGrabOutcome.REJECTED
+        assert grab.rejection_confirmed is False
+
+    def test_live_edge_window_is_not_guessed(self) -> None:
+        # The grab is the last candle of the series: the confirming candle
+        # has not printed, so the answer is not knowable rather than False.
+        candles = [_candle(h, 80.0) for h in range(3, 6)]
+        (grab,) = _build(
+            [_pool(invalidated_at=_ts(5), sweep_rejected=True)], [], candles
+        )
+
+        assert grab.rejection_confirmed is None
+
+    def test_sell_side_confirmation_reads_the_other_way(self) -> None:
+        candles = [_candle(h, 130.0) for h in range(3, 9)]
+        (grab,) = _build(
+            [
+                _pool(
+                    zone_type=LiquidityZoneType.EQUAL_LOWS,
+                    side=LiquiditySide.SELL_SIDE,
+                    invalidated_at=_ts(5),
+                    sweep_rejected=True,
+                )
+            ],
+            [],
+            candles,
+        )
+
+        assert grab.rejection_confirmed is True
+
+    def test_spent_grab_has_nothing_to_confirm(self) -> None:
+        (grab,) = _build([_pool(invalidated_at=_ts(5))], [])
+
+        assert grab.outcome is LiquidityGrabOutcome.SPENT
+        assert grab.rejection_confirmed is None

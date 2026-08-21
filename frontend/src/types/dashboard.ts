@@ -466,6 +466,12 @@ export interface LiquidityGrab {
   /** How far beyond the level the grabbing candle reached, in mean-true-range
    *  units of its own series. Null when the series has no volatility. */
   excursion_atr: number | null
+  /** Whether the rejection survived its confirmation window (2 candles), a
+   *  second look that leaves `outcome`'s local reading alone. Null for a
+   *  spent grab and at the live edge, where the window has not elapsed.
+   *  31% of the rejections drawn from `outcome` alone are closed through by
+   *  the very next candle. */
+  rejection_confirmed: boolean | null
   block_level: number | null
 }
 

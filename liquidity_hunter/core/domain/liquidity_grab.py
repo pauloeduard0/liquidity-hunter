@@ -55,6 +55,24 @@ class LiquidityGrab(DomainModel):
     #: that followed, not the grab. `None` when the series carries no
     #: volatility to normalize against.
     excursion_atr: float | None = Field(default=None, ge=0.0)
+    #: Whether the rejection *survived* the confirmation window: the grab
+    #: candle handed the level back and the next candles closed back inside
+    #: too. `outcome` is deliberately a **local** reading of the grabbing
+    #: candle alone, and it stays that way -- but measured across 10 symbols
+    #: x 5m/15m/1h/4h (199 rejected grabs, `research/grab_confirm.py`),
+    #: **31% of them are closed through by the very next candle**: the
+    #: tombstone says the level was handed back when it was not. This field
+    #: carries that second look without moving the outcome. `None` for a
+    #: `SPENT` grab (nothing to confirm) and at the live edge, where the
+    #: window has not elapsed yet and the answer is genuinely not knowable.
+    #:
+    #: It is a labelling correction, not a signal. In the same measurement a
+    #: confirmed rejection holds better than an unconfirmed one (held@5
+    #: 39% -> 47%, MFE/MAE 0.46 -> 0.56) yet still loses to a
+    #: direction-matched random control on every column at every depth
+    #: (control MFE/MAE 0.96-1.14). Confirming makes the mark honest; it
+    #: does not make it tradeable.
+    rejection_confirmed: bool | None = None
     #: The order block's own boundary, when one was among the pools taken.
     #: `price_level` reports the furthest level reached, which on a candle
     #: that took stacked pools is usually an equal level well past the block
