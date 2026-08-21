@@ -99,12 +99,18 @@ function huntCardProps(
   }
 }
 
-// "Who is in control?" — CVD aggression crossed with open interest. The strong
-// reading is a conviction-backed side (new money behind the aggression): the
-// card turns solid green/red with a "⚠ DON'T FADE" badge, because entering
-// against a side that is opening fresh positions is the high-risk trade. When
-// the aggression is only position-closing (covering/liquidation) the card reads
-// balanced/amber — exhaustion, not control.
+// "Who is in control?" — CVD aggression crossed with open interest. A credited
+// side means new money is behind the aggression; covering/liquidation is
+// position-closing, so the card reads balanced/amber — exhaustion, not control.
+//
+// The badge *describes* what was observed and no longer tells the reader what
+// not to do. It used to say "⚠ DON'T FADE", and that claim was measured and did
+// not hold: across eight symbols x 15m/1h/4h, at horizons of 5 to 100 candles,
+// a break with new money behind it never beat one carried by exit flow on the
+// direction hit rate, and both sat at or below a direction-matched control
+// (`research/control_continuation.py`). The quadrant is an accurate description
+// of what just happened; it is not evidence about what happens next, and a
+// badge phrased as an instruction reads as authority the number cannot back.
 function controlCardProps(control: MarketControlState | null): Omit<KpiCardProps, 'label'> {
   if (!control) {
     return { value: '◆ —', sub: 'no futures OI data' }
@@ -114,7 +120,7 @@ function controlCardProps(control: MarketControlState | null): Omit<KpiCardProps
     return {
       value: '▲ Buyers',
       accent: '#26a69a',
-      badge: { text: '⚠ DON’T FADE', color: '#26a69a' },
+      badge: { text: '⊕ NEW LONGS', color: '#26a69a' },
       sub: `${oiCtx} · conviction ${control.conviction.toFixed(0)}`,
       title: control.description,
     }
@@ -123,7 +129,7 @@ function controlCardProps(control: MarketControlState | null): Omit<KpiCardProps
     return {
       value: '▼ Sellers',
       accent: '#ef5350',
-      badge: { text: '⚠ DON’T FADE', color: '#ef5350' },
+      badge: { text: '⊕ NEW SHORTS', color: '#ef5350' },
       sub: `${oiCtx} · conviction ${control.conviction.toFixed(0)}`,
       title: control.description,
     }
@@ -142,7 +148,7 @@ function controlCardProps(control: MarketControlState | null): Omit<KpiCardProps
   return {
     value: unwinding ?? '◆ Balanced',
     accent: unwinding ? '#ff9800' : '#8a8f9c',
-    badge: unwinding ? { text: '⚠ UNWIND', color: '#ff9800' } : undefined,
+    badge: unwinding ? { text: '⊖ UNWINDING', color: '#ff9800' } : undefined,
     sub: unwinding
       ? `${oiCtx} · conviction ${control.conviction.toFixed(0)}`
       : oiCtx,

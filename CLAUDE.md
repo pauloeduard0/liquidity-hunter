@@ -1702,6 +1702,36 @@ selector.
   Provisional marks are also excluded from line *termination*
   (`!other.provisional` in `structureLineEndTime`): a forming mark never truncates
   a confirmed BOS/CHoCH line — it only draws its own dimmed line to the edge.
+
+  What a provisional BOS *is* was measured and is **deliberately not drawn**: it
+  marks extension, not continuation. With an honest entry — the candle the mark
+  first appears on, dated by incremental replay, so no lookahead — across six
+  symbols × 15m/1h/4h it closes in its own direction 35-45% of the time against
+  a direction-matched control's 51%, below control in all six symbols, while its
+  MFE/MAE runs 1.27-1.44 against the control's 1.05
+  (`research/provisional_edge.py`). Price travels its way and hands it back,
+  which is what the mark is built to do — it fires on the close *beyond* the
+  staircase floor, the most extended point of the leg. (Magnitude caveat: the
+  gap is largest on BTC/ETH and near zero on XRP/LINK, and six majors over one
+  ~15-day window are not six independent samples.) A `·extended` label suffix
+  was built and **reverted on visual review** (2026-08-21): a word among glyphs
+  on a pane already carrying the staircase, POI boxes and sweeps is clutter, and
+  the mark reads as information rather than as a call without it. `CHoCH?` never
+  had one — it is weak on both axes (37-43% hit rate, MFE/MAE 0.69-1.00) rather
+  than asymmetric.
+
+  A mark's **age** is likewise measured and not drawn. A mark carries the
+  timestamp of the candle that *broke* the level, but the pipeline only emits it
+  once the confirming pivot has formed — a median of **13.5 candles** later for
+  a BOS and **9** for a CHoCH, measured by incremental replay
+  (`research/event_lag.py`, p90 30 and 19; provisional marks are live-edge by
+  construction, median age 1 candle). So the newest mark on the pane is never as
+  new as it looks. A `·12c` age suffix on recent confirmed marks was built and
+  **reverted on visual review** (2026-08-21, with the `·extended` suffix above):
+  an extra chip on every recent label clutters a pane that already carries the
+  staircase, POI boxes and sweeps, and the mark's position along the time axis
+  already places it. The lag is real and worth knowing when reading structure —
+  it is simply not worth ink on the chart.
   A **re-fired (re-activated) CHoCH** — one whose `reference_timestamp` sits
   exactly on a prior same-direction real `choch_failed` (the re-arm pivot
   carries the failure's timestamp by construction) — renders with a `↻`
@@ -1914,9 +1944,9 @@ selector.
   Bias, Dominant Liquidity, HTF Trend, OI Regime, **Who's in Control**,
   **Liquidity Hunt**. The **Who's in Control** card (`controlCardProps`, from
   `data.market_control`) is the CVD×OI read: `buyers` → `▲ Buyers` (green,
-  badge `⚠ DON'T FADE`), `sellers` → `▼ Sellers` (red, `⚠ DON'T FADE`),
+  badge `⊕ NEW LONGS`), `sellers` → `▼ Sellers` (red, `⊕ NEW SHORTS`),
   `balanced` → `▲ Shorts covering` / `▼ Longs exiting` (amber, badge
-  `⚠ UNWIND`) in the unwinding quadrants, plain slate `◆ Balanced` only when
+  `⊖ UNWINDING`) in the unwinding quadrants, plain slate `◆ Balanced` only when
   genuinely flat — the domain `controller` stays `BALANCED` (no fresh money =
   no control), the direction is named in presentation only; sub-line `CVD ±x% · OI ±y% · conviction N`, full `description` on
   hover. `huntCardProps` in
@@ -1925,6 +1955,17 @@ selector.
   `Shorts = liquidity` (red, badge `⚠ INTACT`); `hunt_in_progress` →
   `Hunting shorts` (amber, badge `⚡ ACTIVE`); `captured` →
   `Shorts captured` (green, badge `✓ CLEARED`, capture time in the
+  The badges **describe the observation and no longer instruct** (changed
+  2026-08-21; they read `⚠ DON'T FADE` / `⚠ UNWIND` before). The instruction was
+  measured and did not hold: across eight symbols × 15m/1h/4h, at horizons of 5
+  to 100 candles, a break with new money behind it never beat one carried by
+  exit flow on the direction hit rate, and both sat at or below a control
+  matched on symbol, timeframe and direction — `research/control_continuation.py`,
+  entering at the candle where the mark actually becomes visible rather than at
+  the timestamp it carries. The quadrant remains an accurate description of what
+  just happened; it is not evidence about what happens next, and a badge phrased
+  as an instruction reads as authority the number cannot back.
+
   sub-line). Sub-line shows `captured/total pools swept` plus
   `· OI unwinding` while the regime still burns the hunted side; the full
   engine `description` is the card's hover title. **Anchor chips** (as of

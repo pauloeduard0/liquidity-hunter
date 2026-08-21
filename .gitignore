@@ -39,3 +39,6 @@ data/processed/
 # Personal tooling artifacts (knowledge graph, browser pid)
 graphify-out/
 chrome.pid
+
+# Replay cache: derived from a fetched series, regenerated on demand.
+research/.replay_cache/
