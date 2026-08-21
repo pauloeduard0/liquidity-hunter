@@ -570,7 +570,13 @@ class SwingStructureDetector(MarketStructureDetector):
                                 self._reanchor_mode == "chain"
                                 and bos_chain >= self._reanchor_chain_threshold
                             ):
-                                seg_start = max(0, prev_any_pivot_index + 1)
+                                # Two pivots can land on the same candle, which
+                                # puts the segment start past `current_index` and
+                                # leaves the slice empty; clamp so it always holds
+                                # at least the breaking candle itself.
+                                seg_start = min(
+                                    max(0, prev_any_pivot_index + 1), current_index
+                                )
                                 low_candle = min(
                                     candles[seg_start : current_index + 1], key=lambda c: c.low
                                 )
@@ -839,7 +845,13 @@ class SwingStructureDetector(MarketStructureDetector):
                                 self._reanchor_mode == "chain"
                                 and bos_chain >= self._reanchor_chain_threshold
                             ):
-                                seg_start = max(0, prev_any_pivot_index + 1)
+                                # Two pivots can land on the same candle, which
+                                # puts the segment start past `current_index` and
+                                # leaves the slice empty; clamp so it always holds
+                                # at least the breaking candle itself.
+                                seg_start = min(
+                                    max(0, prev_any_pivot_index + 1), current_index
+                                )
                                 high_candle = max(
                                     candles[seg_start : current_index + 1], key=lambda c: c.high
                                 )
