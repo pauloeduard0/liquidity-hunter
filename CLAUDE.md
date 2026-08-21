@@ -5,12 +5,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project purpose and constraints
 
 `liquidity_hunter` is a **research platform** for market liquidity detection
-and market psychology analysis. It is explicitly **not** a trading system:
+and market psychology analysis. Decision layers — readings that assess whether a
+move is likely to be sustained, and that a person could act on — are **allowed**
+(relaxed 2026-08-20, previously forbidden outright), under these conditions:
 
-- Do not add trading strategies, order execution, or position management.
-- Do not add buy/sell signals or any decisioning/recommendation logic.
-- Domain entities and modules describe *observations* about a market
-  (price action, liquidity zones, structure, retail sentiment), not actions.
+- **A decision layer ships only with the measurement that earned it.** No
+  reading gets an edge claim it has not demonstrated against a control matched
+  on symbol, timeframe **and direction**. Without direction matching, any
+  period that trended makes everything look predictive.
+- **Report negatives as findings, not failures.** The measurement record here
+  is mostly negative (`research/raid_reversal.py`, the exhaustion-flush study,
+  `research/control_continuation.py`), and each of those saved a layer from
+  being built on nothing. A rejected hypothesis is a result — record it.
+- Prefer **scale-free** metrics (direction hit rate, MFE/MAE ratio) over mean
+  return. Both tails widening is volatility, not edge, and mean return cannot
+  tell the two apart.
+
+Still out of scope: order execution and position management. The project
+observes and assesses; it does not place or manage orders.
+
+Domain entities remain descriptions of *observations* about a market (price
+action, liquidity zones, structure, retail sentiment). An assessment layer is
+built **on top of** them, and is named for what it measures rather than for an
+action to take.
 
 ## Commands
 
