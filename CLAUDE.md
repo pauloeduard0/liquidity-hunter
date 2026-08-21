@@ -1056,7 +1056,22 @@ documented in `liquidity_hunter/docs/psychology.md`.
   amplified when OI confirms, attenuated when it diverges); `fade_warning` is
   `True` exactly when a side is credited — the high-risk "don't enter against
   the controller" flag. Same `_TIMEFRAME_WINDOW` as `OIRegimeAnalyzer` so the
-  two axes are measured over one horizon. Besides the current-window snapshot
+  two axes are measured over one horizon, and the window's OI is read at the
+  last candle's **close** (`_oi_at_close`) — an OI sample carries the OI at its
+  own timestamp, so the sample sharing a candle's timestamp is that candle's
+  *open* and the displacement it produced only lands one period later. Reading
+  the at-or-before sample inverted the verdict on exactly the candle that
+  matters: a liquidation flush read `LONG_BUILDUP` (fresh money) at the moment
+  of exhaustion. Not lookahead — the candle closes when that sample publishes —
+  and the same one-period shift `OIRegimeAnalyzer` already applies to qualified
+  events; at the live edge it falls back to at-or-before, as it does across an
+  OI coverage gap wider than one period. Measured 2026-08-20 across
+  BTC/ETH/SOL x 15m/1h/4h: 0.5-6% of candles change regime (mostly `FLAT`
+  boundary crossings) and 0.5-2.4% change controller, while of 53 short-squeeze
+  candles (close +0.8% or more on OI falling 0.5% or more) 5 changed and **all
+  five moved from `LONG_BUILDUP` to `SHORT_COVERING`/`FLAT`** — none the other
+  way; the 8 that still read `LONG_BUILDUP` are the trailing window's own OI
+  ramp dominating, not the alignment. Besides the current-window snapshot
   it also emits a **rolling `series`** (`list[MarketControlPoint]`:
   `timestamp`, `control_score`, `controller`, `regime` per candle with OI
   coverage) for the chart oscillator. `regime` is on the point (not only the

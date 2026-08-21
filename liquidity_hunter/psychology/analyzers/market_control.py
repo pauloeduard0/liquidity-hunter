@@ -9,7 +9,7 @@ control right now" reading, not a signal.
 
 import bisect
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from liquidity_hunter.core.domain import (
     Candle,
@@ -220,7 +220,7 @@ class MarketControlAnalyzer:
         if len(oi_points) < 2:
             return None
         oi_start = _oi_at(oi_points, oi_ts, w_candles[0].timestamp)
-        oi_end = _oi_at(oi_points, oi_ts, w_candles[-1].timestamp)
+        oi_end = _oi_at_close(oi_points, oi_ts, w_candles)
         if oi_start is None or oi_end is None or oi_start.open_interest == 0:
             return None
         return (oi_end.open_interest - oi_start.open_interest) / oi_start.open_interest
@@ -232,6 +232,50 @@ def _oi_at(
     """The most recent OI sample at or before `timestamp`, or ``None``."""
     idx = bisect.bisect_right(oi_timestamps, timestamp) - 1
     return oi_points[idx] if idx >= 0 else None
+
+
+def _oi_at_close(
+    oi_points: list[OpenInterestPoint],
+    oi_timestamps: list[datetime],
+    w_candles: list[Candle],
+) -> OpenInterestPoint | None:
+    """The OI sample at the window's last candle *close*, or ``None``.
+
+    An OI sample carries the open interest standing at its own timestamp, so
+    the sample sharing a candle's timestamp is the OI at that candle's *open* —
+    it predates everything the candle did. The displacement a candle produced
+    only lands in the *next* sample, one period later. Reading the at-or-before
+    sample therefore inverts the reading on exactly the candle that matters: a
+    liquidation flush (price up, OI collapsing) is measured against an OI that
+    was still rising, and the window reads ``LONG_BUILDUP`` — fresh money — at
+    the moment of exhaustion. Measured on BTCUSDT M15 2026-08-20 08:00 UTC: a
+    +2.1% candle on 12x volume whose OI fell 1.74% read ``BUYERS`` at score
+    +81, flipping to ``SHORT_COVERING`` only one candle later.
+
+    This is not lookahead: the candle closes one period after its own
+    timestamp, which is exactly when the next sample exists. It mirrors the
+    one-period shift ``OIRegimeAnalyzer`` already applies to qualify events. At
+    the live edge the next sample has not been published yet, so the window
+    falls back to the at-or-before sample (the honest reading available).
+    """
+    last = w_candles[-1].timestamp
+    idx = bisect.bisect_right(oi_timestamps, last)
+    if idx < len(oi_points):
+        spacing = _candle_spacing(w_candles)
+        if spacing is None or oi_timestamps[idx] - last <= spacing:
+            return oi_points[idx]
+    return _oi_at(oi_points, oi_timestamps, last)
+
+
+def _candle_spacing(w_candles: list[Candle]) -> timedelta | None:
+    """The series' own candle period, or ``None`` from a single candle.
+
+    Bounds the forward step to one period, so a gap in OI coverage falls back
+    to the at-or-before sample instead of reaching across it.
+    """
+    if len(w_candles) < 2:
+        return None
+    return w_candles[-1].timestamp - w_candles[-2].timestamp
 
 
 def _describe(

@@ -136,3 +136,53 @@ def test_none_without_oi_coverage() -> None:
 def test_none_when_series_shorter_than_window() -> None:
     candles = _candles([0.8] * 3)
     assert _analyzer().analyze(candles, _oi(candles, [1000, 1010, 1020])) is None
+
+
+# ------------------------------------------------------------------
+# OI sample alignment (candle close, not candle open)
+# ------------------------------------------------------------------
+
+
+def test_liquidation_flush_reads_as_covering_not_new_money() -> None:
+    """A flush lands in the sample *after* the candle; it must still be seen.
+
+    Buy aggression throughout, OI rising all window except the last candle,
+    whose own displacement (a collapse) is only published one period later.
+    Measured against the candle's *open* the window reads fresh money; against
+    its *close* it reads what it is — shorts covering. Regression for the
+    BTCUSDT M15 2026-08-20 08:00 UTC inversion.
+    """
+    candles = _candles([0.8] * WINDOW)
+    oi_values = [1000.0, 1005.0, 1010.0, 1015.0, 1020.0]
+    points = _oi(candles, oi_values)
+    # The sample one period past the last candle: OI collapses.
+    step = candles[-1].timestamp - candles[-2].timestamp
+    points.append(
+        OpenInterestPoint(
+            symbol="BTCUSDT", timestamp=candles[-1].timestamp + step, open_interest=900.0
+        )
+    )
+
+    state = _analyzer().analyze(candles, points)
+
+    assert state is not None
+    assert state.regime is OIRegime.SHORT_COVERING
+    assert state.controller is MarketControlSide.BALANCED
+    assert state.oi_change_pct < 0
+
+
+def test_oi_gap_beyond_one_period_falls_back_to_at_or_before() -> None:
+    """A sample far past the window is not reached across (coverage gap)."""
+    candles = _candles([0.8] * WINDOW)
+    points = _oi(candles, [1000.0, 1005.0, 1010.0, 1015.0, 1020.0])
+    step = candles[-1].timestamp - candles[-2].timestamp
+    points.append(
+        OpenInterestPoint(
+            symbol="BTCUSDT", timestamp=candles[-1].timestamp + 5 * step, open_interest=900.0
+        )
+    )
+
+    state = _analyzer().analyze(candles, points)
+
+    assert state is not None
+    assert state.regime is OIRegime.LONG_BUILDUP
