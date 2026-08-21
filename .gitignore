@@ -42,3 +42,6 @@ chrome.pid
 
 # Replay cache: derived from a fetched series, regenerated on demand.
 research/.replay_cache/
+
+# Klines cache: raw candles re-fetchable from the exchange at any time.
+research/.klines_cache/

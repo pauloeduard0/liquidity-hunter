@@ -73,10 +73,16 @@ from liquidity_hunter.app.dashboard_data import (
 from liquidity_hunter.core.domain import Candle, TimeFrame
 from liquidity_hunter.core.domain.enums import (
     LiquidityZoneType,
+    MarketControlSide,
     MarketDirection,
+    OIRegime,
     POIZoneKind,
     POIZoneStatus,
 )
+from liquidity_hunter.data.exceptions import DataProviderError
+from liquidity_hunter.data.providers.base import FuturesDataProvider, OHLCVProvider
+from liquidity_hunter.indicators import volume_delta
+from research._paginated import NoFuturesProvider, PaginatedFuturesProvider
 from research._replay import scan_first_emissions
 
 BULL = MarketDirection.BULLISH
@@ -147,6 +153,22 @@ class Ev:
     mfe: dict[int, float] = field(default_factory=dict)
     mae: dict[int, float] = field(default_factory=dict)
     hit: dict[float, bool] = field(default_factory=dict)
+    #: Control state at the entry candle; None where OI does not reach.
+    ctrl_aligned: bool | None = None
+    ctrl_unwind: bool | None = None
+    #: `control_score` signed the trade's way, and whether its magnitude sits
+    #: in the window's top quartile of conviction.
+    ctrl_with: bool | None = None
+    ctrl_strong: bool | None = None
+    #: The entry candle's OWN taker delta opposing the trade. No OI, no window
+    #: -- pure candle anatomy, and the confound the control slice is suspected
+    #: of re-measuring.
+    delta_against: bool | None = None
+    #: The two axes `control_score` crosses, taken apart: which side was
+    #: aggressing (`agg_bull`) and whether open interest was rising (`oi_up`).
+    #: Both None on a FLAT candle, where neither axis cleared its floor.
+    agg_bull: bool | None = None
+    oi_up: bool | None = None
 
 
 def _atr(candles: Sequence[Candle]) -> float:
@@ -196,6 +218,53 @@ def _measure(
             if reached:
                 ev.hit[k] = True
                 break
+    return ev
+
+
+def _tag_delta(ev: Ev, candles: Sequence[Candle]) -> Ev:
+    """Whether the entry candle's own taker delta opposed the trade."""
+    d = volume_delta(candles[ev.entry_index])
+    ev.delta_against = d < 0 if ev.direction is BULL else d > 0
+    return ev
+
+
+def _tag_control(ev: Ev, control_at: dict, strong_floor: float) -> Ev:
+    """Cross the entry with `MarketControlAnalyzer`'s CVD x OI reading.
+
+    Two opposite hypotheses, and the setup's own logic argues for the second:
+
+    * ``aligned`` -- a side is *credited* with control in the trade's direction
+      (buy aggression on rising OI = fresh money buying into the reclaim).
+    * ``unwind``  -- the **opposing** population is closing: shorts covering
+      under a long, longs liquidating under a short. The setup's thesis is
+      that the reclaim is the moment the trapped side stops being supply, and
+      that is an exit quadrant, not a buildup one. `controller` alone cannot
+      tell the two apart -- both read as buy aggression -- which is why the
+      point carries `regime` as well.
+    """
+    point = control_at.get(ev.entry_index)
+    if point is None:
+        return ev
+    bull = ev.direction is BULL
+    ev.ctrl_aligned = point.controller is (
+        MarketControlSide.BUYERS if bull else MarketControlSide.SELLERS
+    )
+    ev.ctrl_unwind = point.regime is (
+        OIRegime.SHORT_COVERING if bull else OIRegime.LONG_LIQUIDATION
+    )
+    # `controller` credits a side on a small minority of candles, so it cannot
+    # filter anything without collapsing the sample -- the same reason the Tide
+    # ribbon reads `control_score` against the window's own distribution
+    # instead. `with` is the signed score agreeing with the trade; `strong`
+    # adds conviction in the window's top quartile.
+    signed = point.control_score if bull else -point.control_score
+    ev.ctrl_with = signed > 0
+    ev.ctrl_strong = signed > 0 and abs(point.control_score) >= strong_floor
+    # The quadrant names both axes, so the cross can be taken apart without
+    # recomputing either: buildup = OI rising, covering/liquidation = falling.
+    if point.regime is not OIRegime.FLAT:
+        ev.agg_bull = point.regime in (OIRegime.LONG_BUILDUP, OIRegime.SHORT_COVERING)
+        ev.oi_up = point.regime in (OIRegime.LONG_BUILDUP, OIRegime.SHORT_BUILDUP)
     return ev
 
 
@@ -336,6 +405,8 @@ def run_combo(
     symbol: str,
     timeframe: TimeFrame,
     *,
+    provider: OHLCVProvider | None,
+    futures_provider: FuturesDataProvider | None,
     limit: int,
     horizons: Sequence[int],
     targets: Sequence[float],
@@ -351,17 +422,39 @@ def run_combo(
     random_reps: int,
     rng: random.Random,
 ) -> tuple[list[Ev], dict[str, int]]:
-    data = load_dashboard_data(symbol=symbol, timeframe=timeframe, limit=limit)
+    data = load_dashboard_data(
+        provider=provider,
+        symbol=symbol,
+        timeframe=timeframe,
+        limit=limit,
+        futures_provider=futures_provider,
+        compute_narrative=False,
+    )
     candles = data.candles
     if len(candles) < 200 or data.vwap is None:
         return [], {}
     vwap_at = {p.timestamp: p.value for p in data.vwap.points}
+    idx_of = {c.timestamp: i for i, c in enumerate(candles)}
+    control_at = {}
+    strong_floor = 0.0
+    if data.market_control is not None:
+        control_at = {
+            idx_of[p.timestamp]: p
+            for p in data.market_control.series
+            if p.timestamp in idx_of
+        }
+        magnitudes = sorted(abs(p.control_score) for p in control_at.values())
+        if magnitudes:
+            strong_floor = magnitudes[int(0.75 * (len(magnitudes) - 1))]
     atr = _atr(candles)
     min_r = min_r_atr * atr
     max_h = max(horizons)
 
     out: list[Ev] = []
     counts: dict[str, int] = {}
+    counts["span-days"] = int(
+        (candles[-1].timestamp - candles[0].timestamp).total_seconds() // 86400
+    )
 
     for arm, collect in (("ob", _ob_triggers), ("eql", _eql_triggers)):
         for bull in (True, False):
@@ -400,19 +493,19 @@ def run_combo(
                     r = abs(entry - stop)
                     if r < min_r:
                         break
-                    out.append(_measure(
+                    out.append(_tag_control(_tag_delta(_measure(
                         Ev(arm, symbol, timeframe.value, direction, start, e, entry, stop, r),
                         candles, horizons, targets, target_horizon,
-                    ))
+                    ), candles), control_at, strong_floor))
                     for _ in range(random_reps):
                         ri = rng.randrange(50, len(candles) - max_h - 1)
                         e2 = candles[ri].close
                         s2 = e2 - r if bull else e2 + r
-                        out.append(_measure(
+                        out.append(_tag_control(_tag_delta(_measure(
                             Ev(f"rand-{arm}", symbol, timeframe.value, direction,
                                ri, ri, e2, s2, r),
                             candles, horizons, targets, target_horizon,
-                        ))
+                        ), candles), control_at, strong_floor))
                     break  # one entry per test episode
 
     # placebo: every pinbar VWAP reclaim, no liquidity test required.
@@ -434,18 +527,18 @@ def run_combo(
             r = abs(entry - stop)
             if r < min_r:
                 continue
-            out.append(_measure(
+            out.append(_tag_control(_tag_delta(_measure(
                 Ev("vwap", symbol, timeframe.value, direction, e - max_wait, e, entry, stop, r),
                 candles, horizons, targets, target_horizon,
-            ))
+            ), candles), control_at, strong_floor))
             for _ in range(random_reps):
                 ri = rng.randrange(50, len(candles) - max_h - 1)
                 e2 = candles[ri].close
                 s2 = e2 - r if bull else e2 + r
-                out.append(_measure(
+                out.append(_tag_control(_tag_delta(_measure(
                     Ev("rand-vwap", symbol, timeframe.value, direction, ri, ri, e2, s2, r),
                     candles, horizons, targets, target_horizon,
-                ))
+                ), candles), control_at, strong_floor))
     return out, counts
 
 
@@ -480,6 +573,14 @@ def _binom_p(hits: int, n: int, p0: float) -> float:
         # a control with no hits at all makes the test degenerate (any single
         # hit reads as p=0); that is a sample-size problem, not evidence.
         return float("nan")
+    if n > 1000:
+        # the exact sum overflows well before this; the normal approximation is
+        # accurate to several decimals once n*p0 and n*(1-p0) are both >> 10.
+        sigma = math.sqrt(n * p0 * (1 - p0))
+        if sigma == 0:
+            return float("nan")
+        z = (hits - 0.5 - n * p0) / sigma
+        return 0.5 * math.erfc(z / math.sqrt(2))
     total = 0.0
     for k in range(hits, n + 1):
         total += math.comb(n, k) * p0**k * (1 - p0) ** (n - k)
@@ -562,11 +663,140 @@ def report(
                 )
 
 
+def control_report(
+    events: Sequence[Ev], horizons: Sequence[int], targets: Sequence[float]
+) -> None:
+    """Each arm sliced by the control reading, against the same slice of control.
+
+    The random arms are tagged with the control state at *their* entry too, so
+    a filtered arm is compared with a control filtered identically -- otherwise
+    the filter's own selection of market conditions would be credited to the
+    setup.
+    """
+    covered = [e for e in events if e.ctrl_aligned is not None]
+    print(f"\ncontrol (CVD x OI) conditioning -- {len(covered)}/{len(events)} "
+          f"entries inside Binance's ~30-day OI retention")
+    if not covered:
+        return
+    head = " ".join(f"{'favor@' + str(h):>7} {'MFE/MAE':>7}" for h in horizons)
+    tgt = " ".join(f"{str(k) + 'R':>6}" for k in targets)
+    print(f"{'arm':>16} {'n':>6} {head} {tgt}")
+    for base in ("vwap", "ob", "eql"):
+        for label, pick in (
+            ("all", lambda e: True),
+            ("|with", lambda e: e.ctrl_with),
+            ("|strong", lambda e: e.ctrl_strong),
+            ("|against", lambda e: e.ctrl_with is False),
+            ("|aligned", lambda e: e.ctrl_aligned),
+            ("|unwind", lambda e: e.ctrl_unwind),
+        ):
+            for prefix in (base, f"rand-{base}"):
+                rows = [
+                    e for e in covered if e.arm == prefix and pick(e)  # type: ignore[no-untyped-call]
+                ]
+                if rows:
+                    name = f"{prefix}{'' if label == 'all' else label}"
+                    print(f"{name:>16} {len(rows):>6} {_row(rows, horizons, targets)}")
+        print()
+
+
+def confound_report(
+    events: Sequence[Ev], horizons: Sequence[int], targets: Sequence[float]
+) -> None:
+    """Is the control slice re-measuring the entry candle, or adding to it?
+
+    The entry is a pinbar: a long wick against the trade, closing with it. Such
+    a candle plausibly carries taker delta *opposing* its own close -- sellers
+    hitting into the wick of a bullish reclaim -- and that candle feeds the
+    window `control_score` is measured over. So the `against` slice may be
+    selecting "a real absorption pinbar", a fact about candle anatomy that
+    needs no open interest at all.
+
+    Two decompositions settle it. First `delta_against`, the entry candle's own
+    delta and nothing else: if that alone reproduces the effect, the control
+    layer contributed nothing. Then the quadrant taken apart into its two axes,
+    aggression and OI: the control layer only earns its place if the OI axis
+    moves the reading at a fixed aggression.
+    """
+    head = " ".join(f"{'favor@' + str(h):>7} {'MFE/MAE':>7}" for h in horizons)
+    tgt = " ".join(f"{str(k) + 'R':>6}" for k in targets)
+
+    print("\nA) the entry candle's OWN delta -- no OI, no window")
+    print(f"{'arm':>20} {'n':>6} {head} {tgt}")
+    for base in ("vwap", "ob", "eql"):
+        for prefix in (base, f"rand-{base}"):
+            for label, pick in (
+                ("|d-against", lambda e: e.delta_against is True),
+                ("|d-with", lambda e: e.delta_against is False),
+            ):
+                rows = [e for e in events if e.arm == prefix and pick(e)]  # type: ignore[no-untyped-call]
+                if rows:
+                    print(f"{prefix + label:>20} {len(rows):>6} {_row(rows, horizons, targets)}")
+        print()
+
+    covered = [e for e in events if e.agg_bull is not None]
+    if not covered:
+        return
+    print(f"B) the quadrant's two axes apart ({len(covered)} non-FLAT entries)"
+          f"\n{'arm':>24} {'n':>6} {head} {tgt}")
+    for base in ("vwap", "ob", "eql"):
+        for agg_against in (True, False):
+            for oi in (True, False):
+                rows = [
+                    e for e in covered
+                    if e.arm == base
+                    and ((e.agg_bull is not (e.direction is BULL)) is agg_against)
+                    and e.oi_up is oi
+                ]
+                if len(rows) >= 20:
+                    a = "agg-against" if agg_against else "agg-with"
+                    o = "OI-up" if oi else "OI-down"
+                    print(f"{base + '|' + a + '|' + o:>24} {len(rows):>6} "
+                          f"{_row(rows, horizons, targets)}")
+        print()
+
+
+def control_consistency(events: Sequence[Ev], target: float) -> None:
+    """Is the with/against split the same story in every symbol, or one symbol?
+
+    Slicing three arms five ways is fifteen looks at the same data, so a single
+    striking cell is what one *expects* to find. What a real effect owes is
+    consistency: the same sign in symbol after symbol, and in both timeframes.
+    """
+    print(f"\nwith/against consistency at {target}R (hit% against, minus with)")
+    print(f"{'combo':>18} " + " ".join(f"{a:>14}" for a in ("vwap", "ob", "eql")))
+    combos = sorted({(e.symbol, e.timeframe) for e in events})
+    tally: dict[str, list[int]] = {a: [0, 0] for a in ("vwap", "ob", "eql")}
+    for sym, tf in combos:
+        cells = []
+        for arm in ("vwap", "ob", "eql"):
+            rows = [e for e in events if e.arm == arm and e.symbol == sym and e.timeframe == tf]
+            w = [e.hit[target] for e in rows if e.ctrl_with is True and target in e.hit]
+            a = [e.hit[target] for e in rows if e.ctrl_with is False and target in e.hit]
+            if len(w) < 5 or len(a) < 5:
+                cells.append(f"{'--':>14}")
+                continue
+            delta = sum(a) / len(a) - sum(w) / len(w)
+            tally[arm][0 if delta > 0 else 1] += 1
+            cells.append(f"{delta:>+9.0%} ({len(a):>2})")
+        print(f"{sym + ' ' + tf:>18} " + " ".join(cells))
+    print("\n  combos where `against` beat `with`:")
+    for arm, (up, down) in tally.items():
+        print(f"    {arm:>5}: {up}/{up + down}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--symbols", nargs="+", default=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
     p.add_argument("--timeframes", nargs="+", default=["5m", "15m"])
-    p.add_argument("--limit", type=int, default=1200)
+    p.add_argument("--limit", type=int, default=1200,
+                   help="candles per series; above 1500 needs --deep")
+    p.add_argument("--control", action="store_true",
+                   help="keep the real futures provider so market_control is "
+                        "populated (OI reaches back ~30 days only)")
+    p.add_argument("--deep", action="store_true",
+                   help="paginate past the endpoint's 1500-candle cap "
+                        "(research provider; skips the futures state)")
     p.add_argument("--horizons", nargs="+", type=int, default=[5, 10, 20, 40])
     p.add_argument("--targets", nargs="+", type=float, default=[2.0, 3.0])
     p.add_argument("--target-horizon", type=int, default=40,
@@ -590,6 +820,13 @@ def main() -> None:
     args = p.parse_args()
 
     rng = random.Random(args.seed)
+    provider = PaginatedFuturesProvider() if args.deep else None
+    futures_provider = NoFuturesProvider() if args.deep and not args.control else None
+    if args.deep and args.htf:
+        raise SystemExit(
+            "--htf dates the higher-timeframe trend by replaying the pipeline "
+            "once per candle, which is quadratic; not available with --deep"
+        )
     events: list[Ev] = []
     counts: dict[str, int] = {}
     htf_map: dict[str, TimeFrame] = {}
@@ -610,23 +847,34 @@ def main() -> None:
                     print(f"  ! {symbol} {htf.value} htf: {exc}")
                     continue
                 print(f"  {symbol} {tf.value}: HTF {htf.value}, {len(steps)} trend steps")
-            evs, cs = run_combo(
-                symbol, tf,
-                limit=args.limit, horizons=args.horizons, targets=args.targets,
-                target_horizon=args.target_horizon,
-                max_wait=args.max_wait, merge_gap=args.merge_gap,
-                wick_frac=args.wick_frac, body_frac=args.body_frac,
-                min_r_atr=args.min_r_atr, eql_lag=args.eql_lag,
-                fresh_ob=args.fresh_ob, htf_steps=steps, random_reps=args.random_reps, rng=rng,
-            )
+            try:
+                evs, cs = run_combo(
+                    symbol, tf,
+                    provider=provider, futures_provider=futures_provider,
+                    limit=args.limit, horizons=args.horizons, targets=args.targets,
+                    target_horizon=args.target_horizon,
+                    max_wait=args.max_wait, merge_gap=args.merge_gap,
+                    wick_frac=args.wick_frac, body_frac=args.body_frac,
+                    min_r_atr=args.min_r_atr, eql_lag=args.eql_lag,
+                    fresh_ob=args.fresh_ob, htf_steps=steps,
+                    random_reps=args.random_reps, rng=rng,
+                )
+            except DataProviderError as exc:
+                # one delisted or renamed symbol must not sink the sweep
+                print(f"  ! {symbol} {tf.value}: {exc}")
+                continue
             events.extend(evs)
             for k, v in cs.items():
                 counts[k] = counts.get(k, 0) + v
             n = len([e for e in evs if not e.arm.startswith("rand")])
-            print(f"  {symbol} {tf.value}: {n} setups")
+            span = cs.get("span", "")
+            print(f"  {symbol} {tf.value}: {n} setups {span}")
 
     report(events, args.horizons, args.targets, counts)
     significance(events, args.targets)
+    control_report(events, args.horizons, args.targets)
+    control_consistency(events, min(args.targets))
+    confound_report(events, args.horizons, args.targets)
 
 
 if __name__ == "__main__":
