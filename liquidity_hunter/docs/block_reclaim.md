@@ -8,6 +8,16 @@ not show.
 Everything here is reproducible from `research/`; the numbers below name the
 command that regenerates them.
 
+A visual edition of this record — the rule, the evidence, the graveyard of
+rejected hypotheses, and the retractions — is published from
+`block_reclaim_artifact.html`, kept next to this file so the page and the doc
+it mirrors change together:
+<https://claude.ai/code/artifact/16a5f942-8064-42dd-8917-ed478d0aae7d>.
+It is the same content read from the other end: this file is what a person
+changing the layer needs, that page is what a person deciding whether to trade
+it needs. Republishing it means passing that URL, or it becomes a second
+artifact.
+
 ## What is observed
 
 Price works below the session VWAP, trades into an order block that is sitting
@@ -50,7 +60,7 @@ reject a mean of zero. It is the weaker half in every cut.
 
 ```
 poetry run python research/vwap_ob_pinbar.py \
-    --symbols $(python research/_symbols.py) --timeframes 15m \
+    --symbols $(python research/_symbols.py all) --timeframes 15m \
     --limit 25000 --deep --export trades.json
 poetry run python research/vwap_exit_grid.py --trades trades.json \
     --max-r-atr 1.0 --sample all|search|holdout

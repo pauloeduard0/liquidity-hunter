@@ -1,0 +1,538 @@
+<title>Bloco de Ordem × VWAP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<style>
+:root{
+  --ink:#F2F4F7; --surface:#FFFFFF; --sunk:#E8ECF1;
+  --rule:#D2DAE3; --hair:#E2E8EF;
+  --text:#1B242F; --dim:#54677C; --faint:#7C8DA0;
+  --gold:#9A7420; --gold-ink:#E3BE63;
+  --cyan:#1B6E80; --clay:#A8493D;
+  --chip-held:#DCEEF1; --chip-dead:#F6E3E0; --chip-open:#F1EADA;
+  --measure:68ch; --wide:min(96vw,1080px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ink:#0A0F16; --surface:#121A25; --sunk:#0E141D;
+    --rule:#22303F; --hair:#1A2530;
+    --text:#C6D2E0; --dim:#8B9BAD; --faint:#6B7A8C;
+    --gold:#E3BE63; --gold-ink:#E3BE63;
+    --cyan:#56ADC1; --clay:#C0736A;
+    --chip-held:#122A30; --chip-dead:#2B1917; --chip-open:#241E12;
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#0A0F16; --surface:#121A25; --sunk:#0E141D;
+  --rule:#22303F; --hair:#1A2530;
+  --text:#C6D2E0; --dim:#8B9BAD; --faint:#6B7A8C;
+  --gold:#E3BE63; --gold-ink:#E3BE63;
+  --cyan:#56ADC1; --clay:#C0736A;
+  --chip-held:#122A30; --chip-dead:#2B1917; --chip-open:#241E12;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ink); color:var(--text);
+  font:400 16.5px/1.65 "IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:var(--wide); margin:0 auto; padding:0 24px 120px}
+.col{max-width:var(--measure)}
+
+/* ── masthead ─────────────────────────────── */
+header{padding:72px 0 44px; border-bottom:1px solid var(--rule); margin-bottom:8px}
+.kicker{
+  font:500 11.5px/1 "IBM Plex Mono",ui-monospace,monospace;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--faint); margin:0 0 20px;
+}
+h1{
+  font:600 clamp(38px,6.4vw,62px)/1.04 Spectral,Georgia,serif;
+  letter-spacing:-.015em; margin:0 0 22px; text-wrap:balance; color:var(--text);
+}
+h1 .x{color:var(--gold); font-style:italic; font-weight:400}
+.standfirst{font-size:19px; line-height:1.6; color:var(--dim); margin:0; max-width:62ch}
+.standfirst strong{color:var(--text); font-weight:500}
+.meta{
+  margin-top:28px; display:flex; flex-wrap:wrap; gap:8px 22px;
+  font:400 12.5px/1 "IBM Plex Mono",ui-monospace,monospace; color:var(--faint);
+}
+
+/* ── sections ─────────────────────────────── */
+section{padding:52px 0; border-bottom:1px solid var(--hair)}
+section:last-of-type{border-bottom:0}
+.stage{
+  font:500 11.5px/1 "IBM Plex Mono",ui-monospace,monospace;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--gold); margin:0 0 14px;
+}
+h2{
+  font:600 clamp(25px,3.4vw,33px)/1.2 Spectral,Georgia,serif;
+  letter-spacing:-.01em; margin:0 0 18px; text-wrap:balance;
+}
+h3{
+  font:600 17px/1.35 "IBM Plex Sans",sans-serif; letter-spacing:-.005em;
+  margin:36px 0 12px; color:var(--text);
+}
+p{margin:0 0 18px}
+p:last-child{margin-bottom:0}
+a{color:var(--cyan)}
+strong{font-weight:600; color:var(--text)}
+em{font-style:italic; color:var(--dim)}
+
+/* ── spec block ───────────────────────────── */
+.spec{
+  background:var(--surface); border:1px solid var(--rule);
+  border-left:3px solid var(--gold); padding:26px 28px; margin:26px 0;
+}
+.spec dl{margin:0; display:grid; grid-template-columns:auto 1fr; gap:11px 22px}
+.spec dt{
+  font:500 11.5px/1.5 "IBM Plex Mono",ui-monospace,monospace;
+  letter-spacing:.08em; text-transform:uppercase; color:var(--faint); white-space:nowrap;
+}
+.spec dd{margin:0; font-size:15.5px; line-height:1.5}
+.spec dd code{color:var(--gold)}
+code{
+  font:500 .89em/1 "IBM Plex Mono",ui-monospace,monospace;
+  background:var(--sunk); padding:.14em .38em; border-radius:2px;
+}
+
+/* ── tables ───────────────────────────────── */
+.tbl{overflow-x:auto; margin:26px 0; border:1px solid var(--rule); background:var(--surface)}
+table{border-collapse:collapse; width:100%; min-width:520px}
+caption{
+  text-align:left; padding:16px 20px 0;
+  font:500 11.5px/1.5 "IBM Plex Mono",ui-monospace,monospace;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--faint);
+}
+th,td{
+  padding:11px 20px; text-align:right; border-bottom:1px solid var(--hair);
+  font-variant-numeric:tabular-nums; font-size:14.5px;
+}
+th:first-child,td:first-child{text-align:left}
+thead th{
+  font:500 11.5px/1.4 "IBM Plex Mono",ui-monospace,monospace;
+  letter-spacing:.07em; text-transform:uppercase; color:var(--faint);
+  border-bottom:1px solid var(--rule); vertical-align:bottom;
+}
+tbody tr:last-child td{border-bottom:0}
+tbody tr.hi td{background:var(--sunk)}
+td.num{font-family:"IBM Plex Mono",ui-monospace,monospace}
+.pos{color:var(--cyan); font-weight:500}
+.neg{color:var(--clay)}
+.key{color:var(--gold); font-weight:500}
+.t{color:var(--faint); font-size:12.5px}
+
+/* ── verdict chips ────────────────────────── */
+.chip{
+  display:inline-block; font:500 10.5px/1 "IBM Plex Mono",ui-monospace,monospace;
+  letter-spacing:.1em; text-transform:uppercase; padding:5px 8px; border-radius:2px;
+  white-space:nowrap;
+}
+.chip.held{background:var(--chip-held); color:var(--cyan)}
+.chip.dead{background:var(--chip-dead); color:var(--clay)}
+.chip.open{background:var(--chip-open); color:var(--gold)}
+
+/* ── ledger ───────────────────────────────── */
+.ledger{list-style:none; margin:26px 0 0; padding:0}
+.ledger li{
+  display:grid; grid-template-columns:112px 1fr; gap:18px;
+  padding:20px 0; border-top:1px solid var(--hair); align-items:start;
+}
+.ledger li:last-child{border-bottom:1px solid var(--hair)}
+.ledger .claim{font-weight:600; margin:0 0 5px; font-size:15.5px}
+.ledger .why{margin:0; color:var(--dim); font-size:14.5px; line-height:1.55}
+.ledger .why code{font-size:.86em}
+
+/* ── notes / callout ──────────────────────── */
+.note{
+  border-left:2px solid var(--rule); padding:2px 0 2px 20px; margin:26px 0;
+  color:var(--dim); font-size:15.5px;
+}
+.note strong{color:var(--text)}
+
+/* ── lessons ──────────────────────────────── */
+.lessons{margin:26px 0 0; padding:0; list-style:none; counter-reset:l}
+.lessons li{
+  counter-increment:l; position:relative; padding:0 0 22px 42px; margin:0;
+}
+.lessons li::before{
+  content:counter(l,decimal-leading-zero); position:absolute; left:0; top:2px;
+  font:500 12px/1.5 "IBM Plex Mono",ui-monospace,monospace; color:var(--gold);
+}
+.lessons b{display:block; font-weight:600; margin-bottom:3px}
+.lessons span{color:var(--dim); font-size:15px}
+
+/* ── repro ────────────────────────────────── */
+pre{
+  background:var(--sunk); border:1px solid var(--hair); padding:18px 20px;
+  overflow-x:auto; margin:20px 0;
+  font:400 13px/1.7 "IBM Plex Mono",ui-monospace,monospace; color:var(--dim);
+}
+pre b{color:var(--text); font-weight:500}
+
+footer{padding:44px 0 0; color:var(--faint); font-size:13.5px; border-top:1px solid var(--rule)}
+
+:focus-visible{outline:2px solid var(--gold); outline-offset:3px}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+@media (max-width:620px){
+  .spec dl{grid-template-columns:1fr; gap:4px 0}
+  .spec dt{margin-top:12px}
+  .ledger li{grid-template-columns:1fr; gap:10px}
+}
+
+/* ── retratações: o antes e o depois de uma afirmação ─ */
+.recant{list-style:none; margin:26px 0 0; padding:0; display:grid; gap:20px}
+.recant > li{
+  background:var(--surface); border:1px solid var(--rule);
+  border-left:3px solid var(--clay); padding:22px 24px;
+}
+.recant .said{
+  font:400 italic 17px/1.4 Spectral,Georgia,serif; color:var(--dim);
+  margin:0 0 4px; text-wrap:balance;
+}
+.recant .said::before{content:"“"}
+.recant .said::after{content:"”"}
+.recant .verdict{
+  font:500 10.5px/1 "IBM Plex Mono",ui-monospace,monospace;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--clay);
+  margin:0 0 12px;
+}
+.recant .now{margin:0; font-size:15.5px; line-height:1.55; color:var(--text)}
+.recant .now b{color:var(--gold)}
+
+/* ── fixes: o que foi corrigido antes de medir ─────── */
+.fixes{list-style:none; margin:26px 0 0; padding:0; counter-reset:f}
+.fixes li{
+  counter-increment:f; display:grid; grid-template-columns:2.2em 1fr; gap:16px;
+  padding:18px 0; border-top:1px solid var(--hair);
+}
+.fixes li:last-child{border-bottom:1px solid var(--hair)}
+.fixes li::before{
+  content:counter(f); grid-row:span 2; align-self:start;
+  font:500 12px/1.6 "IBM Plex Mono",ui-monospace,monospace; color:var(--gold);
+}
+.fixes b{display:block; font-weight:600; font-size:15.5px; margin-bottom:4px}
+.fixes span{color:var(--dim); font-size:14.5px; line-height:1.55}
+@media (max-width:620px){ .recant > li{padding:18px} }
+</style><div class="wrap">
+
+<header>
+  <p class="kicker">Registro de medição · liquidity_hunter</p>
+  <h1>Bloco de Ordem <span class="x">×</span> VWAP</h1>
+  <p class="standfirst">A camada foi para produção, e então quatro defeitos apareceram na população que a autorizou. Corrigidos, a medição foi refeita do zero. <strong>O mecanismo sobreviveu</strong> — e três afirmações que este mesmo documento fazia, não.</p>
+  <div class="meta">
+    <span>22 ago 2026</span><span>branch liquidity-grab</span><span>4c98e97</span><span>revisa a edição de fee7fb6</span>
+  </div>
+</header>
+
+<section>
+  <p class="stage">Estágio 01 · O que sobreviveu</p>
+  <h2>A regra</h2>
+  <div class="col">
+    <p>Descrita do lado comprador; o vendedor espelha. Toda condição é conhecível no candle de entrada — nenhuma usa informação futura.</p>
+  </div>
+
+  <div class="spec">
+    <dl>
+      <dt>Tempo gráfico</dt><dd>M15, VWAP de <strong>sessão</strong> (dia UTC)</dd>
+      <dt>Contexto</dt><dd>O preço trabalha <strong>abaixo</strong> da VWAP e testa um bloco de ordem que ainda está de pé lá embaixo</dd>
+      <dt>Gatilho</dt><dd>Em até 20 candles, um <strong>pinbar</strong> cujo pavio fura a VWAP e o corpo fecha acima dela <span class="t">(pavio ≥ 50% do range, corpo ≤ 35%)</span></dd>
+      <dt>Entrada</dt><dd>No fechamento desse pinbar</dd>
+      <dt>Stop</dt><dd>Menor mínima entre o início do teste no bloco e a entrada</dd>
+      <dt>Condição</dt><dd><code>R ≤ 1,0 × ATR(14)</code> — o bloco tem que estar <strong>colado</strong> na VWAP</dd>
+      <dt>Alvo</dt><dd>2R</dd>
+    </dl>
+  </div>
+
+  <div class="col">
+    <p>A condição de R é a descoberta. Sem ela o setup mede no nível do acaso; com ela, o mesmo setup separa. Ela não é um filtro inventado — é a geometria que a própria regra já definia, e que eu tratava como parâmetro dado em vez de como informação.</p>
+    <p>A leitura: quando o bloco e a VWAP estão a menos de um ATR um do outro, as duas populações da tese — quem comprou o bloco e quem tem a VWAP como zero a zero — estão <em>empilhadas no mesmo preço</em>. Longe uma da outra, são dois níveis independentes, e o “teste no bloco” é só um mergulho que por acaso voltou.</p>
+  </div>
+</section>
+
+<section>
+  <p class="stage">Estágio 02 · O que estava errado</p>
+  <h2>Quatro correções antes de qualquer número novo</h2>
+  <div class="col">
+    <p>A camada foi para produção em <code>ce5941b</code>. Revendo-a com olho de auditoria, o objeto que tinha sido medido não era o que a regra descreve. Nada foi re-medido antes de fechar os quatro.</p>
+  </div>
+
+  <ul class="fixes">
+    <li>
+      <div>
+        <b>O bloco morria na hora errada</b>
+        <span><code>POIZone.invalidated_at</code> era lido como o rompimento. É escrituração de fila: o detector aposenta a caixa <em>mais antiga</em> quando qualquer uma rompe, então o carimbo diz quando a fila chegou na caixa, não quando o preço a levou. Medido no BTC H1, um bloco atravessado em 10/ago carregava carimbo de 19/ago — nove dias em que um bloco gasto seguia contando como teste válido, sem ninguém posicionado nele, que é a premissa inteira da leitura. Mesmo defeito que a camada de <em>grab</em> já tinha pago em três commits.</span>
+      </div>
+    </li>
+    <li>
+      <div>
+        <b>O estudo e a produção descartavam entradas diferentes</b>
+        <span>O piso de R era <code>0,25 × ATR da série inteira</code> no estudo e <code>0,05 × ATR(14) local</code> no detector — valor <em>e</em> unidade distintos. Numa faixa calma o detector guardava o que o estudo jogava fora; numa volátil, o contrário. E o descarte mata a visita inteira: não dá para filtrar depois. Convergidos; o piso por <strong>custo</strong> virou parâmetro de análise, onde mudá-lo não exige re-varredura.</span>
+      </div>
+    </li>
+    <li>
+      <div>
+        <b>O candle vivo mentia</b>
+        <span>Um reclaim no último candle da série ainda está se formando — nem o pavio cruzando a VWAP nem o fechamento do outro lado estão decididos. Agora carrega <code>provisional</code> e o gráfico o sufixa com <code>?</code>. Nenhum número deste documento cobre esses: a medição lê resultado futuro e por isso descarta a cauda da série.</span>
+      </div>
+    </li>
+    <li>
+      <div>
+        <b>Eram duas implementações da mesma regra</b>
+        <span>O estudo reescrevia o detector em vez de usá-lo, e devolvia um conjunto diferente — o detector era superset, com ~9% a mais. Agora o braço importa <code>detect_block_reclaims</code> e a segunda cópia foi deletada. O risco que isso remove: o <code>POIDetector</code> está em desenvolvimento ativo, e enquanto fossem duas cópias, mexer nele moveria a produção sem mover o objeto medido.</span>
+      </div>
+    </li>
+  </ul>
+
+  <div class="note">
+    <strong>E um bloqueio que só apareceu ao tentar comparar.</strong> A divisão 43/30 símbolos da edição anterior não estava registrada em lugar nenhum — nem no doc, nem no código, nem no git. Os números podiam ser lidos, mas não re-derivados. Agora ela vive em <code>research/_symbols.py</code>, como hash do nome do símbolo: propriedade do símbolo e não da ordem da rodada, reproduz em qualquer máquina, e não dá para empurrar depois de ver o resultado. <strong>Custo:</strong> os números abaixo não estão nas mesmas metades dos que substituem.
+  </div>
+</section>
+
+<section>
+  <p class="stage">Estágio 03 · A evidência, refeita</p>
+  <h2>O bloco leva o acerto de 29% para 52%</h2>
+  <div class="col">
+    <p>O <strong>placebo</strong> é o mesmo pinbar de reclaim da VWAP sem exigir bloco nenhum, no mesmo R apertado. É o controle que decide: o aleatório só mostra que o setup bate ruído; o placebo mostra se a <em>condição sob teste</em> contribui.</p>
+    <p>72 símbolos, 25.000 candles cada, alvo 2R, custo de 0,10% cobrado por trade no R daquele trade.</p>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <caption>Acerto no alvo 2R · breakeven de um 2:1 é 33,3%</caption>
+      <thead><tr>
+        <th>Amostra</th><th>n</th><th>Com bloco</th><th>Placebo</th><th>Lift</th><th>Líq. @ 0,10%</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>Busca — 47 símbolos</td><td class="num">444</td><td class="num key">55,0%</td><td class="num">29,1%</td><td class="num pos">+25,9 pp</td><td class="num pos">+0,349 <span class="t">t 4,9</span></td></tr>
+        <tr><td>Holdout — 25 símbolos</td><td class="num">232</td><td class="num key">47,4%</td><td class="num">30,2%</td><td class="num pos">+17,2 pp</td><td class="num">+0,114 <span class="t">t 1,2</span></td></tr>
+        <tr class="hi"><td><strong>Todos — 72 símbolos</strong></td><td class="num">676</td><td class="num key">52,4%</td><td class="num">29,4%</td><td class="num pos">+23,0 pp</td><td class="num pos">+0,269 <span class="t">t 4,7</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>Contra os 51,9% / 30,8% da edição anterior: praticamente idêntico. <strong>A datação errada do bloco não estava criando o achado nem escondendo</strong> — os números agora simplesmente descrevem a população que dizem descrever.</p>
+    <p>O <strong>t de 1,2 do holdout</strong> é o número a manter à vista. O lift está lá e aponta para o mesmo lado, mas a metade que não foi pesquisada, sozinha e a 0,10%, não rejeita média zero. É a metade mais fraca em todo corte.</p>
+  </div>
+
+  <h3>A saída não é uma calibração</h3>
+  <div class="tbl">
+    <table>
+      <caption>Líquido em R por alvo · braço com bloco, n=676, custo 0,10%</caption>
+      <thead><tr><th>Alvo</th><th>1,0R</th><th>1,5R</th><th>2,0R</th><th>2,5R</th><th>3,0R</th></tr></thead>
+      <tbody>
+        <tr><td>Líquido</td><td class="num">+0,091</td><td class="num pos">+0,209</td><td class="num key">+0,269</td><td class="num pos">+0,241</td><td class="num pos">+0,261</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="col">
+    <p>Positivo na grade inteira, com <strong>platô largo em vez de pico</strong>. Uma vantagem que existe num múltiplo e some nos vizinhos é uma calibração; esta não é.</p>
+  </div>
+</section>
+<section>
+  <p class="stage">Estágio 04 · A validação que faltava</p>
+  <h2>Existe em toda janela de tempo, não só em todo símbolo</h2>
+  <div class="col">
+    <p>Segurar símbolos não responde “isto é um regime só?”, porque quarenta símbolos de cripto são um mercado só. O walk-forward divide o <em>tempo</em>: escolhe a regra no treino, pontua no teste, com purge e embargo — validando o procedimento inteiro, não apenas a regra que sobreviveu a ele.</p>
+    <p>Quinze regras foram declaradas: a família da agressão, das passagens anteriores, mais a família do limiar <code>r_atr</code> — porque o limiar <em>foi</em> uma das coisas tentadas, e deixá-lo fora da contagem favoreceria justamente a escolha em julgamento.</p>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <caption>Sharpe fora da amostra, agrupado, cada regra fixa em todos os folds</caption>
+      <thead><tr><th>Regra</th><th>Sharpe OOS</th><th>R médio / dia</th></tr></thead>
+      <tbody>
+        <tr class="hi"><td><strong>bloco · R ≤ 1,0 ATR</strong></td><td class="num key">6,30</td><td class="num key">+0,273</td></tr>
+        <tr><td>bloco · R ≤ 0,5 ATR</td><td class="num">4,04</td><td class="num">+0,116</td></tr>
+        <tr><td>bloco · R ≤ 1,5 ATR</td><td class="num">3,64</td><td class="num">+0,130</td></tr>
+        <tr><td>bloco · R ≤ 2,0 ATR</td><td class="num">3,11</td><td class="num">+0,096</td></tr>
+        <tr><td>equal lows · R ≤ 1,0 ATR</td><td class="num">0,17</td><td class="num">+0,005</td></tr>
+        <tr><td><em>placebo</em> · R ≤ 1,0 ATR</td><td class="num neg">−0,92</td><td class="num neg">−0,028</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p><strong>A curva do limiar reproduz fora da amostra com o pico no mesmo lugar.</strong> Esse era o ponto mais frágil da edição anterior — o 1,0×ATR tinha saído de ler uma curva na amostra de busca, e o holdout apenas reusou o número. Agora o limiar é o vencedor fora da amostra entre os quatro que competiram, e o mesmo corte aplicado ao placebo é negativo.</p>
+  </div>
+
+  <div class="spec">
+    <dl>
+      <dt>Folds</dt><dd>22 · Sharpe médio de treino 6,19 contra <strong>4,09 no teste</strong> (degradação −2,10)</dd>
+      <dt>Consistência</dt><dd><strong>16 de 22 folds positivos</strong> fora da amostra</dd>
+      <dt>PBO</dt><dd><strong>0,067</strong> <span class="t">— acima de 0,5 seria mais provável que não ser overfit</span></dd>
+      <dt>Sharpe deflacionado</dt><dd>observado 5,53 contra máximo esperado de <strong>1,77</strong> em quinze tentativas sobre ruído puro</dd>
+    </dl>
+  </div>
+</section>
+
+<section>
+  <p class="stage">Estágio 05 · Retratações</p>
+  <h2>Três coisas que este documento afirmava e não sobreviveram</h2>
+  <div class="col">
+    <p>Não são detalhes: duas delas eram histórias sobre <em>por que</em> o setup funciona, e uma delas era a explicação principal.</p>
+  </div>
+
+  <ul class="recant">
+    <li>
+      <p class="said">Funciona melhor vendido — o lado comprador é o fraco.</p>
+      <p class="verdict">Era a janela, não o mecanismo</p>
+      <p class="now">Bastou partir o <em>placebo</em> pelo mesmo eixo: ele carrega a mesma assimetria (27,4% comprado contra 31,5% vendido; no holdout, 25,8% contra 34,5%). Descontado o placebo, o bloco contribui <b>+23,2 pp comprado e +22,9 pp vendido</b> — a mesma coisa. Lido cru, o lado comprado parece o parente pobre; lido como lift, não há o que escolher entre os dois.</p>
+    </li>
+    <li>
+      <p class="said">O lift acompanha quanto a VWAP acumulou — por isso M15.</p>
+      <p class="verdict">Predição declarada antes de rodar, e falsificada</p>
+      <p class="now">O gradiente antigo — 6 candles negativo, 24 fraco, 42 forte, 96 o mais forte — variava tempo gráfico, âncora <em>e</em> acumulação ao mesmo tempo. Perguntado dentro do M15, onde só a acumulação se move: <b>49,5% · 58,5% · 51,7%</b>. Não é monotônico, e o balde do meio não é achado com n=171. O placebo fica chapado nos mesmos baldes, então nem é “a sessão tardia se comporta diferente”. Qual dos outros dois eixos carregava, ninguém mediu. <code>vwap_candles</code> fica como descrição; <b>nada deve lê-lo como força</b>.</p>
+    </li>
+    <li>
+      <p class="said">O bloco fresco ajuda um pouco.</p>
+      <p class="verdict">Invertido, e não por pouco</p>
+      <p class="now">Primeira visita ao bloco: <b>+0,103</b> líquido, t 1,2, n=308. Um retorno posterior: <b>+0,407</b>, t 5,3, n=368. A zona intocada — que é exatamente sobre o que a tese SMC fala — é a metade que <em>não</em> carrega a leitura sozinha. Nenhum filtro sai daqui: é uma amostra só, e é o formato de fatia que já enganou este estudo duas vezes. Fica registrado porque aponta ao contrário da história com que o setup costuma ser contado.</p>
+    </li>
+  </ul>
+</section>
+
+<section>
+  <p class="stage">Estágio 06 · O limite</p>
+  <h2>O sinal é grande. O stop é curto.</h2>
+  <div class="col">
+    <p>R mediano é <strong>0,39% do preço</strong>, então um round-trip de 0,10% custa <strong>0,26R</strong>. A fricção é grande porque a distância é pequena, não porque a taxa seja alta.</p>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <caption>Retorno líquido por trade, em R · braço com bloco, n=676, alvo 2R</caption>
+      <thead><tr><th>Custo round-trip</th><th>Líquido</th><th>t</th><th>Leitura</th></tr></thead>
+      <tbody>
+        <tr><td>0,06% <span class="t">entrada maker</span></td><td class="num pos">+0,393</td><td class="num">6,8</td><td>claramente lucrativo</td></tr>
+        <tr class="hi"><td>0,10% <span class="t">taker + taker</span></td><td class="num pos">+0,269</td><td class="num">4,7</td><td>lucrativo</td></tr>
+        <tr><td>0,15% <span class="t">+ slippage</span></td><td class="num pos">+0,113</td><td class="num">2,0</td><td>ainda de pé</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>Melhor do que a edição anterior dizia — lá o efeito morria em 0,15%. Mas o alvo é o que segura: <strong>em 1,0R o setup já se foi a 0,15%</strong>, porque um alvo curto não tem R suficiente para pagar a passagem.</p>
+    <p>O corte majors × alts da edição anterior <strong>não foi refeito</strong>. Ele dizia que a estatística forte morava nos alts — CRV, EOS, SNX, CELR — onde a premissa de custo é a coisa mais frágil do estudo. Até ser re-medido sobre a população corrigida, trate-o como não verificado, não como refutado.</p>
+    <p>E a coisa que a medição continua sem saber é a mesma de sempre: <strong>qual é o seu round-trip real nesses símbolos, em M15</strong>. Nenhuma camada aqui enxerga isso, que é uma das razões de a entidade <code>BlockReclaim</code> não nomear entrada, tamanho nem alvo.</p>
+  </div>
+</section>
+<section>
+  <p class="stage">Estágio 07 · O cemitério</p>
+  <h2>O que morreu, e por quê</h2>
+  <div class="col">
+    <p>Metade do valor deste registro é esta lista. Cada item custou uma medição; relê-la é mais barato que refazê-la.</p>
+  </div>
+
+  <ul class="ledger">
+    <li>
+      <span class="chip dead">Rejeitado</span>
+      <div>
+        <p class="claim">O setup sem a condição de R</p>
+        <p class="why">61.272 trades, 259 dias: retorno médio −0,014R no reclaim puro e −0,054R nos equals. Nível do acaso. O sinal existe, mas só na fatia onde o bloco está colado na VWAP.</p>
+      </div>
+    </li>
+    <li>
+      <span class="chip dead">Rejeitado</span>
+      <div>
+        <p class="claim">Equal lows como gatilho no lugar do bloco</p>
+        <p class="why">Negativo em toda janela e todo tempo gráfico, e confirmado na re-medição: <code>−0,329</code> líquido em 2.900 trades, Sharpe OOS 0,17. Um número forte a 3R apareceu numa configuração e sumiu na seguinte — inconsistência entre configurações é assinatura de ruído.</p>
+      </div>
+    </li>
+    <li>
+      <span class="chip dead">Rejeitado</span>
+      <div>
+        <p class="claim">Filtro de tendência da HTF</p>
+        <p class="why">Ajuda — mas ajuda o placebo na mesma medida. Não separa o bloco de tomar todo reclaim alinhado. A tendência da HTF foi datada por replay incremental, não pelo timestamp do evento.</p>
+      </div>
+    </li>
+    <li>
+      <span class="chip dead">Invertido</span>
+      <div>
+        <p class="claim">Veto pela agressão do <code>market_control</code></p>
+        <p class="why">Parecia o achado da conversa: entrar quando a agressão aponta <em>contra</em> dava +5 pp de acerto e replicou em 15 símbolos novos. O walk-forward inverteu: aquela fatia também estopa +7 pp mais. As duas caudas alargando — volatilidade, não vantagem. Na re-medição, Sharpe OOS −0,31 na regra inteira.</p>
+      </div>
+    </li>
+    <li>
+      <span class="chip dead">Rejeitado</span>
+      <div>
+        <p class="claim">Open interest como segundo eixo</p>
+        <p class="why">O incremento do OI dentro da fatia encolheu de −8 pp na descoberta para −3 pp no holdout. E a retenção de ~30 dias da Binance impede qualquer teste de tempo longo. A metade cara da camada contribui a menor parte.</p>
+      </div>
+    </li>
+    <li>
+      <span class="chip dead">Rejeitado</span>
+      <div>
+        <p class="claim">VWAP de sessão no H4</p>
+        <p class="why">−0,068 e −0,097 nas duas amostras, com acerto <em>abaixo</em> do breakeven. Matou o achado mais forte que a investigação tinha produzido. <strong>A explicação que se deu na época — acumulação — caiu depois</strong> (ver Retratações); o resultado do H4 continua de pé, sem explicação.</p>
+      </div>
+    </li>
+    <li>
+      <span class="chip dead">Rejeitado</span>
+      <div>
+        <p class="claim">Piso de R em % do preço</p>
+        <p class="why">Base +0,15 → +0,40; holdout +0,12 → −0,23. O formato exato do overfitting: melhora onde foi ajustado, piora onde não foi.</p>
+      </div>
+    </li>
+    <li>
+      <span class="chip dead">Rejeitado</span>
+      <div>
+        <p class="claim">Delta do candle de entrada, isolado</p>
+        <p class="why">22% contra 22%. A anatomia do pinbar não carrega nada. O eixo de fluxo por candle está esgotado como filtro de entrada.</p>
+      </div>
+    </li>
+    <li>
+      <span class="chip open">Em aberto</span>
+      <div>
+        <p class="claim">VWAP ancorada em evento, no lugar do calendário</p>
+        <p class="why">Meia-noite UTC não nomeia população nenhuma; um CHoCH ou um sweep nomeia — e o projeto já produz essas séries. A morte da explicação por acumulação tirou o apoio desta hipótese, mas não a mata. É o experimento com mais motivação teórica que resta.</p>
+      </div>
+    </li>
+  </ul>
+</section>
+
+<section>
+  <p class="stage">Estágio 08 · Método</p>
+  <h2>Oito coisas que custaram caro para aprender</h2>
+
+  <ul class="lessons">
+    <li><b>Métrica de cauda única passa por qualquer validação.</b><span>Reportar <code>hit 2R</code> sozinho causou os dois maiores erros da investigação — matou o bloco e ressuscitou um veto invertido. Ele conta vitórias e é cego para stops. Para setup com stop, reportar <strong>acerto, stop, neutro e retorno médio em R juntos, sempre</strong>.</span></li>
+    <li><b>Holdout não corrige métrica errada.</b><span>O veto invertido foi confirmado por um holdout de 18 símbolos <em>com a predição registrada antes de rodar</em>. Confirmou porque media a mesma métrica enviesada. Holdout testa se o viés é estável — e era.</span></li>
+    <li><b>O controle que decide um setup é o placebo.</b><span>A mesma entrada sem a condição sob teste. O aleatório só prova que se bate ruído; o placebo prova que a condição contribui. Foi ele que enterrou o bloco como filtro genérico, o ressuscitou como condição de proximidade, e agora desmontou a assimetria de direção.</span></li>
+    <li><b>Janela curta inventa achados.</b><span>Três majors em duas semanas deram 45% e 58% de acerto. Dez símbolos: 32% e 34%. Duzentos e sessenta e um dias: nada. Nenhuma dessas medições estava errada — a primeira só não era sobre o que parecia ser.</span></li>
+    <li><b>Walk-forward e holdout respondem perguntas diferentes.</b><span>Holdout testa símbolos; walk-forward testa <em>tempo</em>. Um achado pode atravessar quarenta símbolos e ser artefato de um trimestre, porque quarenta símbolos são um mercado só.</span></li>
+    <li><b>Um gradiente com três variáveis se movendo não é um gradiente.</b><span>“O lift acompanha a acumulação” vinha de quatro pontos que mudavam tempo gráfico, âncora e acumulação juntos. Isolada a acumulação, some. Antes de aceitar uma tendência entre configurações, perguntar quantas coisas mudaram entre um ponto e o seguinte.</span></li>
+    <li><b>Registrar o split junto com o número.</b><span>A divisão busca/holdout da edição anterior só existia num histórico de shell. Os números podiam ser lidos e não re-derivados — exatamente o que era preciso para julgar uma correção. Um split que não está no repositório não existe.</span></li>
+    <li><b>Escrever a predição antes de rodar.</b><span>É o que transforma uma fatia interessante em teste. Aqui ela derrubou o que eu queria que fosse verdade duas vezes, incluindo a explicação principal do setup.</span></li>
+  </ul>
+</section>
+
+<section>
+  <p class="stage">Estágio 09 · Reprodução</p>
+  <h2>Como rodar de novo</h2>
+  <div class="col">
+    <p>O universo e a divisão vivem em <code>research/_symbols.py</code>. As klines ficam em cache local por 6 horas, então a segunda rodada é só pipeline — cerca de 30 segundos por símbolo.</p>
+  </div>
+  <pre><b># coleta — o braço do bloco É o detector de produção, importado</b>
+poetry run python research/vwap_ob_pinbar.py \
+    --symbols $(python research/_symbols.py all) --timeframes 15m \
+    --limit 25000 --deep --export trades.json
+
+<b># payoff completo, placebo, custo por trade, direção, acumulação</b>
+poetry run python research/vwap_exit_grid.py --trades trades.json \
+    --max-r-atr 1.0 --sample all|search|holdout
+
+<b># walk-forward com purge/embargo, PBO e Sharpe deflacionado</b>
+poetry run python research/vwap_walkforward.py --trades trades.json</pre>
+  <div class="col">
+    <p>Mudar a regra no detector <em>é</em> mudar o objeto medido, então o script <strong>recusa rodar</strong> se <code>--max-wait</code>, <code>--merge-gap</code>, <code>--wick-frac</code> ou <code>--body-frac</code> saírem das constantes compiladas. Varrer esses parâmetros significa editar o detector, e isso pede a medição inteira de novo — não uma flag.</p>
+  </div>
+</section>
+
+<footer>
+  <p>O que está estabelecido é o mecanismo: o bloco de ordem, quando colado na VWAP, leva o acerto de 29% para 52% em 676 trades e 72 símbolos, sobrevive à correção da população que o produziu, e é a melhor de quinze regras fora da amostra no tempo, com PBO 0,067. O que <em>não</em> está estabelecido é que isso paga — o custo round-trip real é seu, não meu, e é mensurável nos seus próprios preenchimentos. Continua sendo a única coisa que falta.</p>
+</footer>
+
+</div>

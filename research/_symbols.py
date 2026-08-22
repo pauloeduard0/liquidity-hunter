@@ -60,6 +60,18 @@ def sample_of(symbol: str) -> str:
 
 
 if __name__ == "__main__":
-    print(f"universe {len(UNIVERSE)}")
-    print(f"search  ({len(SEARCH):>2}): {' '.join(SEARCH)}")
-    print(f"holdout ({len(HOLDOUT):>2}): {' '.join(HOLDOUT)}")
+    import sys
+
+    # A bare name prints just that list, space-separated, so it can be
+    # substituted straight into a --symbols argument.
+    which = sys.argv[1] if len(sys.argv) > 1 else None
+    if which in ("all", "universe"):
+        print(" ".join(UNIVERSE))
+    elif which == "search":
+        print(" ".join(SEARCH))
+    elif which == "holdout":
+        print(" ".join(HOLDOUT))
+    else:
+        print(f"universe {len(UNIVERSE)}")
+        print(f"search  ({len(SEARCH):>2}): {' '.join(SEARCH)}")
+        print(f"holdout ({len(HOLDOUT):>2}): {' '.join(HOLDOUT)}")
