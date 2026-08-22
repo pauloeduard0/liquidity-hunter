@@ -79,12 +79,13 @@ from liquidity_hunter.app.dashboard_data import (
     _run_internal_structure,
     default_ohlcv_provider,
 )
-from liquidity_hunter.core.domain import Candle, TimeFrame
+from liquidity_hunter.core.domain import Candle, TimeFrame, VWAPSeries
 from liquidity_hunter.core.domain.enums import (
     LiquidityZoneType,
     MarketControlSide,
     MarketDirection,
     OIRegime,
+    StructureEvent,
     VWAPAnchor,
 )
 from liquidity_hunter.data.exceptions import DataProviderError
@@ -489,6 +490,71 @@ def _vwap_only_entries(
     return out
 
 
+def event_anchored_vwap(
+    candles: Sequence[Candle],
+    events: Sequence,
+    *,
+    symbol: str,
+    timeframe: TimeFrame,
+) -> VWAPSeries | None:
+    """A VWAP that restarts at each trend flip instead of at midnight UTC.
+
+    The setup's thesis is that the VWAP matters because it is a *population's*
+    break-even: whoever entered since the anchor is underwater below it and
+    therefore supply. A calendar anchor names no population -- 00:00 UTC is
+    not an event anyone entered on. A structural reversal does: the crowd that
+    bought a bullish CHoCH has that leg's average as its zero.
+
+    So this re-anchors at every non-provisional `CHANGE_OF_CHARACTER` and
+    `CHOCH_FAILED`, and the series it returns has the same shape as the
+    calendar one -- several accumulations, delimited by `anchor_timestamp` --
+    so `detect_block_reclaims` consumes it unchanged and the two anchors are
+    compared with everything else held fixed.
+
+    Sweeps are deliberately not anchors here. They are frequent enough that
+    the average would restart every few candles and never accumulate anyone,
+    which is the same degenerate case as a six-candle session VWAP on H4.
+    """
+    flips = sorted(
+        {
+            e.timestamp
+            for e in events
+            if not getattr(e, "provisional", False)
+            and e.event in (StructureEvent.CHANGE_OF_CHARACTER,
+                            StructureEvent.CHOCH_FAILED)
+        }
+    )
+    if not flips:
+        return None
+    index_of = {c.timestamp: i for i, c in enumerate(candles)}
+    cuts = sorted({index_of[t] for t in flips if t in index_of})
+    if not cuts:
+        return None
+    bounds = [0, *cuts, len(candles)] if cuts[0] != 0 else [*cuts, len(candles)]
+    points = []
+    for start, end in zip(bounds, bounds[1:], strict=False):
+        segment = candles[start:end]
+        if not segment:
+            continue
+        part = compute_vwap(segment, symbol=symbol, timeframe=timeframe,
+                            anchor=VWAPAnchor.EVENT,
+                            anchor_timestamp=segment[0].timestamp)
+        if part is not None:
+            points.extend(part.points)
+    if not points:
+        return None
+    return VWAPSeries(
+        symbol=symbol,
+        timeframe=timeframe,
+        anchor=VWAPAnchor.EVENT,
+        anchor_timestamp=points[0].anchor_timestamp,
+        label="Flip",
+        band_multipliers=(1.0, 2.0),
+        estimated=True,
+        points=points,
+    )
+
+
 def run_combo(
     symbol: str,
     timeframe: TimeFrame,
@@ -506,7 +572,7 @@ def run_combo(
     min_r_atr: float,
     eql_lag: int,
     fresh_ob: bool,
-    vwap_anchor: VWAPAnchor | None,
+    vwap_anchor: str | None,
     htf_steps: Sequence[tuple[datetime, MarketDirection]] | None,
     random_reps: int,
     rng: random.Random,
@@ -525,9 +591,17 @@ def run_combo(
     # an explicit anchor recomputes the series rather than patching production
     # config, and makes which VWAP was measured part of the run.
     series = data.vwap
-    if vwap_anchor is not None:
+    if vwap_anchor == "event":
+        # The rival anchor: a population named by a structural reversal rather
+        # than by the calendar. Everything downstream is untouched, so the two
+        # runs differ in exactly one thing.
+        series = event_anchored_vwap(
+            candles, data.internal_structure_events,
+            symbol=symbol, timeframe=timeframe,
+        )
+    elif vwap_anchor is not None:
         series = compute_vwap(candles, symbol=symbol, timeframe=timeframe,
-                              anchor=vwap_anchor)
+                              anchor=VWAPAnchor(vwap_anchor))
     if len(candles) < 200 or series is None:
         return [], {}
     vwap_at = {p.timestamp: p.value for p in series.points}
@@ -1042,9 +1116,12 @@ def main() -> None:
                         "pass it to vwap_exit_grid.py --min-r-atr instead, "
                         "where moving it does not need a re-scan")
     p.add_argument("--eql-lag", type=int, default=EQL_CONFIRM_LAG)
-    p.add_argument("--vwap-anchor", choices=["session", "week", "month"], default=None,
+    p.add_argument("--vwap-anchor",
+                   choices=["session", "week", "month", "event"], default=None,
                    help="recompute the VWAP with this anchor instead of the "
-                        "per-timeframe production default")
+                        "per-timeframe production default. `event` restarts the "
+                        "accumulation at each non-provisional trend flip -- a "
+                        "population named by structure rather than by the clock")
     p.add_argument("--fresh-ob", action="store_true",
                    help="only the first visit to each order block counts")
     p.add_argument("--htf", nargs="*", default=None,
@@ -1093,7 +1170,7 @@ def main() -> None:
                     wick_frac=args.wick_frac, body_frac=args.body_frac,
                     min_r_atr=args.min_r_atr, eql_lag=args.eql_lag,
                     fresh_ob=args.fresh_ob,
-                    vwap_anchor=VWAPAnchor(args.vwap_anchor) if args.vwap_anchor else None,
+                    vwap_anchor=args.vwap_anchor,
                     htf_steps=steps,
                     random_reps=args.random_reps, rng=rng,
                 )

@@ -159,6 +159,55 @@ Getting the real number needs quotes, not bars: a book snapshot recorded at
 each signal, or fills from an account. That is execution, which is out of
 scope here, so it belongs in the consumer of the API.
 
+## Why the VWAP: a Schelling point, not a break-even
+
+The layer's stated thesis is that the VWAP matters because it is a
+*population's* break-even — whoever entered since the anchor is underwater
+below it, and therefore supply. That thesis has an obvious weak spot: 00:00
+UTC is not an event anyone entered on. A structural reversal is. So the rival
+reading is that the session VWAP works because it is a **Schelling point** — a
+level every participant computes the same way and can therefore expect the
+others to be watching — and that what matters is shared observation rather
+than shared positioning.
+
+The two make opposite predictions, which makes them separable. Under the
+break-even thesis a VWAP anchored at a trend flip should do at least as well;
+under the Schelling reading it should do worse, because nobody outside this
+system computes it. `--vwap-anchor event` restarts the accumulation at each
+non-provisional `CHANGE_OF_CHARACTER` / `CHOCH_FAILED` and changes nothing
+else — same detector, same entry, stop, target and placebo.
+
+| anchor | block | placebo | lift | net R | t |
+|---|---|---|---|---|---|
+| session (calendar) | 52.4% | 29.4% | **+23.0 pp** | +0.269 | +4.7 |
+| trend flip (event) | 39.0% | 26.2% | +12.8 pp | −0.128 | −2.3 |
+
+The samples are the same size (676 against 659), so this is not a coverage
+artefact. Anchored at a flip the setup loses half its lift and goes net
+negative. **The Schelling reading is the one that survives**: this works
+against a line the whole market is looking at, and stops working against a
+line only this system can draw.
+
+Two things follow, and they point in opposite directions for the roadmap.
+
+The block half of the mechanism is not what changed — the lift is smaller but
+still there (+12.8 pp), so an order block tested below *any* running average
+contributes something. What collapses is the base rate: reclaiming a bespoke
+line is simply a worse event than reclaiming the session VWAP, and the placebo
+says so too (26.2% against 29.4%).
+
+And the direction for anything built next is *toward* commonly-watched levels,
+not away from them. A bespoke anchor is not a refinement of this setup; it is
+a different and worse one. That also removes the last support for the
+event-anchor hypothesis this project had been carrying since the H4 work.
+
+*Unexplained, and left that way:* the H4 result — session anchor negative,
+weekly anchor strong — was originally explained by accumulation, and that
+explanation is dead (see the retraction below). A Schelling reading offers a
+candidate — a six-candle session VWAP on H4 hugs price closely enough that
+nobody would be watching it — but that is a story, not a measurement, and it
+is recorded here as one.
+
 ## Liquidity is not an axis
 
 The earlier claim — that the strength
