@@ -68,6 +68,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from liquidity_hunter.app import load_dashboard_data
+from liquidity_hunter.app.block_reclaim import (
+    MAX_BODY_FRACTION,
+    MAX_WAIT_CANDLES,
+    MERGE_GAP_CANDLES,
+    MIN_WICK_FRACTION,
+    detect_block_reclaims,
+)
 from liquidity_hunter.app.dashboard_data import (
     _run_internal_structure,
     default_ohlcv_provider,
@@ -78,8 +85,6 @@ from liquidity_hunter.core.domain.enums import (
     MarketControlSide,
     MarketDirection,
     OIRegime,
-    POIZoneKind,
-    POIZoneStatus,
     VWAPAnchor,
 )
 from liquidity_hunter.data.exceptions import DataProviderError
@@ -190,18 +195,16 @@ class Ev:
     #: Whether this was the order block's FIRST visit -- the "pelo menos pela
     #: primeira vez" of the rule as described.
     first_test: bool | None = None
+    #: How much the VWAP had accumulated at the entry, in candles. The lift
+    #: was seen to track this across four measurements -- but those varied
+    #: timeframe, anchor AND accumulation at once, so "the accumulation is the
+    #: motor" is a reading of them, not a result. Carried per entry so the
+    #: question can be asked *within* one timeframe, where nothing else moves.
+    vwap_candles: int | None = None
     atr_pct: float | None = None
     #: R measured in the symbol's own ATR -- the scale-free version of "tight".
     r_atr: float | None = None
     entry_timestamp: str = ""
-
-
-def _atr(candles: Sequence[Candle]) -> float:
-    trs = [
-        max(c.high - c.low, abs(c.high - p.close), abs(c.low - p.close))
-        for p, c in zip(candles, candles[1:], strict=False)
-    ]
-    return statistics.mean(trs) if trs else 0.0
 
 
 def _measure(
@@ -301,6 +304,29 @@ def _tag_all(
     return ev
 
 
+def _local_atr(candles: Sequence[Candle], index: int, period: int = 14) -> float | None:
+    """Mean true range over the window ending at `index`, inclusive.
+
+    The same window `liquidity_hunter.app.block_reclaim._local_atr` uses, and
+    for the same reason: the floor and the reading both have to be stated in
+    the volatility the entry actually sits in, not in the average of a window
+    that may span a year of regimes.
+    """
+    start = max(1, index - period + 1)
+    trs = [
+        max(
+            candles[i].high - candles[i].low,
+            abs(candles[i].high - candles[i - 1].close),
+            abs(candles[i].low - candles[i - 1].close),
+        )
+        for i in range(start, index + 1)
+    ]
+    if not trs:
+        return None
+    atr = sum(trs) / len(trs)
+    return atr if atr > 0 else None
+
+
 def _tag_atr(ev: Ev, candles: Sequence[Candle], period: int = 14) -> Ev:
     """Local ATR at the entry, so R can be read in the symbol's own units.
 
@@ -309,16 +335,10 @@ def _tag_atr(ev: Ev, candles: Sequence[Candle], period: int = 14) -> Ev:
     which is that instrument's own movement. Without this, "tight R" could
     just be selecting low-volatility symbols.
     """
-    w = candles[max(1, ev.entry_index - period + 1) : ev.entry_index + 1]
-    prev = candles[max(0, ev.entry_index - period) : ev.entry_index]
-    trs = [
-        max(c.high - c.low, abs(c.high - p.close), abs(c.low - p.close))
-        for p, c in zip(prev, w, strict=False)
-    ]
-    if trs:
-        atr = sum(trs) / len(trs)
+    atr = _local_atr(candles, ev.entry_index, period)
+    if atr:
         ev.atr_pct = atr / ev.entry
-        ev.r_atr = ev.r / atr if atr > 0 else None
+        ev.r_atr = ev.r / atr
     return ev
 
 
@@ -416,48 +436,6 @@ def _episodes(indices: Sequence[int], merge_gap: int) -> list[tuple[int, int]]:
     return out
 
 
-def _ob_triggers(
-    data, candles, vwap_at, *, bull: bool, fresh_only: bool = False, merge_gap: int = 3
-) -> list[int]:
-    """Candles that test an order block on the far side of the VWAP.
-
-    With ``fresh_only``, only a block's **first** visit counts. A zone price
-    has already traded back into has had its resting orders worked; the SMC
-    claim is about the untouched one, so counting every later return measures
-    a different thing. Freshness is judged against *any* prior touch, not only
-    the ones that qualified as triggers: a visit that happened above the VWAP
-    still spent the block.
-    """
-    want = BULL if bull else BEAR
-    zones = [
-        z
-        for z in data.poi_zones
-        if z.kind is POIZoneKind.ORDER_BLOCK and z.direction is want
-    ]
-    hits: set[int] = set()
-    for z in zones:
-        first: int | None = None
-        for i, c in enumerate(candles):
-            if z.created_at > c.timestamp:
-                continue  # the block did not exist yet
-            if z.status is POIZoneStatus.INVALIDATED and (
-                z.invalidated_at is not None and z.invalidated_at <= c.timestamp
-            ):
-                break  # already spent
-            if not (c.low <= z.price_high and c.high >= z.price_low):
-                continue
-            if first is None:
-                first = i
-            elif fresh_only and i > first + merge_gap:
-                break  # a later return is no longer a fresh block
-            v = vwap_at.get(c.timestamp)
-            if v is None:
-                continue
-            if (c.low < v) if bull else (c.high > v):
-                hits.add(i)
-    return sorted(hits)
-
-
 def _eql_triggers(data, candles, vwap_at, *, bull: bool, lag: int) -> list[int]:
     want = LiquidityZoneType.EQUAL_LOWS if bull else LiquidityZoneType.EQUAL_HIGHS
     zones = [z for z in data.liquidity_zones if z.zone_type is want]
@@ -553,6 +531,18 @@ def run_combo(
     if len(candles) < 200 or series is None:
         return [], {}
     vwap_at = {p.timestamp: p.value for p in series.points}
+    # How many candles the average had accumulated at each point. Tagged on
+    # every arm, placebo included: comparing the block arm's gradient against
+    # a gradient the placebo also has is what separates "the accumulation is
+    # the motor" from "late-session candles behave differently".
+    accumulated: dict[datetime, int] = {}
+    run_anchor: datetime | None = None
+    run = 0
+    for pt in series.points:
+        if pt.anchor_timestamp != run_anchor:
+            run_anchor, run = pt.anchor_timestamp, 0
+        run += 1
+        accumulated[pt.timestamp] = run
     idx_of = {c.timestamp: i for i, c in enumerate(candles)}
     control_at = {}
     agg_window = _AGG_WINDOW.get(timeframe, 10)
@@ -566,8 +556,6 @@ def run_combo(
         magnitudes = sorted(abs(p.control_score) for p in control_at.values())
         if magnitudes:
             strong_floor = magnitudes[int(0.75 * (len(magnitudes) - 1))]
-    atr = _atr(candles)
-    min_r = min_r_atr * atr
     max_h = max(horizons)
 
     out: list[Ev] = []
@@ -576,23 +564,71 @@ def run_combo(
         (candles[-1].timestamp - candles[0].timestamp).total_seconds() // 86400
     )
 
-    for arm, collect in (("ob", _ob_triggers), ("eql", _eql_triggers)):
+    # The `ob` arm IS the production detector, imported rather than restated.
+    # For most of this study the two were the same rule written twice, which
+    # left a superset the measurement did not cover (~9% more entries, from a
+    # scan-order difference: this script merged the candles that touched *any*
+    # block into one stream, so a visit to one block could mask a visit to
+    # another, while the detector scans per block). Importing it closes that,
+    # and closes the standing risk behind it -- `POIDetector` is under active
+    # development, and while these were two implementations any change to it
+    # would move production without moving the measured object.
+    #
+    # What the arm still owns is everything downstream of the observation: the
+    # entry, the stop, the forward outcome, the control. The detector names
+    # none of those by design.
+    if (max_wait, merge_gap, wick_frac, body_frac) != (
+        MAX_WAIT_CANDLES, MERGE_GAP_CANDLES, MIN_WICK_FRACTION, MAX_BODY_FRACTION
+    ):
+        raise SystemExit(
+            "the ob arm is `app.block_reclaim`, whose --max-wait/--merge-gap/"
+            "--wick-frac/--body-frac are compiled in; sweeping them means "
+            "changing the detector's constants, which is a change to the rule"
+        )
+    reclaims = detect_block_reclaims(
+        candles, data.poi_zones, series, symbol=symbol, timeframe=timeframe
+    )
+    counts["ob-episodes"] = len(reclaims)
+    for reclaim in reclaims:
+        if reclaim.provisional:
+            continue  # the forming candle is not an observation yet
+        if fresh_ob and not reclaim.first_test:
+            continue
+        if reclaim.r_atr is None or reclaim.r_atr < min_r_atr:
+            continue
+        e = idx_of[reclaim.timestamp]
+        start = idx_of[reclaim.test_start_timestamp]
+        direction = reclaim.direction
+        bull = direction is BULL
+        if htf_steps is not None and htf_trend_at(
+            htf_steps, reclaim.timestamp
+        ) is not direction:
+            continue  # the HTF is not on this trade's side
+        counts["ob-entries"] = counts.get("ob-entries", 0) + 1
+        if e + max_h >= len(candles):
+            continue
+        entry, stop, r = reclaim.reclaim_price, reclaim.test_extreme, reclaim.reclaim_distance
+        ev = _tag_all(
+            Ev("ob", symbol, timeframe.value, direction, start, e, entry, stop, r),
+            candles, horizons, targets, target_horizon,
+            agg_window, control_at, strong_floor,
+        )
+        ev.first_test = reclaim.first_test
+        out.append(ev)
+        for _ in range(random_reps):
+            ri = rng.randrange(50, len(candles) - max_h - 1)
+            e2 = candles[ri].close
+            s2 = e2 - r if bull else e2 + r
+            out.append(_tag_all(
+                Ev("rand-ob", symbol, timeframe.value, direction, ri, ri, e2, s2, r),
+                candles, horizons, targets, target_horizon,
+                agg_window, control_at, strong_floor,
+            ))
+
+    for arm, collect in (("eql", _eql_triggers),):
         for bull in (True, False):
-            kwargs = (
-                {"lag": eql_lag}
-                if arm == "eql"
-                else {"fresh_only": fresh_ob, "merge_gap": merge_gap}
-            )
+            kwargs = {"lag": eql_lag}
             idx = collect(data, candles, vwap_at, bull=bull, **kwargs)  # type: ignore[operator]
-            # The block's *first* visit, tagged rather than filtered, so one
-            # run answers both "does freshness matter" and "does the setup
-            # work" instead of needing a separate sweep per variant.
-            fresh_idx: set[int] = set()
-            if arm == "ob" and not fresh_ob:
-                fresh_idx = set(
-                    _ob_triggers(data, candles, vwap_at, bull=bull,
-                                 fresh_only=True, merge_gap=merge_gap)
-                )
             episodes = _episodes(idx, merge_gap)
             counts[f"{arm}-episodes"] = counts.get(f"{arm}-episodes", 0) + len(episodes)
             direction = BULL if bull else BEAR
@@ -620,16 +656,24 @@ def run_combo(
                     )
                     entry = c.close
                     r = abs(entry - stop)
-                    if r < min_r:
+                    # The floor is stated in the *local* ATR at the entry and
+                    # at the detector's own value, so the study and
+                    # `app.block_reclaim` keep or drop the same visits. It was
+                    # a fraction of the series-wide mean true range before,
+                    # which is a different unit as well as a different number:
+                    # in a calm stretch it discarded what the detector kept,
+                    # in a volatile one the reverse, and a dropped visit is
+                    # gone rather than filterable afterwards. Anything above
+                    # this is a reader's threshold and belongs in
+                    # `vwap_exit_grid.py --min-r-atr`, where it can be moved
+                    # without re-scanning.
+                    e_atr = _local_atr(candles, e)
+                    if e_atr is None or r / e_atr < min_r_atr:
                         break
                     ev = _tag_all(
                         Ev(arm, symbol, timeframe.value, direction, start, e, entry, stop, r),
                         candles, horizons, targets, target_horizon,
                         agg_window, control_at, strong_floor,
-                        )
-                    if arm == "ob":
-                        ev.first_test = fresh_ob or any(
-                            i in fresh_idx for i in range(start, end + 1)
                         )
                     out.append(ev)
                     for _ in range(random_reps):
@@ -661,7 +705,8 @@ def run_combo(
             stop = min(x.low for x in lo) if bull else max(x.high for x in lo)
             entry = candles[e].close
             r = abs(entry - stop)
-            if r < min_r:
+            e_atr = _local_atr(candles, e)
+            if e_atr is None or r / e_atr < min_r_atr:
                 continue
             out.append(_tag_all(
                 Ev("vwap", symbol, timeframe.value, direction, e - max_wait, e, entry, stop, r),
@@ -677,6 +722,8 @@ def run_combo(
                     candles, horizons, targets, target_horizon,
                     agg_window, control_at, strong_floor,
                 ))
+    for ev in out:
+        ev.vwap_candles = accumulated.get(candles[ev.entry_index].timestamp)
     return out, counts
 
 
@@ -825,6 +872,7 @@ def export_events(events: Sequence[Ev], path: str) -> None:
             "r_pct": e.r / e.entry,
             "r_atr": e.r_atr,
             "atr_pct": e.atr_pct,
+            "vwap_candles": e.vwap_candles,
         }
         for e in events
         if not e.arm.startswith("rand")
@@ -986,7 +1034,13 @@ def main() -> None:
                    help="candles of separation that still count as one test episode")
     p.add_argument("--wick-frac", type=float, default=0.5)
     p.add_argument("--body-frac", type=float, default=0.35)
-    p.add_argument("--min-r-atr", type=float, default=0.25)
+    p.add_argument("--min-r-atr", type=float, default=0.05,
+                   help="scan-time floor on R, in the local ATR(14) at the "
+                        "entry -- `app.block_reclaim.MIN_DISTANCE_ATR`, below "
+                        "which the reading is the tick grid rather than the "
+                        "two levels. A cost-driven floor is a reader's choice: "
+                        "pass it to vwap_exit_grid.py --min-r-atr instead, "
+                        "where moving it does not need a re-scan")
     p.add_argument("--eql-lag", type=int, default=EQL_CONFIRM_LAG)
     p.add_argument("--vwap-anchor", choices=["session", "week", "month"], default=None,
                    help="recompute the VWAP with this anchor instead of the "

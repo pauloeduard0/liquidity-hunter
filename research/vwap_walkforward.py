@@ -74,6 +74,11 @@ def _strong(row: dict) -> bool:
     return abs(row["agg_ratio"]) >= AGG_FLOOR
 
 
+def _tight(row: dict, limit: float) -> bool:
+    """The block and the VWAP within `limit` ATR of each other."""
+    return row.get("r_atr") is not None and row["r_atr"] <= limit
+
+
 #: The rules a researcher plausibly considered. PBO is only honest if the
 #: discarded candidates are declared alongside the kept one -- the count of
 #: trials is what the deflation corrects for.
@@ -87,6 +92,16 @@ RULES: dict[str, object] = {
     "ob|agg-against": lambda r: r["arm"] == "ob" and _against(r),
     "eql|agg-against": lambda r: r["arm"] == "eql" and _against(r),
     "ob+eql|agg-against": lambda r: r["arm"] in ("ob", "eql") and _against(r),
+    # The block family: the arm, and the `r_atr` threshold that was read off a
+    # curve. Declared here because PBO corrects for how many rules were tried,
+    # and the threshold was one of the things tried -- leaving it out would
+    # flatter the very choice this study is defending.
+    "ob|r<=0.5": lambda r: r["arm"] == "ob" and _tight(r, 0.5),
+    "ob|r<=1.0": lambda r: r["arm"] == "ob" and _tight(r, 1.0),
+    "ob|r<=1.5": lambda r: r["arm"] == "ob" and _tight(r, 1.5),
+    "ob|r<=2.0": lambda r: r["arm"] == "ob" and _tight(r, 2.0),
+    "vwap|r<=1.0": lambda r: r["arm"] == "vwap" and _tight(r, 1.0),
+    "eql|r<=1.0": lambda r: r["arm"] == "eql" and _tight(r, 1.0),
 }
 
 
@@ -196,7 +211,12 @@ def main() -> None:
         kurtosis=float(((col - col.mean()) ** 4).mean() / (col.std() ** 4 + 1e-12)),
     )
     print(f"in-sample best rule: {best}  SR {sr:.2f}")
-    print(f"deflated Sharpe (p that SR>0 after {len(names)} trials): {dsr.dsr:.3f}")
+    print(
+        f"deflated Sharpe: observed SR {dsr.observed_sr:.2f} vs an expected "
+        f"max of {dsr.expected_max_sr:.2f} from {dsr.num_trials} trials on "
+        f"noise alone -- p={dsr.dsr_pvalue:.4f}, "
+        f"{'significant' if dsr.is_significant else 'NOT significant'}"
+    )
 
 
 if __name__ == "__main__":

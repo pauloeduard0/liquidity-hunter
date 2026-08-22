@@ -29,6 +29,8 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
+from research._symbols import HOLDOUT, SEARCH
+
 #: Binance USDT-M round trips, from the friendliest plausible to the realistic.
 #: The stop exit is a stop-market and therefore always taker, and it fires on
 #: roughly half of these trades, so the "taker+maker" column is a floor nobody
@@ -109,6 +111,57 @@ def placebo_table(rows: Sequence[dict], cost: float) -> None:
     print("   a 2:1 payoff breaks even at a 33.3% hit rate")
 
 
+def by_direction(rows: Sequence[dict], cost: float) -> None:
+    """Both arms split by side, because only the pair settles the asymmetry.
+
+    The block arm is stronger short than long in every sample so far. That is
+    either the mechanism (a crowded, funded long side liquidates downward) or
+    the period (the window drifted). The placebo answers it: if the placebo is
+    asymmetric the same way, the side is the period showing through, and the
+    block contributes the same amount either way.
+    """
+    print(f"\ndirection, 2R target, cost {cost:.2%}")
+    print(f"{'arm':>10} {'side':>8} {'n':>6} {'hit 2R':>8} {'net':>9} {'t':>6}")
+    for arm, label in (("vwap", "placebo"), ("ob", "block")):
+        for side in ("bullish", "bearish"):
+            s = [r for r in rows if r["arm"] == arm and r.get("direction") == side]
+            if len(s) < 50:
+                continue
+            hit = sum(1 for r in s if r["r_grid"]["2.0"] == 2.0) / len(s)
+            print(f"{label:>10} {side:>8} {len(s):>6} {hit:>7.1%} "
+                  f"{_net(s, '2.0', cost):>+9.4f} {_t_stat(s, '2.0', cost):>+6.1f}")
+
+
+def by_accumulation(rows: Sequence[dict], cost: float, edges: Sequence[int]) -> None:
+    """The gradient asked *within* one timeframe, where nothing else moves.
+
+    The lift was seen to rise with the VWAP's accumulation across four earlier
+    measurements -- but those varied timeframe, anchor and accumulation at the
+    same time, so they cannot say which of the three carried it. Here only the
+    accumulation moves. The mechanism predicts the rise: a six-candle average
+    is nobody's break-even, a ninety-candle one is a session's worth of
+    positions. The placebo is split the same way, since a session's late hours
+    could simply behave differently for every candle in them.
+    """
+    print(f"\nVWAP accumulation at the entry, 2R target, cost {cost:.2%}")
+    print(f"{'arm':>10} {'candles':>12} {'n':>6} {'hit 2R':>8} {'net':>9} {'t':>6}")
+    bounds = [0, *edges, 10**9]
+    for arm, label in (("vwap", "placebo"), ("ob", "block")):
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            s = [
+                r for r in rows
+                if r["arm"] == arm
+                and r.get("vwap_candles") is not None
+                and lo <= r["vwap_candles"] < hi
+            ]
+            if len(s) < 50:
+                continue
+            hit = sum(1 for r in s if r["r_grid"]["2.0"] == 2.0) / len(s)
+            span = f"{lo}-{hi - 1}" if hi < 10**9 else f"{lo}+"
+            print(f"{label:>10} {span:>12} {len(s):>6} {hit:>7.1%} "
+                  f"{_net(s, '2.0', cost):>+9.4f} {_t_stat(s, '2.0', cost):>+6.1f}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--trades", required=True)
@@ -117,17 +170,39 @@ def main() -> None:
     p.add_argument("--max-r-atr", type=float, default=None,
                    help="keep only entries whose stop is within N x ATR(14) -- "
                         "the condition the edge actually lives in")
+    p.add_argument("--min-r-atr", type=float, default=None,
+                   help="drop entries whose stop is tighter than N x ATR(14). "
+                        "Cost is a fixed fraction of price and R is not, so "
+                        "the tightest stops pay the most of themselves away: "
+                        "at 0.1 ATR a round trip can cost several R. This is "
+                        "the reader's floor, applied here rather than in the "
+                        "scan so that moving it does not need a re-run")
+    p.add_argument("--sample", choices=("all", "search", "holdout"), default="all",
+                   help="which half of research/_symbols.py to report on. The "
+                        "split is a hash of the symbol name, recorded so a "
+                        "corrected rule can be compared on the same halves")
+    p.add_argument("--accumulation-edges", type=int, nargs="*", default=(32, 64),
+                   help="bucket boundaries for the VWAP-accumulation split, in "
+                        "candles; the M15 session runs to 96")
     args = p.parse_args()
 
     rows = [r for r in json.loads(Path(args.trades).read_text()) if r.get("r_grid")]
     if args.max_r_atr is not None:
         rows = [r for r in rows
                 if r.get("r_atr") is not None and r["r_atr"] <= args.max_r_atr]
+    if args.min_r_atr is not None:
+        rows = [r for r in rows
+                if r.get("r_atr") is not None and r["r_atr"] >= args.min_r_atr]
+    if args.sample != "all":
+        keep = set(SEARCH if args.sample == "search" else HOLDOUT)
+        rows = [r for r in rows if r["symbol"] in keep]
     ts = sorted(datetime.fromisoformat(r["timestamp"]) for r in rows)
     print(f"{len(rows)} trades, {ts[0].date()} .. {ts[-1].date()} "
-          f"({(ts[-1] - ts[0]).days} days)")
+          f"({(ts[-1] - ts[0]).days} days), sample: {args.sample}")
 
     placebo_table(rows, args.stability_cost)
+    by_direction(rows, args.stability_cost)
+    by_accumulation(rows, args.stability_cost, args.accumulation_edges)
 
     for arm in ("vwap", "ob", "eql"):
         table([r for r in rows if r["arm"] == arm], f"arm: {arm}")
