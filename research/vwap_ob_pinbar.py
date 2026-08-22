@@ -193,6 +193,8 @@ class Ev:
     #: choice ("2x, 2.5x or 3x"), so an edge that exists at one multiple and
     #: not the neighbours is a calibration, not a finding.
     r_grid: dict[float, float] = field(default_factory=dict)
+    #: Payoff in R under each position-management variant, all aiming at 2R.
+    r_manage: dict[str, float] = field(default_factory=dict)
     #: Whether this was the order block's FIRST visit -- the "pelo menos pela
     #: primeira vez" of the rule as described.
     first_test: bool | None = None
@@ -206,6 +208,79 @@ class Ev:
     #: R measured in the symbol's own ATR -- the scale-free version of "tight".
     r_atr: float | None = None
     entry_timestamp: str = ""
+
+
+#: Position-management variants, all aiming at 2R. The plain arm is the one
+#: every number in the study so far used: fixed 2R target, fixed 1R stop,
+#: marked to market at the horizon. The rest move the stop, and the point of
+#: measuring them together is that management is usually sold as free -- "you
+#: can only win by protecting" -- when what it actually does is trade the
+#: shape of the curve for its expectation, in a direction nobody checks.
+MANAGE_VARIANTS = ("plain", "be0.5", "be1.0", "be1.5", "partial", "trail1.0")
+#: What each variant costs in round trips: one entry and one exit, except the
+#: partial, which exits twice.
+MANAGE_COST_MULTIPLE = {v: 1.5 if v == "partial" else 1.0 for v in MANAGE_VARIANTS}
+
+
+def _managed(
+    ev: Ev, candles: Sequence[Candle], horizon: int
+) -> dict[str, float]:
+    """Each management variant's payoff in R, walked candle by candle.
+
+    The whole reason to do this on the path rather than from the outcome grid
+    is one case: a trade that reaches the arming level, comes back to entry,
+    and *then* runs to target. The grid records it as a winner, so reading a
+    breakeven rule off the grid credits it with a win the rule would not have
+    taken -- which is exactly why breakeven always looks free on paper. Here it
+    is a scratch, because the walk sees the order.
+
+    Within a single candle the order of two touches is unknowable, so the
+    adverse one is credited throughout, the same convention `hit` uses. That
+    makes every managed number here a slight *under*statement, which is the
+    right direction for a variant being asked to prove itself.
+    """
+    bull = ev.direction is BULL
+    window = candles[ev.entry_index + 1 : ev.entry_index + 1 + horizon]
+    target = ev.entry + 2.0 * ev.r if bull else ev.entry - 2.0 * ev.r
+    out: dict[str, float] = {}
+
+    def _level(mult: float) -> float:
+        return ev.entry + mult * ev.r if bull else ev.entry - mult * ev.r
+
+    def _hit(c: Candle, level: float, *, above: bool) -> bool:
+        return c.high >= level if above else c.low <= level
+
+    for variant in MANAGE_VARIANTS:
+        stop = ev.stop
+        armed = False
+        booked = 0.0          # R already banked by a partial exit
+        size = 1.0            # fraction of the position still open
+        payoff: float | None = None
+        arm_at = {"be0.5": 0.5, "be1.0": 1.0, "be1.5": 1.5}.get(variant)
+        for c in window:
+            # adverse first, always
+            if _hit(c, stop, above=not bull):
+                payoff = booked + size * ((stop - ev.entry) if bull
+                                          else (ev.entry - stop)) / ev.r
+                break
+            if variant == "partial" and not armed and _hit(c, _level(1.0), above=bull):
+                armed, booked, size, stop = True, 0.5 * 1.0, 0.5, ev.entry
+            elif arm_at is not None and not armed and _hit(c, _level(arm_at), above=bull):
+                armed, stop = True, ev.entry
+            elif variant == "trail1.0":
+                peak = (c.high - ev.entry if bull else ev.entry - c.low) / ev.r
+                if peak > 1.0:
+                    trailed = _level(peak - 1.0)
+                    stop = max(stop, trailed) if bull else min(stop, trailed)
+            if _hit(c, target, above=bull):
+                payoff = booked + size * 2.0
+                break
+        else:
+            if window:
+                move = window[-1].close - ev.entry
+                payoff = booked + size * ((move if bull else -move) / ev.r)
+        out[variant] = 0.0 if payoff is None else payoff
+    return out
 
 
 def _measure(
@@ -254,6 +329,8 @@ def _measure(
                 payoff = (move if bull else -move) / ev.r
         ev.r_grid[k] = payoff
     ev.r_outcome = ev.r_grid[2.0]
+
+    ev.r_manage = _managed(ev, candles, target_horizon)
 
     for k in targets:
         tgt = ev.entry + k * ev.r if bull else ev.entry - k * ev.r
@@ -947,6 +1024,7 @@ def export_events(events: Sequence[Ev], path: str) -> None:
             "r_atr": e.r_atr,
             "atr_pct": e.atr_pct,
             "vwap_candles": e.vwap_candles,
+            "r_manage": e.r_manage,
         }
         for e in events
         if not e.arm.startswith("rand")

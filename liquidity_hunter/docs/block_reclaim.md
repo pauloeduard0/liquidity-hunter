@@ -159,6 +159,60 @@ Getting the real number needs quotes, not bars: a book snapshot recorded at
 each signal, or fills from an account. That is execution, which is out of
 scope here, so it belongs in the consumer of the API.
 
+## Position management: one variant is free, the popular one is negative
+
+Every number in this study until now was take-and-stop: a fixed 2R target, a
+fixed 1R stop, marked to market at the horizon. Management was never measured,
+and "you can only win by protecting" is exactly the kind of claim that never
+gets counted against a trial budget. Five variants are now walked candle by
+candle alongside the plain one — the path matters, because a trade that arms
+a breakeven, returns to entry and *then* runs to target is a winner in the
+outcome grid and a scratch under the rule, which is why reading management off
+the grid always makes it look free.
+
+Block arm, n=636, each trade charged its own measured cost (the partial pays
+1.5 round trips, since it exits twice):
+
+| variant | net R | t | win | scratch | loss |
+|---|---|---|---|---|---|
+| plain 2R | **+0.187** | +3.1 | 53.3% | 0% | 46.7% |
+| breakeven at 0.5R | +0.072 | +1.6 | 34.3% | 45.4% | 20.3% |
+| breakeven at 1.0R | +0.097 | +1.9 | 39.9% | 31.0% | 29.1% |
+| **breakeven at 1.5R** | **+0.187** | +3.3 | 49.2% | 12.3% | **38.5%** |
+| partial half at 1R | **−0.150** | −3.5 | **70.9%** | 0% | 29.1% |
+| trailing 1R | +0.150 | +3.0 | 66.0% | 2.4% | 31.6% |
+
+**Early breakeven costs about half the expectation.** Arming at 0.5R or 1R
+trades 46.7% full losses for 45% scratches — a much nicer curve to sit
+through, at +0.072 instead of +0.187. That is a real trade and a legitimate
+one to make knowingly; it is not free, which is how it is usually sold.
+
+**Taking half off at 1R is the worst option available**, and it is the most
+popular. It posts the highest win rate in the whole study — 70.9% — and loses
+money. The half that exits at 1R pays a full round trip to collect half a
+prize, and the exit count is why: 1.5 round trips against everyone else's 1.
+This is the cleanest example in this project of a win rate pointing the
+opposite way to the payoff.
+
+**Breakeven at 1.5R is the one thing that is free.** Identical expectation to
+plain, a marginally better `t`, and it converts 8 points of full losses into
+scratches. The reason is arithmetic: at 1.5R the target is only 0.5R away, so
+price that gets there usually finishes, and moving the stop rarely ejects a
+winner. At 1R half the journey remains and it ejects plenty.
+
+A caution on reading the walk-forward here. Its Sharpe is computed on **gross**
+R, and Sharpe rewards low variance, so trailing (6.75) and the partial (6.63)
+outrank plain (6.30) there while being worse and negative respectively once
+cost is charged. Choosing by that column would pick the only variant that
+loses money. The five variants are declared in the rule set so PBO counts them
+(now 0.000 over 23 trials, deflated Sharpe 5.89 against an expected max of
+1.96), but the ranking that matters is net R.
+
+**Recommendation, such as it is: 2R fixed, optionally with the stop to entry
+once 1.5R is reached. Never a partial at 1R.** And note that `be1.5` *ties*
+plain rather than beating it — the choice between them is about tolerance for
+full losses, not about return.
+
 ## Why the VWAP: a Schelling point, not a break-even
 
 The layer's stated thesis is that the VWAP matters because it is a

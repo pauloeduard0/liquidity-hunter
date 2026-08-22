@@ -126,6 +126,15 @@ RULES: dict[str, object] = {
     "vwap|r<=1.0": lambda r: r["arm"] == "vwap" and _tight(r, 1.0),
     "eql|r<=1.0": lambda r: r["arm"] == "eql" and _tight(r, 1.0),
 }
+# The position-management family. Same trades, different exit rule, so each is
+# a separate trial and PBO has to see them: "you can only win by protecting"
+# is exactly the kind of claim that never gets counted against the trial
+# budget.
+for _v in ("be0.5", "be1.0", "be1.5", "partial", "trail1.0"):
+    RULES[f"ob|r<=1.0@{_v}"] = (
+        lambda r: r["arm"] == "ob" and _tight(r, 1.0)
+    )
+
 for _tier, _members in TERCILES.items():
     RULES[f"ob|r<=1.0|{_tier}"] = (
         lambda r, m=_members: r["arm"] == "ob" and _tight(r, 1.0) and r["symbol"] in m
@@ -146,7 +155,15 @@ def daily_matrix(
         day = datetime.fromisoformat(row["timestamp"]).date()
         for name, keep in rules.items():
             if keep(row):  # type: ignore[operator]
-                by_rule[name][day].append(row["r_outcome"])
+                # A rule may name a position-management variant after a `@`;
+                # its payoff is that variant's, not the plain 2R one. Declared
+                # this way so the management family is inside the trial count
+                # rather than measured off to the side.
+                variant = name.split("@")[1] if "@" in name else None
+                payoff = (row.get("r_manage", {}).get(variant)
+                          if variant else row["r_outcome"])
+                if payoff is not None:
+                    by_rule[name][day].append(payoff)
 
     days = sorted({datetime.fromisoformat(r["timestamp"]).date() for r in trades})
     names = list(rules)
