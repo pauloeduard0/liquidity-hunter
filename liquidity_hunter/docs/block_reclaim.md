@@ -84,6 +84,35 @@ R is 0.39% of price, so a 0.10% round trip costs 0.26R. The block arm survives
 it is already gone by 0.15%. What a reader's real round trip is remains the one
 number this study cannot supply.
 
+## The cost cannot be read off the candles
+
+The one number the study cannot supply is the reader's real round trip, and
+the obvious shortcut — estimate the spread per symbol from the bars already
+cached, then charge each trade its own symbol's cost — was tried and does not
+work. `research/spread_cost.py` implements Abdi-Ranaldo and Corwin-Schultz and
+carries the test that rejects them.
+
+Both are calibrated on equity daily bars, where a bar's range is mostly
+bid-ask bounce around a slow efficient price. A crypto perp on a 15-minute bar
+is the opposite regime, and the estimators read the volatility instead. The
+falsification is `--validate`: a spread belongs to the order book, so the same
+symbol must estimate the same whatever bar length it is measured on. The
+median comes out 0.107% on M15, 0.098% on H1 and 0.911% on D1, and ETHUSDT
+reads 1.420% on the daily against a real quoted spread near half a basis
+point. Coverage tells the same story from the other side — the estimator
+returns no answer for 49 of 72 symbols on M15, and the ones it fails on are
+the liquid ones, so what it does price is a biased sample of the wide tail.
+
+Charged against the trades it prices, it reported the block arm falling from
++0.45 gross to −0.18 net. **That number is not a result and is not quoted
+anywhere**: it rests on an estimator that fails its own sanity check, over a
+biased subset. The sensitivity table above stands as the right instrument —
+it says what the edge *needs* rather than claiming to know what it costs.
+
+Getting the real number needs quotes, not bars: a book snapshot recorded at
+each signal, or fills from an account. That is execution, which is out of
+scope here, so it belongs in the consumer of the API.
+
 ## Walk-forward: the edge is there across time, not only across symbols
 
 Symbols held out do not answer "is this one regime?", because the symbols are
