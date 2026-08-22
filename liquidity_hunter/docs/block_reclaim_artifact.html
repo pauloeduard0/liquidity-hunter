@@ -215,20 +215,53 @@ footer{padding:44px 0 0; color:var(--faint); font-size:13.5px; border-top:1px so
 .fixes b{display:block; font-weight:600; font-size:15.5px; margin-bottom:4px}
 .fixes span{color:var(--dim); font-size:14.5px; line-height:1.55}
 @media (max-width:620px){ .recant > li{padding:18px} }
+
+/* ── verdict row: a claim and what settled it ─────── */
+.duel{
+  display:grid; grid-template-columns:1fr 1fr; gap:1px; margin:26px 0;
+  background:var(--rule); border:1px solid var(--rule);
+}
+.duel > div{background:var(--surface); padding:20px 22px}
+.duel h4{
+  margin:0 0 8px; font:500 11.5px/1 "IBM Plex Mono",ui-monospace,monospace;
+  letter-spacing:.12em; text-transform:uppercase; color:var(--faint);
+}
+.duel .won h4{color:var(--cyan)}
+.duel .lost h4{color:var(--clay)}
+.duel p{margin:0; font-size:15px; line-height:1.55; color:var(--dim)}
+.duel strong{color:var(--text)}
+@media (max-width:620px){ .duel{grid-template-columns:1fr} }
+
+/* ── headline figure ──────────────────────────────── */
+.figure{
+  display:flex; flex-wrap:wrap; gap:28px 44px; margin:28px 0;
+  padding:22px 24px; background:var(--surface); border:1px solid var(--rule);
+}
+.figure div{min-width:120px}
+.figure .n{
+  display:block; font:600 30px/1.1 "IBM Plex Mono",ui-monospace,monospace;
+  letter-spacing:-.02em; color:var(--gold); font-variant-numeric:tabular-nums;
+}
+.figure .n.bad{color:var(--clay)}
+.figure .k{
+  display:block; margin-top:6px;
+  font:500 11px/1.4 "IBM Plex Mono",ui-monospace,monospace;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--faint);
+}
 </style><div class="wrap">
 
 <header>
   <p class="kicker">Registro de medição · liquidity_hunter</p>
   <h1>Bloco de Ordem <span class="x">×</span> VWAP</h1>
-  <p class="standfirst">A camada foi para produção, e então quatro defeitos apareceram na população que a autorizou. Corrigidos, a medição foi refeita do zero. <strong>O mecanismo sobreviveu</strong> — e três afirmações que este mesmo documento fazia, não.</p>
+  <p class="standfirst">O setup completo: regra, custo real, alvo e gestão — cada um medido, e vários deles contra o que eu esperava. <strong>O mecanismo sobreviveu a tudo.</strong> A explicação bonita dele, não: isto não funciona porque lê o preço médio da manada, funciona porque opera num nível que todo mundo enxerga.</p>
   <div class="meta">
-    <span>22 ago 2026</span><span>branch liquidity-grab</span><span>4c98e97</span><span>revisa a edição de fee7fb6</span>
+    <span>22 ago 2026</span><span>branch liquidity-grab</span><span>820834d</span><span>3ª edição</span>
   </div>
 </header>
 
 <section>
-  <p class="stage">Estágio 01 · O que sobreviveu</p>
-  <h2>A regra</h2>
+  <p class="stage">Estágio 01 · A regra</p>
+  <h2>O que se opera</h2>
   <div class="col">
     <p>Descrita do lado comprador; o vendedor espelha. Toda condição é conhecível no candle de entrada — nenhuma usa informação futura.</p>
   </div>
@@ -241,13 +274,21 @@ footer{padding:44px 0 0; color:var(--faint); font-size:13.5px; border-top:1px so
       <dt>Entrada</dt><dd>No fechamento desse pinbar</dd>
       <dt>Stop</dt><dd>Menor mínima entre o início do teste no bloco e a entrada</dd>
       <dt>Condição</dt><dd><code>R ≤ 1,0 × ATR(14)</code> — o bloco tem que estar <strong>colado</strong> na VWAP</dd>
-      <dt>Alvo</dt><dd>2R</dd>
+      <dt>Alvo</dt><dd><strong>2R fixo.</strong> Opcional: stop no zero a zero ao atingir 1,5R</dd>
+      <dt>Nunca</dt><dd>Parcial em 1R — medida, e é a pior das seis variantes testadas</dd>
     </dl>
   </div>
 
   <div class="col">
     <p>A condição de R é a descoberta. Sem ela o setup mede no nível do acaso; com ela, o mesmo setup separa. Ela não é um filtro inventado — é a geometria que a própria regra já definia, e que eu tratava como parâmetro dado em vez de como informação.</p>
-    <p>A leitura: quando o bloco e a VWAP estão a menos de um ATR um do outro, as duas populações da tese — quem comprou o bloco e quem tem a VWAP como zero a zero — estão <em>empilhadas no mesmo preço</em>. Longe uma da outra, são dois níveis independentes, e o “teste no bloco” é só um mergulho que por acaso voltou.</p>
+    <p>A leitura original: quando o bloco e a VWAP estão a menos de um ATR um do outro, as duas populações da tese estão <em>empilhadas no mesmo preço</em>. Longe uma da outra, são dois níveis independentes. A parte do "empilhadas" sobreviveu; a parte do "populações" não — ver o Estágio 06.</p>
+  </div>
+
+  <div class="figure">
+    <div><span class="n">52,4%</span><span class="k">acerto no alvo 2R</span></div>
+    <div><span class="n">29,4%</span><span class="k">placebo, mesma entrada sem bloco</span></div>
+    <div><span class="n">33,3%</span><span class="k">breakeven de um 2:1</span></div>
+    <div><span class="n">+0,187</span><span class="k">R líquido, custo real</span></div>
   </div>
 </section>
 
@@ -255,54 +296,53 @@ footer{padding:44px 0 0; color:var(--faint); font-size:13.5px; border-top:1px so
   <p class="stage">Estágio 02 · O que estava errado</p>
   <h2>Quatro correções antes de qualquer número novo</h2>
   <div class="col">
-    <p>A camada foi para produção em <code>ce5941b</code>. Revendo-a com olho de auditoria, o objeto que tinha sido medido não era o que a regra descreve. Nada foi re-medido antes de fechar os quatro.</p>
+    <p>A camada foi para produção e então, revendo-a com olho de auditoria, o objeto que tinha sido medido não era o que a regra descreve. Nada foi re-medido antes de fechar os quatro.</p>
   </div>
 
   <ul class="fixes">
     <li>
       <div>
         <b>O bloco morria na hora errada</b>
-        <span><code>POIZone.invalidated_at</code> era lido como o rompimento. É escrituração de fila: o detector aposenta a caixa <em>mais antiga</em> quando qualquer uma rompe, então o carimbo diz quando a fila chegou na caixa, não quando o preço a levou. Medido no BTC H1, um bloco atravessado em 10/ago carregava carimbo de 19/ago — nove dias em que um bloco gasto seguia contando como teste válido, sem ninguém posicionado nele, que é a premissa inteira da leitura. Mesmo defeito que a camada de <em>grab</em> já tinha pago em três commits.</span>
+        <span><code>POIZone.invalidated_at</code> era lido como o rompimento. É escrituração de fila: o detector aposenta a caixa <em>mais antiga</em> quando qualquer uma rompe, então o carimbo diz quando a fila chegou na caixa, não quando o preço a levou. Medido no BTC H1, um bloco atravessado em 10/ago carregava carimbo de 19/ago — nove dias em que um bloco gasto seguia contando como teste válido, sem ninguém posicionado nele.</span>
       </div>
     </li>
     <li>
       <div>
         <b>O estudo e a produção descartavam entradas diferentes</b>
-        <span>O piso de R era <code>0,25 × ATR da série inteira</code> no estudo e <code>0,05 × ATR(14) local</code> no detector — valor <em>e</em> unidade distintos. Numa faixa calma o detector guardava o que o estudo jogava fora; numa volátil, o contrário. E o descarte mata a visita inteira: não dá para filtrar depois. Convergidos; o piso por <strong>custo</strong> virou parâmetro de análise, onde mudá-lo não exige re-varredura.</span>
+        <span>O piso de R era <code>0,25 × ATR da série inteira</code> num lado e <code>0,05 × ATR(14) local</code> no outro — valor <em>e</em> unidade distintos. E o descarte mata a visita inteira: não dá para filtrar depois. Convergidos.</span>
       </div>
     </li>
     <li>
       <div>
         <b>O candle vivo mentia</b>
-        <span>Um reclaim no último candle da série ainda está se formando — nem o pavio cruzando a VWAP nem o fechamento do outro lado estão decididos. Agora carrega <code>provisional</code> e o gráfico o sufixa com <code>?</code>. Nenhum número deste documento cobre esses: a medição lê resultado futuro e por isso descarta a cauda da série.</span>
+        <span>Um reclaim no último candle ainda está se formando — nem o pavio cruzando a VWAP nem o fechamento do outro lado estão decididos. Agora carrega <code>provisional</code> e o gráfico o sufixa com <code>?</code>.</span>
       </div>
     </li>
     <li>
       <div>
         <b>Eram duas implementações da mesma regra</b>
-        <span>O estudo reescrevia o detector em vez de usá-lo, e devolvia um conjunto diferente — o detector era superset, com ~9% a mais. Agora o braço importa <code>detect_block_reclaims</code> e a segunda cópia foi deletada. O risco que isso remove: o <code>POIDetector</code> está em desenvolvimento ativo, e enquanto fossem duas cópias, mexer nele moveria a produção sem mover o objeto medido.</span>
+        <span>O estudo reescrevia o detector em vez de usá-lo, e devolvia ~9% a mais de entradas. Agora importa <code>detect_block_reclaims</code>. O risco removido: o detector de blocos está em desenvolvimento ativo, e enquanto fossem duas cópias, mexer nele moveria a produção sem mover o objeto medido.</span>
       </div>
     </li>
   </ul>
 
   <div class="note">
-    <strong>E um bloqueio que só apareceu ao tentar comparar.</strong> A divisão 43/30 símbolos da edição anterior não estava registrada em lugar nenhum — nem no doc, nem no código, nem no git. Os números podiam ser lidos, mas não re-derivados. Agora ela vive em <code>research/_symbols.py</code>, como hash do nome do símbolo: propriedade do símbolo e não da ordem da rodada, reproduz em qualquer máquina, e não dá para empurrar depois de ver o resultado. <strong>Custo:</strong> os números abaixo não estão nas mesmas metades dos que substituem.
+    <strong>E um bloqueio que só apareceu ao tentar comparar.</strong> A divisão busca/holdout da edição anterior não estava registrada em lugar nenhum — nem no doc, nem no código, nem no git. Os números podiam ser lidos, mas não re-derivados. Agora ela vive em <code>research/_symbols.py</code>, como hash do nome do símbolo. <strong>Custo:</strong> os números abaixo não estão nas mesmas metades dos que substituem.
   </div>
 </section>
 
 <section>
-  <p class="stage">Estágio 03 · A evidência, refeita</p>
+  <p class="stage">Estágio 03 · A evidência</p>
   <h2>O bloco leva o acerto de 29% para 52%</h2>
   <div class="col">
     <p>O <strong>placebo</strong> é o mesmo pinbar de reclaim da VWAP sem exigir bloco nenhum, no mesmo R apertado. É o controle que decide: o aleatório só mostra que o setup bate ruído; o placebo mostra se a <em>condição sob teste</em> contribui.</p>
-    <p>72 símbolos, 25.000 candles cada, alvo 2R, custo de 0,10% cobrado por trade no R daquele trade.</p>
   </div>
 
   <div class="tbl">
     <table>
-      <caption>Acerto no alvo 2R · breakeven de um 2:1 é 33,3%</caption>
+      <caption>72 símbolos · 25.000 candles cada · custo 0,10% por trade</caption>
       <thead><tr>
-        <th>Amostra</th><th>n</th><th>Com bloco</th><th>Placebo</th><th>Lift</th><th>Líq. @ 0,10%</th>
+        <th>Amostra</th><th>n</th><th>Com bloco</th><th>Placebo</th><th>Lift</th><th>Líquido</th>
       </tr></thead>
       <tbody>
         <tr><td>Busca — 47 símbolos</td><td class="num">444</td><td class="num key">55,0%</td><td class="num">29,1%</td><td class="num pos">+25,9 pp</td><td class="num pos">+0,349 <span class="t">t 4,9</span></td></tr>
@@ -313,114 +353,200 @@ footer{padding:44px 0 0; color:var(--faint); font-size:13.5px; border-top:1px so
   </div>
 
   <div class="col">
-    <p>Contra os 51,9% / 30,8% da edição anterior: praticamente idêntico. <strong>A datação errada do bloco não estava criando o achado nem escondendo</strong> — os números agora simplesmente descrevem a população que dizem descrever.</p>
-    <p>O <strong>t de 1,2 do holdout</strong> é o número a manter à vista. O lift está lá e aponta para o mesmo lado, mas a metade que não foi pesquisada, sozinha e a 0,10%, não rejeita média zero. É a metade mais fraca em todo corte.</p>
+    <p>Contra os 51,9% da edição anterior: praticamente idêntico. <strong>A datação errada do bloco não estava criando o achado nem escondendo</strong> — os números agora simplesmente descrevem a população que dizem descrever.</p>
+    <p>O <strong>t de 1,2 do holdout</strong> é o número a manter à vista. O lift está lá e aponta para o mesmo lado, mas a metade que não foi pesquisada, sozinha, não rejeita média zero.</p>
   </div>
 
   <h3>A saída não é uma calibração</h3>
   <div class="tbl">
     <table>
-      <caption>Líquido em R por alvo · braço com bloco, n=676, custo 0,10%</caption>
+      <caption>Líquido em R por alvo, com o custo real cobrado por símbolo · n=636</caption>
       <thead><tr><th>Alvo</th><th>1,0R</th><th>1,5R</th><th>2,0R</th><th>2,5R</th><th>3,0R</th></tr></thead>
       <tbody>
-        <tr><td>Líquido</td><td class="num">+0,091</td><td class="num pos">+0,209</td><td class="num key">+0,269</td><td class="num pos">+0,241</td><td class="num pos">+0,261</td></tr>
+        <tr><td>Líquido</td><td class="num neg">+0,011</td><td class="num pos">+0,129</td><td class="num key">+0,187</td><td class="num pos">+0,148</td><td class="num pos">+0,172</td></tr>
+        <tr><td class="t">t</td><td class="num t">0,3</td><td class="num t">2,7</td><td class="num t">3,1</td><td class="num t">2,2</td><td class="num t">2,2</td></tr>
       </tbody>
     </table>
   </div>
   <div class="col">
-    <p>Positivo na grade inteira, com <strong>platô largo em vez de pico</strong>. Uma vantagem que existe num múltiplo e some nos vizinhos é uma calibração; esta não é.</p>
+    <p><strong>Platô largo, não pico</strong> — de 1,5R a 3R tudo funciona, com o topo em 2R. Você não precisa acertar o alvo exato.</p>
+    <p>O 1,0R é o único que morre, e por aritmética: o custo é fração fixa do <em>preço</em>, e o R deste setup é pequeno (0,39% do preço), então cada operação paga ~0,41R de custo. Num alvo de 1R isso é 41% do prêmio máximo. <strong>Consequência prática: não realize parcial cedo</strong> — o custo não escala com o alvo, mas o prêmio sim.</p>
   </div>
 </section>
+
 <section>
-  <p class="stage">Estágio 04 · A validação que faltava</p>
-  <h2>Existe em toda janela de tempo, não só em todo símbolo</h2>
+  <p class="stage">Estágio 04 · A validação no tempo</p>
+  <h2>Existe em toda janela, não só em todo símbolo</h2>
   <div class="col">
-    <p>Segurar símbolos não responde “isto é um regime só?”, porque quarenta símbolos de cripto são um mercado só. O walk-forward divide o <em>tempo</em>: escolhe a regra no treino, pontua no teste, com purge e embargo — validando o procedimento inteiro, não apenas a regra que sobreviveu a ele.</p>
-    <p>Quinze regras foram declaradas: a família da agressão, das passagens anteriores, mais a família do limiar <code>r_atr</code> — porque o limiar <em>foi</em> uma das coisas tentadas, e deixá-lo fora da contagem favoreceria justamente a escolha em julgamento.</p>
-  </div>
-
-  <div class="tbl">
-    <table>
-      <caption>Sharpe fora da amostra, agrupado, cada regra fixa em todos os folds</caption>
-      <thead><tr><th>Regra</th><th>Sharpe OOS</th><th>R médio / dia</th></tr></thead>
-      <tbody>
-        <tr class="hi"><td><strong>bloco · R ≤ 1,0 ATR</strong></td><td class="num key">6,30</td><td class="num key">+0,273</td></tr>
-        <tr><td>bloco · R ≤ 0,5 ATR</td><td class="num">4,04</td><td class="num">+0,116</td></tr>
-        <tr><td>bloco · R ≤ 1,5 ATR</td><td class="num">3,64</td><td class="num">+0,130</td></tr>
-        <tr><td>bloco · R ≤ 2,0 ATR</td><td class="num">3,11</td><td class="num">+0,096</td></tr>
-        <tr><td>equal lows · R ≤ 1,0 ATR</td><td class="num">0,17</td><td class="num">+0,005</td></tr>
-        <tr><td><em>placebo</em> · R ≤ 1,0 ATR</td><td class="num neg">−0,92</td><td class="num neg">−0,028</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="col">
-    <p><strong>A curva do limiar reproduz fora da amostra com o pico no mesmo lugar.</strong> Esse era o ponto mais frágil da edição anterior — o 1,0×ATR tinha saído de ler uma curva na amostra de busca, e o holdout apenas reusou o número. Agora o limiar é o vencedor fora da amostra entre os quatro que competiram, e o mesmo corte aplicado ao placebo é negativo.</p>
+    <p>Segurar símbolos não responde “isto é um regime só?”, porque quarenta símbolos de cripto são um mercado só. O walk-forward divide o <em>tempo</em>: escolhe a regra no treino, pontua no teste, com purge e embargo.</p>
+    <p>Vinte e três regras declaradas — incluindo o limiar de <code>r_atr</code>, os terços de liquidez e as variantes de gestão. Cada corte que alguém olha é uma tentativa, e o PBO só corrige as que você conta para ele.</p>
   </div>
 
   <div class="spec">
     <dl>
-      <dt>Folds</dt><dd>22 · Sharpe médio de treino 6,19 contra <strong>4,09 no teste</strong> (degradação −2,10)</dd>
-      <dt>Consistência</dt><dd><strong>16 de 22 folds positivos</strong> fora da amostra</dd>
-      <dt>PBO</dt><dd><strong>0,067</strong> <span class="t">— acima de 0,5 seria mais provável que não ser overfit</span></dd>
-      <dt>Sharpe deflacionado</dt><dd>observado 5,53 contra máximo esperado de <strong>1,77</strong> em quinze tentativas sobre ruído puro</dd>
+      <dt>Melhor OOS</dt><dd><strong>bloco · R ≤ 1,0 ATR</strong>, Sharpe 6,30 — contra 3,64 em 1,5, 4,04 em 0,5 e <strong>−0,92</strong> no mesmo corte aplicado ao placebo</dd>
+      <dt>Consistência</dt><dd>22 folds, <strong>16 positivos</strong> fora da amostra; treino 6,19 → teste 4,09</dd>
+      <dt>PBO</dt><dd><strong>0,000</strong> <span class="t">— acima de 0,5 seria mais provável que não ser overfit</span></dd>
+      <dt>Sharpe deflacionado</dt><dd>observado 5,89 contra máximo esperado de <strong>1,96</strong> em 23 tentativas sobre ruído puro</dd>
     </dl>
+  </div>
+  <div class="col">
+    <p>O ponto mais frágil da edição anterior era que o limiar de 1,0×ATR saiu de ler uma curva. Agora ele é o vencedor <em>fora da amostra</em> entre os quatro que competiram, com o pico no mesmo lugar.</p>
+  </div>
+</section>
+<section>
+  <p class="stage">Estágio 05 · O custo, medido</p>
+  <h2>A taxa é o custo. O spread é ruído em cima dela.</h2>
+  <div class="col">
+    <p>Este era o único número que faltava, e por muito tempo a resposta foi “depende do seu custo de execução”, que é outro jeito de dizer que ninguém sabia. Agora está contado — do <strong>tape</strong>, não das barras.</p>
+    <p>O <code>aggTrades</code> da Binance é público e diz qual lado atravessou o spread. Numa janela curta, a diferença entre o preço médio de quem levantou a oferta e o de quem bateu na compra <strong>é</strong> o spread efetivo que o taker pagou. Sem modelo, sem calibração.</p>
+  </div>
+
+  <div class="figure">
+    <div><span class="n">0,0029%</span><span class="k">spread ETH</span></div>
+    <div><span class="n">0,0105%</span><span class="k">spread SOL</span></div>
+    <div><span class="n">0,053%</span><span class="k">spread RVN (o pior)</span></div>
+    <div><span class="n">0,10%</span><span class="k">taxa, fixa, os dois lados</span></div>
+  </div>
+
+  <div class="col">
+    <p>O giro completo custa de <strong>0,103% a 0,185%</strong> no universo inteiro — e dessa conta, 0,10% é <em>taxa</em>. O spread contribui entre 0,3 e 8,5 pontos-base sobre dez pontos-base fixos.</p>
+    <p><strong>Isso reposiciona a pergunta de operabilidade.</strong> Não é sobre escolher símbolo líquido: é sobre o seu tier de taxa na corretora — um número que você já conhece hoje, sem medir nada.</p>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <caption>Cada trade pagando o custo do símbolo dele, alvo 2R</caption>
+      <thead><tr><th>Limite</th><th>símbolos</th><th>n</th><th>custo</th><th>bloco</th><th>t</th><th>placebo</th></tr></thead>
+      <tbody>
+        <tr><td>Piso <span class="t">janela de 1 min</span></td><td class="num">37/69</td><td class="num">342</td><td class="num">0,123%</td><td class="num key">+0,179</td><td class="num">2,2</td><td class="num neg">−0,493</td></tr>
+        <tr class="hi"><td>Teto <span class="t">5 min preenche o resto</span></td><td class="num">67/69</td><td class="num">636</td><td class="num">0,131%</td><td class="num key">+0,187</td><td class="num">3,1</td><td class="num neg">−0,510</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>São <strong>dois limites, não uma estimativa</strong>, porque cobertura e limpeza trocam entre si: uma janela de um minuto é imune à deriva mas não consegue precificar símbolo fino, então esse subconjunto é enviesado para <em>barato</em>; preencher o resto com cinco minutos cobre quase tudo e infla 1,5-2×, enviesando aquela metade para <em>caro</em>. A mesma conclusão nas duas pontas é uma conclusão que não depende do viés escolhido.</p>
+    <p>Contra a premissa achatada de 0,10%: o custo real é ~0,5R mais caro (0,41R contra 0,26R), e a vantagem encolhe junto — +0,269 vira +0,187, e o <code>t</code> cai de 4,7 para 3,1. <strong>Sobrevive. Sobrevive menor.</strong></p>
+    <div class="note">
+      <strong>Dois limites que ficam de pé.</strong> Isto precifica preenchimento <em>no toque</em>: profundidade além do topo do livro, latência e o escorregão de um stop a mercado em movimento rápido não estão cobrados — e o stop dispara em ~metade das operações. É <strong>piso de custo, teto de vantagem</strong>. E é tape <em>recente</em>, porque a Binance recusa busca além de ~2 dias, enquanto as operações cobrem dois anos: ler um sobre o outro assume spread estável em termos relativos. Não testado, e é a junta mais fraca da corrente.
+    </div>
+  </div>
+
+  <h3>A tentativa que falhou antes desta</h3>
+  <div class="col">
+    <p>Antes do tape eu tentei estimar o spread das barras que já estavam em cache (Abdi-Ranaldo, Corwin-Schultz). <strong>Reprovou no próprio teste de sanidade:</strong> um spread pertence ao livro, então o mesmo símbolo tem que estimar igual em qualquer tamanho de barra — e a mediana saía 0,107% em M15, 0,098% em H1 e 0,911% em D1. O ETH lia 1,42% no diário contra um spread real na casa de meio ponto-base.</p>
+    <p>Ele dizia que o CRV custava <strong>0,306%</strong> contra os 0,027% do tape. Onze vezes. E errava na direção que <em>confirmava</em> a ressalva que o estudo já fazia sobre as alts — foi a segunda vez nesta investigação que um número ruim quase passou por parecer prudente. O arquivo ficou no repositório como lápide, com o teste que o mata embutido.</p>
   </div>
 </section>
 
 <section>
-  <p class="stage">Estágio 05 · Retratações</p>
-  <h2>Três coisas que este documento afirmava e não sobreviveram</h2>
+  <p class="stage">Estágio 06 · Por que funciona</p>
+  <h2>Um ponto de Schelling, não um break-even</h2>
   <div class="col">
-    <p>Não são detalhes: duas delas eram histórias sobre <em>por que</em> o setup funciona, e uma delas era a explicação principal.</p>
+    <p>A tese declarada da camada era que a VWAP importa por ser o <em>zero a zero de uma população</em>: quem entrou desde a âncora está no vermelho abaixo dela, e portanto é oferta. Essa tese tem um ponto fraco óbvio — meia-noite UTC não é um evento em que alguém entrou. Uma reversão estrutural é.</p>
+    <p>A leitura rival: a VWAP de sessão funciona por ser um <strong>ponto de Schelling</strong> — um nível que todo participante calcula do mesmo jeito e pode, por isso, esperar que os outros estejam olhando. O que importaria é <em>observação</em> compartilhada, não posicionamento compartilhado.</p>
+    <p>As duas preveem coisas opostas sobre uma VWAP ancorada num flip de tendência, o que as torna separáveis. Uma variável muda; detector, entrada, stop, alvo e placebo ficam idênticos.</p>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <caption>A mesma regra, duas âncoras</caption>
+      <thead><tr><th>Âncora</th><th>n</th><th>Bloco</th><th>Placebo</th><th>Lift</th><th>Líquido</th></tr></thead>
+      <tbody>
+        <tr class="hi"><td><strong>Sessão</strong> <span class="t">calendário</span></td><td class="num">676</td><td class="num key">52,4%</td><td class="num">29,4%</td><td class="num pos">+23,0 pp</td><td class="num pos">+0,269</td></tr>
+        <tr><td>Flip de tendência <span class="t">evento</span></td><td class="num">659</td><td class="num neg">39,0%</td><td class="num">26,2%</td><td class="num">+12,8 pp</td><td class="num neg">−0,128</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="duel">
+    <div class="lost">
+      <h4>Perdeu · break-even</h4>
+      <p>Se o que importasse fosse o preço médio pago por quem entrou, a âncora de evento seria <strong>igual ou melhor</strong> — ela nomeia uma população real, e a meia-noite não nomeia ninguém.</p>
+    </div>
+    <div class="won">
+      <h4>Venceu · ponto de Schelling</h4>
+      <p>Funciona contra uma linha que <strong>o mercado inteiro olha</strong>, e para de funcionar contra uma linha que só este sistema desenha. Amostras do mesmo tamanho, então não é cobertura.</p>
+    </div>
+  </div>
+
+  <div class="col">
+    <p><strong>A consequência é de roadmap, e inverte a direção que o projeto vinha tomando:</strong> construir <em>na direção</em> de níveis amplamente observados, não para longe deles. Uma âncora sob medida não é um refinamento deste setup — é um setup diferente e pior.</p>
+    <p>Separando as duas metades: o bloco não mudou. Sobram +12,8 pontos de lift, então um bloco testado sob qualquer média móvel contribui algo. O que desaba é a <em>taxa base</em> — reclaim de linha sob medida é simplesmente um evento pior, e o placebo confirma (26,2% contra 29,4%).</p>
+  </div>
+</section>
+
+<section>
+  <p class="stage">Estágio 07 · Gestão de posição</p>
+  <h2>A variante mais popular tem 71% de acerto e perde dinheiro</h2>
+  <div class="col">
+    <p>Todo número deste estudo até aqui era take-e-stop puro. Gestão nunca tinha sido medida — e “você só tem a ganhar protegendo” era a única afirmação do setup que jamais entrou na contagem de tentativas.</p>
+    <p>Cinco variantes agora percorrem o <strong>caminho</strong>, candle a candle. O caminho é o ponto: uma operação que arma o breakeven, volta à entrada, e <em>depois</em> corre pro alvo é vitória na tabela de desfechos e empate na regra. Ler gestão da tabela credita a ela vitórias que ela não teria tomado — <strong>é exatamente por isso que breakeven sempre parece de graça no papel</strong>.</p>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <caption>Bloco, n=636, cada trade pagando seu custo medido (a parcial paga 1,5 giros)</caption>
+      <thead><tr><th>Variante</th><th>Líquido</th><th>t</th><th>Ganho</th><th>Zero</th><th>Perda</th></tr></thead>
+      <tbody>
+        <tr class="hi"><td><strong>2R fixo</strong></td><td class="num key">+0,187</td><td class="num">3,1</td><td class="num">53,3%</td><td class="num">0%</td><td class="num">46,7%</td></tr>
+        <tr><td>Breakeven em 0,5R</td><td class="num">+0,072</td><td class="num">1,6</td><td class="num">34,3%</td><td class="num">45,4%</td><td class="num">20,3%</td></tr>
+        <tr><td>Breakeven em 1,0R</td><td class="num">+0,097</td><td class="num">1,9</td><td class="num">39,9%</td><td class="num">31,0%</td><td class="num">29,1%</td></tr>
+        <tr class="hi"><td><strong>Breakeven em 1,5R</strong></td><td class="num key">+0,187</td><td class="num">3,3</td><td class="num">49,2%</td><td class="num">12,3%</td><td class="num pos">38,5%</td></tr>
+        <tr><td>Parcial ½ em 1R</td><td class="num neg">−0,150</td><td class="num neg">−3,5</td><td class="num key">70,9%</td><td class="num">0%</td><td class="num">29,1%</td></tr>
+        <tr><td>Trailing de 1R</td><td class="num">+0,150</td><td class="num">3,0</td><td class="num">66,0%</td><td class="num">2,4%</td><td class="num">31,6%</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p><strong>Parcial em 1R é a pior das seis, e a mais popular.</strong> Ela posta a maior taxa de acerto de todo o estudo — 70,9% — e perde dinheiro. A metade que sai em 1R paga um giro inteiro para pegar meio prêmio, e a operação passa a pagar 1,5 giros em vez de um. É o exemplo mais limpo que este projeto produziu de taxa de acerto apontando ao contrário do resultado.</p>
+    <p><strong>Breakeven cedo custa metade da expectativa.</strong> Armar em 0,5R ou 1R troca 46,7% de perdas cheias por ~45% de empates. A curva fica muito mais confortável de assistir, por +0,072 em vez de +0,187. É uma troca legítima de fazer <em>sabendo o preço</em> — o problema é ser vendida como se não tivesse nenhum.</p>
+    <p><strong>Breakeven em 1,5R é a única coisa de graça.</strong> Mesma expectativa, <code>t</code> um pouco melhor, e converte 8 pontos de perda cheia em empate. Tem explicação aritmética: em 1,5R falta só meio R para o alvo, então quem chega lá quase sempre termina o trajeto e mexer no stop raramente expulsa um vencedor. Em 1R ainda falta metade do caminho, e expulsa muito. Note que ele <em>empata</em> com o 2R fixo — a escolha entre os dois é sobre tolerância a perda cheia, não sobre retorno.</p>
+    <div class="note">
+      <strong>Uma armadilha estrutural, registrada.</strong> O Sharpe do walk-forward roda sobre R <em>bruto</em>, e Sharpe premia variância baixa — então trailing (6,75) e parcial (6,63) superam o 2R fixo (6,30) <em>lá</em>, sendo pior e negativa <em>aqui</em>. Escolher por aquela coluna entrega direto a única variante que perde dinheiro. Vale para qualquer coisa medida naquela ferramenta, não só para este resultado.
+    </div>
+  </div>
+</section>
+<section>
+  <p class="stage">Estágio 08 · Retratações</p>
+  <h2>Cinco coisas que este documento afirmava</h2>
+  <div class="col">
+    <p>Nenhuma é detalhe. Duas eram histórias sobre <em>por que</em> o setup funciona — incluindo a explicação principal.</p>
   </div>
 
   <ul class="recant">
     <li>
+      <p class="said">A VWAP funciona porque é o preço médio pago por quem entrou desde a âncora.</p>
+      <p class="verdict">A explicação principal, e estava errada</p>
+      <p class="now">Ancorada num flip de tendência — uma linha que nomeia uma população real — o setup perde metade do lift e fica negativo. Funciona porque <b>todo mundo olha para ela</b>, não porque alguém empatou ali. Ver Estágio 06.</p>
+    </li>
+    <li>
       <p class="said">Funciona melhor vendido — o lado comprador é o fraco.</p>
       <p class="verdict">Era a janela, não o mecanismo</p>
-      <p class="now">Bastou partir o <em>placebo</em> pelo mesmo eixo: ele carrega a mesma assimetria (27,4% comprado contra 31,5% vendido; no holdout, 25,8% contra 34,5%). Descontado o placebo, o bloco contribui <b>+23,2 pp comprado e +22,9 pp vendido</b> — a mesma coisa. Lido cru, o lado comprado parece o parente pobre; lido como lift, não há o que escolher entre os dois.</p>
+      <p class="now">Bastou partir o <em>placebo</em> pelo mesmo eixo: ele carrega a mesma assimetria. Descontado, o bloco contribui <b>+23,2 pp comprado e +22,9 pp vendido</b> — a mesma coisa.</p>
     </li>
     <li>
       <p class="said">O lift acompanha quanto a VWAP acumulou — por isso M15.</p>
       <p class="verdict">Predição declarada antes de rodar, e falsificada</p>
-      <p class="now">O gradiente antigo — 6 candles negativo, 24 fraco, 42 forte, 96 o mais forte — variava tempo gráfico, âncora <em>e</em> acumulação ao mesmo tempo. Perguntado dentro do M15, onde só a acumulação se move: <b>49,5% · 58,5% · 51,7%</b>. Não é monotônico, e o balde do meio não é achado com n=171. O placebo fica chapado nos mesmos baldes, então nem é “a sessão tardia se comporta diferente”. Qual dos outros dois eixos carregava, ninguém mediu. <code>vwap_candles</code> fica como descrição; <b>nada deve lê-lo como força</b>.</p>
+      <p class="now">O gradiente antigo variava tempo gráfico, âncora <em>e</em> acumulação ao mesmo tempo. Perguntado dentro do M15, onde só a acumulação se move: <b>49,5% · 58,5% · 51,7%</b>. Não é monotônico, e o placebo fica chapado nos mesmos baldes.</p>
+    </li>
+    <li>
+      <p class="said">A força está nas alts, onde o custo é menos conhecível.</p>
+      <p class="verdict">Lista de majors escolhida a dedo</p>
+      <p class="now">Refeito por terço de spread <em>medido</em> — eixo objetivo, ninguém escolhe quem é major. O lift é uniforme: <b>+20,8 · +25,7 · +23,4 pontos</b>. E o terço largo não é o forte: mesmo acerto, <b>menor</b> líquido, porque paga mais custo. No walk-forward, nenhum terço bate a regra inteira.</p>
     </li>
     <li>
       <p class="said">O bloco fresco ajuda um pouco.</p>
       <p class="verdict">Invertido, e não por pouco</p>
-      <p class="now">Primeira visita ao bloco: <b>+0,103</b> líquido, t 1,2, n=308. Um retorno posterior: <b>+0,407</b>, t 5,3, n=368. A zona intocada — que é exatamente sobre o que a tese SMC fala — é a metade que <em>não</em> carrega a leitura sozinha. Nenhum filtro sai daqui: é uma amostra só, e é o formato de fatia que já enganou este estudo duas vezes. Fica registrado porque aponta ao contrário da história com que o setup costuma ser contado.</p>
+      <p class="now">Primeira visita ao bloco: <b>+0,103</b> líquido. Um retorno posterior: <b>+0,407</b>. A zona intocada — que é sobre o que a tese SMC fala — é a metade que <em>não</em> carrega a leitura. Nenhum filtro sai daqui: é uma amostra só.</p>
     </li>
   </ul>
 </section>
 
 <section>
-  <p class="stage">Estágio 06 · O limite</p>
-  <h2>O sinal é grande. O stop é curto.</h2>
-  <div class="col">
-    <p>R mediano é <strong>0,39% do preço</strong>, então um round-trip de 0,10% custa <strong>0,26R</strong>. A fricção é grande porque a distância é pequena, não porque a taxa seja alta.</p>
-  </div>
-
-  <div class="tbl">
-    <table>
-      <caption>Retorno líquido por trade, em R · braço com bloco, n=676, alvo 2R</caption>
-      <thead><tr><th>Custo round-trip</th><th>Líquido</th><th>t</th><th>Leitura</th></tr></thead>
-      <tbody>
-        <tr><td>0,06% <span class="t">entrada maker</span></td><td class="num pos">+0,393</td><td class="num">6,8</td><td>claramente lucrativo</td></tr>
-        <tr class="hi"><td>0,10% <span class="t">taker + taker</span></td><td class="num pos">+0,269</td><td class="num">4,7</td><td>lucrativo</td></tr>
-        <tr><td>0,15% <span class="t">+ slippage</span></td><td class="num pos">+0,113</td><td class="num">2,0</td><td>ainda de pé</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="col">
-    <p>Melhor do que a edição anterior dizia — lá o efeito morria em 0,15%. Mas o alvo é o que segura: <strong>em 1,0R o setup já se foi a 0,15%</strong>, porque um alvo curto não tem R suficiente para pagar a passagem.</p>
-    <p>O corte majors × alts da edição anterior <strong>não foi refeito</strong>. Ele dizia que a estatística forte morava nos alts — CRV, EOS, SNX, CELR — onde a premissa de custo é a coisa mais frágil do estudo. Até ser re-medido sobre a população corrigida, trate-o como não verificado, não como refutado.</p>
-    <p>E a coisa que a medição continua sem saber é a mesma de sempre: <strong>qual é o seu round-trip real nesses símbolos, em M15</strong>. Nenhuma camada aqui enxerga isso, que é uma das razões de a entidade <code>BlockReclaim</code> não nomear entrada, tamanho nem alvo.</p>
-  </div>
-</section>
-<section>
-  <p class="stage">Estágio 07 · O cemitério</p>
+  <p class="stage">Estágio 09 · O cemitério</p>
   <h2>O que morreu, e por quê</h2>
   <div class="col">
     <p>Metade do valor deste registro é esta lista. Cada item custou uma medição; relê-la é mais barato que refazê-la.</p>
@@ -431,42 +557,49 @@ footer{padding:44px 0 0; color:var(--faint); font-size:13.5px; border-top:1px so
       <span class="chip dead">Rejeitado</span>
       <div>
         <p class="claim">O setup sem a condição de R</p>
-        <p class="why">61.272 trades, 259 dias: retorno médio −0,014R no reclaim puro e −0,054R nos equals. Nível do acaso. O sinal existe, mas só na fatia onde o bloco está colado na VWAP.</p>
+        <p class="why">61.272 trades, 259 dias: retorno médio −0,014R no reclaim puro. Nível do acaso. O sinal existe, mas só na fatia onde o bloco está colado na VWAP.</p>
       </div>
     </li>
     <li>
       <span class="chip dead">Rejeitado</span>
       <div>
         <p class="claim">Equal lows como gatilho no lugar do bloco</p>
-        <p class="why">Negativo em toda janela e todo tempo gráfico, e confirmado na re-medição: <code>−0,329</code> líquido em 2.900 trades, Sharpe OOS 0,17. Um número forte a 3R apareceu numa configuração e sumiu na seguinte — inconsistência entre configurações é assinatura de ruído.</p>
+        <p class="why">Negativo em toda janela e todo tempo gráfico: <code>−0,329</code> líquido em 2.900 trades, Sharpe OOS 0,17.</p>
       </div>
     </li>
     <li>
       <span class="chip dead">Rejeitado</span>
       <div>
         <p class="claim">Filtro de tendência da HTF</p>
-        <p class="why">Ajuda — mas ajuda o placebo na mesma medida. Não separa o bloco de tomar todo reclaim alinhado. A tendência da HTF foi datada por replay incremental, não pelo timestamp do evento.</p>
+        <p class="why">Ajuda — mas ajuda o placebo na mesma medida. Não separa o bloco de simplesmente tomar todo reclaim alinhado.</p>
       </div>
     </li>
     <li>
       <span class="chip dead">Invertido</span>
       <div>
         <p class="claim">Veto pela agressão do <code>market_control</code></p>
-        <p class="why">Parecia o achado da conversa: entrar quando a agressão aponta <em>contra</em> dava +5 pp de acerto e replicou em 15 símbolos novos. O walk-forward inverteu: aquela fatia também estopa +7 pp mais. As duas caudas alargando — volatilidade, não vantagem. Na re-medição, Sharpe OOS −0,31 na regra inteira.</p>
+        <p class="why">Parecia o achado da conversa: +5 pp de acerto, replicou em 15 símbolos novos. O walk-forward inverteu — aquela fatia também estopa +7 pp mais. As duas caudas alargando: volatilidade, não vantagem.</p>
       </div>
     </li>
     <li>
       <span class="chip dead">Rejeitado</span>
       <div>
-        <p class="claim">Open interest como segundo eixo</p>
-        <p class="why">O incremento do OI dentro da fatia encolheu de −8 pp na descoberta para −3 pp no holdout. E a retenção de ~30 dias da Binance impede qualquer teste de tempo longo. A metade cara da camada contribui a menor parte.</p>
+        <p class="claim">Estimar o spread pelas barras (Abdi-Ranaldo, Corwin-Schultz)</p>
+        <p class="why">Mede volatilidade, não o livro: mediana 0,107% em M15 contra 0,911% em D1, e ETH a 1,42% no diário. Errava o CRV por 11×, na direção que confirmava a ressalva que eu já queria fazer.</p>
       </div>
     </li>
     <li>
       <span class="chip dead">Rejeitado</span>
       <div>
-        <p class="claim">VWAP de sessão no H4</p>
-        <p class="why">−0,068 e −0,097 nas duas amostras, com acerto <em>abaixo</em> do breakeven. Matou o achado mais forte que a investigação tinha produzido. <strong>A explicação que se deu na época — acumulação — caiu depois</strong> (ver Retratações); o resultado do H4 continua de pé, sem explicação.</p>
+        <p class="claim">VWAP ancorada em evento</p>
+        <p class="why">Era a hipótese com mais motivação teórica que restava. Perde metade do lift e fica negativa — e ao morrer entregou a explicação certa do mecanismo.</p>
+      </div>
+    </li>
+    <li>
+      <span class="chip dead">Rejeitado</span>
+      <div>
+        <p class="claim">Parcial em 1R, e breakeven cedo</p>
+        <p class="why">A parcial é negativa com 70,9% de acerto. Breakeven em 0,5R ou 1R custa metade da expectativa. Só o breakeven em 1,5R sai de graça — e empata, não ganha.</p>
       </div>
     </li>
     <li>
@@ -477,62 +610,61 @@ footer{padding:44px 0 0; color:var(--faint); font-size:13.5px; border-top:1px so
       </div>
     </li>
     <li>
-      <span class="chip dead">Rejeitado</span>
-      <div>
-        <p class="claim">Delta do candle de entrada, isolado</p>
-        <p class="why">22% contra 22%. A anatomia do pinbar não carrega nada. O eixo de fluxo por candle está esgotado como filtro de entrada.</p>
-      </div>
-    </li>
-    <li>
       <span class="chip open">Em aberto</span>
       <div>
-        <p class="claim">VWAP ancorada em evento, no lugar do calendário</p>
-        <p class="why">Meia-noite UTC não nomeia população nenhuma; um CHoCH ou um sweep nomeia — e o projeto já produz essas séries. A morte da explicação por acumulação tirou o apoio desta hipótese, mas não a mata. É o experimento com mais motivação teórica que resta.</p>
+        <p class="claim">Por que o H4 se comporta como se comporta</p>
+        <p class="why">Âncora de sessão negativa, semanal forte. A explicação por acumulação morreu. O ponto de Schelling oferece uma candidata — uma VWAP de sessão de 6 candles gruda no preço demais para alguém observar — mas isso é história, não medição.</p>
       </div>
     </li>
   </ul>
 </section>
 
 <section>
-  <p class="stage">Estágio 08 · Método</p>
-  <h2>Oito coisas que custaram caro para aprender</h2>
+  <p class="stage">Estágio 10 · Método</p>
+  <h2>Dez coisas que custaram caro para aprender</h2>
 
   <ul class="lessons">
-    <li><b>Métrica de cauda única passa por qualquer validação.</b><span>Reportar <code>hit 2R</code> sozinho causou os dois maiores erros da investigação — matou o bloco e ressuscitou um veto invertido. Ele conta vitórias e é cego para stops. Para setup com stop, reportar <strong>acerto, stop, neutro e retorno médio em R juntos, sempre</strong>.</span></li>
-    <li><b>Holdout não corrige métrica errada.</b><span>O veto invertido foi confirmado por um holdout de 18 símbolos <em>com a predição registrada antes de rodar</em>. Confirmou porque media a mesma métrica enviesada. Holdout testa se o viés é estável — e era.</span></li>
-    <li><b>O controle que decide um setup é o placebo.</b><span>A mesma entrada sem a condição sob teste. O aleatório só prova que se bate ruído; o placebo prova que a condição contribui. Foi ele que enterrou o bloco como filtro genérico, o ressuscitou como condição de proximidade, e agora desmontou a assimetria de direção.</span></li>
-    <li><b>Janela curta inventa achados.</b><span>Três majors em duas semanas deram 45% e 58% de acerto. Dez símbolos: 32% e 34%. Duzentos e sessenta e um dias: nada. Nenhuma dessas medições estava errada — a primeira só não era sobre o que parecia ser.</span></li>
-    <li><b>Walk-forward e holdout respondem perguntas diferentes.</b><span>Holdout testa símbolos; walk-forward testa <em>tempo</em>. Um achado pode atravessar quarenta símbolos e ser artefato de um trimestre, porque quarenta símbolos são um mercado só.</span></li>
-    <li><b>Um gradiente com três variáveis se movendo não é um gradiente.</b><span>“O lift acompanha a acumulação” vinha de quatro pontos que mudavam tempo gráfico, âncora e acumulação juntos. Isolada a acumulação, some. Antes de aceitar uma tendência entre configurações, perguntar quantas coisas mudaram entre um ponto e o seguinte.</span></li>
-    <li><b>Registrar o split junto com o número.</b><span>A divisão busca/holdout da edição anterior só existia num histórico de shell. Os números podiam ser lidos e não re-derivados — exatamente o que era preciso para julgar uma correção. Um split que não está no repositório não existe.</span></li>
-    <li><b>Escrever a predição antes de rodar.</b><span>É o que transforma uma fatia interessante em teste. Aqui ela derrubou o que eu queria que fosse verdade duas vezes, incluindo a explicação principal do setup.</span></li>
+    <li><b>Métrica de cauda única passa por qualquer validação.</b><span>Reportar <code>hit 2R</code> sozinho causou os dois maiores erros da investigação. Ele conta vitórias e é cego para stops. Reportar <strong>acerto, stop, neutro e retorno médio em R juntos, sempre</strong>.</span></li>
+    <li><b>Taxa de acerto pode apontar ao contrário do resultado.</b><span>A parcial em 1R acerta 70,9% — a maior do estudo — e perde dinheiro. Se eu tivesse escolhido gestão por “quantas vezes fecho no verde”, teria adotado a pior das seis.</span></li>
+    <li><b>O controle que decide um setup é o placebo.</b><span>A mesma entrada sem a condição sob teste. Foi ele que enterrou o bloco como filtro genérico, o ressuscitou como condição de proximidade, e desmontou a assimetria de direção.</span></li>
+    <li><b>Um gradiente com três variáveis se movendo não é um gradiente.</b><span>“O lift acompanha a acumulação” vinha de quatro pontos que mudavam tempo gráfico, âncora e acumulação juntos. Isolada a acumulação, some.</span></li>
+    <li><b>Viés de cautela também é viés.</b><span>Duas vezes um número ruim quase passou por <em>confirmar</em> a ressalva que eu já queria fazer. Um erro que soa prudente recebe menos escrutínio que um que soa otimista, e isso é uma falha de revisão, não de humildade.</span></li>
+    <li><b>Quando o resultado tem uma forma que a hipótese não produz, suspeite do instrumento.</b><span>O teste do spread deu um valor não-monotônico no tamanho da janela — o que efeito de janela não pode fazer. O defeito era do meu teste, não do objeto. Se tivesse saído monotônico por acaso, eu teria aprovado o método com um teste que não testava.</span></li>
+    <li><b>Registre o split junto com o número.</b><span>A divisão busca/holdout anterior só existia num histórico de shell. Os números podiam ser lidos e não re-derivados — exatamente o que era preciso para julgar uma correção.</span></li>
+    <li><b>Declare os cortes na contagem de tentativas.</b><span>PBO só corrige o que você conta para ele. Terços de liquidez e variantes de gestão entraram na lista de regras em vez de serem medidos por fora.</span></li>
+    <li><b>Cuidado com a métrica da própria ferramenta de validação.</b><span>O Sharpe do walk-forward é bruto e premia variância baixa, então ranqueia por cima justamente as variantes que suavizam a curva pagando com retorno.</span></li>
+    <li><b>Escreva a predição antes de rodar.</b><span>Aqui ela derrubou o que eu queria que fosse verdade três vezes, incluindo a explicação principal do setup.</span></li>
   </ul>
 </section>
 
 <section>
-  <p class="stage">Estágio 09 · Reprodução</p>
+  <p class="stage">Estágio 11 · Reprodução</p>
   <h2>Como rodar de novo</h2>
   <div class="col">
-    <p>O universo e a divisão vivem em <code>research/_symbols.py</code>. As klines ficam em cache local por 6 horas, então a segunda rodada é só pipeline — cerca de 30 segundos por símbolo.</p>
+    <p>O universo e a divisão vivem em <code>research/_symbols.py</code>. As klines ficam em cache local, então a segunda rodada é só pipeline.</p>
   </div>
   <pre><b># coleta — o braço do bloco É o detector de produção, importado</b>
 poetry run python research/vwap_ob_pinbar.py \
     --symbols $(python research/_symbols.py all) --timeframes 15m \
     --limit 25000 --deep --export trades.json
 
-<b># payoff completo, placebo, custo por trade, direção, acumulação</b>
+<b># o spread efetivo, contado do tape (não estimado das barras)</b>
+poetry run python research/spread_trades.py --all --out spreads.json
+poetry run python research/spread_trades.py --validate
+
+<b># payoff completo: placebo, custo por símbolo, direção, liquidez, gestão</b>
 poetry run python research/vwap_exit_grid.py --trades trades.json \
-    --max-r-atr 1.0 --sample all|search|holdout
+    --max-r-atr 1.0 --spreads spreads.json --sample all|search|holdout
 
 <b># walk-forward com purge/embargo, PBO e Sharpe deflacionado</b>
 poetry run python research/vwap_walkforward.py --trades trades.json</pre>
   <div class="col">
-    <p>Mudar a regra no detector <em>é</em> mudar o objeto medido, então o script <strong>recusa rodar</strong> se <code>--max-wait</code>, <code>--merge-gap</code>, <code>--wick-frac</code> ou <code>--body-frac</code> saírem das constantes compiladas. Varrer esses parâmetros significa editar o detector, e isso pede a medição inteira de novo — não uma flag.</p>
+    <p>Mudar a regra no detector <em>é</em> mudar o objeto medido, então o script <strong>recusa rodar</strong> se os parâmetros do gatilho saírem das constantes compiladas. Varrer esses valores significa editar o detector, e isso pede a medição inteira de novo — não uma flag.</p>
   </div>
 </section>
 
 <footer>
-  <p>O que está estabelecido é o mecanismo: o bloco de ordem, quando colado na VWAP, leva o acerto de 29% para 52% em 676 trades e 72 símbolos, sobrevive à correção da população que o produziu, e é a melhor de quinze regras fora da amostra no tempo, com PBO 0,067. O que <em>não</em> está estabelecido é que isso paga — o custo round-trip real é seu, não meu, e é mensurável nos seus próprios preenchimentos. Continua sendo a única coisa que falta.</p>
+  <p>O que está estabelecido: o bloco de ordem, quando colado na VWAP de sessão, leva o acerto de 29% para 52% em 676 operações e 72 símbolos; sobrevive à correção da população que o produziu; é a melhor de 23 regras fora da amostra no tempo, com PBO 0,000; e paga o custo real medido, em ambos os limites do que esse instrumento consegue afirmar. O que <em>não</em> está estabelecido é que o <em>seu</em> preenchimento vai ser o medido — profundidade, latência e o escorregão do stop não estão cobrados, e a taxa que domina o custo é sua. E a explicação: isto não lê o break-even de ninguém. Opera num nível que todo mundo enxerga.</p>
 </footer>
 
 </div>
