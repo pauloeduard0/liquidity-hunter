@@ -1,0 +1,203 @@
+"""Walk-forward validation of the aggression veto.
+
+What this adds over `research/vwap_ob_pinbar.py`
+------------------------------------------------
+That study answered *is the edge there*, and checked it out of sample by
+holding out **symbols**. This one asks the question symbols cannot answer: is
+it there in every stretch of **time**, or only in the regime this sample
+happened to cover? A rule can hold across forty symbols and still be an
+artefact of one quarter, because the symbols are not independent of each other
+-- they are the same market.
+
+The aggression axis is computed from candles alone (the same
+`sum(volume_delta) / sum(volume)` window `MarketControlAnalyzer` uses), with no
+open interest, which is what lets this run over 260 days instead of the ~30 the
+OI retention allows.
+
+Design
+------
+Trades are exported dated from the measurement, bucketed into a daily return
+series per candidate rule (mean R of that day's trades, zero on days with
+none), and fed through:
+
+* **walk-forward** -- on each fold the best rule is *selected on train* and
+  *scored on test*, which validates the whole procedure a researcher follows,
+  not just the rule they ended up with;
+* **purge + embargo** -- a trade's outcome takes up to 40 candles (10h on M15)
+  to resolve, so training days whose labels reach into the test window are
+  dropped, and a further gap is left for serial correlation;
+* **PBO** (combinatorial purged CV) -- how often the in-sample best rule lands
+  below the out-of-sample median. Above 0.5 is more-likely-than-not overfit;
+* **deflated Sharpe** -- the observed Sharpe discounted for how many rules were
+  tried, which for an effect found by slicing is the honest correction.
+
+Usage
+-----
+    poetry run python research/vwap_walkforward.py --trades trades_15m.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections import defaultdict
+from datetime import date, datetime
+from pathlib import Path
+
+import numpy as np
+
+SKILL = Path(__file__).resolve().parents[1] / ".claude/skills/walk-forward-validation/scripts"
+sys.path.insert(0, str(SKILL))
+
+from overfit_detector import (  # noqa: E402
+    deflated_sharpe_ratio,
+    probability_of_backtest_overfitting,
+)
+from walk_forward import (  # noqa: E402
+    WalkForwardConfig,
+    WalkForwardValidator,
+    compute_sharpe,
+)
+
+#: `MarketControlAnalyzer`'s own directional floor: below it the aggression is
+#: not called a side at all.
+AGG_FLOOR = 0.06
+
+
+def _against(row: dict) -> bool:
+    """Whether the window's aggression opposed the trade's direction."""
+    return row["agg_ratio"] < 0 if row["direction"] == "bullish" else row["agg_ratio"] > 0
+
+
+def _strong(row: dict) -> bool:
+    return abs(row["agg_ratio"]) >= AGG_FLOOR
+
+
+#: The rules a researcher plausibly considered. PBO is only honest if the
+#: discarded candidates are declared alongside the kept one -- the count of
+#: trials is what the deflation corrects for.
+RULES: dict[str, object] = {
+    "all": lambda r: True,
+    "agg-against": _against,
+    "agg-with": lambda r: not _against(r),
+    "agg-against-floor": lambda r: _against(r) and _strong(r),
+    "agg-with-floor": lambda r: not _against(r) and _strong(r),
+    "vwap|agg-against": lambda r: r["arm"] == "vwap" and _against(r),
+    "ob|agg-against": lambda r: r["arm"] == "ob" and _against(r),
+    "eql|agg-against": lambda r: r["arm"] == "eql" and _against(r),
+    "ob+eql|agg-against": lambda r: r["arm"] in ("ob", "eql") and _against(r),
+}
+
+
+def daily_matrix(
+    trades: list[dict], rules: dict[str, object]
+) -> tuple[np.ndarray, list[date], list[str]]:
+    """Daily mean R per rule, aligned on one calendar index.
+
+    A day with no qualifying trade contributes zero, not a gap: the rule was
+    live that day and simply did not fire, and dropping the day would let a
+    selective rule silently skip the stretches it dislikes.
+    """
+    by_rule: dict[str, dict[date, list[float]]] = {n: defaultdict(list) for n in rules}
+    for row in trades:
+        day = datetime.fromisoformat(row["timestamp"]).date()
+        for name, keep in rules.items():
+            if keep(row):  # type: ignore[operator]
+                by_rule[name][day].append(row["r_outcome"])
+
+    days = sorted({datetime.fromisoformat(r["timestamp"]).date() for r in trades})
+    names = list(rules)
+    matrix = np.array(
+        [[float(np.mean(by_rule[n][d])) if by_rule[n][d] else 0.0 for n in names]
+         for d in days]
+    )
+    return matrix, days, names
+
+
+def walk_forward(
+    matrix: np.ndarray, days: list[date], names: list[str], cfg: WalkForwardConfig
+) -> None:
+    validator = WalkForwardValidator(cfg)
+    picked: list[str] = []
+    oos: list[float] = []
+    in_sample: list[float] = []
+    chosen_oos: list[float] = []
+    fixed_oos: dict[str, list[float]] = {n: [] for n in names}
+
+    print(f"\n{'fold':>4} {'train':>21} {'test':>21} {'picked':>18} "
+          f"{'train SR':>9} {'test SR':>9}")
+    for fold in validator.split(len(matrix)):
+        tr, te = fold.train_indices, fold.test_indices
+        train_sr = [compute_sharpe(matrix[tr, j]) for j in range(len(names))]
+        best = int(np.argmax(train_sr))
+        test_sr = compute_sharpe(matrix[te, best])
+        picked.append(names[best])
+        in_sample.append(train_sr[best])
+        oos.append(test_sr)
+        chosen_oos.extend(matrix[te, best].tolist())
+        for j, n in enumerate(names):
+            fixed_oos[n].extend(matrix[te, j].tolist())
+        print(f"{fold.fold_idx:>4} {str(days[tr[0]]):>10}..{str(days[tr[-1]]):>10} "
+              f"{str(days[te[0]]):>10}..{str(days[te[-1]]):>10} "
+              f"{names[best]:>18} {train_sr[best]:>9.2f} {test_sr:>9.2f}")
+
+    print(f"\n  folds {len(oos)}   mean train SR {np.mean(in_sample):>6.2f}"
+          f"   mean test SR {np.mean(oos):>6.2f}"
+          f"   degradation {np.mean(oos) - np.mean(in_sample):>+6.2f}")
+    print(f"  picked: {', '.join(sorted(set(picked)))}")
+    print(f"  folds with positive OOS Sharpe: {sum(1 for s in oos if s > 0)}/{len(oos)}")
+
+    print("\n  pooled out-of-sample, each rule held fixed across all folds:")
+    print(f"    {'rule':>20} {'SR':>7} {'mean R':>8} {'n days':>7}")
+    for n in names:
+        arr = np.array(fixed_oos[n])
+        print(f"    {n:>20} {compute_sharpe(arr):>7.2f} {arr.mean():>8.4f} {len(arr):>7}")
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--trades", required=True)
+    p.add_argument("--train-days", type=int, default=60)
+    p.add_argument("--test-days", type=int, default=20)
+    p.add_argument("--step-days", type=int, default=20)
+    p.add_argument("--purge-days", type=int, default=1,
+                   help="a trade resolves in <=40 candles; drop train days whose "
+                        "outcome reaches into the test window")
+    p.add_argument("--embargo-days", type=int, default=2,
+                   help="rule of thumb: >= 2x the label horizon")
+    p.add_argument("--window", choices=["rolling", "expanding"], default="rolling")
+    p.add_argument("--pbo-groups", type=int, default=6)
+    args = p.parse_args()
+
+    trades = json.loads(Path(args.trades).read_text())
+    matrix, days, names = daily_matrix(trades, RULES)
+    print(f"{len(trades)} trades, {len(days)} days "
+          f"({days[0]} .. {days[-1]}), {len(names)} candidate rules")
+
+    cfg = WalkForwardConfig(
+        train_size=args.train_days, test_size=args.test_days,
+        step_size=args.step_days, window_type=args.window,
+        purge_size=args.purge_days, embargo_size=args.embargo_days,
+    )
+    walk_forward(matrix, days, names, cfg)
+
+    pbo = probability_of_backtest_overfitting(matrix, n_groups=args.pbo_groups,
+                                              n_test_groups=2)
+    print(f"\nPBO ({args.pbo_groups} groups, C(n,2) paths): {pbo.pbo:.3f}"
+          f"   ({'OVERFIT' if pbo.pbo > 0.5 else 'below the 0.5 line'})")
+
+    best = max(names, key=lambda n: compute_sharpe(matrix[:, names.index(n)]))
+    col = matrix[:, names.index(best)]
+    sr = compute_sharpe(col)
+    dsr = deflated_sharpe_ratio(
+        observed_sr=sr, num_trials=len(names), backtest_length=len(col),
+        skewness=float(((col - col.mean()) ** 3).mean() / (col.std() ** 3 + 1e-12)),
+        kurtosis=float(((col - col.mean()) ** 4).mean() / (col.std() ** 4 + 1e-12)),
+    )
+    print(f"in-sample best rule: {best}  SR {sr:.2f}")
+    print(f"deflated Sharpe (p that SR>0 after {len(names)} trials): {dsr.dsr:.3f}")
+
+
+if __name__ == "__main__":
+    main()

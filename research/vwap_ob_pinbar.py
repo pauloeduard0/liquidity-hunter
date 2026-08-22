@@ -58,12 +58,14 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import json
 import math
 import random
 import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from liquidity_hunter.app import load_dashboard_data
 from liquidity_hunter.app.dashboard_data import (
@@ -78,10 +80,13 @@ from liquidity_hunter.core.domain.enums import (
     OIRegime,
     POIZoneKind,
     POIZoneStatus,
+    VWAPAnchor,
 )
 from liquidity_hunter.data.exceptions import DataProviderError
 from liquidity_hunter.data.providers.base import FuturesDataProvider, OHLCVProvider
 from liquidity_hunter.indicators import volume_delta
+from liquidity_hunter.indicators import vwap as compute_vwap
+from pydantic import ValidationError
 from research._paginated import NoFuturesProvider, PaginatedFuturesProvider
 from research._replay import scan_first_emissions
 
@@ -169,6 +174,26 @@ class Ev:
     #: Both None on a FLAT candle, where neither axis cleared its floor.
     agg_bull: bool | None = None
     oi_up: bool | None = None
+    #: The aggression axis recomputed from candles alone -- the same
+    #: `sum(volume_delta) / sum(volume)` over the same per-timeframe window
+    #: `MarketControlAnalyzer` uses, signed so positive means buy aggression.
+    #: Free of open interest, so it is defined over the whole deep window
+    #: rather than only inside Binance's ~30-day OI retention.
+    agg_ratio: float | None = None
+    #: The R-multiple this trade actually returned: -1 stopped, +2 target, or
+    #: marked to market at the horizon. The payoff a return series needs.
+    r_outcome: float | None = None
+    #: The same payoff at each target of the grid: the exit rule is the trader's
+    #: choice ("2x, 2.5x or 3x"), so an edge that exists at one multiple and
+    #: not the neighbours is a calibration, not a finding.
+    r_grid: dict[float, float] = field(default_factory=dict)
+    #: Whether this was the order block's FIRST visit -- the "pelo menos pela
+    #: primeira vez" of the rule as described.
+    first_test: bool | None = None
+    atr_pct: float | None = None
+    #: R measured in the symbol's own ATR -- the scale-free version of "tight".
+    r_atr: float | None = None
+    entry_timestamp: str = ""
 
 
 def _atr(candles: Sequence[Candle]) -> float:
@@ -187,6 +212,7 @@ def _measure(
     target_horizon: int,
 ) -> Ev:
     i0 = ev.entry_index
+    ev.entry_timestamp = candles[i0].timestamp.isoformat()
     bull = ev.direction is BULL
     for h in horizons:
         w = candles[i0 + 1 : i0 + 1 + h]
@@ -203,6 +229,28 @@ def _measure(
             ev.mfe[h] = (ev.entry - lo) / ev.r
             ev.mae[h] = (hi - ev.entry) / ev.r
             ev.favor[h] = last < ev.entry
+    # The trade as actually taken, at each target of the grid: kR target, 1R
+    # stop, marked to market if neither is reached inside the horizon.
+    for k in (1.0, 1.5, 2.0, 2.5, 3.0):
+        payoff = 0.0
+        for c in candles[i0 + 1 : i0 + 1 + target_horizon]:
+            if (c.low <= ev.stop) if bull else (c.high >= ev.stop):
+                payoff = -1.0
+                break
+            reached = (
+                c.high >= ev.entry + k * ev.r if bull else c.low <= ev.entry - k * ev.r
+            )
+            if reached:
+                payoff = k
+                break
+        else:
+            tail = candles[i0 + 1 : i0 + 1 + target_horizon]
+            if tail:
+                move = tail[-1].close - ev.entry
+                payoff = (move if bull else -move) / ev.r
+        ev.r_grid[k] = payoff
+    ev.r_outcome = ev.r_grid[2.0]
+
     for k in targets:
         tgt = ev.entry + k * ev.r if bull else ev.entry - k * ev.r
         # bounded: "did it make kR within N candles", not "did it ever".
@@ -218,6 +266,68 @@ def _measure(
             if reached:
                 ev.hit[k] = True
                 break
+    return ev
+
+
+# `MarketControlAnalyzer`'s own window and directional floor, mirrored so the
+# OI-free aggression axis is the same reading the analyzer would report.
+_AGG_WINDOW = {TimeFrame.M1: 20, TimeFrame.M5: 15, TimeFrame.M15: 10,
+               TimeFrame.M30: 7, TimeFrame.H1: 7, TimeFrame.H4: 5,
+               TimeFrame.D1: 5, TimeFrame.W1: 3}
+_AGG_FLOOR = 0.06
+
+
+def _tag_all(
+    ev: Ev,
+    candles: Sequence[Candle],
+    horizons: Sequence[int],
+    targets: Sequence[float],
+    target_horizon: int,
+    agg_window: int,
+    control_at: dict,
+    strong_floor: float,
+) -> Ev:
+    """Measure the trade forward, then attach every context reading to it.
+
+    One pipeline rather than four nested calls: each pass reads the same entry
+    from a different angle (outcome, candle anatomy, window aggression, local
+    volatility, CVDxOI quadrant) and none depends on another's result.
+    """
+    _measure(ev, candles, horizons, targets, target_horizon)
+    _tag_delta(ev, candles)
+    _tag_atr(ev, candles)
+    _tag_aggression(ev, candles, agg_window)
+    _tag_control(ev, control_at, strong_floor)
+    return ev
+
+
+def _tag_atr(ev: Ev, candles: Sequence[Candle], period: int = 14) -> Ev:
+    """Local ATR at the entry, so R can be read in the symbol's own units.
+
+    R as a fraction of *price* is not comparable across symbols: BNB's 3% and
+    a small cap's 3% are different distances in the only unit that matters,
+    which is that instrument's own movement. Without this, "tight R" could
+    just be selecting low-volatility symbols.
+    """
+    w = candles[max(1, ev.entry_index - period + 1) : ev.entry_index + 1]
+    prev = candles[max(0, ev.entry_index - period) : ev.entry_index]
+    trs = [
+        max(c.high - c.low, abs(c.high - p.close), abs(c.low - p.close))
+        for p, c in zip(prev, w, strict=False)
+    ]
+    if trs:
+        atr = sum(trs) / len(trs)
+        ev.atr_pct = atr / ev.entry
+        ev.r_atr = ev.r / atr if atr > 0 else None
+    return ev
+
+
+def _tag_aggression(ev: Ev, candles: Sequence[Candle], window: int) -> Ev:
+    w = candles[max(0, ev.entry_index - window + 1) : ev.entry_index + 1]
+    total = sum(c.volume for c in w)
+    if total <= 0:
+        return ev
+    ev.agg_ratio = max(-1.0, min(1.0, sum(volume_delta(c) for c in w) / total))
     return ev
 
 
@@ -418,6 +528,7 @@ def run_combo(
     min_r_atr: float,
     eql_lag: int,
     fresh_ob: bool,
+    vwap_anchor: VWAPAnchor | None,
     htf_steps: Sequence[tuple[datetime, MarketDirection]] | None,
     random_reps: int,
     rng: random.Random,
@@ -431,11 +542,20 @@ def run_combo(
         compute_narrative=False,
     )
     candles = data.candles
-    if len(candles) < 200 or data.vwap is None:
+    # `_VWAP_ANCHOR_PERIOD` wires WEEK at H4 and MONTH on the dailies, so the
+    # H4 chart's VWAP is not the session one the rule was described on. Passing
+    # an explicit anchor recomputes the series rather than patching production
+    # config, and makes which VWAP was measured part of the run.
+    series = data.vwap
+    if vwap_anchor is not None:
+        series = compute_vwap(candles, symbol=symbol, timeframe=timeframe,
+                              anchor=vwap_anchor)
+    if len(candles) < 200 or series is None:
         return [], {}
-    vwap_at = {p.timestamp: p.value for p in data.vwap.points}
+    vwap_at = {p.timestamp: p.value for p in series.points}
     idx_of = {c.timestamp: i for i, c in enumerate(candles)}
     control_at = {}
+    agg_window = _AGG_WINDOW.get(timeframe, 10)
     strong_floor = 0.0
     if data.market_control is not None:
         control_at = {
@@ -464,6 +584,15 @@ def run_combo(
                 else {"fresh_only": fresh_ob, "merge_gap": merge_gap}
             )
             idx = collect(data, candles, vwap_at, bull=bull, **kwargs)  # type: ignore[operator]
+            # The block's *first* visit, tagged rather than filtered, so one
+            # run answers both "does freshness matter" and "does the setup
+            # work" instead of needing a separate sweep per variant.
+            fresh_idx: set[int] = set()
+            if arm == "ob" and not fresh_ob:
+                fresh_idx = set(
+                    _ob_triggers(data, candles, vwap_at, bull=bull,
+                                 fresh_only=True, merge_gap=merge_gap)
+                )
             episodes = _episodes(idx, merge_gap)
             counts[f"{arm}-episodes"] = counts.get(f"{arm}-episodes", 0) + len(episodes)
             direction = BULL if bull else BEAR
@@ -493,19 +622,26 @@ def run_combo(
                     r = abs(entry - stop)
                     if r < min_r:
                         break
-                    out.append(_tag_control(_tag_delta(_measure(
+                    ev = _tag_all(
                         Ev(arm, symbol, timeframe.value, direction, start, e, entry, stop, r),
                         candles, horizons, targets, target_horizon,
-                    ), candles), control_at, strong_floor))
+                        agg_window, control_at, strong_floor,
+                        )
+                    if arm == "ob":
+                        ev.first_test = fresh_ob or any(
+                            i in fresh_idx for i in range(start, end + 1)
+                        )
+                    out.append(ev)
                     for _ in range(random_reps):
                         ri = rng.randrange(50, len(candles) - max_h - 1)
                         e2 = candles[ri].close
                         s2 = e2 - r if bull else e2 + r
-                        out.append(_tag_control(_tag_delta(_measure(
+                        out.append(_tag_all(
                             Ev(f"rand-{arm}", symbol, timeframe.value, direction,
                                ri, ri, e2, s2, r),
                             candles, horizons, targets, target_horizon,
-                        ), candles), control_at, strong_floor))
+                            agg_window, control_at, strong_floor,
+                        ))
                     break  # one entry per test episode
 
     # placebo: every pinbar VWAP reclaim, no liquidity test required.
@@ -527,18 +663,20 @@ def run_combo(
             r = abs(entry - stop)
             if r < min_r:
                 continue
-            out.append(_tag_control(_tag_delta(_measure(
+            out.append(_tag_all(
                 Ev("vwap", symbol, timeframe.value, direction, e - max_wait, e, entry, stop, r),
                 candles, horizons, targets, target_horizon,
-            ), candles), control_at, strong_floor))
+                agg_window, control_at, strong_floor,
+            ))
             for _ in range(random_reps):
                 ri = rng.randrange(50, len(candles) - max_h - 1)
                 e2 = candles[ri].close
                 s2 = e2 - r if bull else e2 + r
-                out.append(_tag_control(_tag_delta(_measure(
+                out.append(_tag_all(
                     Ev("rand-vwap", symbol, timeframe.value, direction, ri, ri, e2, s2, r),
                     candles, horizons, targets, target_horizon,
-                ), candles), control_at, strong_floor))
+                    agg_window, control_at, strong_floor,
+                ))
     return out, counts
 
 
@@ -661,6 +799,41 @@ def report(
                     f"{sym + ' ' + tf:>18} {arm:>9} {len(rows):>5} "
                     f"{_row(rows, horizons, targets)}"
                 )
+
+
+def export_events(events: Sequence[Ev], path: str) -> None:
+    """Write one row per real (non-random) entry, for the walk-forward study.
+
+    The measurement here answers "is the edge there"; walk-forward answers "is
+    it there in *every stretch of time*, or only in the one this sample
+    happened to cover". That is a different question and needs the trades
+    themselves, dated, not the aggregate table.
+    """
+    rows = [
+        {
+            "timestamp": e.entry_timestamp,
+            "symbol": e.symbol,
+            "timeframe": e.timeframe,
+            "arm": e.arm,
+            "direction": e.direction.value,
+            "agg_ratio": e.agg_ratio,
+            "r_outcome": e.r_outcome,
+            "r_grid": {str(k): v for k, v in e.r_grid.items()},
+            "first_test": e.first_test,
+            # R as a fraction of entry price: what decides whether an edge
+            # measured in R survives a round-trip fee measured in basis points.
+            "r_pct": e.r / e.entry,
+            "r_atr": e.r_atr,
+            "atr_pct": e.atr_pct,
+        }
+        for e in events
+        if not e.arm.startswith("rand")
+        and e.agg_ratio is not None
+        and e.r_outcome is not None
+    ]
+    rows.sort(key=lambda r: r["timestamp"])
+    Path(path).write_text(json.dumps(rows))
+    print(f"\nexported {len(rows)} dated trades -> {path}")
 
 
 def control_report(
@@ -795,6 +968,8 @@ def main() -> None:
     p.add_argument("--timeframes", nargs="+", default=["5m", "15m"])
     p.add_argument("--limit", type=int, default=1200,
                    help="candles per series; above 1500 needs --deep")
+    p.add_argument("--export", default=None,
+                   help="write the dated trades to this JSON, for walk-forward")
     p.add_argument("--control", action="store_true",
                    help="keep the real futures provider so market_control is "
                         "populated (OI reaches back ~30 days only)")
@@ -813,6 +988,9 @@ def main() -> None:
     p.add_argument("--body-frac", type=float, default=0.35)
     p.add_argument("--min-r-atr", type=float, default=0.25)
     p.add_argument("--eql-lag", type=int, default=EQL_CONFIRM_LAG)
+    p.add_argument("--vwap-anchor", choices=["session", "week", "month"], default=None,
+                   help="recompute the VWAP with this anchor instead of the "
+                        "per-timeframe production default")
     p.add_argument("--fresh-ob", action="store_true",
                    help="only the first visit to each order block counts")
     p.add_argument("--htf", nargs="*", default=None,
@@ -860,12 +1038,18 @@ def main() -> None:
                     max_wait=args.max_wait, merge_gap=args.merge_gap,
                     wick_frac=args.wick_frac, body_frac=args.body_frac,
                     min_r_atr=args.min_r_atr, eql_lag=args.eql_lag,
-                    fresh_ob=args.fresh_ob, htf_steps=steps,
+                    fresh_ob=args.fresh_ob,
+                    vwap_anchor=VWAPAnchor(args.vwap_anchor) if args.vwap_anchor else None,
+                    htf_steps=steps,
                     random_reps=args.random_reps, rng=rng,
                 )
-            except DataProviderError as exc:
-                # one delisted or renamed symbol must not sink the sweep
-                print(f"  ! {symbol} {tf.value}: {exc}")
+            except (DataProviderError, ValidationError) as exc:
+                # One delisted symbol, or one exchange row where taker volume
+                # exceeds total volume, must not sink a 43-symbol sweep. Both
+                # are skipped and named rather than repaired: a bad row is the
+                # venue's, and inventing a value for it would put fabricated
+                # flow into a measurement.
+                print(f"  ! {symbol} {tf.value}: {type(exc).__name__}: {exc}")
                 continue
             events.extend(evs)
             for k, v in cs.items():
@@ -879,6 +1063,8 @@ def main() -> None:
     control_report(events, args.horizons, args.targets)
     control_consistency(events, min(args.targets))
     confound_report(events, args.horizons, args.targets)
+    if args.export:
+        export_events(events, args.export)
 
 
 if __name__ == "__main__":
