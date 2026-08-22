@@ -83,17 +83,51 @@ def thirds(rows: Sequence[dict], target: str, cost: float, label: str) -> None:
     print(f"  {label:>28} " + "  ".join(cells))
 
 
+def placebo_table(rows: Sequence[dict], cost: float) -> None:
+    """The order block against the same reclaim with no block behind it.
+
+    The headline reading of the whole study, and the only comparison that
+    settles whether the block contributes: a random control shows the setup
+    beats noise, this shows the *condition* earns its place. Reported as the
+    full payoff -- reaching the target, being stopped, and the mean R that
+    balances them -- because a win-only rate is what made the block look null
+    for most of this investigation.
+    """
+    print(f"\nblock vs placebo (2R target, cost {cost:.2%} charged per trade)")
+    print(f"{'arm':>10} {'n':>6} {'hit 2R':>8} {'stopped':>8} {'open':>7} "
+          f"{'gross':>9} {'net':>9} {'t':>6}")
+    for arm, label in (("vwap", "placebo"), ("eql", "eql"), ("ob", "block")):
+        s = [r for r in rows if r["arm"] == arm]
+        if len(s) < 50:
+            continue
+        hit = sum(1 for r in s if r["r_grid"]["2.0"] == 2.0) / len(s)
+        stop = sum(1 for r in s if r["r_grid"]["2.0"] == -1.0) / len(s)
+        gross = st.mean(r["r_grid"]["2.0"] for r in s)
+        print(f"{label:>10} {len(s):>6} {hit:>7.1%} {stop:>7.1%} "
+              f"{1 - hit - stop:>6.1%} {gross:>+9.4f} "
+              f"{_net(s, '2.0', cost):>+9.4f} {_t_stat(s, '2.0', cost):>+6.1f}")
+    print("   a 2:1 payoff breaks even at a 33.3% hit rate")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--trades", required=True)
     p.add_argument("--stability-target", default="2.0")
     p.add_argument("--stability-cost", type=float, default=0.0010)
+    p.add_argument("--max-r-atr", type=float, default=None,
+                   help="keep only entries whose stop is within N x ATR(14) -- "
+                        "the condition the edge actually lives in")
     args = p.parse_args()
 
     rows = [r for r in json.loads(Path(args.trades).read_text()) if r.get("r_grid")]
+    if args.max_r_atr is not None:
+        rows = [r for r in rows
+                if r.get("r_atr") is not None and r["r_atr"] <= args.max_r_atr]
     ts = sorted(datetime.fromisoformat(r["timestamp"]) for r in rows)
     print(f"{len(rows)} trades, {ts[0].date()} .. {ts[-1].date()} "
           f"({(ts[-1] - ts[0]).days} days)")
+
+    placebo_table(rows, args.stability_cost)
 
     for arm in ("vwap", "ob", "eql"):
         table([r for r in rows if r["arm"] == arm], f"arm: {arm}")
