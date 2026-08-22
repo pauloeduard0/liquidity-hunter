@@ -45,3 +45,6 @@ research/.replay_cache/
 
 # Klines cache: raw candles re-fetchable from the exchange at any time.
 research/.klines_cache/
+
+# Claude Code: local machine settings (the skills/ dir stays versioned).
+.claude/settings.local.json
