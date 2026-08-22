@@ -173,3 +173,79 @@ def test_no_vwap_yields_no_readings() -> None:
     assert detect_block_reclaims(
         candles, zones, None, symbol=SYMBOL, timeframe=TF
     ) == []
+
+
+def test_a_block_closed_through_before_its_queue_stamp_is_spent() -> None:
+    """The FIFO stamp is bookkeeping, not the break.
+
+    The POI queue retires the oldest zone of a side whenever any zone breaks,
+    so `invalidated_at` can land days after price closed through this box.
+    Between the two, the block holds nobody -- a "test" of it is not the
+    observation this layer names.
+    """
+    candles, zones, _ = bullish_case()
+    # price closes below the block's floor long before the queue notices
+    candles[10] = candle(10, open_=99, high=99.5, low=97.0, close=98.0)
+    zones = [
+        zones[0].model_copy(
+            update={
+                "status": POIZoneStatus.INVALIDATED,
+                "invalidated_at": candles[28].timestamp,
+            }
+        )
+    ]
+    reclaims = detect_block_reclaims(
+        candles, zones, vwap_series(candles, 105.0), symbol=SYMBOL, timeframe=TF
+    )
+    assert reclaims == []
+
+
+def test_a_block_retired_without_breaking_stops_resting_at_the_stamp() -> None:
+    """A box the queue removed is off the board, however it left."""
+    candles, zones, vwap = bullish_case()
+    zones = [
+        zones[0].model_copy(
+            update={
+                "status": POIZoneStatus.INVALIDATED,
+                # retired before the test at candles 20-21 happens
+                "invalidated_at": candles[15].timestamp,
+            }
+        )
+    ]
+    assert detect_block_reclaims(
+        candles, zones, vwap, symbol=SYMBOL, timeframe=TF
+    ) == []
+
+
+def test_a_block_still_resting_survives_a_later_queue_stamp() -> None:
+    """Untouched by a close, the block is alive right up to the stamp."""
+    candles, zones, vwap = bullish_case()
+    zones = [
+        zones[0].model_copy(
+            update={
+                "status": POIZoneStatus.INVALIDATED,
+                "invalidated_at": candles[27].timestamp,
+            }
+        )
+    ]
+    assert len(detect_block_reclaims(
+        candles, zones, vwap, symbol=SYMBOL, timeframe=TF
+    )) == 1
+
+
+def test_a_reclaim_on_the_last_candle_is_provisional() -> None:
+    """The forming candle can still stop being a reclaim before it prints."""
+    candles, zones, _ = bullish_case()
+    live = candles[:26]  # the reclaim at index 25 is now the live edge
+    reclaims = detect_block_reclaims(
+        live, zones, vwap_series(live, 105.0), symbol=SYMBOL, timeframe=TF
+    )
+    assert [r.provisional for r in reclaims] == [True]
+
+
+def test_a_settled_reclaim_is_not_provisional() -> None:
+    candles, zones, vwap = bullish_case()
+    reclaims = detect_block_reclaims(
+        candles, zones, vwap, symbol=SYMBOL, timeframe=TF
+    )
+    assert [r.provisional for r in reclaims] == [False]

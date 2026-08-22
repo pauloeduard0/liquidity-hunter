@@ -811,7 +811,11 @@ function buildBlockReclaimMarkers(reclaims: BlockReclaim[]): SeriesMarker<Time>[
           position: r.direction === 'bullish' ? 'belowBar' : 'aboveBar',
           shape: 'circle',
           color: BLOCK_RECLAIM_COLOR,
-          text: `⟡${r.r_atr!.toFixed(1)}`,
+          // A reclaim on the last candle is still forming: both halves of it
+          // -- the wick crossing the VWAP, the close landing back across --
+          // can still come undone before that candle prints. Marked `?`, the
+          // same suffix the provisional structure marks carry.
+          text: `⟡${r.r_atr!.toFixed(1)}${r.provisional ? '?' : ''}`,
           size: 1,
         }) as SeriesMarker<Time>,
     )

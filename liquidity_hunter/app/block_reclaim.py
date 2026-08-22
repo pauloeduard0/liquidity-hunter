@@ -24,7 +24,6 @@ from liquidity_hunter.core.domain import (
     MarketDirection,
     POIZone,
     POIZoneKind,
-    POIZoneStatus,
     TimeFrame,
     VWAPSeries,
 )
@@ -79,6 +78,40 @@ def _local_atr(candles: list[Candle], index: int) -> float | None:
     return fmean(trs) if trs else None
 
 
+def _rests_until(candles: list[Candle], zone: POIZone, *, bullish: bool) -> int:
+    """The first index at which the block is no longer resting liquidity.
+
+    `POIZone.invalidated_at` cannot answer this on its own. The POI queue
+    retires the **oldest** zone of a side whenever any zone of that queue
+    breaks (the indicator's `array.shift`), so the stamp records when the
+    queue got around to this box rather than when price took it -- measured
+    on BTCUSDT 1h, a block closed through on 10 Aug carried a 19 Aug stamp.
+    Reading it as the break keeps a spent block alive for days, and every
+    "test" of it in between has nobody positioned in it, which is the whole
+    premise of the reading.
+
+    So the break is searched for directly: the first candle to *close* beyond
+    the far boundary, from the candle that **confirmed** the box forward (the
+    anchor candle is chosen in hindsight, and price moving through that level
+    before the MSB confirmed broke nothing -- there was no box there yet).
+    The retirement stamp still bounds it: a box the queue removed is off the
+    board, and price closing past that level afterwards takes nothing.
+
+    Returns `len(candles)` while the block is still resting at the live edge.
+    """
+    level = zone.price_low if bullish else zone.price_high
+    retired = len(candles)
+    for i, candle in enumerate(candles):
+        if candle.timestamp < zone.created_at:
+            continue
+        if zone.invalidated_at is not None and candle.timestamp > zone.invalidated_at:
+            retired = i
+            break
+        if (candle.close < level) if bullish else (candle.close > level):
+            return i
+    return retired
+
+
 def _visits(
     candles: list[Candle],
     zone: POIZone,
@@ -92,17 +125,14 @@ def _visits(
     happened on the far side of the VWAP: a visit that did not qualify here
     still worked the orders resting in the block.
     """
+    death = _rests_until(candles, zone, bullish=bullish)
     touches: list[int] = []
     qualifying: list[int] = []
     for i, candle in enumerate(candles):
         if zone.created_at > candle.timestamp:
             continue  # the block did not exist yet
-        if (
-            zone.status is POIZoneStatus.INVALIDATED
-            and zone.invalidated_at is not None
-            and zone.invalidated_at <= candle.timestamp
-        ):
-            break  # already spent
+        if i >= death:
+            break  # broken by a close, or retired off the board
         if candle.low > zone.price_high or candle.high < zone.price_low:
             continue
         touches.append(i)
@@ -145,6 +175,13 @@ def detect_block_reclaims(
 
     Both directions; a bullish block is tested from above and reclaimed
     upward, a bearish one mirrors it.
+
+    A reclaim landing on the series' last candle is marked `provisional`: on a
+    live feed that candle is still forming, and neither half of the reading --
+    the wick crossing the VWAP, the close landing back across it -- is settled
+    until it closes. It is emitted rather than withheld, because a reader
+    watching the live edge wants to see it, but it carries the flag so nothing
+    replaying history counts a candle that may still become something else.
     """
     if vwap is None or len(candles) < ATR_PERIOD + 2:
         return []
@@ -202,6 +239,7 @@ def detect_block_reclaims(
                         test_extreme=extreme,
                         reclaim_distance=distance,
                         r_atr=r_atr,
+                        provisional=i == len(candles) - 1,
                         vwap_candles=accumulated.get(candle.timestamp, 1),
                     )
                 )

@@ -69,6 +69,15 @@ class BlockReclaim(DomainModel):
     #: across instruments. `None` when the window carries no volatility.
     reclaim_distance: float = Field(gt=0)
     r_atr: float | None = Field(default=None, ge=0.0)
+    #: Whether the reclaiming candle is the series' **last** one, which on a
+    #: live feed is still forming. Nothing about this reading is knowable
+    #: until that candle closes -- the wick may not end up crossing the VWAP,
+    #: or the close may not end up on the other side -- so a provisional
+    #: reclaim can vanish on the next refresh. The measurement never covered
+    #: these: it reads a forward outcome and so drops the tail of the series
+    #: outright. Consumers that replay history should skip them, the same
+    #: contract the provisional structure marks carry.
+    provisional: bool = False
     #: How many candles of accumulation the VWAP carried at the reclaim.
     #: The lift tracks this monotonically -- a six-candle average is nobody's
     #: break-even -- so a reading against a barely-started VWAP is weaker

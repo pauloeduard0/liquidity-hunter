@@ -645,6 +645,7 @@ export interface BlockReclaim {
   test_extreme: number
   reclaim_distance: number
   r_atr: number | null
+  provisional: boolean
   vwap_candles: number
 }
 
