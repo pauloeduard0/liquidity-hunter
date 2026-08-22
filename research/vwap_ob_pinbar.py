@@ -738,21 +738,25 @@ def confound_report(
     if not covered:
         return
     print(f"B) the quadrant's two axes apart ({len(covered)} non-FLAT entries)"
-          f"\n{'arm':>24} {'n':>6} {head} {tgt}")
+          f"\n{'arm':>29} {'n':>6} {head} {tgt}")
     for base in ("vwap", "ob", "eql"):
         for agg_against in (True, False):
             for oi in (True, False):
-                rows = [
-                    e for e in covered
-                    if e.arm == base
-                    and ((e.agg_bull is not (e.direction is BULL)) is agg_against)
-                    and e.oi_up is oi
-                ]
-                if len(rows) >= 20:
-                    a = "agg-against" if agg_against else "agg-with"
-                    o = "OI-up" if oi else "OI-down"
-                    print(f"{base + '|' + a + '|' + o:>24} {len(rows):>6} "
-                          f"{_row(rows, horizons, targets)}")
+                a = "agg-against" if agg_against else "agg-with"
+                o = "OI-up" if oi else "OI-down"
+                # the random arm is tagged with the quadrant at *its* own entry,
+                # so each cell is read against a control drawn under the same
+                # market condition rather than against the pooled baseline.
+                for prefix in (base, f"rand-{base}"):
+                    rows = [
+                        e for e in covered
+                        if e.arm == prefix
+                        and ((e.agg_bull is not (e.direction is BULL)) is agg_against)
+                        and e.oi_up is oi
+                    ]
+                    if len(rows) >= 20:
+                        print(f"{prefix + '|' + a + '|' + o:>29} {len(rows):>6} "
+                              f"{_row(rows, horizons, targets)}")
         print()
 
 
