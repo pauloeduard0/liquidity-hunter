@@ -84,6 +84,52 @@ R is 0.39% of price, so a 0.10% round trip costs 0.26R. The block arm survives
 it is already gone by 0.15%. What a reader's real round trip is remains the one
 number this study cannot supply.
 
+## What it costs, measured
+
+The round trip was the study's one open number, and it is now measured rather
+than assumed. Not from the bars — that was tried and failed (below) — but from
+the tape. Binance's `aggTrades` is public and carries `isBuyerMaker`, so inside
+a short window the gap between the average price of trades that lifted the ask
+and those that hit the bid **is** the effective spread a taker paid.
+`research/spread_trades.py` counts it; the result is frozen in
+`research/measured_spreads.json`.
+
+The spread turns out not to be the story. At a base-tier taker fee the round
+trip runs **0.103% to 0.185%** across the universe, of which 0.10% is the fee
+and 0.3 to 8.5 basis points is the spread. ETH sits at 0.0029%, BTC 0.0036%,
+SOL 0.0105%, ADA 0.0369%, RVN 0.0531%. **The fee is the cost and the spread is
+noise on top of it** — so what decides whether this is operable is the reader's
+fee tier, a number they already know, not their choice of symbol.
+
+Charged per trade, at both ends of what the instrument can bound:
+
+| bound | symbols priced | n | cost | block net R | t | placebo |
+|---|---|---|---|---|---|---|
+| floor | 37 / 69 | 342 | 0.123% | **+0.179** | +2.2 | −0.493 |
+| ceiling | 67 / 69 | 636 | 0.131% | **+0.187** | +3.1 | −0.510 |
+
+The two bounds exist because coverage and cleanliness trade off. A one-minute
+window is immune to drift but cannot price a thin symbol at all, so its subset
+is biased **cheap**; filling the rest at five minutes covers almost everything
+but inflates those by 1.5-2×, biasing that half **dear**. The conclusion is the
+same at both ends, so it does not depend on which bias is chosen — and the
+ceiling reads slightly better only because near-full coverage nearly doubles n.
+
+Against the flat 0.10% assumption the table above uses, the real cost is about
+half an R-unit dearer (0.38-0.41R against 0.26R) and the edge shrinks with it:
++0.269 becomes +0.18, and `t` falls from +4.7 to between +2.2 and +3.1. **It
+survives. It survives smaller than the flat table said.**
+
+Two limits stand, and neither is small. This prices a fill **at the touch**:
+depth beyond the top of book, latency, and a stop-market firing into a fast
+move are all uncharged, and a stop fires on roughly half these trades — so it
+is a floor on cost and a ceiling on the edge. And it is measured on **recent**
+tape, because Binance refuses a time-ranged `aggTrades` search older than about
+two days, while the trades priced span two years. Reading one onto the other
+assumes a symbol's spread is stable in relative terms — that CRV has always
+been dearer than BTC, not that either held a fixed number. That assumption is
+untested and is the weakest joint in the chain.
+
 ## The cost cannot be read off the candles
 
 The one number the study cannot supply is the reader's real round trip, and

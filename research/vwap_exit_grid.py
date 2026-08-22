@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 from research._symbols import HOLDOUT, SEARCH
+from research.spread_trades import DEFAULT_TAKER_FEE
 
 #: Binance USDT-M round trips, from the friendliest plausible to the realistic.
 #: The stop exit is a stop-market and therefore always taker, and it fires on
@@ -162,6 +163,87 @@ def by_accumulation(rows: Sequence[dict], cost: float, edges: Sequence[int]) -> 
                   f"{_net(s, '2.0', cost):>+9.4f} {_t_stat(s, '2.0', cost):>+6.1f}")
 
 
+def _charge(rows: Sequence[dict], spreads: dict, fee: float, target: str,
+            label: str) -> None:
+    priced = [
+        (r, 2 * fee + spreads[r["symbol"]]["spread"])
+        for r in rows if r["symbol"] in spreads
+    ]
+    covered = len({r["symbol"] for r in rows} & set(spreads))
+    total = len({r["symbol"] for r in rows})
+    print(f"\n  {label}  ({covered}/{total} symbols priced)")
+    print(f"  {'arm':>10} {'n':>6} {'cost %':>8} {'cost R':>8} {'gross':>9} "
+          f"{'net':>9} {'t':>6}")
+    for arm, name in (("vwap", "placebo"), ("eql", "eql"), ("ob", "block")):
+        sel = [(r, c) for r, c in priced if r["arm"] == arm]
+        if len(sel) < 50:
+            continue
+        nets = [r["r_grid"][target] - c / r["r_pct"] for r, c in sel]
+        sd = st.stdev(nets) if len(nets) > 1 else 0.0
+        t = st.mean(nets) / (sd / len(nets) ** 0.5) if sd > 0 else 0.0
+        print(f"  {name:>10} {len(sel):>6} "
+              f"{st.mean(c for _, c in sel):>7.3%} "
+              f"{st.mean(c / r['r_pct'] for r, c in sel):>8.3f} "
+              f"{st.mean(r['r_grid'][target] for r, _ in sel):>+9.4f} "
+              f"{st.mean(nets):>+9.4f} {t:>+6.1f}")
+
+
+def measured_cost(rows: Sequence[dict], spreads_paths: Sequence[str],
+                  fee: float, target: str) -> None:
+    """The payoff with each trade charged its own symbol's measured spread.
+
+    The flat columns above answer "what does the edge need". This answers the
+    other question -- what these instruments actually cost -- using the
+    effective spread counted off the tape by `research/spread_trades.py`, not
+    an estimate off the bars (which was tried, and failed its own check; see
+    `spread_cost.py`).
+
+    Two things it is not. The spread prices a fill at the touch, so depth,
+    latency and a stop-market firing into a fast move are all uncharged: this
+    is a floor on cost and a ceiling on the edge. And it is measured on recent
+    tape, because Binance will not serve a time-ranged `aggTrades` search older
+    than two days, so applying it here assumes a symbol's spread is stable in
+    relative terms over the study window. That assumption is untested.
+    """
+    floor = json.loads(Path(spreads_paths[0]).read_text())
+    print(f"\nnet R with each trade charged its own symbol's MEASURED cost "
+          f"(target {target}R, taker {fee:.3%} per side)")
+    _charge(rows, floor, fee, target,
+            "FLOOR -- one-minute windows only; the symbols too thin to price "
+            "are the dear ones, so this subset is biased cheap")
+    if len(spreads_paths) > 1:
+        ceiling = dict(json.loads(Path(spreads_paths[1]).read_text()))
+        ceiling.update(floor)  # the clean one-minute value wins where it exists
+        _charge(rows, ceiling, fee, target,
+                "CEILING -- five-minute windows fill the rest, and drift "
+                "inflates those by 1.5-2x, so their half is biased dear")
+        print("\n  The two bound what this instrument can and cannot say. A "
+              "conclusion\n  that holds at both ends is robust to the "
+              "coverage problem; one that\n  flips between them is "
+              "undetermined, and should be reported as that.")
+
+    priced = [
+        (r, 2 * fee + floor[r["symbol"]]["spread"])
+        for r in rows if r["symbol"] in floor
+    ]
+    block = [(r, c) for r, c in priced if r["arm"] == "ob"]
+    if len(block) >= 200:
+        mid = st.median(c for _, c in block)
+        print("\n  block arm split at the median measured cost (floor set)")
+        for label, sel in (
+            ("cheap half", [(r, c) for r, c in block if c <= mid]),
+            ("dear half", [(r, c) for r, c in block if c > mid]),
+        ):
+            if len(sel) < 50:
+                continue
+            nets = [r["r_grid"][target] - c / r["r_pct"] for r, c in sel]
+            sd = st.stdev(nets) if len(nets) > 1 else 0.0
+            t = st.mean(nets) / (sd / len(nets) ** 0.5) if sd > 0 else 0.0
+            print(f"  {label:>14} n={len(sel):<5} "
+                  f"cost {st.mean(c for _, c in sel):.3%}  "
+                  f"net {st.mean(nets):>+8.4f}  t {t:>+5.1f}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--trades", required=True)
@@ -181,6 +263,15 @@ def main() -> None:
                    help="which half of research/_symbols.py to report on. The "
                         "split is a hash of the symbol name, recorded so a "
                         "corrected rule can be compared on the same halves")
+    p.add_argument("--spreads", nargs="+", default=None,
+                   metavar=("FLOOR", "CEILING"),
+                   help="one or two JSONs from research/spread_trades.py --out. "
+                        "The first should be the one-minute measurement (clean "
+                        "but incomplete); an optional second, measured at a "
+                        "longer window, fills the symbols it could not price. "
+                        "Given both, the payoff is reported at both bounds")
+    p.add_argument("--taker-fee", type=float, default=DEFAULT_TAKER_FEE,
+                   help="fee per side, used with --spreads")
     p.add_argument("--accumulation-edges", type=int, nargs="*", default=(32, 64),
                    help="bucket boundaries for the VWAP-accumulation split, in "
                         "candles; the M15 session runs to 96")
@@ -201,6 +292,8 @@ def main() -> None:
           f"({(ts[-1] - ts[0]).days} days), sample: {args.sample}")
 
     placebo_table(rows, args.stability_cost)
+    if args.spreads:
+        measured_cost(rows, args.spreads, args.taker_fee, args.stability_target)
     by_direction(rows, args.stability_cost)
     by_accumulation(rows, args.stability_cost, args.accumulation_edges)
 
