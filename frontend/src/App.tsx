@@ -60,6 +60,10 @@ const SYMBOL_OPTIONS: { value: string; label: string }[] = [
     value: 'solana:Ge87EtsjwRQbHaqQmKRno69RFTwh9bfSsm99XNxTpump',
     label: 'JIMOTHY',
   },
+  {
+    value: 'solana:Ai66LHZG9MCzg1WKdawwqduVAXpNDUuV8M3uyq5ppump',
+    label: 'CATE',
+  },
 ]
 
 const TIMEFRAME_OPTIONS: { value: TimeFrame; label: string }[] = [
@@ -160,6 +164,10 @@ function App() {
   const [volumeVisible, setVolumeVisible] = useState(true)
   const [rsiDivVisible, setRsiDivVisible] = useState(false)
   const [supertrendVisible, setSupertrendVisible] = useState(false)
+  // VWAP reclaims that followed a test of an order block. Off by default: the
+  // pane already carries the structure staircase, the blocks and the sweeps,
+  // and this reading is a close look at where two of them coincide.
+  const [blockReclaimVisible, setBlockReclaimVisible] = useState(false)
   const [smcVisible, setSmcVisible] = useState(true)
   // The periodic VWAP cycles through three states on plain click: off → the
   // average alone → the average plus its ±1σ/±2σ bands. The line is the
@@ -598,6 +606,18 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setBlockReclaimVisible((v) => !v)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        blockReclaimVisible
+                          ? 'bg-[#d8a94922] text-[#d8a949]'
+                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
+                      }`}
+                      title="Toggle block reclaims: a VWAP reclaim right after price tested an order block, drawn only where the two sit within about one ATR of each other. The label is that distance."
+                    >
+                      ⟡ OB·VWAP
+                    </button>
+                    <button
+                      type="button"
                       onClick={(e) => {
                         // Alt/Shift-click toggles the anchored VWAPs (what the
                         // crowd from the last CHoCH/sweep paid); plain click
@@ -735,7 +755,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showSmc={smcVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible && controlAvailable} showRibbon={ribbonVisible} showDefendedLevels={defendedVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showSmc={smcVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} showBlockReclaims={blockReclaimVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible && controlAvailable} showRibbon={ribbonVisible} showDefendedLevels={defendedVisible} />
                 </div>
               </div>
 

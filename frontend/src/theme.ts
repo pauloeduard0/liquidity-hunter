@@ -296,3 +296,8 @@ export const VWAP_BAND_2_COLOR = 'rgba(143, 176, 201, 0.20)'
  */
 export const VWAP_ANCHORED_COLORS = ['#4dd0e1', '#9575cd']
 export const VWAP_ANCHORED_LINE_WIDTH = 2
+
+// Block reclaim: a VWAP reclaim that followed a test of an order block. Takes
+// the VWAP's own hue -- the reading is about that average -- lifted to full
+// strength so it reads against the band it sits on.
+export const BLOCK_RECLAIM_COLOR = '#d8a949'

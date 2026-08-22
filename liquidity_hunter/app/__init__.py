@@ -5,6 +5,7 @@ Wires together `data`, `indicators`, `liquidity`, `psychology`, and
 other layers; no other layer depends on `app`.
 """
 
+from liquidity_hunter.app.block_reclaim import detect_block_reclaims
 from liquidity_hunter.app.dashboard_data import DashboardData, load_dashboard_data
 from liquidity_hunter.app.liquidation_backtest import (
     LiquidationBacktester,
@@ -22,6 +23,7 @@ from liquidity_hunter.app.overview import (
 from liquidity_hunter.scoring import ScoredLiquidityZone
 
 __all__ = [
+    "detect_block_reclaims",
     "OVERVIEW_TIMEFRAMES",
     "DashboardData",
     "LiquidationBacktester",

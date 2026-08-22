@@ -6,6 +6,7 @@ trading, signal, or decisioning logic.
 """
 
 from liquidity_hunter.core.domain.behavior_divergence import BehaviorDivergence
+from liquidity_hunter.core.domain.block_reclaim import BlockReclaim
 from liquidity_hunter.core.domain.candle import Candle
 from liquidity_hunter.core.domain.consolidation import ConsolidationRange
 from liquidity_hunter.core.domain.enums import (
@@ -86,6 +87,7 @@ from liquidity_hunter.core.domain.volume_spread import VolumeSpreadSignal
 from liquidity_hunter.core.domain.vwap import VWAPPoint, VWAPSeries
 
 __all__ = [
+    "BlockReclaim",
     "AnomalySeverity",
     "BehaviorDivergence",
     "BiasSource",

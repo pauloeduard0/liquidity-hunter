@@ -11,9 +11,11 @@ from datetime import datetime
 from functools import lru_cache
 from statistics import fmean
 
+from liquidity_hunter.app.block_reclaim import detect_block_reclaims
 from liquidity_hunter.app.liquidity_grabs import build_liquidity_grabs
 from liquidity_hunter.app.sweep_context import build_sweep_contexts
 from liquidity_hunter.core.domain import (
+    BlockReclaim,
     Candle,
     ConsolidationRange,
     ConsolidationStatus,
@@ -985,6 +987,12 @@ class DashboardData:
     # and side (see `app.liquidity_grabs`). The full stream: which few belong
     # on a chart is presentation.
     liquidity_grabs: list[LiquidityGrab] = field(default_factory=list)
+    # Every VWAP reclaim in the window that followed a test of an order block
+    # (see `app.block_reclaim`), each carrying `r_atr` -- how far the reclaim
+    # sat from the tested block in the series' own volatility. The reading is
+    # only strong where that distance is small; the threshold is deliberately
+    # the reader's, so the layer stays the same rule the measurement covers.
+    block_reclaims: list[BlockReclaim] = field(default_factory=list)
     # What each confirmed `LIQUIDITY_SWEEP` of `internal_structure_events`
     # actually swept (see `app.sweep_context`): whether its extreme landed in
     # a facing, pre-existing order block, and how deep it went. Keyed to the
@@ -2876,6 +2884,13 @@ def load_dashboard_data(
             liquidity_zones=liquidity_zones,
             poi_zones=poi_zones,
             candles=candles,
+        ),
+        block_reclaims=detect_block_reclaims(
+            candles,
+            poi_zones,
+            session_vwap,
+            symbol=symbol,
+            timeframe=timeframe,
         ),
         sweep_contexts=build_sweep_contexts(
             symbol=symbol,

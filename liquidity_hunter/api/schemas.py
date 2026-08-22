@@ -10,6 +10,7 @@ it serializable to JSON. The nested domain types (`Candle`, `LiquidityZone`,
 from pydantic import BaseModel, ConfigDict, Field
 
 from liquidity_hunter.core.domain import (
+    BlockReclaim,
     Candle,
     ConsolidationRange,
     LeverageLiquidationMap,
@@ -76,5 +77,6 @@ class DashboardDataResponse(BaseModel):
     )
     consolidation_ranges: list[ConsolidationRange] = []
     liquidity_grabs: list[LiquidityGrab] = []
+    block_reclaims: list[BlockReclaim] = []
     sweep_contexts: list[SweepContext] = []
     structure_confluence: list[StructureConfluence] = []

@@ -35,7 +35,7 @@ import { RibbonPrimitive } from '../charting/RibbonPrimitive'
 import { buildPhase, buildRibbon, structureTrendByCandle } from '../utils/tideRibbon'
 import type { DefendedMark } from '../utils/defendedLevels'
 import { buildDefenceLevels, buildDefendedMarks } from '../utils/defendedLevels'
-import type { BehaviorDivergence, DashboardData, LiquidityGrab, LiquiditySide, LiquidityZone, LiquidityZoneType, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
+import type { BehaviorDivergence, BlockReclaim, DashboardData, LiquidityGrab, LiquiditySide, LiquidityZone, LiquidityZoneType, ManipulationCycle, MarketStructure, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -72,6 +72,7 @@ import {
   VP_RIGHT_MARGIN,
   VWAP_ANCHORED_COLORS,
   VWAP_ANCHORED_LINE_WIDTH,
+  BLOCK_RECLAIM_COLOR,
   VWAP_BAND_1_COLOR,
   VWAP_BAND_2_COLOR,
   VWAP_COLOR,
@@ -790,6 +791,32 @@ function buildStopRunMarkers(breaks: SupertrendBreak[]): SeriesMarker<Time>[] {
     )
 }
 
+// A block reclaim that happened close to the block it followed. The label
+// carries `r_atr` because that number *is* the reading -- inside about one ATR
+// the block and the VWAP are one level holding two populations, and the
+// measured lift over a block-less reclaim is +21 points of hit rate; wider
+// apart they are two levels price visited in sequence and the lift is gone.
+// Only the tight ones are drawn: which few belong on a chart is presentation,
+// and the detector deliberately emits them all.
+const BLOCK_RECLAIM_MAX_R_ATR = 1.0
+
+function buildBlockReclaimMarkers(reclaims: BlockReclaim[]): SeriesMarker<Time>[] {
+  return reclaims
+    .filter((r) => r.r_atr !== null && r.r_atr <= BLOCK_RECLAIM_MAX_R_ATR)
+    .map(
+      (r) =>
+        ({
+          time: toChartTime(r.timestamp) as Time,
+          // Anchored on the side the wick came from, where the block sits.
+          position: r.direction === 'bullish' ? 'belowBar' : 'aboveBar',
+          shape: 'circle',
+          color: BLOCK_RECLAIM_COLOR,
+          text: `⟡${r.r_atr!.toFixed(1)}`,
+          size: 1,
+        }) as SeriesMarker<Time>,
+    )
+}
+
 // A defended level: the wick cleared the Tide envelope's edge into standing
 // levels from two or more families and the close came straight back inside.
 // Anchored on the raided side, so the mark sits where the stops were, and
@@ -983,6 +1010,8 @@ interface MainChartProps {
   showVolume?: boolean
   showRsiDivergence?: boolean
   showSupertrend?: boolean
+  /** VWAP reclaims that followed a test of an order block, tight ones only. */
+  showBlockReclaims?: boolean
   vwapMode?: VwapMode
   showAnchoredVwap?: boolean
   showVolumeProfile?: boolean
@@ -1010,6 +1039,7 @@ export function MainChart({
   showVolume = true,
   showRsiDivergence = false,
   showSupertrend = false,
+  showBlockReclaims = false,
   vwapMode = 'off',
   showAnchoredVwap = false,
   showVolumeProfile = false,
@@ -2503,6 +2533,9 @@ export function MainChart({
     // holds a single marker set), merged and re-sorted ascending by time.
     const vsaMarkers = buildVsaMarkers(vsaSignals)
     const stopRunMarkers = buildStopRunMarkers(stopRuns)
+    const blockReclaimMarkers = showBlockReclaims
+      ? buildBlockReclaimMarkers(data.block_reclaims ?? [])
+      : []
     // A structural level stands exactly as long as its line is drawn, so the
     // evidence counted here is the evidence on screen. `structureLineEndTime`
     // answers in chart time; map it back to the ISO timestamp the level rule
@@ -2521,7 +2554,12 @@ export function MainChart({
           ),
         )
       : []
-    const mergedMarkers = [...vsaMarkers, ...stopRunMarkers, ...defendedMarkers].sort(
+    const mergedMarkers = [
+      ...vsaMarkers,
+      ...stopRunMarkers,
+      ...defendedMarkers,
+      ...blockReclaimMarkers,
+    ].sort(
       (a, b) => (a.time as number) - (b.time as number),
     )
     divergenceMarkersRef.current?.setMarkers(mergedMarkers)
@@ -2694,7 +2732,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showSweptZones, showOrderBlocks, showSweeps, showSmc, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode, showRibbon, showDefendedLevels])
+  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showSweptZones, showOrderBlocks, showSweeps, showSmc, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, showBlockReclaims, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode, showRibbon, showDefendedLevels])
 
   // Incremental live-price update: the forming candle, and the fixed-reference
   // series derived from it, refreshed in place on every poll. This runs on the

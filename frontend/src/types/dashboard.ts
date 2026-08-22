@@ -621,6 +621,33 @@ export interface VWAPSeries {
   estimated: boolean
 }
 
+/**
+ * A candle that reclaimed the VWAP after price tested an order block.
+ *
+ * `r_atr` is the reading that matters: how far the reclaim sat from the tested
+ * block in the series' own volatility. Small means the block and the VWAP are
+ * one level holding two populations; large means two levels price happened to
+ * visit in sequence. `vwap_candles` says how much the average had accumulated,
+ * which the measured lift tracks. Descriptive -- no entry, size, or target.
+ */
+export interface BlockReclaim {
+  symbol: string
+  timeframe: TimeFrame
+  timestamp: string
+  direction: MarketDirection
+  reclaim_price: number
+  vwap_price: number
+  block_price_low: number
+  block_price_high: number
+  block_timestamp: string
+  test_start_timestamp: string
+  first_test: boolean
+  test_extreme: number
+  reclaim_distance: number
+  r_atr: number | null
+  vwap_candles: number
+}
+
 export interface DashboardData {
   symbol: string
   timeframe: TimeFrame
@@ -653,6 +680,7 @@ export interface DashboardData {
   liquidity_continuation_history: LiquidityHuntEpisode[]
   consolidation_ranges: ConsolidationRange[]
   liquidity_grabs: LiquidityGrab[]
+  block_reclaims: BlockReclaim[]
   sweep_contexts: SweepContext[]
   structure_confluence: StructureConfluence[]
 }
