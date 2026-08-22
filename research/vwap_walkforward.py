@@ -79,6 +79,29 @@ def _tight(row: dict, limit: float) -> bool:
     return row.get("r_atr") is not None and row["r_atr"] <= limit
 
 
+#: Symbols by measured spread tercile, from `research/measured_spreads.json`.
+#: The liquidity split is declared as rules for the same reason the `r_atr`
+#: threshold is: it was a slice someone looked at, and PBO only corrects for
+#: the trials it is told about. An objective axis (measured spread) removes the
+#: researcher's choice of which name counts as a major, but not the fact that
+#: three more rules were tried.
+def _terciles() -> dict[str, set[str]]:
+    path = Path(__file__).parent / "measured_spreads.json"
+    if not path.exists():
+        return {}
+    spreads = json.loads(path.read_text())
+    ordered = sorted(spreads, key=lambda s: spreads[s]["spread"])
+    third = max(1, len(ordered) // 3)
+    return {
+        "tight": set(ordered[:third]),
+        "middle": set(ordered[third:2 * third]),
+        "wide": set(ordered[2 * third:]),
+    }
+
+
+TERCILES = _terciles()
+
+
 #: The rules a researcher plausibly considered. PBO is only honest if the
 #: discarded candidates are declared alongside the kept one -- the count of
 #: trials is what the deflation corrects for.
@@ -103,6 +126,10 @@ RULES: dict[str, object] = {
     "vwap|r<=1.0": lambda r: r["arm"] == "vwap" and _tight(r, 1.0),
     "eql|r<=1.0": lambda r: r["arm"] == "eql" and _tight(r, 1.0),
 }
+for _tier, _members in TERCILES.items():
+    RULES[f"ob|r<=1.0|{_tier}"] = (
+        lambda r, m=_members: r["arm"] == "ob" and _tight(r, 1.0) and r["symbol"] in m
+    )
 
 
 def daily_matrix(

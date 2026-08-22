@@ -159,6 +159,36 @@ Getting the real number needs quotes, not bars: a book snapshot recorded at
 each signal, or fills from an account. That is execution, which is out of
 scope here, so it belongs in the consumer of the API.
 
+## Liquidity is not an axis
+
+The earlier claim — that the strength
+sat in the alts, where the cost assumption was weakest — rested on a
+hand-picked list of majors, a researcher's choice sitting exactly where the
+conclusion was. With the spread measured per symbol there is an objective
+axis, so the split is by spread tercile and each trade is charged its own
+cost:
+
+| tercile | median spread | n | hit 2R | placebo | lift | net R | t |
+|---|---|---|---|---|---|---|---|
+| tight | 0.011% | 164 | 51.8% | 31.0% | +20.8 pp | +0.144 | +1.2 |
+| middle | 0.023% | 217 | 55.3% | 29.6% | +25.7 pp | +0.311 | +3.1 |
+| wide | 0.044% | 255 | 51.4% | 28.0% | +23.4 pp | +0.109 | +1.2 |
+
+The lift is uniform — 21 to 26 points against a placebo steady at 28-31% — so
+the mechanism is not an artefact of thin books. The wide tercile is not the
+strong one: same hit rate, *lowest* net, because it pays more cost. The
+prediction recorded before the run (present in all three with overlapping
+magnitudes, if real) is what happened.
+
+Walk-forward says the same from the other side. Declared as three more rules,
+so PBO counts them, each tercile is positive out of sample and **none beats
+the undivided rule** — 3.75, 4.46 and 4.61 against 6.30. Splitting by
+liquidity subtracts sample and adds nothing, which is what a split with no
+information in it looks like. PBO is unchanged at 0.067; the deflated Sharpe
+absorbed the extra trials (expected max 1.77 → 1.85, observed 5.53).
+
+**Do not filter this setup by liquidity.**
+
 ## Walk-forward: the edge is there across time, not only across symbols
 
 Symbols held out do not answer "is this one regime?", because the symbols are
@@ -178,17 +208,23 @@ and leaving it out of the trial count would flatter the choice being defended.
 * 22 folds, mean train SR 6.19 against mean test SR 4.09 — degradation of
   −2.10, and **16 of 22 folds positive** out of sample.
 * **PBO 0.067**, well under the 0.5 line.
-* Deflated Sharpe: observed 5.53 against an expected max of 1.77 from fifteen
-  trials on noise alone.
+* Deflated Sharpe: observed 5.53 against an expected max of 1.85 from the
+  eighteen trials declared (the liquidity terciles below are three of them).
 
 ## What this does not establish
 
-**That it pays.** R is 0.42% of price on M15, so a 0.10% round trip costs
-0.275R and the arms break even near a 0.20% round trip. On liquid majors, where
-that cost is knowable, n=167 and the edge dies at 0.15%. The strength sits in
-the alts, where the cost assumption is the weakest thing in the study. Nothing
-in this layer knows a reader's execution costs, which is one reason it names no
-entry, size, or target.
+**That a reader's own fill matches the measured one.** The round trip is no
+longer assumed — it is counted off the tape, and the setup survives it at both
+bounds (see "What it costs, measured"). But that measurement prices a fill at
+the touch on recent tape, so depth, latency and a stop-market in a fast move
+are still uncharged, and the reader's fee tier — which dominates the cost — is
+theirs, not the study's. Nothing in this layer knows any of that, which is one
+reason it names no entry, size, or target.
+
+*Superseded:* this section previously said the edge died at 0.15% on majors
+and that its strength sat in the alts where cost was least knowable. Both
+halves were wrong. The cost is dominated by the flat fee rather than by the
+spread, and the lift is uniform across spread terciles.
 
 **That the block works better short.** It looked that way, and it does not
 survive the placebo. Both arms are split by side, and the *placebo* carries the

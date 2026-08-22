@@ -244,6 +244,68 @@ def measured_cost(rows: Sequence[dict], spreads_paths: Sequence[str],
                   f"net {st.mean(nets):>+8.4f}  t {t:>+5.1f}")
 
 
+def by_liquidity(rows: Sequence[dict], spreads_path: str, fee: float,
+                 target: str) -> None:
+    """Does the edge depend on how liquid the instrument is?
+
+    The claim this replaces was "the strength sits in the alts, where the cost
+    assumption is weakest", and it rested on a hand-picked list of majors --
+    a researcher's degree of freedom sitting exactly where the conclusion was.
+    With the spread measured per symbol there is an objective axis, so the
+    split is by **measured spread terciles**: nobody chooses which name is a
+    major.
+
+    Each trade is charged its own symbol's cost, so a dearer tercile is not
+    being flattered by a cheap flat fee. The prediction, recorded before the
+    run: if the block mechanism is real rather than an artefact of thin books,
+    it shows up in all three terciles with overlapping magnitudes. Concentrated
+    in the dearest one, the old claim survives -- and can then be asked whether
+    it survives its own cost.
+    """
+    spreads = json.loads(Path(spreads_path).read_text())
+    priced = [
+        (r, 2 * fee + spreads[r["symbol"]]["spread"])
+        for r in rows if r["symbol"] in spreads
+    ]
+    block = [(r, c) for r, c in priced if r["arm"] == "ob"]
+    if len(block) < 150:
+        print("\nliquidity split: too few priced block trades")
+        return
+    by_symbol = sorted(
+        {r["symbol"] for r, _ in priced},
+        key=lambda sym: spreads[sym]["spread"],
+    )
+    third = max(1, len(by_symbol) // 3)
+    tiers = (
+        ("tight", set(by_symbol[:third])),
+        ("middle", set(by_symbol[third:2 * third])),
+        ("wide", set(by_symbol[2 * third:])),
+    )
+    print(f"\nby measured spread tercile, each trade charged its own cost "
+          f"(target {target}R)")
+    print(f"{'tier':>8} {'symbols':>8} {'spread':>8} {'arm':>8} {'n':>6} "
+          f"{'hit 2R':>8} {'net':>9} {'t':>6}")
+    for label, members in tiers:
+        band = [spreads[s]["spread"] for s in members]
+        for arm, name in (("ob", "block"), ("vwap", "placebo")):
+            sel = [(r, c) for r, c in priced
+                   if r["arm"] == arm and r["symbol"] in members]
+            if len(sel) < 40:
+                continue
+            hit = sum(1 for r, _ in sel if r["r_grid"][target] == float(target))
+            nets = [r["r_grid"][target] - c / r["r_pct"] for r, c in sel]
+            sd = st.stdev(nets) if len(nets) > 1 else 0.0
+            t = st.mean(nets) / (sd / len(nets) ** 0.5) if sd > 0 else 0.0
+            print(f"{label if arm == 'ob' else '':>8} "
+                  f"{len(members) if arm == 'ob' else '':>8} "
+                  f"{(f'{st.median(band):.3%}' if arm == 'ob' else ''):>8} "
+                  f"{name:>8} {len(sel):>6} {hit / len(sel):>7.1%} "
+                  f"{st.mean(nets):>+9.4f} {t:>+6.1f}")
+    print("\n  Overlapping magnitudes across the three = the mechanism is not")
+    print("  a liquidity artefact. Concentrated in one = it is, and the tier")
+    print("  it concentrates in is the one to trust least.")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--trades", required=True)
@@ -294,6 +356,7 @@ def main() -> None:
     placebo_table(rows, args.stability_cost)
     if args.spreads:
         measured_cost(rows, args.spreads, args.taker_fee, args.stability_target)
+        by_liquidity(rows, args.spreads[0], args.taker_fee, args.stability_target)
     by_direction(rows, args.stability_cost)
     by_accumulation(rows, args.stability_cost, args.accumulation_edges)
 
