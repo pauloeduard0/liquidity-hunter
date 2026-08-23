@@ -53,3 +53,6 @@ research/.klines_cache/
 # reproducible from the command recorded in docs/block_reclaim.md.
 trades*.json
 manage.json
+
+# paper journal (local run output)
+paper_journal.jsonl

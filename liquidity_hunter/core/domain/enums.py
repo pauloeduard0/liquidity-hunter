@@ -374,3 +374,18 @@ class ScreenerStatus(str, Enum):
 
     ARMED = "armed"
     FIRED = "fired"
+
+
+class PaperOutcome(str, Enum):
+    """How a journalled decision resolved.
+
+    ``OPEN``: still running. ``TARGET``/``STOP``: the 2R level or the stop was
+    reached -- a candle that spans both credits the ``STOP``, the conservative
+    attribution the study uses. ``EXPIRED``: neither, within the study's
+    40-candle horizon.
+    """
+
+    OPEN = "open"
+    TARGET = "target"
+    STOP = "stop"
+    EXPIRED = "expired"

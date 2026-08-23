@@ -977,6 +977,36 @@ total monthly net R is comparable (~1.4R vs ~2.2R recent, at 2R); the choice
 is about cadence and drawdown tolerance, not strength.
 
 
+## The paper journal: measuring the one cost the study assumes
+
+Every net figure here is measured against an entry at the **trigger candle's
+close** -- a price that has already happened by the time anything can act on
+it. Live, the first available price is the next one, and the difference is the
+only cost in this study that is assumed rather than observed. It matters most
+exactly where the edge is thinnest: M15 nets +0.23R on a 0.41R cost, so a
+persistent 0.05R of slippage is a fifth of the edge.
+
+`app/paper_journal.py` + `app/paper_runner.py` record it. Two idempotent
+passes, cron-able: `record_decisions` reads the screener, keeps rows passing
+the operating gates (M15 `r_atr <= 1.0` and `vwap_candles >= 15`; M30/H1/H4 the
+gate alone), and journals each with both prices -- the close the study assumed
+and the tape's price at the moment of recording -- storing the gap in percent
+and, the figure that decides, **in R**. `resolve_open` settles each against
+later candles at 2R, the stop, or the 40-candle horizon, crediting the stop
+when a candle spans both (the study's own conservative attribution), and
+measures `realized_r` from the **observed** price, so the journal's R already
+carries the slippage the study could not see.
+
+It records and never orders: no credentials, no order placement, public data
+only. Execution and position management stay out of scope; what is in scope is
+the measurement.
+
+One design error is worth recording, because the journal's first live pass
+found it: reading the screener's whole recent window and pricing a row against
+the tape *now* logged a 1.6R "slippage" on a signal that had fired three hours
+earlier. That is the cost of chasing, not of slippage. `MAX_DECISION_AGE_CANDLES
+= 1` bounds a decision to a trigger that has just closed.
+
 ## What this does not establish
 
 **That a reader's own fill matches the measured one.** The round trip is no

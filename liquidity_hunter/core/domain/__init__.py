@@ -29,6 +29,7 @@ from liquidity_hunter.core.domain.enums import (
     NarrativeEventType,
     OIParticipation,
     OIRegime,
+    PaperOutcome,
     POIZoneKind,
     POIZoneStatus,
     RetailPositioning,
@@ -75,6 +76,7 @@ from liquidity_hunter.core.domain.oi_analysis import (
     OIRegimeReading,
 )
 from liquidity_hunter.core.domain.overview import MarketOverview, TimeframeOverview
+from liquidity_hunter.core.domain.paper_decision import PaperDecision
 from liquidity_hunter.core.domain.poi_zone import POIZone
 from liquidity_hunter.core.domain.retail_bias import RetailBias
 from liquidity_hunter.core.domain.screener import (
@@ -139,6 +141,8 @@ __all__ = [
     "OIQualifiedEvent",
     "OIRegime",
     "OIRegimeReading",
+    "PaperDecision",
+    "PaperOutcome",
     "OpenInterestPoint",
     "POIZone",
     "POIZoneKind",
