@@ -908,6 +908,36 @@ Walk-forward Sharpe here is gross (the known trap); on H4 the cost is
 0.03–0.07R, which flips no sign. The wider tiers were declared in
 `research/vwap_walkforward.py` before the run, so PBO prices them.
 
+### The H4 target grid, and why the target stays 2R
+
+The full 1R–3R grid at both caps, both windows (net of measured cost):
+
+| gate ≤ 1.0 | hit full | net full | hit 253d | net 253d |
+|---|---|---|---|---|
+| 1R | 72.6% | +0.382 | 79.5% | +0.485 |
+| 2R | 54.4% | +0.565 | 46.2% | +0.280 |
+| 2.5R | 49.2% | +0.643 | 38.5% | +0.241 |
+| 3R | 43.7% | +0.655 | 33.3% | +0.229 |
+
+The two windows disagree about the target: full-sample the net rises with
+the target (3R best), while the recent 253-day window (n=39) falls with it
+(1R best). A disagreement where one side has 39 trades is sample noise, not
+regime — and picking the target off the better cell of this table is the
+target-overfit the climax study already priced. Everything from 1.5R to 3R
+is net-positive in every slice; nothing dominates both windows. **The target
+stays 2R**: never the worst cell anywhere, and the only one that has been
+through the walk-forward and the eleven exit rules. 2.5R was considered and
+declined for exactly this reason (recorded 2026-08-23); it becomes a
+question again only if it wins in *both* windows on a larger recent sample.
+At the ≤1.5 cap the same grid is flatter (3R best in both windows, +0.288 /
++0.200) but the spread is within noise of 2R there too.
+
+The frequency/hit-rate pairing is one or the other, not both: **~5
+trades/month at ~54% (gate ≤ 1.0), or ~17/month at ~40% (cap ≤ 1.5)** —
+total monthly net R is comparable (~1.4R vs ~2.2R recent, at 2R); the choice
+is about cadence and drawdown tolerance, not strength.
+
+
 ## What this does not establish
 
 **That a reader's own fill matches the measured one.** The round trip is no
