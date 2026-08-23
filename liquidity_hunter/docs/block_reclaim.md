@@ -412,6 +412,56 @@ poetry run python research/vwap_ob_pinbar.py \
 poetry run python research/vwap_walkforward.py --trades trades.json
 ```
 
+## Two ideas from a visual backtest, both measured, both negative
+
+Both came from a reader watching charts rather than from the data, which is the
+useful direction for a hypothesis to arrive from. Neither survived.
+
+### A VSA climax does not make a better target
+
+The thought: a climax bar is where the tape already changed hands violently, so
+a move might travel *to* it and stop. `research/climax_target.py` measures two
+readings — a **static** target (the nearest climax level already printed beyond
+the entry, known before the trade starts) and a **dynamic** exit (leave on the
+close of the first candle that prints an opposing climax). Both are free of
+lookahead, and the comparison runs on the subset that *has* a target with the 2R
+baseline recomputed there, since dropping the targetless trades would select for
+charts that happened to be violent lately.
+
+| M15, n=374 (those with a target) | gross | net | t |
+|---|---|---|---|
+| **fixed 2R** | +0.583 | **+0.188** | **+2.4** |
+| static climax level | +0.503 | +0.108 | +1.1 |
+| dynamic climax exit | +0.455 | +0.060 | +0.4 |
+
+M5 repeats it (−0.281 / −0.343 / −0.448 on n=771), and so does each half of both.
+Notably the median climax target sits at **2.40R**, so the level is not absurd —
+what costs is its spread: p10 at 0.79R gives the edge away, p90 at 7.00R hands
+it back. A fixed 2R is the better compromise. That last sentence is a story;
+what is measured is that it loses.
+
+### Restricting to the majors is worse, and the reason is the denominator again
+
+| | n | hit | cost R | net |
+|---|---|---|---|---|
+| M15, all 70 symbols | 622 | 54.0% | 0.405 | **+0.225** |
+| M15, 7 majors only | 42 | 50.0% | **0.536** | −0.036 |
+| M5, all 70 | 1351 | 47.1% | 0.687 | −0.268 |
+| M5, 7 majors only | 82 | 52.4% | **1.041** | −0.468 |
+
+The majors cost **more** in R, not less: less volatility means a smaller stop as
+a fraction of price, so the same fee takes a larger share of it — on M5 it
+passes a whole R per trade. The setup also barely fires there, 42 trades over
+666 days across seven symbols.
+
+With n=42 the claim is not "majors are worse"; it is that **there is no evidence
+they are better**, the point estimate is worse, and a mechanism explains why.
+Note also the shape of the question: picking "the strong assets" by hand is the
+same move as the retracted "the strength is in the alts" claim, which the
+objective redo by measured-spread tercile showed to be uniform. Liquidity is not
+an axis, and choosing the axis after seeing the charts is how it appears to be
+one.
+
 ## Letting the winners run: the excursion is there and unreachable
 
 The question came from a chart rather than from the data, which is why it was
