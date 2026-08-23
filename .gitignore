@@ -48,3 +48,8 @@ research/.klines_cache/
 
 # Claude Code: local machine settings (the skills/ dir stays versioned).
 .claude/settings.local.json
+
+# Study exports: the dated trade sets are large (tens of MB) and fully
+# reproducible from the command recorded in docs/block_reclaim.md.
+trades*.json
+manage.json

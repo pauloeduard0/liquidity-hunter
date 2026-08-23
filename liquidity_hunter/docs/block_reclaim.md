@@ -314,6 +314,113 @@ and leaving it out of the trial count would flatter the choice being defended.
 * Deflated Sharpe: observed 5.53 against an expected max of 1.85 from the
   eighteen trials declared (the liquidity terciles below are three of them).
 
+## M5: the mechanism confirms, the arithmetic refuses
+
+Measured 2026-08-22, 72 symbols on 5m over 75 000 candles — the **same 666-day
+calendar window** as the 15m run, deliberately, so a difference reads as the
+timeframe rather than as the period. Same rule, same
+`app.block_reclaim` detector, not one parameter retuned. 70 of 72 symbols
+entered (`LRCUSDT` took its whole timeframe down with a degenerate
+`ConsolidationRange`, the `EGLD H1` failure mode again; `MKRUSDT` produced no
+setup).
+
+The two halves of the result point opposite ways, and separating them is the
+finding.
+
+**The mechanism passes, more cleanly than at M15.** Block 44.5% against a
+placebo's 24.4% — a +20.0pp lift against M15's +23.0pp — and it replicates
+across the frozen hash split: +20.3pp on search (n=1104), **+19.1pp on holdout
+(n=463)**. That is stronger evidence than M15 gave, where the holdout's `t` of
++1.2 could not reject zero on its own. The gross exit grid is positive across
+every target with the same broad plateau: +0.262 / +0.281 / +0.341 / +0.341 /
++0.376 at 1.0 → 3.0R.
+
+**The trade fails, at every target and every management variant.** With each
+trade charged its own measured cost (n=1504, 0.132% of price):
+
+| target | hit | gross | cost R | net | t |
+|---|---|---|---|---|---|
+| 1.0R | 63.1% | +0.262 | 0.670 | **−0.408** | −15.1 |
+| 1.5R | 51.2% | +0.281 | 0.670 | **−0.389** | −11.8 |
+| 2.0R | 44.5% | +0.341 | 0.670 | **−0.329** | −8.4 |
+| 2.5R | 38.0% | +0.341 | 0.670 | **−0.329** | −7.5 |
+| 3.0R | 33.9% | +0.376 | 0.670 | **−0.294** | −6.0 |
+
+**The cost column does not vary, and that is definitional, not rounding.** R is
+the entry→stop distance, fixed at entry; the target decides where the trade goes,
+never what the round trip costs relative to the risk taken. So the target is not
+a lever on cost — it moves only the gross, which would have to nearly double.
+
+The clearest framing is the hit rate the payoff demands:
+
+| target | actual | needed, no cost | needed, with cost | short by |
+|---|---|---|---|---|
+| 2.0R | 44.5% | 33.3% | 55.7% | 11.2pp |
+| 2.5R | 38.0% | 28.6% | 47.7% | 9.7pp |
+| 3.0R | 33.9% | 25.0% | 41.8% | 7.9pp |
+
+Without cost the setup clears the bar comfortably at every target. The 0.670R
+lifts the bar across the line, and the trade lands 8-20pp under it.
+
+### Why: the stop shrinks, the fee does not
+
+The round trip costs 0.131% of price at M15 and **0.132% at M5** — the same. But
+M5's stop is far tighter, so the identical fee eats **1.7× more of the risk
+unit**: 0.670R against 0.40R. A tight stop looks like an advantage, and is one in
+absolute risk; but someone reasoning in R never sees the fee change size, because
+as a fraction of price it does not. The shrinking happens on the other side of the
+division and is invisible on the chart. **Dropping a timeframe is not free, and the
+price is in the denominator.**
+
+To break even the round trip would have to cost 0.067% — 2.2bp of fee per side
+after the measured median spread, against Binance USDT-M's standard 5bp. That is
+an account tier, not an adjustment.
+
+### Management does not rescue it either
+
+Measured, not deduced (the first draft of this section argued it arithmetically,
+which in a project where a 1R partial once fooled us with a 70.9% hit rate was
+exactly the wrong habit). Block arm, n=1504, each variant charged its own cost:
+
+| variant | win | scratch | loss | gross | net | t |
+|---|---|---|---|---|---|---|
+| **plain 2R** | 44.8% | 0.1% | 55.1% | +0.341 | **−0.329** | −8.4 |
+| breakeven 0.5R | 24.5% | 44.3% | 31.1% | +0.180 | −0.490 | −16.5 |
+| breakeven 1.0R | 28.9% | 34.2% | 36.9% | +0.208 | −0.462 | −14.4 |
+| breakeven 1.5R | 41.0% | 10.2% | 48.7% | +0.331 | −0.339 | −9.1 |
+| partial ½ at 1R | 63.1% | 0.0% | 36.9% | +0.235 | **−0.770** | −25.6 |
+| trailing 1R | 53.5% | 2.7% | 43.8% | +0.307 | −0.363 | −10.7 |
+
+The plain fixed target is the best of the six. At M15 breakeven-at-1.5R *tied*
+it; here it already loses, because a dearer round trip makes each scratch exit
+relatively more expensive. And the partial repeats the M15 trap at worse scale —
+the table's highest hit rate and its worst result, paying 1.5 round trips on a
+cost already worth 0.670R, over 1R of cost to collect half a prize.
+
+### What it changes
+
+The finding is **not** "it does not work at M5", and the distinction sets the
+roadmap. Looking for more events by dropping timeframe is looking in the wrong
+place: every step down multiplies the trades and shrinks the R that pays for
+them. The open direction is the opposite one — the same mechanism where R is
+wide, which is where the unexplained H4 result already pointed.
+
+One asymmetry is left open and not claimed: at M5 the short side lifts +22.6pp
+against the long side's +16.8pp, and unlike M15 the placebo does *not* reproduce
+it. One sample, in a setup that loses money regardless. Recorded as a loose
+thread.
+
+```
+poetry run python research/vwap_ob_pinbar.py \
+    --symbols $(python research/_symbols.py all) --timeframes 5m \
+    --limit 75000 --deep --export trades5m.json
+poetry run python research/vwap_exit_grid.py --trades trades5m.json \
+    --max-r-atr 1.0 --spreads research/measured_spreads.json
+```
+
+The visual record is `block_reclaim_m5_artifact.html`, published at
+<https://claude.ai/code/artifact/9666b70f-79f7-409e-a017-228e9def4897>.
+
 ## What this does not establish
 
 **That a reader's own fill matches the measured one.** The round trip is no
