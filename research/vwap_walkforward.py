@@ -157,6 +157,30 @@ RULES: dict[str, object] = {
     # rule is scored on (read from `r_grid`); the whole 1.5R-3R band is
     # declared, not just the 2.5R being asked about, so PBO prices the family
     # the way it prices the management one.
+    # The accumulation family, declared 2026-08-23 BEFORE the confirming run
+    # (in-sample slices inside the gate: vwap_candles>=15 separates 46->66%
+    # on M15; ema_slope_with 63/53 and 61/53 on M15/H4; the revisited block
+    # beats the fresh one again). Three prior findings point the same way --
+    # the weekly-anchor H4 lift, the EMA-either refinement, the documented
+    # monotone `vwap_candles` lift -- so the family gets the full rite:
+    # declared here, walk-forwarded, and judged on the symbol holdout.
+    "ob-pin2|r<=1.0|vwap>=15": (
+        lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0)
+        and (r.get("vwap_candles") or 0) >= 15
+    ),
+    "ob-pin2|r<=1.0|slope": (
+        lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0)
+        and bool(r.get("ema_slope_with"))
+    ),
+    "ob-pin2|r<=1.0|revisit": (
+        lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0)
+        and r.get("first_test") is False
+    ),
+    "ob-pin2|r<=1.0|vwap>=15+slope": (
+        lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0)
+        and (r.get("vwap_candles") or 0) >= 15
+        and bool(r.get("ema_slope_with"))
+    ),
     "ob-pin2|r<=1.0#1.5R": lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0),
     "ob-pin2|r<=1.0#2.5R": lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0),
     "ob-pin2|r<=1.0#3.0R": lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0),

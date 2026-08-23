@@ -16,6 +16,14 @@ const TF_LABELS: Record<string, string> = {
  */
 const GATE_R_ATR = 1.0
 
+/**
+ * The accumulation floor: on M15, a reclaim against a session VWAP younger
+ * than ~15 candles measured 46% against the gate's 55% (walk-forwarded,
+ * PBO 0.000 — see `docs/block_reclaim.md`). Young-VWAP rows get a `·youngV`
+ * hint rather than being hidden, the same emit-don't-filter contract.
+ */
+const VWAP_CANDLES_FLOOR = 15
+
 const MAX_ROWS = 14
 
 function rowTitle(entry: BlockReclaimScanEntry): string {
@@ -27,6 +35,10 @@ function rowTitle(entry: BlockReclaimScanEntry): string {
   if (entry.r_atr != null) parts.push(`r_atr ${entry.r_atr.toFixed(2)}`)
   if (entry.reclaim) {
     parts.push(`trigger ${entry.reclaim.trigger_line} · pinbar ${entry.reclaim.pinbar_grade}`)
+    parts.push(`VWAP ${entry.reclaim.vwap_candles} candles old`)
+    if (entry.reclaim.vwap_candles < VWAP_CANDLES_FLOOR) {
+      parts.push('young VWAP — below the measured accumulation floor')
+    }
     if (entry.reclaim.provisional) parts.push('candle still forming')
   }
   return parts.join(' · ')
@@ -71,6 +83,11 @@ function ScreenerRow({ entry }: { entry: BlockReclaimScanEntry }) {
         {entry.candles_ago === 0 ? 'live' : `${entry.candles_ago}c`}
         {entry.reclaim?.provisional ? '?' : ''}
       </span>
+      {entry.reclaim != null && entry.reclaim.vwap_candles < VWAP_CANDLES_FLOOR && (
+        <span className="flex-none text-[9px] text-[#ffb300]" title="young VWAP — below the measured accumulation floor">
+          ·youngV
+        </span>
+      )}
     </div>
   )
 }

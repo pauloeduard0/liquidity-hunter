@@ -911,6 +911,42 @@ Walk-forward Sharpe here is gross (the known trap); on H4 the cost is
 0.03–0.07R, which flips no sign. The wider tiers were declared in
 `research/vwap_walkforward.py` before the run, so PBO prices them.
 
+### The accumulation filter: the line has to be somebody's break-even
+
+The fourth confirmation of one thesis, and the first that becomes an
+operable cut. The thesis has three prior sightings: the H4 confluence lift
+lived in the *weekly* VWAP, not the session one; the EMA(9) route refined the
+Schelling reading to "the line must accumulate"; and `vwap_candles` is
+documented on the domain model as a monotone lift. The cut (declared in
+`vwap_walkforward.py` before the confirming run, 2026-08-23, alongside three
+siblings so PBO priced the family):
+
+**M15, inside the gate: require `vwap_candles >= 15`** — do not take a
+reclaim against a session VWAP younger than ~15 candles (~4h), because a
+barely-started average is nobody's break-even yet.
+
+- Walk-forward: pooled OOS Sharpe **8.47 vs 7.90** for the plain gate — the
+  best of 40 declared rules, PBO 0.000 — and mean daily R *rises* (0.371 vs
+  0.352) while dropping a third of the trades: the kept trades more than pay
+  for the cut ones.
+- Symbol holdout: 62.4% search / 53.6% holdout against the base's
+  57.5%/50.6% — the lift shrinks but survives both halves.
+- Operationally: gated M15 hit ~55% → ~59%, ~39 → ~26 trades/month
+  universe-wide, monthly R unchanged or better.
+
+The three siblings are negative findings and are recorded as such:
+`ema_slope_with` (63/53 in the in-sample slice) collapsed to OOS 5.74 —
+another pretty cut that died in the rite; the `vwap>=15 + slope` combination
+is the `both`-route subset trap again (5.40); `revisit` pools at 7.40, at the
+base — consistent with the freshness reversal staying an observation, not a
+filter. **On H4 none of the four improves the plain gate** (all pool below
+2.34): the timeframe is already scarce, and any further cut thins the daily
+series past what it returns. H4 stays as it is.
+
+Like every threshold in this layer, `vwap_candles` is emitted, not enforced:
+the field rides on every `BlockReclaim`, and the 15-candle floor is the
+reader's cut with the measurement above behind it.
+
 ### The H4 target grid, and why the target stays 2R
 
 The full 1R–3R grid at both caps, both windows (net of measured cost):
