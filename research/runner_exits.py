@@ -63,13 +63,37 @@ FIXED = (2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
 #: `(arm, follow)` -- start trailing once the excursion reaches `arm`, then keep
 #: the stop `follow` behind the best price seen. No target, so no cap.
 TRAILS = ((1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (3.0, 2.0))
+#: Chandelier: `(atr period, multiplier)`. The stop hangs `mult x ATR` under
+#: the highest high since entry (over it, for a short) and the ATR is recomputed
+#: every candle -- so unlike the R-unit trails above, which freeze their
+#: distance at entry, this one *widens* when the move gets violent. That is the
+#: whole claim: it should keep the stop clear of a fast leg's own noise.
+CHANDELIER = ((22, 3.0), (22, 2.0), (22, 1.5), (14, 3.0), (14, 2.0))
+
 #: The bands the r_atr question is actually about.
 BANDS = ((0.0, 1.0), (1.0, 1.5), (1.5, 2.0), (2.0, 3.0), (3.0, 99.0))
 
 
+def atr_series(candles: Sequence[Candle], period: int) -> list[float | None]:
+    """Wilder's ATR, 1:1 with `candles`, None until it is defined."""
+    out: list[float | None] = [None] * len(candles)
+    if len(candles) <= period:
+        return out
+    trs = [candles[0].high - candles[0].low]
+    for i in range(1, len(candles)):
+        c, prev = candles[i], candles[i - 1]
+        trs.append(max(c.high - c.low, abs(c.high - prev.close), abs(c.low - prev.close)))
+    prev_atr = sum(trs[1 : period + 1]) / period
+    out[period] = prev_atr
+    for i in range(period + 1, len(candles)):
+        prev_atr = (prev_atr * (period - 1) + trs[i]) / period
+        out[i] = prev_atr
+    return out
+
+
 def walk(
     candles: Sequence[Candle], i: int, entry: float, r: float, *, bull: bool,
-    horizon: int,
+    horizon: int, atrs: dict[int, Sequence[float | None]] | None = None,
 ) -> tuple[float, dict[str, float]]:
     """Price one entry's forward path under every exit family.
 
@@ -86,6 +110,8 @@ def walk(
     out: dict[str, float] = {}
     live_fixed = dict.fromkeys(FIXED, True)
     live_trail = dict.fromkeys(TRAILS, True)
+    live_chand = dict.fromkeys(CHANDELIER, atrs is not None)
+    peak = 0.0  # best favourable excursion in R, for the chandelier anchor
     for j in range(i + 1, min(i + 1 + horizon, len(candles))):
         c = candles[j]
         adv_r = ((entry - c.low) if bull else (c.high - entry)) / r
@@ -107,6 +133,22 @@ def walk(
                 out[f"trail{arm}/{follow}"] = level
                 live_trail[(arm, follow)] = False
 
+        if atrs is not None:
+            for period, mult in CHANDELIER:
+                if not live_chand[(period, mult)]:
+                    continue
+                a = atrs[period][j - 1] if j - 1 < len(atrs[period]) else None
+                if a is None:
+                    continue
+                # the anchor is the excursion the PREVIOUS candles earned, and
+                # the ATR is the previous close's -- this candle cannot move the
+                # stop it is about to hit.
+                level = peak - (mult * a) / r
+                level = max(level, -1.0)  # never looser than the structural stop
+                if -adv_r <= level:
+                    out[f"chand{period}/{mult}"] = level
+                    live_chand[(period, mult)] = False
+        peak = max(peak, fav_r)
         best = max(best, fav_r)
 
     for t in FIXED:
@@ -115,6 +157,11 @@ def walk(
     for arm, follow in TRAILS:
         if live_trail[(arm, follow)]:
             out[f"trail{arm}/{follow}"] = _mark(
+                candles, i, entry, r, bull=bull, horizon=horizon
+            )
+    for period, mult in CHANDELIER:
+        if live_chand[(period, mult)]:
+            out[f"chand{period}/{mult}"] = _mark(
                 candles, i, entry, r, bull=bull, horizon=horizon
             )
     return best, out
@@ -160,6 +207,7 @@ def main() -> None:
             print(f"  ! {symbol}: {exc}")
             continue
         idx = {c.timestamp: k for k, c in enumerate(candles)}
+        atrs = {p: atr_series(candles, p) for p in {q for q, _ in CHANDELIER}}
         for r in trades:
             i = idx.get(datetime.fromisoformat(r["timestamp"]))
             if i is None:
@@ -172,7 +220,9 @@ def main() -> None:
                 "cost": (2 * args.taker_fee + floor[symbol]["spread"]) / r["r_pct"],
             }
             for h in args.horizons:
-                mfe, out = walk(candles, i, entry, rr, bull=bull, horizon=h)
+                mfe, out = walk(
+                    candles, i, entry, rr, bull=bull, horizon=h, atrs=atrs
+                )
                 rec[f"mfe{h}"] = mfe
                 for k, v in out.items():
                     rec[f"{k}@{h}"] = v
@@ -198,9 +248,11 @@ def main() -> None:
                 f"  max {max(mfe):.1f}R"
             )
             print(f"    {'regra':<16} {'bruto':>8} {'liquido':>9} {'t':>7}")
-            for key in [f"fixed{t}" for t in FIXED] + [
-                f"trail{a}/{b}" for a, b in TRAILS
-            ]:
+            for key in (
+                [f"fixed{t}" for t in FIXED]
+                + [f"trail{a}/{b}" for a, b in TRAILS]
+                + [f"chand{p}/{m}" for p, m in CHANDELIER]
+            ):
                 vals = [x[f"{key}@{h}"] for x in sel]
                 net = [v - x["cost"] for v, x in zip(vals, sel, strict=True)]
                 m = st.fmean(net)

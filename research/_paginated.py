@@ -60,6 +60,17 @@ class PaginatedFuturesProvider(OHLCVProvider):
             if len(cached) >= limit:
                 return cached
 
+        if limit > self.max_fetch_limit:
+            # Cortar em silencio custou caro uma vez: um estudo pediu 75 000
+            # candles de 5m para casar a janela de calendario de outro em 15m,
+            # recebeu 60 000, e a conclusao foi publicada afirmando um desenho
+            # que nao tinha acontecido. Devolver menos do que se pediu e
+            # legitimo; nao dizer nada, nao.
+            print(
+                f"  ! {symbol} {timeframe.value}: pedido {limit} candles, "
+                f"teto do provider e {self.max_fetch_limit} -- a janela sera menor"
+            )
+
         binance_symbol = to_ccxt_symbol(symbol).replace("/", "")
         collected: list[list[Any]] = []
         end: int | None = None

@@ -412,6 +412,42 @@ poetry run python research/vwap_ob_pinbar.py \
 poetry run python research/vwap_walkforward.py --trades trades.json
 ```
 
+## The window, corrected
+
+Every span this document quoted in days was wrong, in two compounding ways, and
+the numbers are restated here rather than edited away.
+
+**The quoted figure was a global range, not a window.** "666 days" and "715
+days" are the distance from the earliest trade of *any* symbol to the latest,
+and one symbol (EOSUSDT, carrying deeper cached history than the rest) stretched
+both. The window a symbol actually contributes is far shorter.
+
+**And the 5m fetch was silently clamped.** `PaginatedFuturesProvider.max_fetch_limit`
+is 60 000; the study asked for 75 000. Sixty thousand 5m candles is 208 days,
+which is exactly the 204-day median span the trades show.
+
+| | asked | got | median span per symbol |
+|---|---|---|---|
+| M15 | 25 000 | 25 000 | **253 days** (241–259) |
+| M5 | 75 000 | 60 000 | **204 days** (199–207) |
+
+So the M5 study's central design — *same calendar window, so the difference is
+the timeframe* — was not achieved. Restricting M15 to each symbol's own M5 date
+range puts them on the same dates:
+
+| | n | hit | cost R | net | t |
+|---|---|---|---|---|---|
+| M15, full window | 622 | 54.0% | 0.405 | +0.225 | +3.7 |
+| **M15, on the M5 window** | 417 | 55.4% | 0.397 | **+0.275** | +3.8 |
+| M5 | 1351 | 47.1% | 0.687 | **−0.268** | −6.4 |
+
+The conclusion survives — M15 is if anything slightly better on the shorter
+dates, so the gap was the timeframe rather than the period. But that is known
+*now*; it was asserted before it was checked, which is the part worth recording.
+A silent clamp is the failure mode to watch for here: the provider returned
+fewer candles than asked and said nothing, and nothing downstream compared the
+span it got against the span it wanted.
+
 ## Two ideas from a visual backtest, both measured, both negative
 
 Both came from a reader watching charts rather than from the data, which is the
@@ -452,7 +488,22 @@ what is measured is that it loses.
 The majors cost **more** in R, not less: less volatility means a smaller stop as
 a fraction of price, so the same fee takes a larger share of it — on M5 it
 passes a whole R per trade. The setup also barely fires there, 42 trades over
-666 days across seven symbols.
+roughly eight months per symbol.
+
+Per symbol the operable population is 3 to 19 trades, which is not a sample.
+BTC shows 71.4% on M15 with a 95% interval of **35.9–91.8%**; ETH shows 33.3% on
+M15 and 78.6% on M5; BNB shows 80.0% on five trades. Those are the same symbols
+swapping places, which is what noise looks like. Loosen the `r_atr` gate until
+each symbol has 86–226 trades and all seven land between 12.5% and 25.3% on both
+timeframes, net negative throughout — the same finding from the other side, that
+where there is sample there is no setup.
+
+Which carries a practical consequence worth stating plainly: **this setup is not
+an asset's, it is a rarity that needs many symbols to accumulate.** 622 M15
+entries come from 70 symbols — nine per symbol over eight months. Trading only
+the majors means waiting weeks between signals and never accumulating enough of
+them to tell working from unlucky. Watching the whole list is not statistical
+fussiness; it is what makes the setup operable at all.
 
 With n=42 the claim is not "majors are worse"; it is that **there is no evidence
 they are better**, the point estimate is worse, and a mechanism explains why.
@@ -517,6 +568,32 @@ no rule's payoff improves at all. **The excursion is there and it is
 unreachable** — price goes that far, but it passes through the stop on the way.
 More time collects nothing; it only offers more chances to be stopped.
 
+### A Chandelier trail does not help, and the reason is the gate
+
+An ATR-anchored trail is a genuinely different family from the R-unit trails
+above: it hangs `N × ATR` under the running high with the **ATR recomputed every
+candle**, so it widens when a leg turns violent instead of freezing its distance
+at entry.
+
+| M15, n=622 | net | t |
+|---|---|---|
+| **fixed 2R** | **+0.225** | **+3.7** |
+| chandelier 22 / 1.5×ATR | +0.180 | +2.3 |
+| chandelier 22 / 2.0×ATR | +0.094 | +1.0 |
+| chandelier 22 / 3.0×ATR | +0.068 | +0.6 |
+
+M5's best is 22/2.0 at −0.239, against the fixed 3R's −0.216. Nothing is
+rescued.
+
+Note the ordering: **the wider the multiple, the worse** — the reverse of the
+motivating intuition. It follows from the gate. `r_atr ≤ 1.0` means R is at most
+one ATR *by construction*, so a 3×ATR chandelier sits 3R or more under the peak
+and the trade must travel past 3R merely to bring the stop to breakeven. That is
+why `chand22/3.0` (+0.068) measures almost exactly like `trail3.0/2.0` (+0.057):
+the same looseness reached by two different routes. The mechanism the idea rests
+on is real; it just cannot apply to a setup that has already selected for tight
+stops.
+
 ### On M15 the existing 2R survives a much wider family
 
 | rule | gross | net | t |
@@ -545,9 +622,14 @@ such search owes a control matched the way every claim here is.
 
 ## M5: the mechanism confirms, the arithmetic refuses
 
-Measured 2026-08-22, 72 symbols on 5m over 75 000 candles — the **same 666-day
-calendar window** as the 15m run, deliberately, so a difference reads as the
-timeframe rather than as the period. Same rule, same
+Measured 2026-08-22, 72 symbols on 5m, asking for 75 000 candles so as to cover
+the same calendar window as the 15m run and read a difference as the timeframe
+rather than as the period. **That is not what happened**, and the correction is
+below under "The window, corrected": the request was silently clamped to the
+provider's 60 000-candle cap, leaving 5m on ~204 days per symbol against 15m's
+~253. Re-run with the windows actually matched, the comparison holds — 15m
+returns **+0.275** on the 5m's own dates against 5m's −0.268 — so the conclusion
+stands and the stated design did not. Same rule, same
 `app.block_reclaim` detector, not one parameter retuned. 70 of 72 symbols
 entered (`LRCUSDT` took its whole timeframe down with a degenerate
 `ConsolidationRange`, the `EGLD H1` failure mode again; `MKRUSDT` produced no
