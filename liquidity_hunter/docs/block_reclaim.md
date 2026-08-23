@@ -898,7 +898,10 @@ highest mean daily R). But the matched recent window (last 253 days, the
 M15 study's span) corrects the ungated claim: **no gate at all is −0.029
 there — the ungated positive was 2020–21 regime.** What survives both samples
 is the widened cap: `r_atr ≤ 1.5` nets +0.128 recent / +0.264 full, ~17
-trades/month across the universe (vs ~4 for gated M15), cost 0.05–0.07R.
+trades/month across the universe, cost 0.05–0.07R. (Frequency is per
+timeframe's own clock: the gated intraday tiers all fire ~36–39/month
+universe-wide — M15 39, M30 36, H1 38 — about 0.5/month per symbol, which is
+why a watchlist of a few symbols reads as "almost never"; gated H4 is ~5.)
 `≤ 2.0` matches its net with double the exposure; `≤ 1.5` is the recorded
 choice. M15 `≤ 1.0` remains the best per trade; the two are the same rule on
 two clocks. M30 and H1 are thin-positive inside the gate only — alive, not

@@ -1,4 +1,4 @@
-import type { DashboardData, MarketOverview, TimeFrame } from '../types/dashboard'
+import type { BlockReclaimScreen, DashboardData, MarketOverview, TimeFrame } from '../types/dashboard'
 
 export interface DashboardQuery {
   symbol?: string
@@ -30,4 +30,13 @@ export async function fetchOverview(symbol: string): Promise<MarketOverview> {
     throw new Error(`GET /api/overview failed: ${response.status} ${response.statusText}`)
   }
   return (await response.json()) as MarketOverview
+}
+
+/** Fetch the universe-wide block-reclaim screener from `GET /api/screener`. */
+export async function fetchScreener(): Promise<BlockReclaimScreen> {
+  const response = await fetch('/api/screener')
+  if (!response.ok) {
+    throw new Error(`GET /api/screener failed: ${response.status} ${response.statusText}`)
+  }
+  return (await response.json()) as BlockReclaimScreen
 }

@@ -362,3 +362,15 @@ class VWAPAnchor(str, Enum):
     MONTH = "month"
     ROLLING = "rolling"
     EVENT = "event"
+
+
+class ScreenerStatus(str, Enum):
+    """State of one block-reclaim screener row.
+
+    ``ARMED``: an order block has been tested on the far side of the VWAP and
+    the detector's wait window is still open -- the trigger candle has not
+    printed. ``FIRED``: the reclaim printed within the requested lookback.
+    """
+
+    ARMED = "armed"
+    FIRED = "fired"

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { fetchDashboardData, fetchOverview } from './api/dashboard'
+import { fetchDashboardData, fetchOverview, fetchScreener } from './api/dashboard'
 import { BehaviorDivergencePanel } from './components/BehaviorDivergencePanel'
 import { KpiRow } from './components/KpiRow'
 import { Logo } from './components/Logo'
@@ -8,8 +8,11 @@ import { MainChart } from './components/MainChart'
 import type { VwapMode } from './components/MainChart'
 import { ManipulationCyclesPanel } from './components/ManipulationCyclesPanel'
 import { MultiTimeframePanel } from './components/MultiTimeframePanel'
+import { ScreenerPanel } from './components/ScreenerPanel'
 import { NarrativePanel } from './components/NarrativePanel'
-import type { DashboardData, MarketOverview, TimeFrame } from './types/dashboard'
+import type { DashboardData, MarketOverview, TimeFrame ,
+  BlockReclaimScreen,
+} from './types/dashboard'
 import { isChartBusy } from './utils/chartActivity'
 import { chartTimezoneLabel } from './utils/chartTime'
 import { formatPrice, setPriceFormatMode } from './utils/format'
@@ -19,6 +22,7 @@ const REFRESH_INTERVAL_MS = 5_000
 // the backend caches each timeframe with a proportional TTL — polling faster
 // than this only re-reads caches.
 const OVERVIEW_REFRESH_INTERVAL_MS = 30_000
+const SCREENER_REFRESH_INTERVAL_MS = 120_000
 
 // A poll tick worth skipping: applying the snapshot is a synchronous burst, so
 // it is deferred while the user is dragging/zooming the chart (the moment the
@@ -144,6 +148,7 @@ function App() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [chartData, setChartData] = useState<DashboardData | null>(null)
   const [overview, setOverview] = useState<MarketOverview | null>(null)
+  const [screen, setScreen] = useState<BlockReclaimScreen | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [manipChartVisible, setManipChartVisible] = useState(false)
   const [divChartVisible, setDivChartVisible] = useState(true)
@@ -318,6 +323,30 @@ function App() {
       clearInterval(interval)
     }
   }, [symbol])
+
+  // Fetch the universe-wide block-reclaim screener (sidebar). Symbol-agnostic:
+  // the whole point is seeing the setup wherever it arms, not on this chart.
+  useEffect(() => {
+    let cancelled = false
+
+    const load = () => {
+      fetchScreener()
+        .then((result) => {
+          if (!cancelled) setScreen(result)
+        })
+        .catch(() => {
+          // Secondary panel: keep the last screen on transient errors.
+        })
+    }
+
+    load()
+    const interval = setInterval(load, SCREENER_REFRESH_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
 
   // Tick the clock in the status bar
   useEffect(() => {
@@ -775,6 +804,7 @@ function App() {
                         onSelectTimeframe={switchChartTimeframe}
                       />
                     )}
+                    {screen && <ScreenerPanel screen={screen} />}
                     {data.narrative && (
                       <NarrativePanel narrative={data.narrative} />
                     )}
