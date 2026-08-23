@@ -78,6 +78,20 @@ class BlockReclaim(DomainModel):
     #: outright. Consumers that replay history should skip them, the same
     #: contract the provisional structure marks carry.
     provisional: bool = False
+    #: Which shared line the pinbar rejected: ``"vwap"``, ``"ema"`` (the fast
+    #: EMA(9), with price already holding the VWAP side) or ``"both"`` on one
+    #: candle. Always ``"vwap"`` when the detector runs without an EMA, which
+    #: is the reading this layer shipped with.
+    #:
+    #: Widening the trigger to either line is measured, not assumed: over 22
+    #: walk-forward folds the widened rule pools the best out-of-sample Sharpe
+    #: of 26 declared candidates (6.72 against 6.15 for the VWAP-only trigger),
+    #: and it earns that without discarding trades -- 622 against 636 -- so the
+    #: gain is a re-timing of the entry rather than a subset selection. The
+    #: ``"both"`` subset measures far better in the search half and *worse* out
+    #: of sample (3.87), so this field is here to be observed, never filtered
+    #: on. See `docs/block_reclaim.md`.
+    trigger_line: str = "vwap"
     #: How many candles of accumulation the VWAP carried at the reclaim.
     #: The lift tracks this monotonically -- a six-candle average is nobody's
     #: break-even -- so a reading against a barely-started VWAP is weaker

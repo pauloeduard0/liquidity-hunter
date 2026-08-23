@@ -63,6 +63,7 @@ from liquidity_hunter.data import (
 from liquidity_hunter.data.exceptions import DataProviderError
 from liquidity_hunter.indicators import (
     anchored_vwap,
+    ema_series,
     supertrend,
     volume_delta_series,
     volume_profile,
@@ -854,6 +855,12 @@ _HUNT_PROXIMITY_ATR = 2.0
 # a recent-lookback reading rather than one over the whole visible series: a
 # 1200-candle profile on H1 spans ~50 days and buries the current balance under
 # months of unrelated history. 200 matches the reference TradingView studies.
+#: The fast line `BlockReclaim` reads as its second trigger. Fixed at 9 --
+#: the period a reader named, not one this project searched. Sweeping it would
+#: turn a pre-registered choice into a scan, and the result would then owe a
+#: correction it has not been charged.
+_BLOCK_RECLAIM_EMA_PERIOD = 9
+
 _VOLUME_PROFILE_LOOKBACK = 200
 # Price bands the lookback range is divided into (floored at the instrument's
 # tick inside `volume_profile`).
@@ -2891,6 +2898,11 @@ def load_dashboard_data(
             session_vwap,
             symbol=symbol,
             timeframe=timeframe,
+            # The fast line as a second route into the same observation. Wired
+            # because it measured: best pooled out-of-sample Sharpe of 26
+            # declared rules over 22 walk-forward folds, and it gets there
+            # without discarding trades. See `docs/block_reclaim.md`.
+            ema=ema_series(candles, _BLOCK_RECLAIM_EMA_PERIOD),
         ),
         sweep_contexts=build_sweep_contexts(
             symbol=symbol,

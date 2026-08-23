@@ -124,6 +124,21 @@ RULES: dict[str, object] = {
     "ob|r<=1.5": lambda r: r["arm"] == "ob" and _tight(r, 1.5),
     "ob|r<=2.0": lambda r: r["arm"] == "ob" and _tight(r, 2.0),
     "vwap|r<=1.0": lambda r: r["arm"] == "vwap" and _tight(r, 1.0),
+    # The charted rule: the same block, triggered by a pinbar on EITHER shared
+    # line once the EMA(9) has crossed the VWAP. Declared whole, and its
+    # `both`-route subset declared beside it -- that subset measures far better
+    # in the search half and is exactly the kind of selection this procedure
+    # exists to price, so leaving it out of the trial count would flatter the
+    # rule being defended.
+    "ob-either|r<=1.0": lambda r: r["arm"] == "ob-either" and _tight(r, 1.0),
+    "ob-either|r<=1.0|both": (
+        lambda r: r["arm"] == "ob-either" and _tight(r, 1.0)
+        and r.get("trigger_line") == "both"
+    ),
+    "ob-either|r<=1.0|ema": (
+        lambda r: r["arm"] == "ob-either" and _tight(r, 1.0)
+        and r.get("trigger_line") == "ema"
+    ),
     "eql|r<=1.0": lambda r: r["arm"] == "eql" and _tight(r, 1.0),
 }
 # The position-management family. Same trades, different exit rule, so each is

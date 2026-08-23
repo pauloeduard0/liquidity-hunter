@@ -28,6 +28,12 @@ from liquidity_hunter.data.providers.base import FuturesDataProvider, OHLCVProvi
 from liquidity_hunter.data.providers.binance import klines_row_to_candle, to_ccxt_symbol
 
 CACHE_DIR = Path(__file__).parent / ".klines_cache"
+
+#: Quantas vezes repetir um erro de rede transitorio antes de desistir do
+#: simbolo. O erro traduzido vira `DataProviderError`, que o laco de
+#: combos ja sabe pular nomeando o simbolo.
+NETWORK_RETRIES = 4
+RETRY_BACKOFF_SECONDS = 2.0
 PAGE = 1500
 CACHE_TTL_SECONDS = 6 * 3600
 
@@ -65,10 +71,28 @@ class PaginatedFuturesProvider(OHLCVProvider):
             }
             if end is not None:
                 params["endTime"] = end
-            try:
-                page: list[list[Any]] = self._exchange.fapiPublicGetKlines(params)
-            except ccxt.ExchangeError as exc:
-                raise DataProviderError(f"{symbol} {timeframe.value}: {exc}") from exc
+            # Uma varredura de 72 simbolos faz milhares de requisicoes, e uma
+            # unica que expira derrubava a coleta inteira: `RequestTimeout` e
+            # `NetworkError`, nao `ExchangeError`, entao escapava do except
+            # abaixo e subia ate o topo. O provider de producao ja repete
+            # transitorios (`data/retry.py`); este nao repetia. Erro de
+            # protocolo (simbolo invalido) continua subindo na primeira vez --
+            # repetir o que nao e transitorio so gasta tempo.
+            page = None
+            for attempt in range(NETWORK_RETRIES):
+                try:
+                    page = self._exchange.fapiPublicGetKlines(params)
+                    break
+                except ccxt.ExchangeError as exc:
+                    raise DataProviderError(f"{symbol} {timeframe.value}: {exc}") from exc
+                except ccxt.NetworkError as exc:
+                    if attempt == NETWORK_RETRIES - 1:
+                        raise DataProviderError(
+                            f"{symbol} {timeframe.value}: {exc}"
+                        ) from exc
+                    time.sleep(RETRY_BACKOFF_SECONDS * 2 ** attempt)
+            if page is None:  # pragma: no cover - defensivo
+                break
             if not page:
                 break
             collected = page + collected

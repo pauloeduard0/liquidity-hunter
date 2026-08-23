@@ -646,6 +646,13 @@ export interface BlockReclaim {
   reclaim_distance: number
   r_atr: number | null
   provisional: boolean
+  /**
+   * Which shared line the pinbar rejected: 'vwap', 'ema' (the fast EMA(9)) or
+   * 'both'. Deliberately not drawn: the 'both' subset measures far better in
+   * the search half and worse out of sample, so a glyph for it would invite
+   * exactly the filtering the measurement rules out.
+   */
+  trigger_line: string
   vwap_candles: number
 }
 

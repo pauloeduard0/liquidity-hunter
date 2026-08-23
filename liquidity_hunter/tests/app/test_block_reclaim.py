@@ -249,3 +249,84 @@ def test_a_settled_reclaim_is_not_provisional() -> None:
         candles, zones, vwap, symbol=SYMBOL, timeframe=TF
     )
     assert [r.provisional for r in reclaims] == [False]
+
+
+# --- the EMA(9) second route -------------------------------------------------
+
+
+def _ema_at(candles: list[Candle], value: float) -> list[float | None]:
+    """A flat EMA at `value`, so a test states the line rather than derives it."""
+    return [value] * len(candles)
+
+
+def test_without_an_ema_the_trigger_is_unchanged() -> None:
+    """The layer's original reading is what it reports when no line is given."""
+    candles, zones, vwap = bullish_case()
+    out = detect_block_reclaims(
+        candles, zones, vwap, symbol="BTCUSDT", timeframe=TimeFrame.M15
+    )
+    assert out and all(r.trigger_line == "vwap" for r in out)
+
+
+def test_ema_route_needs_the_cross() -> None:
+    """A pinbar off the 9 does not count while the 9 sits under the average.
+
+    The gate is a state, not an event: it asks where the two lines are, and an
+    uncrossed pair means the recovery the setup waits for has not happened.
+    """
+    candles, zones, vwap = bullish_case()
+    below = 100.0  # under the VWAP at 105: the 9 has not crossed
+    out = detect_block_reclaims(
+        candles, zones, vwap, symbol="BTCUSDT", timeframe=TimeFrame.M15,
+        ema=_ema_at(candles, below),
+    )
+    assert all(r.trigger_line == "vwap" for r in out)
+
+
+def test_ema_route_needs_price_to_hold_the_vwap_side() -> None:
+    """A wick off the 9 *underneath* the average is a different picture."""
+    candles, zones, vwap = bullish_case()
+    high = 200.0  # far above every close, so no candle can hold above it
+    out = detect_block_reclaims(
+        candles, zones, vwap, symbol="BTCUSDT", timeframe=TimeFrame.M15,
+        ema=_ema_at(candles, high),
+    )
+    # the close can never be above an EMA that far up, so the route stays shut
+    assert all(r.trigger_line == "vwap" for r in out)
+
+
+def test_ema_route_fires_where_the_vwap_is_never_touched_again() -> None:
+    """The charted case: price clears the average, then pinbars off the 9.
+
+    The trigger the VWAP-only rule cannot see. Price tests the block, runs
+    clear of the average on a plain candle, and the pullback finds the fast
+    line without ever coming back to the VWAP -- so there is no reclaim to
+    detect, and the observation would simply be missed.
+    """
+    candles = [flat(i, 108.0) for i in range(20)]
+    candles[20:20] = [
+        candle(20, open_=104, high=104.5, low=100.5, close=101.5),
+        candle(21, open_=101.5, high=103, low=100.2, close=102.5),
+    ]
+    # clears the VWAP at 105 on a plain body -- no wick through it, no pinbar
+    candles.append(candle(22, open_=103.0, high=107.2, low=102.9, close=107.0))
+    # the pullback: a pinbar whose wick finds the 9 at 106.5, closing above
+    # both it and the VWAP
+    candles.append(candle(23, open_=107.0, high=107.1, low=106.0, close=106.9))
+    candles += [flat(i, 107.0) for i in range(24, 30)]
+
+    out = detect_block_reclaims(
+        candles, [block(0, 100.0, 102.0)], vwap_series(candles, 105.0),
+        symbol="BTCUSDT", timeframe=TimeFrame.M15,
+        ema=_ema_at(candles, 106.5),
+    )
+    assert [r.trigger_line for r in out] == ["ema"]
+    assert out[0].timestamp == candles[23].timestamp
+    # the stop is still the block test's extreme, not the pullback's
+    assert out[0].test_extreme == 100.2
+
+    # and without the line the same series yields nothing at all
+    assert not detect_block_reclaims(
+        candles, [block(0, 100.0, 102.0)], vwap_series(candles, 105.0),
+        symbol="BTCUSDT", timeframe=TimeFrame.M15,
+    )

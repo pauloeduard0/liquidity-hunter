@@ -73,6 +73,7 @@ from liquidity_hunter.app.block_reclaim import (
     MAX_WAIT_CANDLES,
     MERGE_GAP_CANDLES,
     MIN_WICK_FRACTION,
+    _visits,
     detect_block_reclaims,
 )
 from liquidity_hunter.app.dashboard_data import (
@@ -85,6 +86,7 @@ from liquidity_hunter.core.domain.enums import (
     MarketControlSide,
     MarketDirection,
     OIRegime,
+    POIZoneKind,
     StructureEvent,
     VWAPAnchor,
 )
@@ -92,6 +94,7 @@ from liquidity_hunter.data.exceptions import DataProviderError
 from liquidity_hunter.data.providers.base import FuturesDataProvider, OHLCVProvider
 from liquidity_hunter.indicators import volume_delta
 from liquidity_hunter.indicators import vwap as compute_vwap
+from liquidity_hunter.indicators.ema import ema_series
 from pydantic import ValidationError
 from research._paginated import NoFuturesProvider, PaginatedFuturesProvider
 from research._replay import scan_first_emissions
@@ -195,6 +198,30 @@ class Ev:
     r_grid: dict[float, float] = field(default_factory=dict)
     #: Payoff in R under each position-management variant, all aiming at 2R.
     r_manage: dict[str, float] = field(default_factory=dict)
+    #: Which shared line the pinbar actually rejected: "vwap", "ema" or
+    #: "both". Only the `ob-either` arm sets it -- the decomposition that says
+    #: whether the second line contributes trades or only re-labels the first.
+    trigger_line: str | None = None
+    #: --- EMA(9) context at the entry candle. EMITTED, NEVER FILTERED, the
+    #: same discipline `r_atr` follows: the threshold is the reader's, so
+    #: every variant stays an analysis-time cut on one collection rather than
+    #: a scan that has to be repeated to be revisited.
+    #: The line's value, and whether the entry closed beyond it in the trade's
+    #: own direction (the cheap "alignment" gate that keeps the sample).
+    ema9: float | None = None
+    ema_side: bool | None = None
+    #: Whether the entry candle also *reclaimed* the 9 -- wick through, close
+    #: back across -- the way it reclaimed the VWAP. Strict confluence.
+    ema_reclaimed: bool | None = None
+    #: Whether the 9 sits BEYOND the VWAP in the trade's direction, i.e. it is
+    #: the far level. This decides whether the confluence gate can bite at all:
+    #: with the 9 inside, clearing the VWAP clears it for free.
+    ema_is_far: bool | None = None
+    #: |EMA9 - VWAP| in local ATR. How much room the gate has to matter.
+    ema_gap_atr: float | None = None
+    #: The 9 rising (True) / falling (False) over the previous 3 candles,
+    #: signed to the trade: True means it slopes the trade's way.
+    ema_slope_with: bool | None = None
     #: Whether this was the order block's FIRST visit -- the "pelo menos pela
     #: primeira vez" of the rule as described.
     first_test: bool | None = None
@@ -405,6 +432,41 @@ def _local_atr(candles: Sequence[Candle], index: int, period: int = 14) -> float
     return atr if atr > 0 else None
 
 
+def _tag_ema(
+    ev: Ev, candles: Sequence[Candle], line: Sequence[float | None],
+    vwap_at: dict, *, slope_lookback: int = 3,
+) -> Ev:
+    """Record where the EMA(9) stood at the entry, and nothing else.
+
+    Six facts, none of them a decision. `ema_is_far` is the one that governs
+    whether a confluence gate can do any work: after a decline into a block
+    below the VWAP the fast line is usually below it too, so a bullish reclaim
+    of the VWAP already clears the 9 and the gate never fires.
+    """
+    i = ev.entry_index
+    v = line[i] if i < len(line) else None
+    if v is None:
+        return ev
+    c = candles[i]
+    bull = ev.direction is BULL
+    ev.ema9 = v
+    ev.ema_side = (c.close > v) if bull else (c.close < v)
+    ev.ema_reclaimed = (
+        c.low < v <= c.close if bull else c.high > v >= c.close
+    )
+    w = vwap_at.get(c.timestamp)
+    if w is not None:
+        ev.ema_is_far = (v > w) if bull else (v < w)
+        atr = _local_atr(candles, i)
+        if atr:
+            ev.ema_gap_atr = abs(v - w) / atr
+    j = i - slope_lookback
+    if j >= 0 and j < len(line) and line[j] is not None:
+        rising = v > line[j]
+        ev.ema_slope_with = rising if bull else not rising
+    return ev
+
+
 def _tag_atr(ev: Ev, candles: Sequence[Candle], period: int = 14) -> Ev:
     """Local ATR at the entry, so R can be read in the symbol's own units.
 
@@ -496,6 +558,184 @@ def _reclaims(candle: Candle, vwap_value: float, *, bull: bool) -> bool:
         if bull
         else candle.high > vwap_value >= candle.close
     )
+
+
+def _ema_hook(
+    candles: Sequence[Candle], line: Sequence[float | None], vwap_at: dict,
+    reclaim: int, *, bull: bool, wait: int, wick_frac: float, body_frac: float,
+) -> tuple[int, float] | None:
+    """The pullback pinbar on the fast line, taken AFTER the VWAP is reclaimed.
+
+    A different trade from the reclaim itself, not a filter on it: price has
+    already crossed the shared level, and the entry is the first pullback that
+    holds the 9 while staying on the reclaimed side of the VWAP. Returns the
+    entry index and its stop (the pullback's extreme), or None if the wait
+    elapses without one.
+
+    Note what the geometry does to the risk unit: the stop is the pullback's
+    low rather than the whole test's, which is *tighter*, and a tighter stop
+    pays a larger share of its R to the same round trip. That is the M5 result
+    restated inside one timeframe, and it is why this arm has to be read in net
+    R and never in hit rate.
+    """
+    for j in range(reclaim + 1, min(reclaim + 1 + wait, len(candles))):
+        v = line[j] if j < len(line) else None
+        w = vwap_at.get(candles[j].timestamp)
+        if v is None or w is None:
+            continue
+        c = candles[j]
+        if bull and c.close < w:
+            return None  # gave the VWAP back; the premise is gone
+        if not bull and c.close > w:
+            return None
+        if not _is_pinbar(c, bull=bull, wick_frac=wick_frac, body_frac=body_frac):
+            continue
+        touched = c.low < v <= c.close if bull else c.high > v >= c.close
+        if not touched:
+            continue
+        span = candles[reclaim + 1 : j + 1]
+        stop = min(x.low for x in span) if bull else max(x.high for x in span)
+        return j, stop
+    return None
+
+
+def _emit_hook(
+    out: list[Ev], candles, line, vwap_at, reclaim: int, *, arm: str, bull: bool,
+    direction, symbol: str, timeframe, hook_wait: int, wick_frac: float,
+    body_frac: float, min_r_atr: float, max_h: int, horizons, targets,
+    target_horizon: int, agg_window: int, control_at, strong_floor: float,
+    random_reps: int, rng,
+) -> None:
+    """Append the `<arm>-hook` trade for one episode, plus its own controls.
+
+    Additive by construction: the reclaim entry is already in `out` and is not
+    touched, so the pair can be compared on one population rather than one
+    replacing the other.
+    """
+    hook = _ema_hook(
+        candles, line, vwap_at, reclaim, bull=bull, wait=hook_wait,
+        wick_frac=wick_frac, body_frac=body_frac,
+    )
+    if hook is None:
+        return
+    hj, hstop = hook
+    hr = abs(candles[hj].close - hstop)
+    hatr = _local_atr(candles, hj)
+    if not (hr > 0 and hatr and hr / hatr >= min_r_atr and hj + max_h < len(candles)):
+        return
+    out.append(_tag_all(
+        Ev(f"{arm}-hook", symbol, timeframe.value, direction, reclaim, hj,
+           candles[hj].close, hstop, hr),
+        candles, horizons, targets, target_horizon,
+        agg_window, control_at, strong_floor,
+    ))
+    for _ in range(random_reps):
+        ri = rng.randrange(50, len(candles) - max_h - 1)
+        e2 = candles[ri].close
+        s2 = e2 - hr if bull else e2 + hr
+        out.append(_tag_all(
+            Ev(f"rand-{arm}-hook", symbol, timeframe.value, direction,
+               ri, ri, e2, s2, hr),
+            candles, horizons, targets, target_horizon,
+            agg_window, control_at, strong_floor,
+        ))
+
+
+def _ema_level_entries(
+    candles: Sequence[Candle], ema_at: dict, *, bull: bool,
+    wick_frac: float, body_frac: float,
+) -> list[int]:
+    """Placebo for the fast line: every pinbar that reclaims the EMA(9).
+
+    The mirror of `_vwap_only_entries`, so the two shared lines can be compared
+    as levels on one population before any block is involved.
+    """
+    out: list[int] = []
+    for i, c in enumerate(candles):
+        v = ema_at.get(c.timestamp)
+        if v is None:
+            continue
+        if _reclaims(c, v, bull=bull) and _is_pinbar(
+            c, bull=bull, wick_frac=wick_frac, body_frac=body_frac
+        ):
+            out.append(i)
+    return out
+
+
+def _ob_ema_triggers(
+    candles: Sequence[Candle], zones, ema_at: dict, *, bull: bool,
+    wick_frac: float, body_frac: float, max_wait: int,
+) -> list[tuple[int, int, bool]]:
+    """The block setup with the EMA(9) standing in for the VWAP.
+
+    The 9 *replaces* the session average rather than joining it: the test has
+    to happen on the far side of the 9, and the reclaim has to be of the 9.
+    This is the question behind "or on the 9" -- not whether the two levels can
+    be combined, but whether the fast line is a shared reference of the same
+    quality. `docs/block_reclaim.md` argues the VWAP earns its place by being
+    widely *observed*, not by being anyone's break-even; if that is the whole
+    mechanism, a line every chart also draws should do comparable work.
+
+    Reuses the production `_visits`, so block lifetime and the FIFO retirement
+    correction are identical -- only the level changes. Returns
+    `(test_start, reclaim_index, first_visit)`.
+    """
+    want = BULL if bull else BEAR
+    out: list[tuple[int, int, bool]] = []
+    for zone in zones:
+        if zone.direction is not want:
+            continue
+        for start, end, first in _visits(list(candles), zone, ema_at, bullish=bull):
+            for j in range(end + 1, min(end + 1 + max_wait, len(candles))):
+                v = ema_at.get(candles[j].timestamp)
+                if v is None:
+                    continue
+                if _reclaims(candles[j], v, bull=bull) and _is_pinbar(
+                    candles[j], bull=bull, wick_frac=wick_frac, body_frac=body_frac
+                ):
+                    out.append((start, j, first))
+                    break
+    return out
+
+
+def _either_line_trigger(
+    candles: Sequence[Candle], vwap_at: dict, ema_at: dict, start: int, end: int,
+    *, bull: bool, wick_frac: float, body_frac: float, max_wait: int,
+) -> tuple[int, str] | None:
+    """The setup as described on the charts: reject EITHER shared line.
+
+    Three conditions, in the order a reader states them. Price has already
+    tested the block; it must be back on the working side of the VWAP; the
+    EMA(9) must have *crossed* the VWAP (a state, not a candle); and then the
+    pinbar counts whether it rejects the VWAP, the 9, or both.
+
+    The second route is the one the existing arms could not produce: a pullback
+    that finds the 9 while price stays clear of the VWAP entirely. It is not
+    the `-hook` arm, which required a VWAP reclaim pinbar to have fired first
+    and so could only ever be a subset of trades the main trigger already took.
+    """
+    for j in range(end, min(end + max_wait + 1, len(candles))):
+        c = candles[j]
+        w, m = vwap_at.get(c.timestamp), ema_at.get(c.timestamp)
+        if w is None or m is None:
+            continue
+        crossed = (m > w) if bull else (m < w)
+        if not crossed:
+            continue  # the 9 has not crossed the average yet
+        if not _is_pinbar(c, bull=bull, wick_frac=wick_frac, body_frac=body_frac):
+            continue
+        on_vwap = _reclaims(c, w, bull=bull)
+        # a rejection of the 9 only counts while price holds the VWAP side --
+        # otherwise it is a bounce underneath the average, a different picture.
+        holds = (c.close > w) if bull else (c.close < w)
+        on_ema = holds and (c.low < m <= c.close if bull else c.high > m >= c.close)
+        if on_vwap and on_ema:
+            return j, "both"
+        if on_vwap:
+            return j, "vwap"
+        if on_ema:
+            return j, "ema"
+    return None
 
 
 def _episodes(indices: Sequence[int], merge_gap: int) -> list[tuple[int, int]]:
@@ -653,6 +893,8 @@ def run_combo(
     htf_steps: Sequence[tuple[datetime, MarketDirection]] | None,
     random_reps: int,
     rng: random.Random,
+    ema_period: int = 9,
+    hook_wait: int = 10,
 ) -> tuple[list[Ev], dict[str, int]]:
     data = load_dashboard_data(
         provider=provider,
@@ -682,6 +924,12 @@ def run_combo(
     if len(candles) < 200 or series is None:
         return [], {}
     vwap_at = {p.timestamp: p.value for p in series.points}
+    ema_line = ema_series(candles, ema_period)
+    ema_at_pre = {
+        c.timestamp: v
+        for c, v in zip(candles, ema_line, strict=False)
+        if v is not None
+    }
     # How many candles the average had accumulated at each point. Tagged on
     # every arm, placebo included: comparing the block arm's gradient against
     # a gradient the placebo also has is what separates "the accumulation is
@@ -775,6 +1023,15 @@ def run_combo(
                 candles, horizons, targets, target_horizon,
                 agg_window, control_at, strong_floor,
             ))
+        _emit_hook(
+            out, candles, ema_line, vwap_at, e, arm="ob", bull=bull,
+            direction=direction, symbol=symbol, timeframe=timeframe,
+            hook_wait=hook_wait, wick_frac=wick_frac, body_frac=body_frac,
+            min_r_atr=min_r_atr, max_h=max_h, horizons=horizons,
+            targets=targets, target_horizon=target_horizon,
+            agg_window=agg_window, control_at=control_at,
+            strong_floor=strong_floor, random_reps=random_reps, rng=rng,
+        )
 
     for arm, collect in (("eql", _eql_triggers),):
         for bull in (True, False):
@@ -837,7 +1094,157 @@ def run_combo(
                             candles, horizons, targets, target_horizon,
                             agg_window, control_at, strong_floor,
                         ))
+                    _emit_hook(
+                        out, candles, ema_line, vwap_at, e, arm=arm, bull=bull,
+                        direction=direction, symbol=symbol, timeframe=timeframe,
+                        hook_wait=hook_wait, wick_frac=wick_frac,
+                        body_frac=body_frac, min_r_atr=min_r_atr, max_h=max_h,
+                        horizons=horizons, targets=targets,
+                        target_horizon=target_horizon, agg_window=agg_window,
+                        control_at=control_at, strong_floor=strong_floor,
+                        random_reps=random_reps, rng=rng,
+                    )
                     break  # one entry per test episode
+
+    # The charted rule: block, then a pinbar on EITHER shared line, gated on
+    # the 9 having crossed the average.
+    #
+    # This mirrors `detect_block_reclaims` condition for condition -- ORDER_BLOCK
+    # zones only, scan from the visit's own end, and the same collapse of
+    # several blocks resolving on one candle down to the NEAREST test -- and
+    # widens exactly one thing, the line the pinbar may reject. A first version
+    # re-implemented the surrounding rule instead of copying it, took every zone
+    # kind and emitted one trade per visit; its VWAP route then measured 33%
+    # against the production arm's 53% on the same trigger, which is the
+    # signature of a broken instrument rather than of a finding.
+    for bull in (True, False):
+        direction = BULL if bull else BEAR
+        cand: dict[tuple, tuple[float, int, int, str, bool]] = {}
+        for zone in data.poi_zones:
+            if zone.direction is not direction or zone.kind is not POIZoneKind.ORDER_BLOCK:
+                continue
+            for vstart, vend, vfirst in _visits(
+                list(candles), zone, vwap_at, bullish=bull
+            ):
+                found = _either_line_trigger(
+                    candles, vwap_at, ema_at_pre, vstart, vend, bull=bull,
+                    wick_frac=wick_frac, body_frac=body_frac, max_wait=max_wait,
+                )
+                if found is None:
+                    continue
+                e, which = found
+                stop = (
+                    min(x.low for x in candles[vstart : e + 1])
+                    if bull
+                    else max(x.high for x in candles[vstart : e + 1])
+                )
+                r = abs(candles[e].close - stop)
+                if r <= 0:
+                    continue
+                key = (candles[e].timestamp, direction)
+                held = cand.get(key)
+                if held is None or r < held[0]:
+                    cand[key] = (r, vstart, e, which, vfirst)
+
+        for r, vstart, e, which, vfirst in sorted(cand.values(), key=lambda x: x[2]):
+            if htf_steps is not None and htf_trend_at(
+                htf_steps, candles[e].timestamp
+            ) is not direction:
+                continue
+            if e + max_h >= len(candles):
+                continue
+            e_atr = _local_atr(candles, e)
+            if e_atr is None or r / e_atr < min_r_atr:
+                continue
+            stop = candles[e].close - r if bull else candles[e].close + r
+            ev = _tag_all(
+                Ev("ob-either", symbol, timeframe.value, direction,
+                   vstart, e, candles[e].close, stop, r),
+                candles, horizons, targets, target_horizon,
+                agg_window, control_at, strong_floor,
+            )
+            ev.trigger_line = which
+            ev.first_test = vfirst
+            out.append(ev)
+            for _ in range(random_reps):
+                ri = rng.randrange(50, len(candles) - max_h - 1)
+                e2 = candles[ri].close
+                s2 = e2 - r if bull else e2 + r
+                out.append(_tag_all(
+                    Ev("rand-ob-either", symbol, timeframe.value, direction,
+                       ri, ri, e2, s2, r),
+                    candles, horizons, targets, target_horizon,
+                    agg_window, control_at, strong_floor,
+                ))
+
+    # The fast line standing in for the session average: the same block setup
+    # and the same bare-level placebo, measured against the EMA(9) instead.
+    ema_at = {
+        c.timestamp: v for c, v in zip(candles, ema_line, strict=False) if v is not None
+    }
+    for bull in (True, False):
+        direction = BULL if bull else BEAR
+        for start, e, first in _ob_ema_triggers(
+            candles, data.poi_zones, ema_at, bull=bull, wick_frac=wick_frac,
+            body_frac=body_frac, max_wait=max_wait,
+        ):
+            if htf_steps is not None and htf_trend_at(
+                htf_steps, candles[e].timestamp
+            ) is not direction:
+                continue
+            if e + max_h >= len(candles):
+                continue
+            stop = (
+                min(x.low for x in candles[start : e + 1])
+                if bull
+                else max(x.high for x in candles[start : e + 1])
+            )
+            entry = candles[e].close
+            r = abs(entry - stop)
+            e_atr = _local_atr(candles, e)
+            if r <= 0 or e_atr is None or r / e_atr < min_r_atr:
+                continue
+            ev = _tag_all(
+                Ev("ob-ema", symbol, timeframe.value, direction, start, e, entry, stop, r),
+                candles, horizons, targets, target_horizon,
+                agg_window, control_at, strong_floor,
+            )
+            ev.first_test = first
+            out.append(ev)
+            for _ in range(random_reps):
+                ri = rng.randrange(50, len(candles) - max_h - 1)
+                e2 = candles[ri].close
+                s2 = e2 - r if bull else e2 + r
+                out.append(_tag_all(
+                    Ev("rand-ob-ema", symbol, timeframe.value, direction,
+                       ri, ri, e2, s2, r),
+                    candles, horizons, targets, target_horizon,
+                    agg_window, control_at, strong_floor,
+                ))
+
+    for bull in (True, False):
+        direction = BULL if bull else BEAR
+        for e in _ema_level_entries(
+            candles, ema_at, bull=bull, wick_frac=wick_frac, body_frac=body_frac
+        ):
+            if htf_steps is not None and htf_trend_at(
+                htf_steps, candles[e].timestamp
+            ) is not direction:
+                continue
+            if e + max_h >= len(candles) or e < max_wait:
+                continue
+            lo = candles[e - max_wait : e + 1]
+            stop = min(x.low for x in lo) if bull else max(x.high for x in lo)
+            entry = candles[e].close
+            r = abs(entry - stop)
+            e_atr = _local_atr(candles, e)
+            if r <= 0 or e_atr is None or r / e_atr < min_r_atr:
+                continue
+            out.append(_tag_all(
+                Ev("ema", symbol, timeframe.value, direction, e - max_wait, e, entry, stop, r),
+                candles, horizons, targets, target_horizon,
+                agg_window, control_at, strong_floor,
+            ))
 
     # placebo: every pinbar VWAP reclaim, no liquidity test required.
     for bull in (True, False):
@@ -875,6 +1282,7 @@ def run_combo(
                 ))
     for ev in out:
         ev.vwap_candles = accumulated.get(candles[ev.entry_index].timestamp)
+        _tag_ema(ev, candles, ema_line, vwap_at)
     return out, counts
 
 
@@ -1024,6 +1432,13 @@ def export_events(events: Sequence[Ev], path: str) -> None:
             "r_atr": e.r_atr,
             "atr_pct": e.atr_pct,
             "vwap_candles": e.vwap_candles,
+            "trigger_line": e.trigger_line,
+            "ema9": e.ema9,
+            "ema_side": e.ema_side,
+            "ema_reclaimed": e.ema_reclaimed,
+            "ema_is_far": e.ema_is_far,
+            "ema_gap_atr": e.ema_gap_atr,
+            "ema_slope_with": e.ema_slope_with,
             "r_manage": e.r_manage,
         }
         for e in events

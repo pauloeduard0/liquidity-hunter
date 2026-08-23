@@ -314,6 +314,104 @@ and leaving it out of the trial count would flatter the choice being defended.
 * Deflated Sharpe: observed 5.53 against an expected max of 1.85 from the
   eighteen trials declared (the liquidity terciles below are three of them).
 
+## The EMA(9): a second route into the same observation
+
+Measured 2026-08-22/23 on the M15 sweep, 72 symbols. The question came from a
+reader's charts: the fast line is on them too, and a pinbar that rejects *it*
+looks like the same event. Four variants were declared and measured; one is now
+wired, three are recorded as negatives.
+
+**What the rule became.** Same block, same stop, same target. The trigger widens
+from "a pinbar that reclaims the VWAP" to "a pinbar that rejects **either**
+shared line", gated on the EMA(9) having crossed the VWAP in the reclaim's
+favour. `BlockReclaim.trigger_line` records which fired.
+
+| | n | hit | net R | t |
+|---|---|---|---|---|
+| VWAP-only trigger | 636 | 52.8% | +0.187 | +3.1 |
+| **either line** | 622 | **54.0%** | **+0.225** | **+3.7** |
+
+Better in both halves (search +0.315 against +0.264, holdout +0.038 against
++0.020). Modest — about 20% more per trade — and it earns it **without
+discarding trades**: 622 against 636. That is why it is trusted more than the
+filters below. A gain from selecting a subset is always suspect; a gain at the
+same sample size is a re-timing of the entry, not a survivorship effect.
+
+Walk-forward, 22 folds, the widened rule and both of its sub-routes declared:
+**pooled out-of-sample Sharpe 6.72, the best of 26 candidates** (the VWAP-only
+trigger pools 6.15), picked on train in three late folds, PBO 0.000, deflated
+Sharpe 6.10 against an expected max of 2.01.
+
+### The subset that must not be taken
+
+The gain concentrates in the `both` route — one candle rejecting both lines:
+63.5% hit and +0.521 net overall, **68.2% in the search half**. Filtering to it
+is the obvious move and it is wrong. Out of sample that subset pools **3.87**
+against the whole rule's 6.72, and its holdout is 53.3% on n=30. Declaring it
+alongside the rule being defended is what let the procedure price it; leaving it
+out of the trial count would have flattered the choice.
+
+Observe `trigger_line`; never filter on it. It is deliberately not drawn on the
+chart for the same reason.
+
+### The route that motivated it is rare
+
+A pinbar on the 9 with the VWAP never touched — the charted case — is **28 of
+622 trades, 4.5%**, and pools 1.02 out of sample. Not wrong, just uncommon, and
+the reason is geometric: inside the tight-stop population the 9 sits *beyond*
+the VWAP 97% of the time, so price recovering from the block crosses the average
+first and the old trigger already caught it. Over *every* reclaim, with no stop
+filter, the 9 is the far level only 61% of the time.
+
+### Three negatives
+
+* **Strict confluence as a filter.** Requiring both lines on the reclaim candle:
+  59.8% hit and +0.415 net, but n=34 in the holdout and no advantage there
+  (+0.070 against a +0.020 baseline). Not established. Note also that "closed
+  beyond the 9" and "reclaimed the 9" are the *same test* on this population
+  (Jaccard 0.98), not two — with the 9 beyond the VWAP, clearing one clears the
+  other.
+* **The pullback hook.** Taking the EMA(9) pullback *after* a VWAP reclaim,
+  paired against the reclaim entry on the same 113 episodes: **57.5% → 25.7%**,
+  net +0.353 → −0.655. Placebo-grade. The block's advantage is spent at the
+  reclaim; waiting for the give-back discards it. The arm was also structurally
+  incapable of finding the charted case, since it required a VWAP reclaim pinbar
+  to have fired first.
+* **The 9 replacing the VWAP.** Block tested and reclaimed against the EMA(9)
+  alone: the block still lifts over its own placebo (+8.8pp, and it replicates
+  — +8.6 search, +9.1 holdout), but gross is +0.008 and net −0.308. The failure
+  is hit rate, not cost: this arm's stop is *wider* (0.48% against 0.38%) and so
+  its cost is *lower* (0.316R against 0.408R). **The level does about three
+  quarters of the work.**
+
+That last one sharpens the Schelling reading rather than contradicting it.
+Shared observation is not sufficient — the line has to **accumulate**. The 9 is
+on every chart in the world and does a third of the job; the event-anchored VWAP
+likewise lost half its lift by re-basing. Three measurements, one direction:
+what matters is how much history the level carries.
+
+### A broken instrument, caught by its own arm
+
+The first `ob-either` implementation re-implemented the surrounding rule instead
+of importing it, and took every POI zone kind while emitting one trade per visit
+rather than collapsing several blocks resolving on one candle down to the
+nearest test. Its VWAP route then measured 33% where the production arm measures
+53% **on the same trigger** — impossible as a finding, diagnostic as a bug. The
+corrected arm mirrors `detect_block_reclaims` condition for condition and widens
+exactly one thing. `docs/` already prescribes one implementation for detector
+and study; this is what the drift looks like when it happens.
+
+The period is fixed at **9** because a reader named it. Sweeping 5/9/21 would
+turn a pre-registered choice into a search, and the result would then owe a
+correction it has not been charged.
+
+```
+poetry run python research/vwap_ob_pinbar.py \
+    --symbols $(python research/_symbols.py all) --timeframes 15m \
+    --limit 25000 --deep --export trades.json
+poetry run python research/vwap_walkforward.py --trades trades.json
+```
+
 ## M5: the mechanism confirms, the arithmetic refuses
 
 Measured 2026-08-22, 72 symbols on 5m over 75 000 candles — the **same 666-day

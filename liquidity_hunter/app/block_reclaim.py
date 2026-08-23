@@ -15,6 +15,7 @@ dated entries, then `research/vwap_exit_grid.py --max-r-atr N` against the
 placebo, on symbols held out of the change.
 """
 
+from collections.abc import Sequence
 from datetime import datetime
 from statistics import fmean
 
@@ -42,6 +43,39 @@ ATR_PERIOD = 14
 #: distance the reading is dominated by the tick grid rather than by where
 #: the two levels sit.
 MIN_DISTANCE_ATR = 0.05
+
+
+def _rejects_ema(
+    candle: Candle, ema_value: float, vwap_value: float, *, bullish: bool
+) -> bool:
+    """The pinbar found the fast line while price held the VWAP side.
+
+    The second route into the same observation. It only counts while the close
+    is on the working side of the VWAP: a wick off the 9 *underneath* the
+    average is a bounce inside the supply the setup is waiting to see spent,
+    which is a different picture entirely.
+    """
+    holds = (candle.close > vwap_value) if bullish else (candle.close < vwap_value)
+    if not holds:
+        return False
+    return (
+        candle.low < ema_value <= candle.close
+        if bullish
+        else candle.high > ema_value >= candle.close
+    )
+
+
+def _ema_crossed(ema_value: float, vwap_value: float, *, bullish: bool) -> bool:
+    """Whether the fast line has crossed the average in the reclaim's favour.
+
+    A *state*, not an event: it asks where the two lines sit, not whether they
+    crossed on this candle. Measured over every reclaim it separates 26.8% from
+    17.9% on the 2R hit rate -- but inside the tight-stop population the layer
+    actually reports it already holds 97% of the time, because a stop that
+    close to the test means the recovery was fast enough to drag the 9 through
+    the average on its own. It gates the EMA route, where it is not redundant.
+    """
+    return (ema_value > vwap_value) if bullish else (ema_value < vwap_value)
 
 
 def _is_reclaim(candle: Candle, vwap_value: float, *, bullish: bool) -> bool:
@@ -162,6 +196,7 @@ def detect_block_reclaims(
     *,
     symbol: str,
     timeframe: TimeFrame,
+    ema: Sequence[float | None] | None = None,
 ) -> list[BlockReclaim]:
     """Every VWAP reclaim that followed a test of an order block.
 
@@ -186,6 +221,15 @@ def detect_block_reclaims(
     if vwap is None or len(candles) < ATR_PERIOD + 2:
         return []
     vwap_at = {point.timestamp: point.value for point in vwap.points}
+    ema_at: dict[datetime, float] = (
+        {}
+        if ema is None
+        else {
+            candle.timestamp: value
+            for candle, value in zip(candles, ema, strict=False)
+            if value is not None
+        }
+    )
     # How much the average had accumulated at each candle: the reading is
     # weaker against a VWAP that has barely started.
     accumulated: dict[datetime, int] = {}
@@ -208,10 +252,18 @@ def detect_block_reclaims(
                 vwap_value = vwap_at.get(candle.timestamp)
                 if vwap_value is None:
                     continue
-                if not _is_reclaim(candle, vwap_value, bullish=bullish):
-                    continue
                 if not _is_pinbar(candle, bullish=bullish):
                     continue
+                on_vwap = _is_reclaim(candle, vwap_value, bullish=bullish)
+                ema_value = ema_at.get(candle.timestamp)
+                on_ema = (
+                    ema_value is not None
+                    and _ema_crossed(ema_value, vwap_value, bullish=bullish)
+                    and _rejects_ema(candle, ema_value, vwap_value, bullish=bullish)
+                )
+                if not (on_vwap or on_ema):
+                    continue
+                line = "both" if (on_vwap and on_ema) else ("vwap" if on_vwap else "ema")
                 window = candles[start : i + 1]
                 extreme = (
                     min(c.low for c in window) if bullish else max(c.high for c in window)
@@ -240,6 +292,7 @@ def detect_block_reclaims(
                         reclaim_distance=distance,
                         r_atr=r_atr,
                         provisional=i == len(candles) - 1,
+                        trigger_line=line,
                         vwap_candles=accumulated.get(candle.timestamp, 1),
                     )
                 )

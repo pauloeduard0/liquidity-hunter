@@ -5,6 +5,7 @@ volume profiles) consumed by `liquidity`, `psychology`, and `scoring`.
 Depends only on `core` and `data`.
 """
 
+from liquidity_hunter.indicators.ema import DEFAULT_PERIOD, ema, ema_series
 from liquidity_hunter.indicators.supertrend import (
     DEFAULT_MULTIPLIER,
     DEFAULT_PERIODS,
@@ -30,6 +31,9 @@ from liquidity_hunter.indicators.vwap import (
 )
 
 __all__ = [
+    "DEFAULT_PERIOD",
+    "ema",
+    "ema_series",
     "DEFAULT_BAND_MULTIPLIERS",
     "DEFAULT_BUCKET_COUNT",
     "DEFAULT_MULTIPLIER",
