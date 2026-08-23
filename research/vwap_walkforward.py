@@ -153,6 +153,13 @@ RULES: dict[str, object] = {
     # showed H4 net-positive even ungated, so the wider tiers are declared
     # as trials of their own -- announced before this run, not read off it.
     "ob-pin2|r<=1.5": lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.5),
+    # The target family at the H4 gate. `#` names the target whose payoff the
+    # rule is scored on (read from `r_grid`); the whole 1.5R-3R band is
+    # declared, not just the 2.5R being asked about, so PBO prices the family
+    # the way it prices the management one.
+    "ob-pin2|r<=1.0#1.5R": lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0),
+    "ob-pin2|r<=1.0#2.5R": lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0),
+    "ob-pin2|r<=1.0#3.0R": lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0),
     "ob-pin2|r<=2.0": lambda r: r["arm"] == "ob-pin2" and _tight(r, 2.0),
     "ob-pin2|nogate": lambda r: r["arm"] == "ob-pin2",
     "ob-either|r<=1.0|both": (
@@ -199,8 +206,12 @@ def daily_matrix(
                 # this way so the management family is inside the trial count
                 # rather than measured off to the side.
                 variant = name.split("@")[1] if "@" in name else None
-                payoff = (row.get("r_manage", {}).get(variant)
-                          if variant else row["r_outcome"])
+                # `#` names a target instead: the payoff is that target's
+                # r_grid outcome, not the plain 2R one.
+                target = name.split("#")[1].rstrip("R") if "#" in name else None
+                payoff = (row.get("r_manage", {}).get(variant) if variant
+                          else row.get("r_grid", {}).get(target) if target
+                          else row["r_outcome"])
                 if payoff is not None:
                     by_rule[name][day].append(payoff)
 
