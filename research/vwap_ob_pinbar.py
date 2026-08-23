@@ -202,6 +202,36 @@ class Ev:
     #: "both". Only the `ob-either` arm sets it -- the decomposition that says
     #: whether the second line contributes trades or only re-labels the first.
     trigger_line: str | None = None
+    #: The tested block's edges and the test extreme, so both the filter and
+    #: the stop can be re-derived at analysis time rather than frozen into the
+    #: scan. `r_atr` measures the entry against the *test extreme* -- the tip
+    #: of the wick -- while the layer's thesis is about the two *levels* being
+    #: close. Over 1198 M15 reclaims the distance to the block runs at a median
+    #: 0.69 of the distance to the wick and under 0.17 a tenth of the time, so
+    #: they are not the same measurement, and 27% of what the 1.0 threshold
+    #: discards sits within one ATR of the block. Emitted, never filtered.
+    block_low: float | None = None
+    block_high: float | None = None
+    test_extreme: float | None = None
+    #: --- How the price ARRIVED at the block. All three are properties of
+    #: candles that closed before the entry, so none of them peeks.
+    #:
+    #: A reader's 9.83R example approached its block on a near-vertical run and
+    #: was rejected inside one candle, and neither `r_atr` nor the distance to
+    #: the block edge would have kept it (1.87 and 1.44 against a 1.0 gate).
+    #: Whatever separated it is not a distance, so these measure the *shape* of
+    #: the approach instead: how far the leg travelled into the block, how many
+    #: candles it took, and how much of the extreme candle was handed back.
+    #: Emitted, never filtered.
+    #:
+    #: Net travel of the approach leg into the test extreme, in local ATR.
+    approach_atr: float | None = None
+    #: Candles from the leg's origin to the test extreme. With `approach_atr`
+    #: this gives verticality: the same distance in fewer bars is displacement.
+    approach_candles: int | None = None
+    #: On the extreme candle itself, the fraction of its range given back by
+    #: the close -- 1.0 is a full rejection, 0.0 closes at the extreme.
+    rejection_frac: float | None = None
     #: --- EMA(9) context at the entry candle. EMITTED, NEVER FILTERED, the
     #: same discipline `r_atr` follows: the threshold is the reader's, so
     #: every variant stays an analysis-time cut on one collection rather than
@@ -430,6 +460,53 @@ def _local_atr(candles: Sequence[Candle], index: int, period: int = 14) -> float
         return None
     atr = sum(trs) / len(trs)
     return atr if atr > 0 else None
+
+
+def _tag_approach(
+    ev: Ev, candles: Sequence[Candle], *, lookback: int = 10,
+) -> Ev:
+    """Measure the shape of the leg that carried price into the block.
+
+    The origin is the leg's own extreme within `lookback` candles before the
+    test, so a slow drift and an impulse of the same size are told apart by
+    `approach_candles` rather than by distance alone.
+    """
+    if ev.test_extreme is None:
+        return ev
+    bull = ev.direction is BULL
+    # locate the candle that made the test extreme, at or before the entry
+    lo = max(0, ev.trigger_index - lookback)
+    span = range(lo, ev.entry_index + 1)
+    if not span:
+        return ev
+    k = (
+        min(span, key=lambda i: candles[i].low)
+        if bull
+        else max(span, key=lambda i: candles[i].high)
+    )
+    atr = _local_atr(candles, ev.entry_index)
+    if not atr:
+        return ev
+    origin_span = range(max(0, k - lookback), k + 1)
+    origin = (
+        max(candles[i].high for i in origin_span)
+        if bull
+        else min(candles[i].low for i in origin_span)
+    )
+    extreme = candles[k].low if bull else candles[k].high
+    ev.approach_atr = abs(origin - extreme) / atr
+    j = max(
+        origin_span,
+        key=lambda i: candles[i].high if bull else -candles[i].low,
+    )
+    ev.approach_candles = max(1, k - j)
+    c = candles[k]
+    rng = c.high - c.low
+    if rng > 0:
+        ev.rejection_frac = (
+            (c.close - c.low) / rng if bull else (c.high - c.close) / rng
+        )
+    return ev
 
 
 def _tag_ema(
@@ -1013,6 +1090,10 @@ def run_combo(
             agg_window, control_at, strong_floor,
         )
         ev.first_test = reclaim.first_test
+        ev.block_low = reclaim.block_price_low
+        ev.block_high = reclaim.block_price_high
+        ev.test_extreme = reclaim.test_extreme
+        ev.trigger_line = reclaim.trigger_line
         out.append(ev)
         for _ in range(random_reps):
             ri = rng.randrange(50, len(candles) - max_h - 1)
@@ -1144,9 +1225,11 @@ def run_combo(
                 key = (candles[e].timestamp, direction)
                 held = cand.get(key)
                 if held is None or r < held[0]:
-                    cand[key] = (r, vstart, e, which, vfirst)
+                    cand[key] = (r, vstart, e, which, vfirst, zone)
 
-        for r, vstart, e, which, vfirst in sorted(cand.values(), key=lambda x: x[2]):
+        for r, vstart, e, which, vfirst, zone in sorted(
+            cand.values(), key=lambda x: x[2]
+        ):
             if htf_steps is not None and htf_trend_at(
                 htf_steps, candles[e].timestamp
             ) is not direction:
@@ -1165,6 +1248,9 @@ def run_combo(
             )
             ev.trigger_line = which
             ev.first_test = vfirst
+            ev.block_low = zone.price_low
+            ev.block_high = zone.price_high
+            ev.test_extreme = stop
             out.append(ev)
             for _ in range(random_reps):
                 ri = rng.randrange(50, len(candles) - max_h - 1)
@@ -1283,6 +1369,7 @@ def run_combo(
     for ev in out:
         ev.vwap_candles = accumulated.get(candles[ev.entry_index].timestamp)
         _tag_ema(ev, candles, ema_line, vwap_at)
+        _tag_approach(ev, candles)
     return out, counts
 
 
@@ -1433,6 +1520,12 @@ def export_events(events: Sequence[Ev], path: str) -> None:
             "atr_pct": e.atr_pct,
             "vwap_candles": e.vwap_candles,
             "trigger_line": e.trigger_line,
+            "block_low": e.block_low,
+            "block_high": e.block_high,
+            "test_extreme": e.test_extreme,
+            "approach_atr": e.approach_atr,
+            "approach_candles": e.approach_candles,
+            "rejection_frac": e.rejection_frac,
             "ema9": e.ema9,
             "ema_side": e.ema_side,
             "ema_reclaimed": e.ema_reclaimed,

@@ -513,6 +513,77 @@ objective redo by measured-spread tercile showed to be uniform. Liquidity is not
 an axis, and choosing the axis after seeing the charts is how it appears to be
 one.
 
+## Where the stop goes, and five attempts to recover the discarded 95%
+
+The stop is the extreme of the whole test window — the lowest low (highest high)
+between the visit's first candle and the reclaim candle inclusive — with the
+entry at the reclaim's close and R the distance between them. No buffer: it sits
+on the tip of the wick.
+
+A reader marking that trade by hand put the stop at the same price the detector
+did, to a tenth of a point: 77 423.8 against a hand-drawn ~77 425, on an entry
+of 77 254.3 against ~77 250. **The placement is not in question**; what follows
+is whether anything around it can be improved.
+
+### Nothing about the stop can be improved
+
+Priced on the operable population, the same trades under five stop placements:
+
+| stop | median R% | net | t |
+|---|---|---|---|
+| **the test extreme (current)** | 0.39% | **+0.226** | **+3.8** |
+| extreme + 0.25 ATR | 0.52% | +0.187 | +3.1 |
+| extreme + 0.5 ATR | 0.65% | +0.163 | +2.8 |
+| extreme + 1.0 ATR | 0.91% | +0.075 | +1.4 |
+| the block's far edge | 0.99% | −0.097 | −1.7 |
+
+Every tick of buffer costs, and the degradation is **monotonic**, which is what
+makes it clean: not one bad setting but a bad direction. The motivating worry —
+that a stop parked on a visible extreme sits exactly where this project's own
+sweep layer says liquidity rests — does not survive. What the table establishes
+precisely is that the trade-off does not pay: a buffer both avoids false stops
+*and* pushes 2R further away, and the second effect dominates. It does not show
+that stops are never hunted.
+
+### And nothing recovers the discarded trades
+
+`r_atr ≤ 1.0` discards 95% of reclaims — 159 of BTC's 168 on 5m. Three
+alternative measures were emitted and cut, chosen because each has a mechanism
+rather than because it looked good:
+
+* **distance to the block edge** rather than to the wick, since the layer's
+  thesis is about the two *levels* being close while `r_atr` measures the tip of
+  a spike. Over 1198 M15 reclaims the two run at a median ratio of 0.69 and
+  under 0.17 a tenth of the time, and 27% of the discarded sit within one ATR of
+  the block — so the difference is real and there was room for it to matter.
+* **verticality of the approach** (ATR travelled per candle into the test), from
+  the reader's example arriving on a near-vertical run.
+* **rejection fraction** of the extreme candle.
+
+| filter, whole population | n | hit | net | t |
+|---|---|---|---|---|
+| **`r_atr ≤ 1.0` (standing rule)** | 624 | **54.0%** | **+0.226** | +3.8 |
+| `block_atr ≤ 1.0` | 2547 | 31.8% | +0.023 | +0.9 |
+| verticality ≥ 1.0 ATR/candle | 1234 | 19.9% | −0.037 | −1.2 |
+| rejection ≥ 0.7 | 3544 | 21.3% | −0.081 | −4.1 |
+
+Inside the discarded set the block distance is the only one that moves anything
+(25.5% against the discarded baseline's 19.1%) and it stays negative.
+**Verticality measures *worse* than the baseline** (17.4%), so a vertical run
+into a block continues, if anything, rather than reverses — wrong in direction,
+not merely in size.
+
+Five new trials, all declared before running, five failures, and nothing in
+production changed. The standing rule has now outlasted twenty-three measured
+alternatives across exits, management, triggers, filters and stops; it is a
+defended choice rather than an inherited one.
+
+What remains open is the example itself. The reader's 9.83R trade is separated
+by none of these — `r_atr` 1.87 and `block_atr` 1.44 against a 1.0 gate — so
+whatever distinguished it is not a distance, not the approach's shape, and not
+the rejection. That is a map of what is missing, not a conclusion about the
+trade.
+
 ## Letting the winners run: the excursion is there and unreachable
 
 The question came from a chart rather than from the data, which is why it was
