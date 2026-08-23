@@ -862,6 +862,52 @@ poetry run python research/vwap_exit_grid.py --trades trades5m.json \
 The visual record is `block_reclaim_m5_artifact.html`, published at
 <https://claude.ai/code/artifact/9666b70f-79f7-409e-a017-228e9def4897>.
 
+## The r_atr gate is the setup, and the timeframe ladder (2026-08-23)
+
+The gate discards ~93% of triggers, and the natural complaint — it must be
+throwing away good trades — was measured. It is not. On the `ob-pin2`
+population, deciles of `r_atr` show a **cliff, not a slope**: decile 1
+(r_atr ≤ ~1.1) nets +0.140 on M15 while every other decile is negative, at
+2R, 1.5R and 3R alike. Nothing recovers the discarded population: within
+`r_atr > 1.0`, the pinbar grades measure identical (42.3–42.6% hit, all
+negative net), the trigger line doesn't separate, and the 1.0–1.5 band with a
+golden-tail pinbar is still −0.072. A cutoff sweep shows the shipped `≤ 1.0`
+near-optimal on total net R for M15 (939 × +0.233 ≈ +219R; widening to 1.25
+doubles the sample and drops the total). The 42% of discarded trades that do
+reach 2R are what a visual backtest sees; the 58% that stop out pay for them.
+
+The same grid run at M30, H1 and H4 (71 symbols, `--limit 25000`, spans
+512d / 1031d / 2124d median per symbol) turns the cost finding into a ladder —
+the mechanism's gross edge is roughly constant (decile 1 gross ≈ +0.2 to
++0.5 everywhere) while the cost falls with the timeframe, so the net rises
+monotonically:
+
+| TF | gated n | hit 2R | cost/trade | net/trade |
+|---|---|---|---|---|
+| M5 | 2058 | 51.8% | 0.75 | −0.194 |
+| M15 | 939 | 55.1% | 0.41 | +0.233 |
+| M30 | 1124 | 44.3% | 0.25 | +0.075 |
+| H1 | 1850 | 39.8% | 0.15 | +0.039 |
+| H4 | 419 | 54.4% | 0.07 | +0.565 |
+
+**H4 is where the gate can be widened.** Full-sample it is net-positive even
+ungated (+0.074); walk-forward over 58 folds (2019→2026, purge 7d) gives PBO
+0.133 with `ob-pin2|r<=1.0` pooled OOS SR 2.34 and the pre-declared wider
+tiers holding (`r<=1.5` 1.96, `r<=2.0` 1.93, ungated 1.96 with the family's
+highest mean daily R). But the matched recent window (last 253 days, the
+M15 study's span) corrects the ungated claim: **no gate at all is −0.029
+there — the ungated positive was 2020–21 regime.** What survives both samples
+is the widened cap: `r_atr ≤ 1.5` nets +0.128 recent / +0.264 full, ~17
+trades/month across the universe (vs ~4 for gated M15), cost 0.05–0.07R.
+`≤ 2.0` matches its net with double the exposure; `≤ 1.5` is the recorded
+choice. M15 `≤ 1.0` remains the best per trade; the two are the same rule on
+two clocks. M30 and H1 are thin-positive inside the gate only — alive, not
+worth a dedicated push.
+
+Walk-forward Sharpe here is gross (the known trap); on H4 the cost is
+0.03–0.07R, which flips no sign. The wider tiers were declared in
+`research/vwap_walkforward.py` before the run, so PBO prices them.
+
 ## What this does not establish
 
 **That a reader's own fill matches the measured one.** The round trip is no

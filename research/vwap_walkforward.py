@@ -149,6 +149,12 @@ RULES: dict[str, object] = {
         lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0)
         and "legacy" in (r.get("pinbar_grade") or "")
     ),
+    # The H4 widening question: the r_atr decile diagnostic (2026-08-23)
+    # showed H4 net-positive even ungated, so the wider tiers are declared
+    # as trials of their own -- announced before this run, not read off it.
+    "ob-pin2|r<=1.5": lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.5),
+    "ob-pin2|r<=2.0": lambda r: r["arm"] == "ob-pin2" and _tight(r, 2.0),
+    "ob-pin2|nogate": lambda r: r["arm"] == "ob-pin2",
     "ob-either|r<=1.0|both": (
         lambda r: r["arm"] == "ob-either" and _tight(r, 1.0)
         and r.get("trigger_line") == "both"
