@@ -15,7 +15,10 @@ from liquidity_hunter.app.screener import (
     scan_symbol_timeframe,
 )
 from liquidity_hunter.core.domain import BlockReclaimScreen, TimeFrame
-from liquidity_hunter.data.exceptions import DataProviderError
+from liquidity_hunter.data.exceptions import (
+    DataProviderBannedError,
+    DataProviderError,
+)
 
 router = APIRouter(tags=["screener"])
 
@@ -46,6 +49,7 @@ def get_screener(
     frames = [TimeFrame(t.strip()) for t in timeframes.split(",") if t.strip()]
     units: list[ScanUnit] = []
     failed: set[str] = set()
+    banned: list[str] = []
 
     # Fanned out over threads: a cold scan is hundreds of klines fetches, and
     # the providers are stateless public GETs (the dashboard prefetch-pool
@@ -53,6 +57,8 @@ def get_screener(
     # `TTLCache` at worst recomputes a unit, never corrupts one.
     def fetch(job: tuple[str, TimeFrame]) -> ScanUnit | None:
         symbol, timeframe = job
+        if banned:
+            return None
         try:
             return _unit_cache.get_or_set(
                 (symbol, timeframe),
@@ -61,6 +67,11 @@ def get_screener(
                     timeframe, _DEFAULT_UNIT_TTL_SECONDS
                 ),
             )
+        except DataProviderBannedError:
+            # The venue cut us off: stop the pass rather than spend the rest
+            # of the budget on requests that fail and extend the ban.
+            banned.append(symbol)
+            return None
         except (DataProviderError, ValueError):
             failed.add(symbol)
             return None

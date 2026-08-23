@@ -25,10 +25,12 @@ Descriptive throughout: a row states that the setup is armed or has fired and
 carries `r_atr`; every threshold stays the reader's choice.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from threading import Lock
+from time import monotonic
 
 from liquidity_hunter.app.block_reclaim import (
     MAX_WAIT_CANDLES,
@@ -54,7 +56,10 @@ from liquidity_hunter.core.domain import (
     VWAPSeries,
 )
 from liquidity_hunter.data import OHLCVProvider
-from liquidity_hunter.data.exceptions import DataProviderError
+from liquidity_hunter.data.exceptions import (
+    DataProviderBannedError,
+    DataProviderError,
+)
 from liquidity_hunter.indicators import ema_series, vwap
 from liquidity_hunter.liquidity import POIDetector
 
@@ -88,15 +93,66 @@ SCREEN_TIMEFRAMES: tuple[TimeFrame, ...] = (
     TimeFrame.H4,
 )
 
-#: Candles fetched per unit. Enough for the POI queue and the VWAP anchor to
-#: be in their steady state well before the window a row can report from.
-SCAN_CANDLES = 600
+#: Candles fetched per unit. Binance prices a klines request by size: up to
+#: 500 candles costs weight 2, above that weight 5. A universe pass is ~284
+#: requests, so 600 candles spends 1420 of the 2400/min IP budget in one burst
+#: and 300 spends 568 -- and 300 still covers the POI queue and several VWAP
+#: accumulations on every screened timeframe. Lowered after a live scan got
+#: this IP banned (2026-08-23).
+SCAN_CANDLES = 300
 
 #: How far back a fired reclaim still makes the list, in candles. The setup
 #: resolves its 2R-or-stop within ~40 candles; past that the row is history.
 DEFAULT_FIRED_WITHIN = 12
 
-_SCAN_POOL_WORKERS = 8
+#: Concurrency of a universe pass. ccxt's own rate limiter is per-instance and
+#: not thread-aware, so the pool size *is* the burst size against the venue.
+_SCAN_POOL_WORKERS = 3
+
+#: Per-(symbol, timeframe) TTLs for the library-level cache. A reclaim can
+#: only appear once per candle, so a cron pass every few minutes should reuse
+#: almost everything: without this each pass refetched the whole universe.
+_UNIT_TTL_SECONDS: dict[TimeFrame, float] = {
+    TimeFrame.M15: 60.0,
+    TimeFrame.M30: 90.0,
+    TimeFrame.H1: 120.0,
+    TimeFrame.H4: 300.0,
+}
+_DEFAULT_UNIT_TTL_SECONDS = 120.0
+
+#: Module-scoped so repeated `load_screen` calls in one process (the journal's
+#: record pass, then a report) share it. A plain dict under a lock rather than
+#: `api.cache.TTLCache`: dependencies flow inward, and `app` may not import
+#: `api`. The lock matters here in a way it does not there -- this cache is
+#: read by every worker of the scan pool.
+_unit_cache: dict[tuple[str, TimeFrame], tuple[float, "ScanUnit"]] = {}
+_unit_cache_lock = Lock()
+
+
+def _cached_unit(
+    key: tuple[str, TimeFrame], ttl_seconds: float, factory: "Callable[[], ScanUnit]"
+) -> "ScanUnit":
+    """Return the cached unit for `key`, computing it outside the lock.
+
+    Two workers racing the same key both fetch, which costs one extra request
+    and never a corrupt entry; holding the lock across a network call would
+    serialize the whole pass instead.
+    """
+    now = monotonic()
+    with _unit_cache_lock:
+        hit = _unit_cache.get(key)
+        if hit is not None and now < hit[0]:
+            return hit[1]
+    unit = factory()
+    with _unit_cache_lock:
+        _unit_cache[key] = (monotonic() + ttl_seconds, unit)
+    return unit
+
+
+def clear_unit_cache() -> None:
+    """Drop every cached unit (tests, and a forced refresh)."""
+    with _unit_cache_lock:
+        _unit_cache.clear()
 
 
 @dataclass(frozen=True)
@@ -267,12 +323,25 @@ def load_screen(
     units: list[ScanUnit] = []
     failed: set[str] = set()
 
+    banned: list[DataProviderBannedError] = []
+
     def run(job: tuple[str, TimeFrame]) -> ScanUnit | None:
         symbol, timeframe = job
+        if banned:
+            return None  # the venue has cut us off; stop spending the budget
         try:
-            return scan_symbol_timeframe(
-                symbol, timeframe, provider=provider, limit=limit
+            return _cached_unit(
+                (symbol, timeframe),
+                _UNIT_TTL_SECONDS.get(timeframe, _DEFAULT_UNIT_TTL_SECONDS),
+                lambda: scan_symbol_timeframe(
+                    symbol, timeframe, provider=provider, limit=limit
+                ),
             )
+        except DataProviderBannedError as exc:
+            # Fatal to the whole pass, by design: every further request during
+            # a ban fails *and* extends it.
+            banned.append(exc)
+            return None
         except (DataProviderError, ValueError):
             # A symbol with a bad row or no contract degrades to a reported
             # failure; the rest of the universe still screens.
@@ -283,6 +352,8 @@ def load_screen(
         for unit in pool.map(run, jobs):
             if unit is not None:
                 units.append(unit)
+    if banned:
+        raise banned[0]
     return build_screen(
         units,
         timeframes=timeframes,

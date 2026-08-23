@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from liquidity_hunter.app.block_reclaim import detect_block_reclaims
 from liquidity_hunter.app.screener import (
     ScanUnit,
@@ -21,7 +23,10 @@ from liquidity_hunter.core.domain import (
     VWAPPoint,
     VWAPSeries,
 )
-from liquidity_hunter.data.exceptions import DataProviderRequestError
+from liquidity_hunter.data.exceptions import (
+    DataProviderBannedError,
+    DataProviderRequestError,
+)
 from liquidity_hunter.data.providers.base import OHLCVProvider
 
 START = datetime(2026, 8, 1, tzinfo=UTC)
@@ -160,3 +165,32 @@ def test_load_screen_reports_failures_without_dying() -> None:
     assert screen.symbols_failed == ["NOPEUSDT"]
     # BTC scanned fine (whether or not POIDetector finds a zone in the fixture)
     assert all(e.symbol == SYMBOL for e in screen.entries)
+
+
+class BannedProvider(OHLCVProvider):
+    """Every request is refused by a venue ban."""
+
+    max_fetch_limit = 1000
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def get_ohlcv(self, symbol, timeframe, limit=1000):
+        self.calls += 1
+        raise DataProviderBannedError("IP banned until 1787524352754")
+
+
+def test_a_ban_aborts_the_scan_instead_of_hammering() -> None:
+    from liquidity_hunter.app.screener import clear_unit_cache
+
+    clear_unit_cache()
+    provider = BannedProvider()
+    with pytest.raises(DataProviderBannedError):
+        load_screen(
+            provider=provider,
+            symbols=[f"SYM{i}USDT" for i in range(30)],
+            timeframes=[TF],
+        )
+    # the pool may have a few jobs in flight when the first ban lands, but it
+    # must not push on through all thirty
+    assert provider.calls < 30

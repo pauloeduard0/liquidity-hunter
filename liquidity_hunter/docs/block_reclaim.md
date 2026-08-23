@@ -1007,6 +1007,35 @@ the tape *now* logged a 1.6R "slippage" on a signal that had fired three hours
 earlier. That is the cost of chasing, not of slippage. `MAX_DECISION_AGE_CANDLES
 = 1` bounds a decision to a trigger that has just closed.
 
+### The request budget, learned by getting banned
+
+The screener's first cron run got this IP banned by Binance (HTTP 418,
+`-1003`). Three causes, all in the scan's design, all fixed:
+
+1. **The retry made it worse.** ccxt's `DDoSProtection` subclasses
+   `NetworkError`, which is exactly what `retry_with_backoff` was told to
+   retry -- so 284 jobs each retried into a live ban. Bans and rate-limit
+   rejections are now `DataProviderBannedError`, never retried
+   (`retry._NEVER_RETRY`, whatever the caller passes), and one of them aborts
+   the whole pass instead of letting the rest of the jobs spend a budget that
+   is already gone.
+2. **No cache on the library path.** `api/routes/screener.py` cached its
+   units; `app.screener.load_screen`, which the journal calls, did not, so
+   every pass refetched the universe. It now has its own lock-guarded
+   per-(symbol, timeframe) cache with the same timeframe-proportional TTLs.
+   (`app` may not import `api`, so the cache is local -- and the lock matters
+   here, where the scan pool reads it from several threads.)
+3. **The requests were priced wrong.** Binance charges klines by size: up to
+   500 candles is weight 2, above that weight 5. At 600 candles a pass spent
+   1420 of the 2400/min IP budget in one burst; at 300 it spends 568, and 300
+   still covers the POI queue and several VWAP accumulations on every screened
+   timeframe. Pool workers dropped 8 → 3, since ccxt's rate limiter is
+   per-instance and not thread-aware -- the pool size *is* the burst size.
+
+Worth stating plainly because it generalises past this feature: a scan that
+fans out across a universe is a request budget first and an algorithm second,
+and retrying a rate limit is how a rate limit becomes a ban.
+
 ## What this does not establish
 
 **That a reader's own fill matches the measured one.** The round trip is no

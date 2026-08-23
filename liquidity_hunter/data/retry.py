@@ -8,6 +8,18 @@ from typing import ParamSpec, TypeVar
 
 logger = logging.getLogger(__name__)
 
+#: Failures that must never be retried, whatever the caller passed: a venue
+#: ban or rate-limit rejection is not transient, and a retry makes it worse.
+try:  # pragma: no cover - ccxt is always installed in practice
+    import ccxt
+
+    _NEVER_RETRY: tuple[type[BaseException], ...] = (
+        ccxt.DDoSProtection,
+        ccxt.RateLimitExceeded,
+    )
+except Exception:  # pragma: no cover
+    _NEVER_RETRY = ()
+
 P = ParamSpec("P")
 T = TypeVar("T")
 
@@ -33,6 +45,10 @@ def retry_with_backoff(
             for attempt in range(1, max_attempts + 1):
                 try:
                     return func(*args, **kwargs)
+                except _NEVER_RETRY:
+                    # A ban names an expiry; retrying inside it extends the
+                    # offence instead of recovering from it.
+                    raise
                 except exceptions as exc:
                     if attempt == max_attempts:
                         logger.error(

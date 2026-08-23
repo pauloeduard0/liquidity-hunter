@@ -24,6 +24,7 @@ from liquidity_hunter.app.paper_journal import (
     resolve_open,
 )
 from liquidity_hunter.core.domain import PaperDecision, PaperOutcome
+from liquidity_hunter.data.exceptions import DataProviderBannedError
 
 
 def report(decisions: list[PaperDecision]) -> str:
@@ -75,22 +76,32 @@ def main() -> None:
     args = p.parse_args()
 
     if not args.report_only:
-        settled = resolve_open(path=args.journal)
-        for d in settled:
+        try:
+            settled = resolve_open(path=args.journal)
+            for d in settled:
+                print(
+                    f"settled {d.symbol} {d.timeframe.value} {d.direction.value} "
+                    f"-> {d.outcome.value} {d.realized_r:+.2f}R "
+                    f"in {d.bars_to_resolution} bars"
+                )
+            fresh = record_decisions(path=args.journal)
+            for d in fresh:
+                print(
+                    f"recorded {d.symbol} {d.timeframe.value} {d.direction.value} "
+                    f"@ {d.observed_price:g} (close {d.signal_close:g}, "
+                    f"slip {d.slippage_r:+.3f}R)"
+                )
+            if not settled and not fresh:
+                print("nothing new")
+        except DataProviderBannedError as exc:
+            # Not a crash to debug: the venue cut us off, and the only correct
+            # response is to stop asking until its own expiry passes. Nothing
+            # is lost -- both passes are idempotent.
+            print(f"venue rate limit / ban -- pass aborted: {exc}")
             print(
-                f"settled {d.symbol} {d.timeframe.value} {d.direction.value} "
-                f"-> {d.outcome.value} {d.realized_r:+.2f}R "
-                f"in {d.bars_to_resolution} bars"
+                "wait for the expiry named above, then run again; the cached "
+                "units make the next pass cheaper."
             )
-        fresh = record_decisions(path=args.journal)
-        for d in fresh:
-            print(
-                f"recorded {d.symbol} {d.timeframe.value} {d.direction.value} "
-                f"@ {d.observed_price:g} (close {d.signal_close:g}, "
-                f"slip {d.slippage_r:+.3f}R)"
-            )
-        if not settled and not fresh:
-            print("nothing new")
     print()
     print(report(read_journal(args.journal)))
 

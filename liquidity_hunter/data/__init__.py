@@ -4,6 +4,7 @@ Responsible for sourcing raw market data and mapping it to `core.domain`
 entities (e.g. `Candle`). Depends only on `core`.
 """
 
+from liquidity_hunter.data.exceptions import DataProviderBannedError
 from liquidity_hunter.data.providers import (
     BinanceDataProvider,
     BinanceFuturesDataProvider,
@@ -18,6 +19,7 @@ from liquidity_hunter.data.providers import (
 )
 
 __all__ = [
+    "DataProviderBannedError",
     "BinanceDataProvider",
     "BinanceFuturesDataProvider",
     "BinanceFuturesOHLCVProvider",

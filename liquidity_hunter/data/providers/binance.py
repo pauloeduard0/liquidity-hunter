@@ -7,7 +7,11 @@ from typing import Any
 import ccxt
 
 from liquidity_hunter.core.domain import Candle, TimeFrame
-from liquidity_hunter.data.exceptions import DataProviderConnectionError, DataProviderRequestError
+from liquidity_hunter.data.exceptions import (
+    DataProviderBannedError,
+    DataProviderConnectionError,
+    DataProviderRequestError,
+)
 from liquidity_hunter.data.providers.base import OHLCVProvider
 from liquidity_hunter.data.retry import retry_with_backoff
 
@@ -96,6 +100,9 @@ class BinanceDataProvider(OHLCVProvider):
             base_delay_seconds=self._retry_base_delay_seconds,
         )
         def _fetch() -> list[list[Any]]:
+            # A ban is not transient: raising it past the retry decorator is
+            # what stops 284 jobs from hammering a banned IP.
+
             logger.debug(
                 "Fetching klines: symbol=%s timeframe=%s limit=%d",
                 binance_symbol,
@@ -109,6 +116,8 @@ class BinanceDataProvider(OHLCVProvider):
 
         try:
             rows = _fetch()
+        except (ccxt.DDoSProtection, ccxt.RateLimitExceeded) as exc:
+            raise DataProviderBannedError(str(exc)) from exc
         except ccxt.NetworkError as exc:
             raise DataProviderConnectionError(
                 f"Failed to reach Binance for {ccxt_symbol} {timeframe.value}: {exc}"
