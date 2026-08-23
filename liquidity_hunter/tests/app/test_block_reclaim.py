@@ -330,3 +330,49 @@ def test_ema_route_fires_where_the_vwap_is_never_touched_again() -> None:
         candles, [block(0, 100.0, 102.0)], vwap_series(candles, 105.0),
         symbol="BTCUSDT", timeframe=TimeFrame.M15,
     )
+
+
+# --- the pinbar grades ------------------------------------------------------
+
+
+def _bar(o: float, h: float, low: float, c: float) -> Candle:
+    return candle(50, open_=o, high=h, low=low, close=c)
+
+
+def test_the_three_grades_are_different_candles() -> None:
+    """`legacy`, `l1` and `l2` name different bars, not one threshold."""
+    from liquidity_hunter.app.block_reclaim import pinbar_grades
+
+    # golden rule: 70% tail, tiny body, no nose
+    golden = _bar(o=107.5, h=108.0, low=100.0, c=107.8)
+    assert "l1" in pinbar_grades(golden, bullish=True)
+
+    # the reader's 03 Aug bar: 43% body, 53% tail, 4% nose -- l2 only
+    lvl2 = _bar(o=62737.3, h=62915.9, low=62533.3, c=62901.5)
+    grades = pinbar_grades(lvl2, bullish=True)
+    assert grades == frozenset({"l2"}), grades
+
+
+def test_a_capped_nose_is_what_l1_adds_over_legacy() -> None:
+    """The legacy rule never looked at the far wick; both new grades do."""
+    from liquidity_hunter.app.block_reclaim import pinbar_grades
+
+    # 55% tail, 15% body, 30% nose: legacy accepts it, neither new grade does
+    bar = _bar(o=105.5, h=110.0, low=100.0, c=107.0)
+    grades = pinbar_grades(bar, bullish=True)
+    assert "legacy" in grades
+    assert "l1" not in grades and "l2" not in grades
+
+
+def test_a_flat_candle_has_no_grade() -> None:
+    from liquidity_hunter.app.block_reclaim import pinbar_grades
+
+    assert pinbar_grades(_bar(o=100.0, h=100.0, low=100.0, c=100.0), bullish=True) == frozenset()
+
+
+def test_the_detector_reports_which_grade_fired() -> None:
+    candles, zones, vwap = bullish_case()
+    out = detect_block_reclaims(
+        candles, zones, vwap, symbol="BTCUSDT", timeframe=TimeFrame.M15
+    )
+    assert out and all(r.pinbar_grade for r in out)

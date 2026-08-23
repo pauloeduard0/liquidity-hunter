@@ -202,6 +202,9 @@ class Ev:
     #: "both". Only the `ob-either` arm sets it -- the decomposition that says
     #: whether the second line contributes trades or only re-labels the first.
     trigger_line: str | None = None
+    #: Which pinbar definitions the trigger candle satisfied, comma-joined.
+    #: Emitted so each grade is an analysis-time cut on one collection.
+    pinbar_grade: str | None = None
     #: The tested block's edges and the test extreme, so both the filter and
     #: the stop can be re-derived at analysis time rather than frozen into the
     #: scan. `r_atr` measures the entry against the *test extreme* -- the tip
@@ -628,6 +631,60 @@ def _is_pinbar(candle: Candle, *, bull: bool, wick_frac: float, body_frac: float
     return wick >= wick_frac * rng and body <= body_frac * rng
 
 
+#: The golden rule: a level-1 pinbar is two thirds tail. Read from a trader
+#: rather than fitted -- 0.65 is the tolerance they already work with.
+L1_TAIL = 0.65
+#: A level-2 pinbar trades tail for body: a real body with a decent tail and
+#: almost no nose. The proportions are the reader's, not this study's.
+L2_BODY = 1.0 / 3.0
+L2_TAIL = 0.20
+#: Both grades cap the nose -- the wick on the far side, which is the part that
+#: says price was pushed back the other way before the candle closed.
+NOSE_MAX = 0.15
+
+
+def _pinbar_grades(candle: Candle, *, bull: bool) -> frozenset[str]:
+    """Which pinbar definitions this candle satisfies.
+
+    Three, deliberately kept apart rather than merged into one threshold:
+
+    * ``legacy`` -- what this project has been measuring: tail >= 0.50, body
+      <= 0.35, nose unconstrained. Worth naming as its own thing, because it is
+      neither of the two below: looser than the golden rule on the tail, and
+      silent about the nose entirely.
+    * ``l1`` -- the golden rule, tail >= 0.65 with a capped nose.
+    * ``l2`` -- body >= 1/3, tail >= 0.20, nose <= 0.15. A candle that closed
+      most of the way through its own range but still left a tail underneath.
+
+    A reader's 03 Aug example is the case that motivated this: 43% body, 53%
+    tail, 4% nose. It fails `legacy` on the body by eight points, fails `l1` on
+    the tail, and passes `l2` cleanly -- and fifteen minutes earlier the legacy
+    rule fired a *losing* trade in the opposite direction on the same chart.
+    """
+    rng = candle.high - candle.low
+    if rng <= 0:
+        return frozenset()
+    body = abs(candle.close - candle.open)
+    tail = (
+        min(candle.close, candle.open) - candle.low
+        if bull
+        else candle.high - max(candle.close, candle.open)
+    )
+    nose = (
+        candle.high - max(candle.close, candle.open)
+        if bull
+        else min(candle.close, candle.open) - candle.low
+    )
+    out: set[str] = set()
+    if tail >= MIN_WICK_FRACTION * rng and body <= MAX_BODY_FRACTION * rng:
+        out.add("legacy")
+    if tail >= L1_TAIL * rng and nose <= NOSE_MAX * rng:
+        out.add("l1")
+    if body >= L2_BODY * rng and tail >= L2_TAIL * rng and nose <= NOSE_MAX * rng:
+        out.add("l2")
+    return frozenset(out)
+
+
 def _reclaims(candle: Candle, vwap_value: float, *, bull: bool) -> bool:
     """The wick pierces the VWAP and the close lands back on the other side."""
     return (
@@ -778,7 +835,8 @@ def _ob_ema_triggers(
 def _either_line_trigger(
     candles: Sequence[Candle], vwap_at: dict, ema_at: dict, start: int, end: int,
     *, bull: bool, wick_frac: float, body_frac: float, max_wait: int,
-) -> tuple[int, str] | None:
+    accept: frozenset[str] = frozenset({"legacy"}),
+) -> tuple[int, str, str] | None:
     """The setup as described on the charts: reject EITHER shared line.
 
     Three conditions, in the order a reader states them. Price has already
@@ -799,19 +857,21 @@ def _either_line_trigger(
         crossed = (m > w) if bull else (m < w)
         if not crossed:
             continue  # the 9 has not crossed the average yet
-        if not _is_pinbar(c, bull=bull, wick_frac=wick_frac, body_frac=body_frac):
+        grades = _pinbar_grades(c, bull=bull)
+        if not (grades & accept):
             continue
         on_vwap = _reclaims(c, w, bull=bull)
         # a rejection of the 9 only counts while price holds the VWAP side --
         # otherwise it is a bounce underneath the average, a different picture.
         holds = (c.close > w) if bull else (c.close < w)
         on_ema = holds and (c.low < m <= c.close if bull else c.high > m >= c.close)
+        tag = ",".join(sorted(grades))
         if on_vwap and on_ema:
-            return j, "both"
+            return j, "both", tag
         if on_vwap:
-            return j, "vwap"
+            return j, "vwap", tag
         if on_ema:
-            return j, "ema"
+            return j, "ema", tag
     return None
 
 
@@ -1198,7 +1258,11 @@ def run_combo(
     # kind and emitted one trade per visit; its VWAP route then measured 33%
     # against the production arm's 53% on the same trigger, which is the
     # signature of a broken instrument rather than of a finding.
-    for bull in (True, False):
+    for arm_name, accept in (
+        ("ob-either", frozenset({"legacy"})),
+        ("ob-pin2", frozenset({"legacy", "l1", "l2"})),
+    ):
+      for bull in (True, False):
         direction = BULL if bull else BEAR
         cand: dict[tuple, tuple[float, int, int, str, bool]] = {}
         for zone in data.poi_zones:
@@ -1210,10 +1274,11 @@ def run_combo(
                 found = _either_line_trigger(
                     candles, vwap_at, ema_at_pre, vstart, vend, bull=bull,
                     wick_frac=wick_frac, body_frac=body_frac, max_wait=max_wait,
+                    accept=accept,
                 )
                 if found is None:
                     continue
-                e, which = found
+                e, which, tag = found
                 stop = (
                     min(x.low for x in candles[vstart : e + 1])
                     if bull
@@ -1225,9 +1290,9 @@ def run_combo(
                 key = (candles[e].timestamp, direction)
                 held = cand.get(key)
                 if held is None or r < held[0]:
-                    cand[key] = (r, vstart, e, which, vfirst, zone)
+                    cand[key] = (r, vstart, e, which, vfirst, zone, tag)
 
-        for r, vstart, e, which, vfirst, zone in sorted(
+        for r, vstart, e, which, vfirst, zone, tag in sorted(
             cand.values(), key=lambda x: x[2]
         ):
             if htf_steps is not None and htf_trend_at(
@@ -1241,12 +1306,13 @@ def run_combo(
                 continue
             stop = candles[e].close - r if bull else candles[e].close + r
             ev = _tag_all(
-                Ev("ob-either", symbol, timeframe.value, direction,
+                Ev(arm_name, symbol, timeframe.value, direction,
                    vstart, e, candles[e].close, stop, r),
                 candles, horizons, targets, target_horizon,
                 agg_window, control_at, strong_floor,
             )
             ev.trigger_line = which
+            ev.pinbar_grade = tag
             ev.first_test = vfirst
             ev.block_low = zone.price_low
             ev.block_high = zone.price_high
@@ -1257,7 +1323,7 @@ def run_combo(
                 e2 = candles[ri].close
                 s2 = e2 - r if bull else e2 + r
                 out.append(_tag_all(
-                    Ev("rand-ob-either", symbol, timeframe.value, direction,
+                    Ev(f"rand-{arm_name}", symbol, timeframe.value, direction,
                        ri, ri, e2, s2, r),
                     candles, horizons, targets, target_horizon,
                     agg_window, control_at, strong_floor,
@@ -1520,6 +1586,7 @@ def export_events(events: Sequence[Ev], path: str) -> None:
             "atr_pct": e.atr_pct,
             "vwap_candles": e.vwap_candles,
             "trigger_line": e.trigger_line,
+            "pinbar_grade": e.pinbar_grade,
             "block_low": e.block_low,
             "block_high": e.block_high,
             "test_extreme": e.test_extreme,

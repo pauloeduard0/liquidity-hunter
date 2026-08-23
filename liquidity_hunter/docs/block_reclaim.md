@@ -513,6 +513,65 @@ objective redo by measured-spread tercile showed to be uniform. Liquidity is not
 an axis, and choosing the axis after seeing the charts is how it appears to be
 one.
 
+## The trigger candle: three definitions, and the union wins
+
+A reader showed a 03 Aug M15 entry the layer had not taken and named why: "a
+level-2 pinbar, bigger body but a good tail". The candle measures 43% body, 53%
+tail, 4% nose — it fails the shipped rule on the **body** by eight points while
+passing on the tail, and fifteen minutes earlier that same rule fired a *losing*
+trade in the opposite direction on the same chart.
+
+Unlike the five attempts above, this is not a new variable. It is a **constant
+somebody chose**, and it decides whether a trade exists at all rather than
+whether it is good.
+
+Three definitions, kept apart rather than collapsed into one threshold, because
+they are different candles wearing one name:
+
+| grade | tail | body | nose |
+|---|---|---|---|
+| `legacy` (what shipped) | ≥ 50% | ≤ 35% | **unconstrained** |
+| `l1` (the golden rule) | ≥ 65% | — | ≤ 15% |
+| `l2` | ≥ 20% | ≥ 1/3 | ≤ 15% |
+
+Worth noticing what that table says about the shipped rule: it is **neither** of
+the other two. Looser than the golden rule on the tail, and silent about the
+nose — the far wick, which is the part saying price was pushed back the other
+way before the close.
+
+### The union, measured
+
+| M15, r_atr ≤ 1.0 | n | hit | net | t |
+|---|---|---|---|---|
+| legacy trigger (shipped) | 624 | 54.0% | +0.226 | +3.8 |
+| **union of the three** | **891** | 54.9% | **+0.238** | **+4.7** |
+
+**43% more trades at the same hit rate**, which matters more than the net here:
+this setup's binding constraint has always been sparsity, nine entries per
+symbol over eight months.
+
+Walk-forward over 22 folds with each grade declared beside the union:
+
+| rule | pooled OOS Sharpe |
+|---|---|
+| **`ob-pin2\|r<=1.0`** | **7.90** |
+| `ob-pin2\|r<=1.0\|legacy` | 7.24 |
+| `ob-either\|r<=1.0` (shipped) | 6.75 |
+| `ob-pin2\|r<=1.0\|l2only` | 4.56 |
+| `ob-pin2\|r<=1.0\|hasl1` | 4.25 |
+
+Best of 30 declared candidates, PBO 0.000, deflated Sharpe 7.25 against an
+expected max of 2.07. **The union beats every one of its own subsets**, including
+the legacy-only one — which is the cleanest form this answer could take, and the
+third time in this document that the whole rule outperforms the piece of it that
+looked best in the search half. `l2` alone measures +0.142 with a holdout of
+−0.017; taking it on its own is exactly the mistake the subsets are declared to
+price.
+
+`BlockReclaim.pinbar_grade` records which definitions fired. Observe it; do not
+filter on it. M5 improves too (−0.270 to −0.197) and stays negative, so nothing
+there changes.
+
 ## Where the stop goes, and five attempts to recover the discarded 95%
 
 The stop is the extreme of the whole test window — the lowest low (highest high)

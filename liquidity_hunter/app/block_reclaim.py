@@ -85,6 +85,65 @@ def _is_reclaim(candle: Candle, vwap_value: float, *, bullish: bool) -> bool:
     return candle.high > vwap_value >= candle.close
 
 
+#: The golden rule: a level-1 pinbar is two thirds tail, with the tolerance
+#: traders already work with. The nose -- the wick on the *far* side -- is
+#: capped in both grades, because that is the part saying price was pushed back
+#: the other way before the candle closed.
+L1_TAIL_FRACTION = 0.65
+NOSE_MAX_FRACTION = 0.15
+#: A level-2 pinbar trades tail for body: a real body, a decent tail, almost no
+#: nose. Proportions read from a trader rather than fitted here.
+L2_BODY_FRACTION = 1.0 / 3.0
+L2_TAIL_FRACTION = 0.20
+
+
+def pinbar_grades(candle: Candle, *, bullish: bool) -> frozenset[str]:
+    """Which pinbar definitions this candle satisfies: `legacy`, `l1`, `l2`.
+
+    Three, kept apart rather than collapsed into one threshold, because they
+    are different candles wearing one name. `legacy` is what this layer shipped
+    with -- tail >= 0.50, body <= 0.35, nose unconstrained -- and it is neither
+    of the others: looser than the golden rule on the tail, and silent about
+    the nose. `l1` is the golden rule. `l2` is body-heavy with a small nose: a
+    candle that closed most of the way through its own range and still left a
+    tail underneath.
+
+    Accepting the **union** is measured, not assumed. Over 22 walk-forward
+    folds it pools the best out-of-sample Sharpe of 30 declared candidates,
+    **7.90 against the legacy trigger's 6.75**, and it beats every one of its
+    own subsets -- `legacy` alone 7.24, `l2` alone 4.56, `l1` 4.25 -- while
+    carrying 43% more trades at the same hit rate. The subsets are named here
+    so a reader can observe which grade fired; filtering on one is what the
+    measurement rules out. See `docs/block_reclaim.md`.
+    """
+    span = candle.high - candle.low
+    if span <= 0:
+        return frozenset()
+    body = abs(candle.close - candle.open)
+    tail = (
+        min(candle.close, candle.open) - candle.low
+        if bullish
+        else candle.high - max(candle.close, candle.open)
+    )
+    nose = (
+        candle.high - max(candle.close, candle.open)
+        if bullish
+        else min(candle.close, candle.open) - candle.low
+    )
+    out: set[str] = set()
+    if tail >= MIN_WICK_FRACTION * span and body <= MAX_BODY_FRACTION * span:
+        out.add("legacy")
+    if tail >= L1_TAIL_FRACTION * span and nose <= NOSE_MAX_FRACTION * span:
+        out.add("l1")
+    if (
+        body >= L2_BODY_FRACTION * span
+        and tail >= L2_TAIL_FRACTION * span
+        and nose <= NOSE_MAX_FRACTION * span
+    ):
+        out.add("l2")
+    return frozenset(out)
+
+
 def _is_pinbar(candle: Candle, *, bullish: bool) -> bool:
     span = candle.high - candle.low
     if span <= 0:
@@ -252,7 +311,8 @@ def detect_block_reclaims(
                 vwap_value = vwap_at.get(candle.timestamp)
                 if vwap_value is None:
                     continue
-                if not _is_pinbar(candle, bullish=bullish):
+                grades = pinbar_grades(candle, bullish=bullish)
+                if not grades:
                     continue
                 on_vwap = _is_reclaim(candle, vwap_value, bullish=bullish)
                 ema_value = ema_at.get(candle.timestamp)
@@ -293,6 +353,7 @@ def detect_block_reclaims(
                         r_atr=r_atr,
                         provisional=i == len(candles) - 1,
                         trigger_line=line,
+                        pinbar_grade=",".join(sorted(grades)),
                         vwap_candles=accumulated.get(candle.timestamp, 1),
                     )
                 )

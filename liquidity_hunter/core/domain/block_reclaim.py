@@ -92,6 +92,13 @@ class BlockReclaim(DomainModel):
     #: of sample (3.87), so this field is here to be observed, never filtered
     #: on. See `docs/block_reclaim.md`.
     trigger_line: str = "vwap"
+    #: Which pinbar definitions the trigger candle met, comma-joined and
+    #: sorted: ``legacy``, ``l1`` (the golden two-thirds tail), ``l2``
+    #: (body-heavy with a capped nose). The **union** is accepted, which is
+    #: measured rather than assumed -- it pools the best out-of-sample Sharpe
+    #: of 30 declared rules and beats each of its own subsets. Observe this
+    #: field; do not filter on it.
+    pinbar_grade: str = "legacy"
     #: How many candles of accumulation the VWAP carried at the reclaim.
     #: The lift tracks this monotonically -- a six-candle average is nobody's
     #: break-even -- so a reading against a barely-started VWAP is weaker

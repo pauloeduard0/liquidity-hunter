@@ -653,6 +653,13 @@ export interface BlockReclaim {
    * exactly the filtering the measurement rules out.
    */
   trigger_line: string
+  /**
+   * Which pinbar definitions the trigger candle met: 'legacy', 'l1' (the
+   * golden two-thirds tail), 'l2' (body-heavy, capped nose), comma-joined.
+   * The union is what the detector accepts, and it beats each subset out of
+   * sample — so this is here to be read, not to be filtered on.
+   */
+  pinbar_grade: string
   vwap_candles: number
 }
 

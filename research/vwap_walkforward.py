@@ -131,6 +131,24 @@ RULES: dict[str, object] = {
     # exists to price, so leaving it out of the trial count would flatter the
     # rule being defended.
     "ob-either|r<=1.0": lambda r: r["arm"] == "ob-either" and _tight(r, 1.0),
+    # The pinbar grades. `ob-pin2` accepts the union of three definitions of the
+    # trigger candle -- the legacy one this project has measured, the golden
+    # two-thirds tail, and a level-2 body-heavy bar with a capped nose -- and
+    # each grade is declared beside the union so the procedure can price the
+    # subset as well as the whole.
+    "ob-pin2|r<=1.0": lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0),
+    "ob-pin2|r<=1.0|l2only": (
+        lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0)
+        and r.get("pinbar_grade") == "l2"
+    ),
+    "ob-pin2|r<=1.0|hasl1": (
+        lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0)
+        and "l1" in (r.get("pinbar_grade") or "")
+    ),
+    "ob-pin2|r<=1.0|legacy": (
+        lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0)
+        and "legacy" in (r.get("pinbar_grade") or "")
+    ),
     "ob-either|r<=1.0|both": (
         lambda r: r["arm"] == "ob-either" and _tight(r, 1.0)
         and r.get("trigger_line") == "both"
