@@ -412,6 +412,87 @@ poetry run python research/vwap_ob_pinbar.py \
 poetry run python research/vwap_walkforward.py --trades trades.json
 ```
 
+## Letting the winners run: the excursion is there and unreachable
+
+The question came from a chart rather than from the data, which is why it was
+worth answering. A reader showed a 5m reclaim that ran **9.83R** and never came
+near its stop, and asked whether the measurement was right. Two things followed.
+
+**The detector found that trade exactly** — same minute, bearish, `both` route,
+fresh block, entry 77254.3 against a 77423.8 test extreme. But its `r_atr` was
+**1.87**, and every table in this document caps that at 1.0, so it had never
+been counted in anything reported here. That was a real gap in what was being
+shown, and closing it is what the rest of this section does.
+
+### The band the example belongs to loses
+
+M5, `ob-either`, each trade charged its own measured cost:
+
+| r_atr band | n | hit | cost R | gross @2R |
+|---|---|---|---|---|
+| ≤ 1.0 | 1351 | **47.1%** | 0.687 | **+0.418** |
+| 1.0–1.5 | 2127 | 32.6% | 0.393 | +0.039 |
+| **1.5–2.0** | **2519** | **26.8%** | 0.283 | **−0.020** |
+| 2.0–3.0 | 4443 | 18.7% | 0.206 | −0.017 |
+| > 3.0 | 5852 | 8.4% | 0.128 | −0.026 |
+
+A 2:1 payoff breaks even at 33.3% before any cost. The wider bands sit under it
+and their gross is negative, in both halves. The cost *does* fall as the stop
+widens — the geometry works exactly as predicted, 0.283R against 0.687R — but
+the hit rate falls faster. **The `r_atr` gate is not hiding an edge; it is
+separating the only band that has one.**
+
+### No exit family rescues either timeframe
+
+`research/runner_exits.py` prices every dated entry under eleven rules — fixed
+targets out to 10R, and four uncapped trailing stops — plus the MFE
+distribution, which is not an exit anyone can take and is reported only as the
+ceiling every real rule is measured against. Adverse extremes are credited
+first within a candle and the trailing level is the one *previous* candles
+earned, so both choices bias the runner columns down.
+
+**The fat tail is in the tight band, not the wide one.** On M5 at 40 candles the
+`r_atr ≤ 1.0` band offers a median MFE of **3.89R** (p90 10.75R); the 1.5–2.0
+band offers **1.37R** (p90 4.04R), and it falls to 1.00R and 0.57R above that.
+Most trades in the wide bands never offer even 1.5R. The reader's 9.83R was not
+a typical member of its band; it was its extreme.
+
+Every one of the eleven rules is net negative in every M5 band, and in the wide
+bands the runners make it **worse** (fixed 10R at −0.094 against fixed 2R's
+−0.013): more trades that were ahead give it all back.
+
+The cleanest demonstration is what the horizon does. Stretching it from 40
+candles to 200 raises the tight band's median MFE from **3.89R to 8.38R** while
+no rule's payoff improves at all. **The excursion is there and it is
+unreachable** — price goes that far, but it passes through the stop on the way.
+More time collects nothing; it only offers more chances to be stopped.
+
+### On M15 the existing 2R survives a much wider family
+
+| rule | gross | net | t |
+|---|---|---|---|
+| **fixed 2R** | +0.630 | **+0.225** | **+3.7** |
+| fixed 3R | +0.570 | +0.164 | +2.1 |
+| fixed 6R | +0.599 | +0.193 | +1.8 |
+| fixed 10R | +0.566 | +0.161 | +1.3 |
+| trail 2R/1R | +0.600 | +0.194 | +3.0 |
+| trail 3R/2R | +0.462 | +0.057 | +0.7 |
+
+M15's median MFE is 4.00R too, and 2R still wins — holding past it converts
+winners into scratches more often than it collects tails. The exit was
+previously tested only against 1R–3R; it now stands against targets to 10R and
+uncapped trailing, and the `t` separates it clearly from its neighbours.
+
+### What cannot be concluded
+
+That the reader's read was luck. A 9.83R trade in a band that loses on average
+may well have carried something the band does not capture — the block's
+freshness, the hour, the displacement behind it. What the measurement
+establishes is narrower and worth stating exactly: **`r_atr` alone does not
+separate it, and no variable currently emitted does.** Hunting for one by
+collecting the examples that worked is how a false finding gets built, so any
+such search owes a control matched the way every claim here is.
+
 ## M5: the mechanism confirms, the arithmetic refuses
 
 Measured 2026-08-22, 72 symbols on 5m over 75 000 candles — the **same 666-day
