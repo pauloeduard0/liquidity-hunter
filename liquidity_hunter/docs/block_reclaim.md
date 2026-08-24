@@ -1036,6 +1036,36 @@ Worth stating plainly because it generalises past this feature: a scan that
 fans out across a universe is a request budget first and an algorithm second,
 and retrying a rate limit is how a rate limit becomes a ban.
 
+### Departure: a block price never left is not a level (negative)
+
+Read off a chart: a block tall enough to swallow the range is touched by every
+candle, so price should have to *work clear* of the box after it forms and then
+come back -- a test of a level, not a stretch of chop inside a region. The
+instrument is in `research/vwap_ob_pinbar.py`: `departure_atr` (the furthest
+price got wholly clear of the box between its creation and the test, in local
+ATR), `departure_candles`, `block_age_candles`.
+
+The mechanism is real and the filter is not. Inside the gate, the trades where
+price **never** got clear are 1-4% of the population: 38/935 on M15, 26/1123 on
+M30, 6/419 on H4. They measure worse on the coarse rungs (M30 −0.165, H4
+−0.116) and identically to the rest on M15 (+0.219 against +0.230) -- and M15
+is where the sample is largest. Out of sample nothing survives: against the
+plain gate's pooled OOS Sharpe of 7.89, `dep > 0` is 7.77, `dep >= 0.5 ATR`
+7.59, and combining it with the accumulation floor (7.98) is *worse* than that
+floor alone (8.44).
+
+Why it is already handled: with price stuck inside a tall box, the test extreme
+sits far from the reclaim, so `r_atr` blows past 1.0 and the gate drops the
+trade for a different reason. The filter that exists is doing this filter's
+work without naming it, which is why only 1-4% remain to be caught.
+
+Three related shapes measured in the same pass, all recorded and none admitted:
+block **height** goes the *opposite* way to intuition (taller blocks measure
+better on all four rungs -- thin ones are outright negative on M30), and a
+**shorter approach** measures better on all three checked (M15 <3 ATR: +0.431
+against +0.030). Both are in-sample slices of the kind this study has been
+fooled by repeatedly, and neither has been through the rite.
+
 ## Live and replay: does a reclaim survive being read again?
 
 The study runs the detector **once** over a finished series; a live reader runs
