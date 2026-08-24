@@ -846,6 +846,7 @@ def _either_line_trigger(
     candles: Sequence[Candle], vwap_at: dict, ema_at: dict, start: int, end: int,
     *, bull: bool, wick_frac: float, body_frac: float, max_wait: int,
     accept: frozenset[str] = frozenset({"legacy"}),
+    from_start: bool = False,
 ) -> tuple[int, str, str] | None:
     """The setup as described on the charts: reject EITHER shared line.
 
@@ -859,7 +860,12 @@ def _either_line_trigger(
     the `-hook` arm, which required a VWAP reclaim pinbar to have fired first
     and so could only ever be a subset of trades the main trigger already took.
     """
-    for j in range(end, min(end + max_wait + 1, len(candles))):
+    # A visit's *end* is not knowable when it happens (it keeps absorbing
+    # later touches), so a window anchored on it moves as candles arrive --
+    # 6.5% of live reclaims vanish from a later read of the same series
+    # (`research/reclaim_stability.py`). The *start* is settled by the past.
+    anchor = start if from_start else end
+    for j in range(anchor, min(anchor + max_wait + 1, len(candles))):
         c = candles[j]
         w, m = vwap_at.get(c.timestamp), ema_at.get(c.timestamp)
         if w is None or m is None:
@@ -1285,9 +1291,13 @@ def run_combo(
     # kind and emitted one trade per visit; its VWAP route then measured 33%
     # against the production arm's 53% on the same trigger, which is the
     # signature of a broken instrument rather than of a finding.
-    for arm_name, accept in (
-        ("ob-either", frozenset({"legacy"})),
-        ("ob-pin2", frozenset({"legacy", "l1", "l2"})),
+    for arm_name, accept, from_start in (
+        ("ob-either", frozenset({"legacy"}), False),
+        ("ob-pin2", frozenset({"legacy", "l1", "l2"}), False),
+        # The same rule with the trigger window anchored on the visit's start
+        # instead of its end: stable under replay by construction. Declared as
+        # its own arm so the two are measured side by side on one collection.
+        ("ob-pin2s", frozenset({"legacy", "l1", "l2"}), True),
     ):
       for bull in (True, False):
         direction = BULL if bull else BEAR
@@ -1301,7 +1311,7 @@ def run_combo(
                 found = _either_line_trigger(
                     candles, vwap_at, ema_at_pre, vstart, vend, bull=bull,
                     wick_frac=wick_frac, body_frac=body_frac, max_wait=max_wait,
-                    accept=accept,
+                    accept=accept, from_start=from_start,
                 )
                 if found is None:
                     continue

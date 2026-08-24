@@ -1106,6 +1106,40 @@ block, and a box tall enough to swallow the range is not a level), and it
 changes the measured object -- so it needs the study run again, per
 **Changing the rule** below.
 
+### Anchoring the trigger on the visit's start (negative, and instructive)
+
+The obvious fix for the 6.5% instability: a visit's *end* moves as candles
+arrive, its *start* does not, so search the trigger from the start. It is
+implemented as `detect_block_reclaims(scan_from_visit_start=...)` and the
+`ob-pin2s` research arm, and it does exactly what it promised on stability --
+**100% of live reclaims survive the final read, zero vanish across all 36
+symbol/timeframe combinations**, against 93.5% for the shipped anchor.
+
+And it destroys the reading:
+
+| | M15 shipped | M15 from-start | H4 shipped | H4 from-start |
+|---|---|---|---|---|
+| trades | 627 | 1473 | 419 | 870 |
+| hit 2R | 59.3% | 29.1% | 54.4% | 35.6% |
+| net | **+0.344** | **−0.628** | **+0.565** | **−0.015** |
+| holdout hit | 53.6% | 27.7% | 60.0% | 36.9% |
+
+The population **doubles** rather than shrinking, which names the cause: from
+the visit's start the trigger is searched *while the test is still happening*,
+so a pinbar fires with price still working into the block. The visit's end is
+not an implementation detail -- it is the rule's semantics, "the test is
+over", and the whole premise is a block tested **and then handed back**.
+
+So the instability is intrinsic to the reading rather than a defect in it:
+knowing the test finished requires waiting, and waiting is what lets the visit
+keep growing. It is also harmless in the direction that matters -- extras are
+zero, so the measured population is a conservative subset, never an invented
+one. The flag stays off, kept for the record.
+
+This also weakens the other candidate fix (capping block height): taller blocks
+already measure *better* on all four rungs, so that cap would charge a price
+too.
+
 ## What this does not establish
 
 **That a reader's own fill matches the measured one.** The round trip is no

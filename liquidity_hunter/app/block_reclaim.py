@@ -256,6 +256,7 @@ def detect_block_reclaims(
     symbol: str,
     timeframe: TimeFrame,
     ema: Sequence[float | None] | None = None,
+    scan_from_visit_start: bool = False,
 ) -> list[BlockReclaim]:
     """Every VWAP reclaim that followed a test of an order block.
 
@@ -276,6 +277,16 @@ def detect_block_reclaims(
     until it closes. It is emitted rather than withheld, because a reader
     watching the live edge wants to see it, but it carries the flag so nothing
     replaying history counts a candle that may still become something else.
+
+    Under `scan_from_visit_start` the trigger is searched from the candle the
+    visit **began** on rather than from the one it ended on. A visit's end is
+    not knowable when it happens -- it keeps absorbing later touches across
+    `MERGE_GAP_CANDLES` -- so a window anchored on it moves as candles arrive,
+    and a reclaim emitted live can be gone from the same series read later
+    (measured: 6.5% of live reclaims vanish, `research/reclaim_stability.py`).
+    The visit's *start* is settled by the past alone, so anchoring there is
+    stable by construction. Off by default: it changes which trades exist, and
+    a change to the rule is a change to the measured object.
     """
     if vwap is None or len(candles) < ATR_PERIOD + 2:
         return []
@@ -306,7 +317,8 @@ def detect_block_reclaims(
             continue
         bullish = zone.direction is MarketDirection.BULLISH
         for start, end, first_test in _visits(candles, zone, vwap_at, bullish=bullish):
-            for i in range(end, min(end + MAX_WAIT_CANDLES + 1, len(candles))):
+            scan_from = start if scan_from_visit_start else end
+            for i in range(scan_from, min(scan_from + MAX_WAIT_CANDLES + 1, len(candles))):
                 candle = candles[i]
                 vwap_value = vwap_at.get(candle.timestamp)
                 if vwap_value is None:

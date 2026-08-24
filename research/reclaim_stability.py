@@ -44,7 +44,13 @@ def key_of(r: BlockReclaim) -> Key:
     return (r.timestamp.isoformat(), r.direction.value)
 
 
-def detect_at(candles: list[Candle], symbol: str, timeframe: TimeFrame) -> list[BlockReclaim]:
+def detect_at(
+    candles: list[Candle],
+    symbol: str,
+    timeframe: TimeFrame,
+    *,
+    from_start: bool = False,
+) -> list[BlockReclaim]:
     """The production pipeline over one prefix."""
     zones = POIDetector().detect(candles)
     series = vwap(
@@ -60,6 +66,7 @@ def detect_at(candles: list[Candle], symbol: str, timeframe: TimeFrame) -> list[
         symbol=symbol,
         timeframe=timeframe,
         ema=ema_series(candles, _BLOCK_RECLAIM_EMA_PERIOD),
+        scan_from_visit_start=from_start,
     )
 
 
@@ -85,17 +92,24 @@ class Result:
 
 
 def scan(
-    candles: list[Candle], symbol: str, timeframe: TimeFrame, *, warmup: int = 200
+    candles: list[Candle],
+    symbol: str,
+    timeframe: TimeFrame,
+    *,
+    warmup: int = 200,
+    from_start: bool = False,
 ) -> Result:
     live: set[Key] = set()
     for end in range(warmup, len(candles) + 1):
         prefix = candles[:end]
-        for r in detect_at(prefix, symbol, timeframe):
+        for r in detect_at(prefix, symbol, timeframe, from_start=from_start):
             # Only what a live reader could act on: the trigger candle has
             # closed (the last candle of a prefix is the forming one).
             if not r.provisional:
                 live.add(key_of(r))
-    final = {key_of(r) for r in detect_at(candles, symbol, timeframe)}
+    final = {
+        key_of(r) for r in detect_at(candles, symbol, timeframe, from_start=from_start)
+    }
     return Result(symbol, timeframe.value, live, final)
 
 
@@ -134,6 +148,9 @@ def main() -> None:
     p.add_argument("--timeframes", nargs="+", default=["15m", "30m"])
     p.add_argument("--limit", type=int, default=1500)
     p.add_argument("--warmup", type=int, default=200)
+    p.add_argument("--from-start", action="store_true",
+                   help="anchor the trigger search on the visit's start "
+                        "(stable by construction) instead of its end")
     args = p.parse_args()
 
     provider = PaginatedFuturesProvider()
@@ -141,7 +158,9 @@ def main() -> None:
     for symbol in args.symbols:
         for tf in (TimeFrame(t) for t in args.timeframes):
             candles = provider.get_ohlcv(symbol, tf, args.limit)
-            results.append(scan(candles, symbol, tf, warmup=args.warmup))
+            results.append(
+                scan(candles, symbol, tf, warmup=args.warmup, from_start=args.from_start)
+            )
             r = results[-1]
             print(
                 f"{symbol} {tf.value}: live {len(r.live)} final {len(r.final)} "
