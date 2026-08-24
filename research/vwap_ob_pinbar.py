@@ -215,6 +215,16 @@ class Ev:
     #: discards sits within one ATR of the block. Emitted, never filtered.
     block_low: float | None = None
     block_high: float | None = None
+    #: Did price ever *leave* the block between its creation and the test?
+    #: A block tall enough to swallow the range is touched by every candle,
+    #: and a "test" of a level price never left is not a test of anything.
+    #: `departure_atr` is the furthest price worked clear of the box (the
+    #: whole candle beyond it) before coming back, in local ATR; 0.0 means it
+    #: never got clear. `departure_candles` counts the candles fully outside.
+    departure_atr: float | None = None
+    departure_candles: int | None = None
+    #: Candles between the block's anchor candle and the start of the test.
+    block_age_candles: int | None = None
     test_extreme: float | None = None
     #: --- How the price ARRIVED at the block. All three are properties of
     #: candles that closed before the entry, so none of them peeks.
@@ -1154,6 +1164,23 @@ def run_combo(
         ev.block_high = reclaim.block_price_high
         ev.test_extreme = reclaim.test_extreme
         ev.trigger_line = reclaim.trigger_line
+        born = idx_of.get(reclaim.block_timestamp)
+        if born is not None and start > born:
+            atr = _local_atr(candles, e)
+            clear = 0.0
+            fully_out = 0
+            for c in candles[born + 1 : start]:
+                gap = (
+                    c.low - reclaim.block_price_high
+                    if bull
+                    else reclaim.block_price_low - c.high
+                )
+                if gap > 0:
+                    fully_out += 1
+                    clear = max(clear, gap)
+            ev.departure_atr = (clear / atr) if atr else None
+            ev.departure_candles = fully_out
+            ev.block_age_candles = start - born
         out.append(ev)
         for _ in range(random_reps):
             ri = rng.randrange(50, len(candles) - max_h - 1)
@@ -1317,6 +1344,23 @@ def run_combo(
             ev.block_low = zone.price_low
             ev.block_high = zone.price_high
             ev.test_extreme = stop
+            # Did price ever work clear of the box before coming back to it?
+            born = idx_of.get(zone.ob_candle_timestamp)
+            if born is not None and vstart > born:
+                clear = 0.0
+                fully_out = 0
+                for c in candles[born + 1 : vstart]:
+                    gap = (
+                        c.low - zone.price_high
+                        if bull
+                        else zone.price_low - c.high
+                    )
+                    if gap > 0:
+                        fully_out += 1
+                        clear = max(clear, gap)
+                ev.departure_atr = clear / e_atr if e_atr else None
+                ev.departure_candles = fully_out
+                ev.block_age_candles = vstart - born
             out.append(ev)
             for _ in range(random_reps):
                 ri = rng.randrange(50, len(candles) - max_h - 1)
@@ -1589,6 +1633,9 @@ def export_events(events: Sequence[Ev], path: str) -> None:
             "pinbar_grade": e.pinbar_grade,
             "block_low": e.block_low,
             "block_high": e.block_high,
+            "departure_atr": e.departure_atr,
+            "departure_candles": e.departure_candles,
+            "block_age_candles": e.block_age_candles,
             "test_extreme": e.test_extreme,
             "approach_atr": e.approach_atr,
             "approach_candles": e.approach_candles,

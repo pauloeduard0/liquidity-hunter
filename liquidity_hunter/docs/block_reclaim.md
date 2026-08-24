@@ -1036,6 +1036,46 @@ Worth stating plainly because it generalises past this feature: a scan that
 fans out across a universe is a request budget first and an algorithm second,
 and retrying a rate limit is how a rate limit becomes a ban.
 
+## Live and replay: does a reclaim survive being read again?
+
+The study runs the detector **once** over a finished series; a live reader runs
+it on every closed candle. They need not agree, and a case found by the paper
+journal showed they sometimes do not: two GALAUSDT M30 reclaims recorded live
+on 2026-08-23 were gone from the same series read a few hours later. The cause
+is visit merging -- a visit absorbs later touches across `MERGE_GAP_CANDLES`,
+and the detector emits one reclaim per visit *after* the visit ends, so a visit
+that keeps growing swallows a trigger that had already fired. The GALA block is
+the pathological shape for this: 20.8% of price tall, so price stays "inside"
+it for days and the visit never closes.
+
+`research/reclaim_stability.py` measures how common that is by replaying the
+detector over growing prefixes and comparing what was ever emitted live
+(non-provisionally) against the final whole-series read. Across 12 symbols ×
+M15/M30/H4, 2000 candles each:
+
+| | count | share |
+|---|---|---|
+| emitted live | 725 | — |
+| survive the final read | 678 | **93.5%** |
+| vanish | 47 | 6.5% |
+| **in the final read but never live** | **0** | **0.0%** |
+
+The failure that would have invalidated the study did not happen: the "extra"
+column is zero in all 36 combinations, so no measured trade is one a live
+reader could not have taken. The error is omission only -- the measured
+population is an honest, slightly smaller subset of the live one, which makes
+every net figure mildly conservative rather than wrong.
+
+M30 is the least stable rung (23 of the 47), and the most liquid majors barely
+show it (ETH: zero across all three). The paper journal will therefore record
+roughly one decision in fifteen that the study never measured -- which is the
+kind of discrepancy it exists to expose, not a defect in it.
+
+The fix belongs in the visit rule (a visit should end when price leaves the
+block, and a box tall enough to swallow the range is not a level), and it
+changes the measured object -- so it needs the study run again, per
+**Changing the rule** below.
+
 ## What this does not establish
 
 **That a reader's own fill matches the measured one.** The round trip is no

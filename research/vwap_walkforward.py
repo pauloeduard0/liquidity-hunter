@@ -164,6 +164,24 @@ RULES: dict[str, object] = {
     # the weekly-anchor H4 lift, the EMA-either refinement, the documented
     # monotone `vwap_candles` lift -- so the family gets the full rite:
     # declared here, walk-forwarded, and judged on the symbol holdout.
+    # The departure family, declared 2026-08-23 before its confirming run:
+    # the user's observation that a block price never *left* is not a level at
+    # all -- every candle touches a box tall enough to swallow the range.
+    # `dep` is the furthest price worked wholly clear of the box between its
+    # creation and the test, in local ATR.
+    "ob-pin2|r<=1.0|dep>0": (
+        lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0)
+        and (r.get("departure_atr") or 0.0) > 0.0
+    ),
+    "ob-pin2|r<=1.0|dep>=0.5": (
+        lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0)
+        and (r.get("departure_atr") or 0.0) >= 0.5
+    ),
+    "ob-pin2|r<=1.0|dep>=0.5+vwap>=15": (
+        lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0)
+        and (r.get("departure_atr") or 0.0) >= 0.5
+        and (r.get("vwap_candles") or 0) >= 15
+    ),
     "ob-pin2|r<=1.0|vwap>=15": (
         lambda r: r["arm"] == "ob-pin2" and _tight(r, 1.0)
         and (r.get("vwap_candles") or 0) >= 15
