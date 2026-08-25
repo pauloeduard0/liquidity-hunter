@@ -29,8 +29,9 @@ Tres diferencas em relacao ao original, e so tres:
 O que **nao** muda: o gatilho (`detect_block_reclaims`, uniao dos tres graus de
 pinbar, rotas VWAP e EMA), o piso de acumulacao da VWAP -- `vwap_candles>=4`,
 que existe porque a VWAP de sessao reancora a meia-noite UTC e cruza o preco
-sozinha (ver `docs/block_reclaim.md`) --, o custo de 0,10% por ida e volta, a
-divisao busca/holdout congelada em `_symbols.py`, e o controle aleatorio
+sozinha --, o descarte do teste que **atravessou o bloco** e saiu do outro lado
+(o bloco nao segurou nada; ver `docs/block_reclaim.md`), o custo de 0,10% por
+ida e volta, a divisao busca/holdout congelada em `_symbols.py`, e o controle aleatorio
 **casado na direcao e no simbolo** (um controle sem direcao faz qualquer
 periodo que tendeu parecer preditivo).
 
@@ -145,11 +146,12 @@ def _row_outcomes(candles, i0, entry, stop, r, *, bull) -> dict[str, float]:
     return out
 
 
-def run(symbols, timeframe, limit, out, *, gap, require_ema9, min_vwap):
+def run(symbols, timeframe, limit, out, *, gap, require_ema9, min_vwap,
+        drop_pierced=True):
     provider, futures = PaginatedFuturesProvider(), NoFuturesProvider()
     rng = random.Random(7)
     rows: list[dict] = []
-    dropped = {"ema9": 0, "vwap": 0}
+    dropped = {"ema9": 0, "vwap": 0, "atravessou": 0}
     for n, symbol in enumerate(symbols, 1):
         try:
             data = load_dashboard_data(
@@ -184,6 +186,17 @@ def run(symbols, timeframe, limit, out, *, gap, require_ema9, min_vwap):
                 dropped["vwap"] += 1
                 continue
             bull = rec.direction is MarketDirection.BULLISH
+            # O bloco atravessado de ponta a ponta pelo pavio da propria visita
+            # do gatilho: nenhuma vela fechou alem dele, entao o detector ainda
+            # o considera vivo, mas nao sobrou ordem para reagir. Emitido tambem
+            # como campo, para o custo do corte ser mensuravel aqui tambem.
+            pierced = (
+                rec.test_extreme < rec.block_price_low if bull
+                else rec.test_extreme > rec.block_price_high
+            )
+            if pierced and drop_pierced:
+                dropped["atravessou"] += 1
+                continue
             sign = 1.0 if bull else -1.0
             # A inclinacao termina na vela ANTERIOR ao gatilho: um pinbar de
             # reclaim forte levanta a EMA9 sozinho, e sem a defasagem nao da
@@ -221,6 +234,7 @@ def run(symbols, timeframe, limit, out, *, gap, require_ema9, min_vwap):
                 "ema9_slope_lag1": slope,
                 "vwap_candles": rec.vwap_candles,
                 "first_test": rec.first_test,
+                "pierced": pierced,
                 "pinbar_grade": rec.pinbar_grade,
                 "trigger_line": rec.trigger_line,
                 "block_atr": (rec.block_price_high - rec.block_price_low) / atr,
@@ -251,7 +265,8 @@ def run(symbols, timeframe, limit, out, *, gap, require_ema9, min_vwap):
         print(f"[{n}/{len(symbols)}] {symbol:11s} {kept} entradas", flush=True)
     Path(out).write_text(json.dumps(rows))
     print(f"\ngravado {len(rows)} linhas -> {out}", flush=True)
-    print(f"descartados: EMA9 contra {dropped['ema9']}, vwap jovem {dropped['vwap']}")
+    print(f"descartados: EMA9 contra {dropped['ema9']}, vwap jovem "
+          f"{dropped['vwap']}, atravessou o bloco {dropped['atravessou']}")
     report(rows)
 
 
@@ -302,6 +317,8 @@ def main() -> None:
     p.add_argument("--no-ema9", action="store_true",
                    help="nao exigir a EMA9 a favor (para medir o que ela custa)")
     p.add_argument("--min-vwap", type=int, default=MIN_VWAP_CANDLES)
+    p.add_argument("--keep-pierced", action="store_true",
+                   help="manter os testes que atravessaram o bloco")
     p.add_argument("--out", default="/tmp/deep_reclaim.json")
     p.add_argument("--report-only", default=None)
     a = p.parse_args()
@@ -309,7 +326,8 @@ def main() -> None:
         report(json.loads(Path(a.report_only).read_text()))
         return
     run(a.symbols, TimeFrame(a.timeframe), a.limit, a.out,
-        gap=a.gap, require_ema9=not a.no_ema9, min_vwap=a.min_vwap)
+        gap=a.gap, require_ema9=not a.no_ema9, min_vwap=a.min_vwap,
+        drop_pierced=not a.keep_pierced)
 
 
 if __name__ == "__main__":
