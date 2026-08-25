@@ -33,6 +33,7 @@ from liquidity_hunter.app.screener import (
     load_screen,
 )
 from liquidity_hunter.core.domain import (
+    BlockReclaim,
     BlockReclaimScanEntry,
     Candle,
     MarketDirection,
@@ -121,7 +122,37 @@ def passes_gates(
     max_r_atr, min_vwap_candles = gate
     if entry.r_atr is None or entry.r_atr > max_r_atr:
         return False
-    return entry.reclaim.vwap_candles >= min_vwap_candles
+    if entry.reclaim.vwap_candles < min_vwap_candles:
+        return False
+    return not test_pierced_the_block(entry.reclaim)
+
+
+def test_pierced_the_block(reclaim: BlockReclaim) -> bool:
+    """Whether the test went clean through the block and out the far side.
+
+    The detector already retires a block that a candle *closes* beyond, which
+    is the `POIZone` lifecycle rule: a wick back inside does not break a zone.
+    This is the case that rule does not cover -- a wick that crosses the whole
+    block, on the very visit that produced the trigger. No close settled it, so
+    the block is still on the board, but nothing held: price went in one side
+    and out the other, and there is no resting order left to react to.
+
+    Measured (`research/block_test_walkforward.py`, declared before the run
+    among sixteen rules): 8% of the gated population, and the rare cut whose
+    discarded half is **negative on its own** rather than merely weaker --
+    -14.6R search, -21.0R holdout, hit rate 34.9%/31.4%. Excluding it raises
+    both Sharpe and total R in both symbol halves. It is not a proxy for small
+    blocks: inside the sub-1-ATR bucket alone the split is 34.9%/31.4% against
+    55.7%/57.1%.
+
+    Depth *within* the block does not matter and was measured not to -- the
+    shallow graze is fine, which is the opposite of what reading one chart
+    suggested. Only crossing all the way out does.
+    """
+    block_low, block_high = reclaim.block_price_low, reclaim.block_price_high
+    if reclaim.direction is MarketDirection.BULLISH:
+        return reclaim.test_extreme < block_low
+    return reclaim.test_extreme > block_high
 
 
 def build_decision(

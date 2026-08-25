@@ -77,6 +77,19 @@ def test_gates_follow_the_operating_plan() -> None:
     assert passes_gates(entry(status=ScreenerStatus.ARMED)) is False
 
 
+def test_a_test_that_pierced_the_block_is_not_a_decision() -> None:
+    # The detector retires a block only on a *close* beyond it (the POIZone
+    # rule). A wick that crosses the whole block on the trigger's own visit
+    # leaves it on the board with nothing left holding: price went in one side
+    # and out the other. Depth *inside* the block is fine -- only crossing out.
+    e = entry()
+    block = e.reclaim.block_price_low, e.reclaim.block_price_high
+    inside = e.reclaim.model_copy(update={"test_extreme": block[0] + 0.01})
+    through = e.reclaim.model_copy(update={"test_extreme": block[0] - 0.01})
+    assert passes_gates(e.model_copy(update={"reclaim": inside})) is True
+    assert passes_gates(e.model_copy(update={"reclaim": through})) is False
+
+
 def test_a_stale_row_is_not_a_decision() -> None:
     # the screener lists recent fires; acting on one from hours ago is
     # chasing, and pricing it against the tape now measures the chase

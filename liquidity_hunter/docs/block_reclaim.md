@@ -1364,3 +1364,33 @@ not even reached the OB yet". Four separate measurements had run over this same
 population without isolating it — the defect is invisible in an aggregate
 because it is a *minority* of trades with a *specific* mechanism. The block-test
 criterion, the other half of the AVAX case, is still unmeasured inside the gate.
+
+### A block the test crossed out the far side (2026-08-25)
+
+The other half of the AVAX case, measured. The reading that prompted it -- "it
+had not even reached the OB yet" -- does **not** survive: shallow tests are fine,
+and the depth a test reaches inside the block does not separate. Nor does visit
+length, once time is the axis: `visit_candles <= 2` gains a full Sharpe point on
+holdout and **nothing** on search, and the combinations built on it lead the
+in-sample table while their PBO climbs to 0.467.
+
+One rule of sixteen survived, and it is the mechanical one. **Do not take a
+reclaim whose test wicked clean through the block and out the far side**
+(`test_extreme` beyond the far boundary). The detector retires a block only on a
+*close* beyond it -- the `POIZone` lifecycle rule, where a wick back inside does
+not break a zone -- so these blocks are still on the board with nothing holding.
+
+| | search | holdout |
+|---|---|---|
+| base | SR 7.76, +206.2R | SR 5.48, +109.2R |
+| did not cross out | **SR 8.26, +217.0R** | **SR 6.78, +127.5R** |
+| crossed out (dropped) | SR −1.24, **−14.6R** | SR −2.59, **−21.0R** |
+
+The discarded half is negative *on its own* rather than merely weaker, in both
+halves -- the rare shape that makes a cut safe. It costs 8% of the gated
+population and raises Sharpe and total R in both. Not a proxy for small blocks
+either: piercing concentrates in sub-1-ATR blocks (median 0.78 vs 1.44 ATR), but
+inside that bucket alone it still splits 34.9%/31.4% against 55.7%/57.1%.
+
+Wired in `passes_gates` (`test_pierced_the_block`). Small: ~5% of result for 8%
+of trades, an order of magnitude less than the re-anchor floor above.
