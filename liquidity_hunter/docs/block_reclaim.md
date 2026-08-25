@@ -925,6 +925,10 @@ siblings so PBO priced the family):
 reclaim against a session VWAP younger than ~15 candles (~4h), because a
 barely-started average is nobody's break-even yet.
 
+> **Lowered to 4 on 2026-08-25** (H4 raised from 1 to 2). The floor was right
+> about *what* to drop and wrong about *how much*; see "The floor was aimed at
+> the re-anchor candle" below.
+
 - Walk-forward: pooled OOS Sharpe **8.47 vs 7.90** for the plain gate — the
   best of 40 declared rules, PBO 0.000 — and mean daily R *rises* (0.371 vs
   0.352) while dropping a third of the trades: the kept trades more than pay
@@ -988,8 +992,8 @@ persistent 0.05R of slippage is a fifth of the edge.
 
 `app/paper_journal.py` + `app/paper_runner.py` record it. Two idempotent
 passes, cron-able: `record_decisions` reads the screener, keeps rows passing
-the operating gates (M15 `r_atr <= 1.0` and `vwap_candles >= 15`; M30/H1/H4 the
-gate alone), and journals each with both prices -- the close the study assumed
+the operating gates (M15 `r_atr <= 1.0` and `vwap_candles >= 4`; H4 the gate
+plus `vwap_candles >= 2`; M30/H1 the gate alone), and journals each with both prices -- the close the study assumed
 and the tape's price at the moment of recording -- storing the gap in percent
 and, the figure that decides, **in R**. `resolve_open` settles each against
 later candles at 2R, the stop, or the 40-candle horizon, crediting the stop
@@ -1310,3 +1314,53 @@ often resolve at the same reclaim candle. They are one observation. The
 detector keeps the **nearest** test, since that is the level the reclaim was
 measured against; collapsing them leaves the reading unchanged (51.9% against
 51.9%) while dropping the staler, farther tests, which measure worse.
+
+
+### The floor was aimed at the re-anchor candle (2026-08-25)
+
+The accumulation floor was measured as a monotone lift and adopted at 15. What
+it was actually removing only became visible by reading one stopped trade on a
+chart: **AVAXUSDT M15, 2026-08-17 21:00 UTC-3**, entry 6.345, block 6.363-6.383.
+Two things were wrong with it, and the second is general.
+
+The "test" of the block was the 20:30 candle grazing 6.367 — four thousandths
+into the bottom edge of a two-cent block, 2% penetration. And the entry candle
+sat exactly on **00:00 UTC**, where the session VWAP re-anchors: the VWAP jumped
+from 6.3316 to 6.3493 in one candle, `vwap_candles = 1`. Price did not lose the
+VWAP; the VWAP moved across price. The trigger fired on the clock.
+
+Measured, the defect is large and it replicates: entries with `vwap_candles = 1`
+are **15% of the whole M15 population** and its worst subgroup — 34.2%/27.0% hit
+rate, net −0.194/−0.477, the only negative rule among twelve declared in
+`research/vwap_age_walkforward.py`, in both symbol halves.
+
+So the floor was right. But 15 also discarded the **8-14 band, the best of all**
+(65.5%/60.9% hit rate, +0.692/+0.584 net). Walk-forward over eight thresholds
+shows a **plateau from 2 to 12** with a drop at 20 — the exact number does not
+matter, and 15 sat just past the plateau's edge:
+
+| | search SR | search R | holdout SR | holdout R |
+|---|---|---|---|---|
+| no floor | 6.37 | +180.0 | 2.93 | +70.0 |
+| `>= 4` | **7.31** | **+206.4** | **4.85** | **+107.3** |
+| `>= 15` | 7.08 | +197.6 | 4.67 | +99.1 |
+| `>= 20` | 6.47 | +180.0 | 3.79 | +77.8 |
+| `<= 3` (the defect) | −0.45 | −9.2 | −1.88 | −26.9 |
+
+PBO 0.267/0.333 — higher than this project's usual 0.000, and expected: twelve
+neighbouring thresholds are nearly the same rule, so they rank-swap easily. The
+plateau is the evidence, not the peak.
+
+**The floor is in candles, but what it measures is a fraction of the anchor
+period** — and that period is per timeframe (`_VWAP_ANCHOR_PERIOD`: SESSION
+intraday, WEEK on H4). Fifteen candles is ~4h of a 96-candle M15 day and **2.5
+days of a 42-candle H4 week**. On H4 the defect is mild (its `vwap <= 3` bucket
+measures *positive*) and any high floor is pure loss, so H4 drops only the
+re-anchor candle itself. Expressing the floor as a fraction of the anchor period
+rather than a candle count is the obvious follow-up, and is not done.
+
+Method note: the case came from a reader looking at a chart and saying "it had
+not even reached the OB yet". Four separate measurements had run over this same
+population without isolating it — the defect is invisible in an aggregate
+because it is a *minority* of trades with a *specific* mechanism. The block-test
+criterion, the other half of the AVAX case, is still unmeasured inside the gate.

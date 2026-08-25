@@ -63,8 +63,12 @@ def candle(i: int, high: float, low: float, close: float) -> Candle:
 
 def test_gates_follow_the_operating_plan() -> None:
     assert passes_gates(entry()) is True
-    # M15 carries the accumulation floor
-    assert passes_gates(entry(vwap_candles=5)) is False
+    # M15 carries the accumulation floor: it exists to drop the re-anchor
+    # candle, where the VWAP jumps across price on the clock rather than on
+    # price moving. Its 8-14 band is the best of all, so the floor sits at the
+    # bottom of the walk-forward plateau, not past its edge.
+    assert passes_gates(entry(vwap_candles=3)) is False
+    assert passes_gates(entry(vwap_candles=5)) is True
     # outside the r_atr gate
     assert passes_gates(entry(r_atr=1.4)) is False
     # a forming trigger candle settles nothing
@@ -79,9 +83,14 @@ def test_a_stale_row_is_not_a_decision() -> None:
     assert passes_gates(entry(candles_ago=6)) is False
 
 
-def test_h4_has_no_accumulation_floor() -> None:
+def test_h4_only_drops_the_re_anchor_candle() -> None:
+    # H4 anchors weekly, so a floor in candles bites far harder there (15
+    # candles is 2.5 days of a 42-candle week) and every high floor measured
+    # as pure loss. Only the re-anchor candle itself is dropped.
     e = entry(vwap_candles=2).model_copy(update={"timeframe": TimeFrame.H4})
     assert passes_gates(e) is True
+    fresh = entry(vwap_candles=1).model_copy(update={"timeframe": TimeFrame.H4})
+    assert passes_gates(fresh) is False
 
 
 def test_decision_records_the_gap_between_close_and_tape() -> None:

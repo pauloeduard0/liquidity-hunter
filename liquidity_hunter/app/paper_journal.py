@@ -45,16 +45,36 @@ from liquidity_hunter.data import OHLCVProvider
 from liquidity_hunter.data.exceptions import DataProviderError
 
 #: The operating gates, per timeframe: the maximum `r_atr` and the minimum
-#: VWAP accumulation each timeframe's measurement admits. M15 carries the
-#: accumulation floor (walk-forwarded, PBO 0.000); H4 does not -- no filter
-#: improved its plain gate. M30/H1 are journalled at the gate alone: they are
-#: thin-positive, and a journal that only ever sees the good timeframes cannot
-#: notice that the thin ones behave differently live.
+#: VWAP accumulation each timeframe's measurement admits. M30/H1 are journalled
+#: at the gate alone: they are thin-positive, and a journal that only ever sees
+#: the good timeframes cannot notice that the thin ones behave differently live.
+#:
+#: The accumulation floor exists because the session VWAP **re-anchors**, and on
+#: the re-anchor candle it jumps and crosses price without price having moved --
+#: the trigger fires on the clock. Found by reading one stopped trade on a chart
+#: (AVAXUSDT M15, 2026-08-17 21:00 UTC-3, `vwap_candles=1`) and then measured:
+#: those entries are 15% of the M15 population and its worst subgroup by far
+#: (34.2%/27.0% hit rate, -0.194/-0.477 net; the only negative rule of twelve in
+#: `research/vwap_age_walkforward.py`, in both symbol halves).
+#:
+#: The floor was 15 on M15, which removed that but took the 8-14 band with it --
+#: the best band of all (65.5%/60.9%). Walk-forward puts a **plateau from 2 to
+#: 12** and a drop at 20, so the exact number does not matter and 15 sat just
+#: past the plateau's edge: 4 beats 15 on Sharpe and total R in both halves
+#: (7.31 vs 7.08 and +206 vs +198 R on search; 4.85 vs 4.67 and +107 vs +99 on
+#: holdout).
+#:
+#: The floor is in **candles**, but what it measures is a fraction of the anchor
+#: period -- and that period is per timeframe (`_VWAP_ANCHOR_PERIOD`: SESSION
+#: intraday, WEEK on H4). So 15 candles is ~4h of a 96-candle M15 day and 2.5
+#: days of a 42-candle H4 week. On H4 the defect is mild (its `vwap<=3` bucket
+#: is positive) and any high floor is pure loss, so it stays at the plateau's
+#: bottom.
 OPERATING_GATES: dict[TimeFrame, tuple[float, int]] = {
-    TimeFrame.M15: (1.0, 15),
+    TimeFrame.M15: (1.0, 4),
     TimeFrame.M30: (1.0, 1),
     TimeFrame.H1: (1.0, 1),
-    TimeFrame.H4: (1.0, 1),
+    TimeFrame.H4: (1.0, 2),
 }
 
 #: How stale a fired row may be and still be a decision. A journal pass sees

@@ -167,7 +167,8 @@ def main() -> None:
                        (matrix[:, names.index(best[1])].std() ** 4 + 1e-12)),
     )
     print(f"\nmelhor: {best[1]} (SR {best[0]:.2f})")
-    print(f"deflated Sharpe (P[SR>0] pos-deflacao)={dsr.dsr_pvalue:.4f} sobre {len(names)} tentativas")
+    print(f"deflated Sharpe (P[SR>0] pos-deflacao)={dsr.dsr_pvalue:.4f} "
+          f"sobre {len(names)} tentativas")
 
 
 if __name__ == "__main__":
