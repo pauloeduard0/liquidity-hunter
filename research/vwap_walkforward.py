@@ -213,6 +213,13 @@ RULES: dict[str, object] = {
         and r.get("trigger_line") == "ema"
     ),
     "eql|r<=1.0": lambda r: r["arm"] == "eql" and _tight(r, 1.0),
+    # The body rule: the trigger candle's whole body on the working side of the
+    # VWAP, so a body the two lines pass *through* is a crossing rather than a
+    # test. Both halves of the pair are declared -- the arm with the rule and
+    # the arm without it -- because the comparison IS the trial: keeping only
+    # the winner would hide that a choice was made between them.
+    "ob-lines|r<=1.0": lambda r: r["arm"] == "ob-lines" and _tight(r, 1.0),
+    "ob-body|r<=1.0": lambda r: r["arm"] == "ob-body" and _tight(r, 1.0),
 }
 # The position-management family. Same trades, different exit rule, so each is
 # a separate trial and PBO has to see them: "you can only win by protecting"

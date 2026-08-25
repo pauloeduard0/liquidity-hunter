@@ -99,7 +99,8 @@ def placebo_table(rows: Sequence[dict], cost: float) -> None:
     print(f"\nblock vs placebo (2R target, cost {cost:.2%} charged per trade)")
     print(f"{'arm':>10} {'n':>6} {'hit 2R':>8} {'stopped':>8} {'open':>7} "
           f"{'gross':>9} {'net':>9} {'t':>6}")
-    for arm, label in (("vwap", "placebo"), ("eql", "eql"), ("ob", "block")):
+    for arm, label in (("vwap", "placebo"), ("eql", "eql"), ("ob", "block"),
+                       ("ob-lines", "block+ema"), ("ob-body", "block+body")):
         s = [r for r in rows if r["arm"] == arm]
         if len(s) < 50:
             continue
@@ -123,7 +124,8 @@ def by_direction(rows: Sequence[dict], cost: float) -> None:
     """
     print(f"\ndirection, 2R target, cost {cost:.2%}")
     print(f"{'arm':>10} {'side':>8} {'n':>6} {'hit 2R':>8} {'net':>9} {'t':>6}")
-    for arm, label in (("vwap", "placebo"), ("ob", "block")):
+    for arm, label in (("vwap", "placebo"), ("ob", "block"),
+                       ("ob-lines", "block+ema"), ("ob-body", "block+body")):
         for side in ("bullish", "bearish"):
             s = [r for r in rows if r["arm"] == arm and r.get("direction") == side]
             if len(s) < 50:
@@ -147,7 +149,8 @@ def by_accumulation(rows: Sequence[dict], cost: float, edges: Sequence[int]) -> 
     print(f"\nVWAP accumulation at the entry, 2R target, cost {cost:.2%}")
     print(f"{'arm':>10} {'candles':>12} {'n':>6} {'hit 2R':>8} {'net':>9} {'t':>6}")
     bounds = [0, *edges, 10**9]
-    for arm, label in (("vwap", "placebo"), ("ob", "block")):
+    for arm, label in (("vwap", "placebo"), ("ob", "block"),
+                       ("ob-lines", "block+ema"), ("ob-body", "block+body")):
         for lo, hi in zip(bounds, bounds[1:], strict=False):
             s = [
                 r for r in rows
@@ -174,7 +177,8 @@ def _charge(rows: Sequence[dict], spreads: dict, fee: float, target: str,
     print(f"\n  {label}  ({covered}/{total} symbols priced)")
     print(f"  {'arm':>10} {'n':>6} {'cost %':>8} {'cost R':>8} {'gross':>9} "
           f"{'net':>9} {'t':>6}")
-    for arm, name in (("vwap", "placebo"), ("eql", "eql"), ("ob", "block")):
+    for arm, name in (("vwap", "placebo"), ("eql", "eql"), ("ob", "block"),
+                      ("ob-lines", "block+ema"), ("ob-body", "block+body")):
         sel = [(r, c) for r, c in priced if r["arm"] == arm]
         if len(sel) < 50:
             continue
@@ -360,7 +364,7 @@ def main() -> None:
     by_direction(rows, args.stability_cost)
     by_accumulation(rows, args.stability_cost, args.accumulation_edges)
 
-    for arm in ("vwap", "ob", "eql"):
+    for arm in ("vwap", "ob", "ob-lines", "ob-body", "eql"):
         table([r for r in rows if r["arm"] == arm], f"arm: {arm}")
 
     ob = [r for r in rows if r["arm"] == "ob"]
@@ -369,7 +373,7 @@ def main() -> None:
 
     print(f"\nstability in thirds, net at {args.stability_target}R, "
           f"cost {args.stability_cost:.2%}")
-    for arm in ("vwap", "ob", "eql"):
+    for arm in ("vwap", "ob", "ob-lines", "ob-body", "eql"):
         sel = [r for r in rows if r["arm"] == arm]
         if len(sel) >= 150:
             thirds(sel, args.stability_target, args.stability_cost, arm)

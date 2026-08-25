@@ -1137,11 +1137,29 @@ def run_combo(
             "--wick-frac/--body-frac are compiled in; sweeping them means "
             "changing the detector's constants, which is a change to the rule"
         )
-    reclaims = detect_block_reclaims(
-        candles, data.poi_zones, series, symbol=symbol, timeframe=timeframe
-    )
-    counts["ob-episodes"] = len(reclaims)
-    for reclaim in reclaims:
+    # Three arms off the production detector, differing in one thing each so
+    # the pair that answers the question is measured on one collection:
+    #
+    #   ob       -- the VWAP route alone, the arm every prior result is stated
+    #               against. Untouched, and it alone emits the random control
+    #               and the hook, so those outputs stay comparable.
+    #   ob-lines -- the same with the EMA route open: the BEFORE of the body
+    #               rule, since the rule gates both routes.
+    #   ob-body  -- ob-lines plus `require_body_clears_vwap`: the AFTER.
+    #
+    # The primary comparison is ob-body against ob-lines. Comparing against `ob`
+    # instead would confound the body rule with opening the second route.
+    for ob_arm, ob_ema, ob_body in (
+        ("ob", None, False),
+        ("ob-lines", ema_line, False),
+        ("ob-body", ema_line, True),
+    ):
+      reclaims = detect_block_reclaims(
+        candles, data.poi_zones, series, symbol=symbol, timeframe=timeframe,
+        ema=ob_ema, require_body_clears_vwap=ob_body,
+      )
+      counts[f"{ob_arm}-episodes"] = counts.get(f"{ob_arm}-episodes", 0) + len(reclaims)
+      for reclaim in reclaims:
         if reclaim.provisional:
             continue  # the forming candle is not an observation yet
         if fresh_ob and not reclaim.first_test:
@@ -1156,12 +1174,12 @@ def run_combo(
             htf_steps, reclaim.timestamp
         ) is not direction:
             continue  # the HTF is not on this trade's side
-        counts["ob-entries"] = counts.get("ob-entries", 0) + 1
+        counts[f"{ob_arm}-entries"] = counts.get(f"{ob_arm}-entries", 0) + 1
         if e + max_h >= len(candles):
             continue
         entry, stop, r = reclaim.reclaim_price, reclaim.test_extreme, reclaim.reclaim_distance
         ev = _tag_all(
-            Ev("ob", symbol, timeframe.value, direction, start, e, entry, stop, r),
+            Ev(ob_arm, symbol, timeframe.value, direction, start, e, entry, stop, r),
             candles, horizons, targets, target_horizon,
             agg_window, control_at, strong_floor,
         )
@@ -1188,15 +1206,20 @@ def run_combo(
             ev.departure_candles = fully_out
             ev.block_age_candles = start - born
         out.append(ev)
+        # Every arm gets its own direction-matched control, drawn with that
+        # arm's own R: the arms differ in which candle triggers, so they
+        # differ in R, and a control carrying a different R is not matched.
         for _ in range(random_reps):
             ri = rng.randrange(50, len(candles) - max_h - 1)
             e2 = candles[ri].close
             s2 = e2 - r if bull else e2 + r
             out.append(_tag_all(
-                Ev("rand-ob", symbol, timeframe.value, direction, ri, ri, e2, s2, r),
+                Ev(f"rand-{ob_arm}", symbol, timeframe.value, direction, ri, ri, e2, s2, r),
                 candles, horizons, targets, target_horizon,
                 agg_window, control_at, strong_floor,
             ))
+        if ob_arm != "ob":
+            continue  # the hook belongs to the untouched arm
         _emit_hook(
             out, candles, ema_line, vwap_at, e, arm="ob", bull=bull,
             direction=direction, symbol=symbol, timeframe=timeframe,
@@ -1540,7 +1563,7 @@ def _binom_p(hits: int, n: int, p0: float) -> float:
 
 def significance(events: Sequence[Ev], targets: Sequence[float]) -> None:
     print("\nsignificance of the gap over the matched control (one-sided binomial)")
-    for arm in ("vwap", "ob", "eql"):
+    for arm in ("vwap", "ob", "ob-lines", "ob-body", "eql"):
         rows = [e for e in events if e.arm == arm]
         ctrl = [e for e in events if e.arm == f"rand-{arm}"]
         if not rows or not ctrl:
@@ -1587,7 +1610,7 @@ def report(
     print(f"  vwap: {'':>5}                 "
           f"  ->{counts.get('vwap-entries', 0):>5} pinbar reclaims"
           f"  ->{len([e for e in events if e.arm == 'vwap']):>5} measurable")
-    for arm in ("ob", "eql"):
+    for arm in ("ob", "ob-lines", "ob-body", "eql"):
         print(
             f"  {arm:>4}: {counts.get(f'{arm}-episodes', 0):>5} test episodes"
             f"  ->{counts.get(f'{arm}-entries', 0):>5} pinbar reclaims"
@@ -1597,7 +1620,11 @@ def report(
     head = " ".join(f"{'favor@' + str(h):>7} {'MFE/MAE':>7}" for h in horizons)
     tgt = " ".join(f"{str(k) + 'R':>6}" for k in targets)
     print(f"\n{'arm':>10} {'n':>5} {head} {tgt}")
-    for arm in ("vwap", "rand-vwap", "ob", "rand-ob", "eql", "rand-eql"):
+    for arm in (
+        "vwap", "rand-vwap", "ob", "rand-ob",
+        "ob-lines", "rand-ob-lines", "ob-body", "rand-ob-body",
+        "eql", "rand-eql",
+    ):
         rows = [e for e in events if e.arm == arm]
         if rows:
             print(f"{arm:>10} {len(rows):>5} {_row(rows, horizons, targets)}")
@@ -1605,7 +1632,8 @@ def report(
     print(f"\nper symbol/timeframe\n{'combo':>18} {'arm':>9} {'n':>5} {head} {tgt}")
     combos = sorted({(e.symbol, e.timeframe) for e in events})
     for sym, tf in combos:
-        for arm in ("ob", "rand-ob", "eql", "rand-eql"):
+        for arm in ("ob", "rand-ob", "ob-lines", "rand-ob-lines",
+                    "ob-body", "rand-ob-body", "eql", "rand-eql"):
             rows = [e for e in events if e.arm == arm and e.symbol == sym and e.timeframe == tf]
             if rows:
                 print(
@@ -1778,7 +1806,7 @@ def control_consistency(events: Sequence[Ev], target: float) -> None:
     tally: dict[str, list[int]] = {a: [0, 0] for a in ("vwap", "ob", "eql")}
     for sym, tf in combos:
         cells = []
-        for arm in ("vwap", "ob", "eql"):
+        for arm in ("vwap", "ob", "ob-lines", "ob-body", "eql"):
             rows = [e for e in events if e.arm == arm and e.symbol == sym and e.timeframe == tf]
             w = [e.hit[target] for e in rows if e.ctrl_with is True and target in e.hit]
             a = [e.hit[target] for e in rows if e.ctrl_with is False and target in e.hit]

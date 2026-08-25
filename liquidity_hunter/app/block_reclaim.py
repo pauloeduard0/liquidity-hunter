@@ -65,6 +65,25 @@ def _rejects_ema(
     )
 
 
+def _body_clears_vwap(candle: Candle, vwap_value: float, *, bullish: bool) -> bool:
+    """The trigger candle's whole body on the working side of the VWAP.
+
+    The wick belongs to the line being tested; the body does not. A body that
+    straddles the VWAP tested no level at all -- it changed sides inside its
+    own candle, and the two populations the setup is about were still mixed
+    when it closed. Reading that as a rejection is reading a crossing.
+
+    The edge measured is `min(open, close)` rather than the open, so a pinbar
+    whose small body closed *down* -- a real shape, and the one that motivated
+    the rule -- is judged by the bottom of its body like any other.
+
+    Off by default (`require_body_clears_vwap`): it changes which trades exist,
+    and a change to the rule is a change to the measured object.
+    """
+    edge = min(candle.open, candle.close) if bullish else max(candle.open, candle.close)
+    return edge > vwap_value if bullish else edge < vwap_value
+
+
 def _ema_crossed(ema_value: float, vwap_value: float, *, bullish: bool) -> bool:
     """Whether the fast line has crossed the average in the reclaim's favour.
 
@@ -105,8 +124,23 @@ def pinbar_grades(candle: Candle, *, bullish: bool) -> frozenset[str]:
     with -- tail >= 0.50, body <= 0.35, nose unconstrained -- and it is neither
     of the others: looser than the golden rule on the tail, and silent about
     the nose. `l1` is the golden rule. `l2` is body-heavy with a small nose: a
-    candle that closed most of the way through its own range and still left a
-    tail underneath.
+    candle that spent most of its range on a body and still left a tail
+    underneath.
+
+    **None of the three asks which way the candle closed.** The body is
+    `abs(close - open)`, so a red candle satisfies the *bullish* `l2`, and that
+    is deliberate rather than an oversight -- it was read as one (the earlier
+    wording here said `l2` "closed most of the way through its own range",
+    which is a claim about direction) and then measured. Requiring the close to
+    agree, on the gated population where the layer is used: every grade
+    (`cor=all`) drops the 2R hit rate from 55.1% to 49.5% on the search half
+    and 52.4% to 47.9% on the holdout, cutting 58% of the trades -- a red
+    hammer with a long tail is an ordinary rejection and what it reports is the
+    tail. Requiring it of `l2` alone is a tie: 53.7% against 55.1% on search,
+    52.4% against 52.4% on the holdout, for 18% fewer trades. A heavy body
+    closing *against* the direction at a defended level is absorption, which is
+    a reading, not a defect. `research/pinbar_color.py`, wired through
+    `detect_block_reclaims(require_pinbar_color=...)`, off by default.
 
     Accepting the **union** is measured, not assumed. Over 22 walk-forward
     folds it pools the best out-of-sample Sharpe of 30 declared candidates,
@@ -142,6 +176,50 @@ def pinbar_grades(candle: Candle, *, bullish: bool) -> frozenset[str]:
     ):
         out.add("l2")
     return frozenset(out)
+
+
+def pinbar_color_agrees(candle: Candle, *, bullish: bool) -> bool:
+    """The trigger candle closed in the direction it is being read as.
+
+    `pinbar_grades` measures the body as `abs(close - open)` and never asks
+    which way it closed, so a **red** candle with a big body and a tail
+    underneath satisfies the *bullish* `l2`. For `legacy` and `l1` that barely
+    matters -- both cap the body at 35% and 15% of the range, so there is
+    little body for a colour to be wrong about. `l2` is the opposite: it
+    requires a body of at least a third of the range, which is exactly the
+    grade where the close's direction carries the meaning its own docstring
+    claims ("closed most of the way through its own range").
+
+    Kept as a separate predicate rather than folded into `pinbar_grades`
+    because the union of the three grades was validated out-of-sample with
+    this behaviour inside it: some of that edge may be coming from the
+    wrong-coloured candles, and finding out is a measurement, not an
+    assumption. Wired through `require_pinbar_color`, off by default.
+    """
+    return candle.close > candle.open if bullish else candle.close < candle.open
+
+
+def surviving_grades(
+    candle: Candle, grades: frozenset[str], *, bullish: bool, scope: str
+) -> frozenset[str]:
+    """`grades` after the colour rule at `scope` is applied.
+
+    `"all"` drops every grade when the candle closed the wrong way. `"l2"`
+    drops only `l2`, on the reasoning that the other two cap the body at 35%
+    and 15% of the range: a red candle with a long tail beneath it is an
+    ordinary hammer, and what it reports is the tail, not the close. `l2`
+    requires a body of at least a third of the range, so there the close's
+    direction is the reading.
+
+    Returning the surviving set rather than a boolean matters for `"l2"`: a
+    candle that qualified as both `legacy` and `l2` keeps the trade and loses
+    only the label, so the arm is not silently a different trigger.
+    """
+    if scope not in ("all", "l2"):
+        raise ValueError(f"unknown colour scope: {scope}")
+    if pinbar_color_agrees(candle, bullish=bullish):
+        return grades
+    return frozenset() if scope == "all" else grades - {"l2"}
 
 
 def _is_pinbar(candle: Candle, *, bullish: bool) -> bool:
@@ -257,6 +335,8 @@ def detect_block_reclaims(
     timeframe: TimeFrame,
     ema: Sequence[float | None] | None = None,
     scan_from_visit_start: bool = False,
+    require_body_clears_vwap: bool = False,
+    require_pinbar_color: str | None = None,
 ) -> list[BlockReclaim]:
     """Every VWAP reclaim that followed a test of an order block.
 
@@ -287,6 +367,19 @@ def detect_block_reclaims(
     The visit's *start* is settled by the past alone, so anchoring there is
     stable by construction. Off by default: it changes which trades exist, and
     a change to the rule is a change to the measured object.
+
+    `require_pinbar_color` applies the colour rule `pinbar_grades` omits, which
+    is what lets a red candle qualify as a bullish `l2`. `"all"` requires every
+    grade to close the trade's way; `"l2"` requires it only of `l2`, where the
+    body is large enough for the close's direction to be the reading (see
+    `surviving_grades`). `None` (the default) is the shipped behaviour --
+    either setting changes which trades exist.
+
+    Under `require_body_clears_vwap` the trigger candle's whole body must sit
+    on the working side of the VWAP (`_body_clears_vwap`). A rejected
+    candidate does **not** end the visit: the scan keeps running to the end of
+    the wait window, so a straddling candle is passed over rather than
+    consuming the episode. Off by default, same contract.
     """
     if vwap is None or len(candles) < ATR_PERIOD + 2:
         return []
@@ -326,6 +419,12 @@ def detect_block_reclaims(
                 grades = pinbar_grades(candle, bullish=bullish)
                 if not grades:
                     continue
+                if require_pinbar_color is not None:
+                    grades = surviving_grades(
+                        candle, grades, bullish=bullish, scope=require_pinbar_color
+                    )
+                    if not grades:
+                        continue  # closed the other way: not this shape
                 on_vwap = _is_reclaim(candle, vwap_value, bullish=bullish)
                 ema_value = ema_at.get(candle.timestamp)
                 on_ema = (
@@ -335,6 +434,10 @@ def detect_block_reclaims(
                 )
                 if not (on_vwap or on_ema):
                     continue
+                if require_body_clears_vwap and not _body_clears_vwap(
+                    candle, vwap_value, bullish=bullish
+                ):
+                    continue  # a straddling body is a crossing, not a test
                 line = "both" if (on_vwap and on_ema) else ("vwap" if on_vwap else "ema")
                 window = candles[start : i + 1]
                 extreme = (
