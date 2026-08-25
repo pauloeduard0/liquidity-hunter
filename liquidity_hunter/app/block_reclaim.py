@@ -37,6 +37,15 @@ MAX_WAIT_CANDLES = 20
 #: The reclaiming candle's shape: a long wick against the close, little body.
 MIN_WICK_FRACTION = 0.5
 MAX_BODY_FRACTION = 0.35
+#: `legacy` caps the body but says nothing about the nose, so a *doji* clears
+#: it: tail 0.58, body 0.026, and 0.39 of opposing wick nobody asks about --
+#: buyers and sellers finishing level, read as a rejection. Raising the tail
+#: floor is what rules that out without adding a fourth threshold: at 0.65 the
+#: nose can be at most 0.35 by construction. Left at 0.5 here because every
+#: measurement of this layer was run at 0.5 and the union's out-of-sample
+#: Sharpe rests mostly on `legacy`; passed as 0.65 by the deep-stop study,
+#: through `detect_block_reclaims(min_tail_fraction=...)`.
+STRICT_WICK_FRACTION = 0.65
 #: Local window for the volatility `r_atr` is normalized by.
 ATR_PERIOD = 14
 #: Reclaims closer than this to their test extreme are dropped: at that
@@ -116,7 +125,10 @@ L2_BODY_FRACTION = 1.0 / 3.0
 L2_TAIL_FRACTION = 0.20
 
 
-def pinbar_grades(candle: Candle, *, bullish: bool) -> frozenset[str]:
+def pinbar_grades(
+    candle: Candle, *, bullish: bool,
+    min_tail_fraction: float = MIN_WICK_FRACTION,
+) -> frozenset[str]:
     """Which pinbar definitions this candle satisfies: `legacy`, `l1`, `l2`.
 
     Three, kept apart rather than collapsed into one threshold, because they
@@ -149,6 +161,10 @@ def pinbar_grades(candle: Candle, *, bullish: bool) -> frozenset[str]:
     carrying 43% more trades at the same hit rate. The subsets are named here
     so a reader can observe which grade fired; filtering on one is what the
     measurement rules out. See `docs/block_reclaim.md`.
+
+    `min_tail_fraction` raises `legacy`'s tail floor (`l1` and `l2` cap the
+    nose themselves and are untouched). The default keeps the measured
+    behaviour; `STRICT_WICK_FRACTION` is the doji cut described above.
     """
     span = candle.high - candle.low
     if span <= 0:
@@ -165,7 +181,7 @@ def pinbar_grades(candle: Candle, *, bullish: bool) -> frozenset[str]:
         else min(candle.close, candle.open) - candle.low
     )
     out: set[str] = set()
-    if tail >= MIN_WICK_FRACTION * span and body <= MAX_BODY_FRACTION * span:
+    if tail >= min_tail_fraction * span and body <= MAX_BODY_FRACTION * span:
         out.add("legacy")
     if tail >= L1_TAIL_FRACTION * span and nose <= NOSE_MAX_FRACTION * span:
         out.add("l1")
@@ -337,6 +353,7 @@ def detect_block_reclaims(
     scan_from_visit_start: bool = False,
     require_body_clears_vwap: bool = False,
     require_pinbar_color: str | None = None,
+    min_tail_fraction: float = MIN_WICK_FRACTION,
 ) -> list[BlockReclaim]:
     """Every VWAP reclaim that followed a test of an order block.
 
@@ -416,7 +433,9 @@ def detect_block_reclaims(
                 vwap_value = vwap_at.get(candle.timestamp)
                 if vwap_value is None:
                     continue
-                grades = pinbar_grades(candle, bullish=bullish)
+                grades = pinbar_grades(
+                    candle, bullish=bullish, min_tail_fraction=min_tail_fraction
+                )
                 if not grades:
                     continue
                 if require_pinbar_color is not None:

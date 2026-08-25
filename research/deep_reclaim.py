@@ -21,7 +21,27 @@ Tres diferencas em relacao ao original, e so tres:
    inclinada a favor. Usa `ema9_slope_lag1`, que termina UMA VELA ANTES do
    gatilho -- a versao que inclui a vela de gatilho mede o proprio pinbar
    levantando a media, e essa duvida ja custou uma rodada.
-3. **`r_atr` emitido, nunca filtrado.** No original ele e o gate; aqui e uma
+3. **Cor do pinbar exigida no `l2`** (`require_pinbar_color="l2"`). O grau
+   `l2` mede o corpo como `abs(close - open)` e nunca pergunta a direcao, entao
+   uma vela de ALTA, de corpo pesado e nariz curto, satisfaz o `l2` *baixista*.
+   No original isso foi medido e deu empate (53,7% contra 55,1%), e por isso
+   continua desligado la. Aqui e ligado por decisao de leitura, nao por
+   medicao: uma vela verde cujo pavio superior e MENOR que o proprio corpo nao
+   e rejeicao vendedora nenhuma. `--no-color` desliga para a diferenca ser
+   medida neste setup, onde o empate do original nao se transfere de graca --
+   sem o gate `r_atr` e com outro stop, a entrada mais esticada do `l2` cai
+   direto no denominador do R. `legacy` e `l1` ficam de fora do corte: os dois
+   limitam o corpo a 35% do range, entao quase nao sobra corpo para a cor
+   errar.
+4. **Calda de 65% no `legacy`** (`min_tail_fraction=STRICT_WICK_FRACTION`). O
+   `legacy` limita o corpo mas nao diz nada sobre o nariz, entao um *doji*
+   passa: calda 58%, corpo 2,6% e 39% de pavio do lado contrario que ninguem
+   pergunta -- comprador e vendedor terminando empatados, lido como rejeicao.
+   Subir o piso da calda para 65% resolve sem inventar um quarto limiar, ja
+   que com 65% de calda o nariz cabe em 35% por construcao. Fica so aqui: no
+   original toda medicao foi feita a 0,50 e o Sharpe da uniao se apoia
+   principalmente no `legacy`.
+5. **`r_atr` emitido, nunca filtrado.** No original ele e o gate; aqui e uma
    pergunta em aberto, porque um stop mais fundo produz `r_atr` maior por
    construcao e o teto do original nao se transfere. O relatorio sai por faixa
    para o teto ser escolhido com o numero na frente.
@@ -51,7 +71,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from statistics import fmean
 
-from liquidity_hunter.app.block_reclaim import detect_block_reclaims
+from liquidity_hunter.app.block_reclaim import (
+    STRICT_WICK_FRACTION,
+    detect_block_reclaims,
+)
 from liquidity_hunter.app.dashboard_data import load_dashboard_data
 from liquidity_hunter.core.domain import Candle, MarketDirection, TimeFrame
 from liquidity_hunter.data.exceptions import DataProviderError
@@ -147,7 +170,7 @@ def _row_outcomes(candles, i0, entry, stop, r, *, bull) -> dict[str, float]:
 
 
 def run(symbols, timeframe, limit, out, *, gap, require_ema9, min_vwap,
-        drop_pierced=True):
+        drop_pierced=True, pinbar_color="l2"):
     provider, futures = PaginatedFuturesProvider(), NoFuturesProvider()
     rng = random.Random(7)
     rows: list[dict] = []
@@ -170,7 +193,8 @@ def run(symbols, timeframe, limit, out, *, gap, require_ema9, min_vwap,
         e9 = ema_series(candles, 9)
         reclaims = detect_block_reclaims(
             candles, data.poi_zones, data.vwap, symbol=symbol,
-            timeframe=timeframe, ema=e9,
+            timeframe=timeframe, ema=e9, require_pinbar_color=pinbar_color,
+            min_tail_fraction=STRICT_WICK_FRACTION,
         )
         kept = 0
         for rec in reclaims:
@@ -317,6 +341,9 @@ def main() -> None:
     p.add_argument("--no-ema9", action="store_true",
                    help="nao exigir a EMA9 a favor (para medir o que ela custa)")
     p.add_argument("--min-vwap", type=int, default=MIN_VWAP_CANDLES)
+    p.add_argument("--no-color", action="store_true",
+                   help="aceita pinbar l2 de cor contraria (o comportamento do "
+                        "setup original), para medir o que o corte custa")
     p.add_argument("--keep-pierced", action="store_true",
                    help="manter os testes que atravessaram o bloco")
     p.add_argument("--out", default="/tmp/deep_reclaim.json")
@@ -327,6 +354,7 @@ def main() -> None:
         return
     run(a.symbols, TimeFrame(a.timeframe), a.limit, a.out,
         gap=a.gap, require_ema9=not a.no_ema9, min_vwap=a.min_vwap,
+        pinbar_color=None if a.no_color else "l2",
         drop_pierced=not a.keep_pierced)
 
 
