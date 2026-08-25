@@ -46,6 +46,12 @@ from research._symbols import UNIVERSE, sample_of
 
 COST_PCT = 0.0010
 HORIZONS = (40, 120)
+#: Alvos em R. `2.0` mantem a chave `r2_h*` que `ema9_walkforward.py` ja le.
+TARGETS = (2.0, 2.5, 3.0)
+#: Tetos de `r_atr` a reportar. O 1.0 e o gate de producao; os demais existem
+#: para ver se a separacao da EMA9 sobrevive ao gate afrouxado -- fora do gate
+#: nenhum eixo geometrico separou nada, e este e o primeiro que tentou.
+GATES = (1.0, 1.5, 2.0, 2.5, 3.0)
 ATR_PERIOD = 14
 
 
@@ -165,9 +171,12 @@ def run(symbols: Sequence[str], timeframe: TimeFrame, limit: int, out: str) -> N
                     else sign * (candles[i0].close - e200[i0]) / atr
                 ),
             }
-            for h in HORIZONS:
-                row[f"r2_h{h}"] = _outcome(
-                    candles, i0, entry, stop, r, bull=bull, target=2.0, horizon=h)
+            for target in TARGETS:
+                tag = _tag(target)
+                for h in HORIZONS:
+                    row[f"r{tag}_h{h}"] = _outcome(
+                        candles, i0, entry, stop, r,
+                        bull=bull, target=target, horizon=h)
             rows.append(row)
             kept += 1
         print(f"[{n}/{len(symbols)}] {symbol:11s} {kept} entradas", flush=True)
@@ -176,10 +185,15 @@ def run(symbols: Sequence[str], timeframe: TimeFrame, limit: int, out: str) -> N
     report(rows)
 
 
-def _net(rs, key):
+def _tag(target: float) -> str:
+    """`2.0` -> "2", `2.5` -> "25". Mantem a chave historica do alvo 2R."""
+    return str(target).replace(".", "").rstrip("0") or "0"
+
+
+def _net(rs, key, target=2.0):
     if len(rs) < 40:
         return f"n={len(rs):5d} (poucos)"
-    hit = sum(1 for r in rs if r[key] >= 1.99) / len(rs)
+    hit = sum(1 for r in rs if r[key] >= target - 0.01) / len(rs)
     g = fmean(r[key] for r in rs)
     c = fmean(COST_PCT / r["r_pct"] for r in rs)
     return (f"n={len(rs):5d}  acerto {hit:5.1%}  liq {g - c:+.3f}  "
@@ -187,31 +201,63 @@ def _net(rs, key):
 
 
 def report(rows: Sequence[dict]) -> None:
+    """Grade gate x alvo, com e sem o filtro da EMA9.
+
+    O eixo `ema9_slope_lag1` (inclinacao ate a vela ANTERIOR) e o que se
+    reporta: `ema9_slope` inclui o proprio candle de gatilho, e as duas versoes
+    concordam em ~91% -- usar a defasada tira a duvida de tautologia de graca.
+    """
     for sample in ("search", "holdout"):
         S = [r for r in rows if r["sample"] == sample]
-        for band, lo, hi in (("gate r_atr<=1.0", 0.0, 1.0),
-                             ("profundo r_atr>=2.5", 2.5, 1e9)):
-            B = [r for r in S if lo <= r["r_atr"] <= hi]
-            if len(B) < 40:
-                continue
-            for h in HORIZONS:
-                key = f"r2_h{h}"
-                print(f"\n=== {sample} · {band} · h{h}")
-                print(f"  {'base':32s} {_net(B, key)}")
-                for f_, label in (
-                    ("vwap_slope", "VWAP a favor"),
-                    ("ema9_slope", "EMA9 a favor"),
-                    ("ema50_slope", "EMA50 a favor"),
-                    ("ema200_slope", "EMA200 a favor"),
-                ):
-                    ok = [r for r in B if r.get(f_) is not None and r[f_] > 0]
-                    no = [r for r in B if r.get(f_) is not None and r[f_] <= 0]
-                    print(f"  {label:32s} {_net(ok, key)}")
-                    print(f"  {'  (contra)':32s} {_net(no, key)}")
-                ok = [r for r in B if r.get("regime_side") is True]
-                no = [r for r in B if r.get("regime_side") is False]
-                print(f"  {'lado certo da EMA200':32s} {_net(ok, key)}")
-                print(f"  {'  (lado errado)':32s} {_net(no, key)}")
+        for h in HORIZONS:
+            print(f"\n=== {sample} · h{h} · grade gate x alvo")
+            print(f"  {'gate':>6} {'alvo':>5}  {'braco':<14} "
+                  f"{'n':>6} {'acerto':>7} {'liq':>8} {'total':>9}")
+            for gate in GATES:
+                B = [r for r in S if r["r_atr"] <= gate]
+                for target in TARGETS:
+                    key = f"r{_tag(target)}_h{h}"
+                    arms = (
+                        ("base", B),
+                        ("EMA9 a favor",
+                         [r for r in B if (r.get("ema9_slope_lag1") or 0) > 0]),
+                        ("EMA9 contra",
+                         [r for r in B if r.get("ema9_slope_lag1") is not None
+                          and r["ema9_slope_lag1"] <= 0]),
+                    )
+                    for label, rs in arms:
+                        print(f"  {gate:>6.1f} {target:>5.1f}  {label:<14} "
+                              f"{_row(rs, key, target)}")
+                    print()
+
+    # No gate de producao, os demais eixos -- para que a comparacao entre eles
+    # continue visivel e a EMA9 nao seja lida isolada.
+    for sample in ("search", "holdout"):
+        B = [r for r in rows if r["sample"] == sample and r["r_atr"] <= 1.0]
+        if len(B) < 40:
+            continue
+        key = f"r2_h{HORIZONS[0]}"
+        print(f"\n=== {sample} · gate 1.0 · alvo 2R · h{HORIZONS[0]} · eixos")
+        print(f"  {'base':26s} {_net(B, key)}")
+        for f_, label in (
+            ("vwap_slope_lag1", "VWAP a favor"),
+            ("ema9_slope_lag1", "EMA9 a favor"),
+            ("ema50_slope", "EMA50 a favor"),
+            ("ema200_slope", "EMA200 a favor"),
+        ):
+            ok = [r for r in B if r.get(f_) is not None and r[f_] > 0]
+            no = [r for r in B if r.get(f_) is not None and r[f_] <= 0]
+            print(f"  {label:26s} {_net(ok, key)}")
+            print(f"  {'  (contra)':26s} {_net(no, key)}")
+
+
+def _row(rs, key, target):
+    if len(rs) < 40:
+        return f"{len(rs):>6} (poucos)"
+    hit = sum(1 for r in rs if r[key] >= target - 0.01) / len(rs)
+    net = fmean(r[key] - COST_PCT / r["r_pct"] for r in rs)
+    tot = sum(r[key] - COST_PCT / r["r_pct"] for r in rs)
+    return f"{len(rs):>6} {hit:>7.1%} {net:>+8.3f} {tot:>+8.1f}R"
 
 
 def main() -> None:
