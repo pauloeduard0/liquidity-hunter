@@ -56,3 +56,7 @@ manage.json
 
 # paper journal (local run output)
 paper_journal.jsonl
+
+# Datasets de pesquisa (grandes, reproduziveis por research/quality_features.py)
+research/.datasets/
+research/.klines_cache/

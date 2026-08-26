@@ -43,8 +43,9 @@ enquanto isso nao for confirmado com a corretora.
 
 Rodar
 -----
-    poetry run python -m research.quality_features --timeframe 15m --out /tmp/qf2.json
-    (idem para 30m, 1h, 4h)
+    poetry run python -m research.quality_features --timeframe 15m \
+        --out research/.datasets/qf_m15.json
+    (idem para 30m, 1h, 4h -> qf_m30 / qf_h1 / qf_h4)
     poetry run python -m research.ftmo_universe
 """
 
@@ -83,11 +84,15 @@ FTMO_CRYPTO: dict[str, str] = {
 #: Varredura por timeframe: (rotulo, arquivo, a regra de profundidade e wired
 #: neste TF?, minutos por vela). O H4 entra sem o gate porque `passes_gates`
 #: nao o aplica la -- foi medido e reprovado na regua diaria.
+#: Apontam para `research/.datasets/`, que e ignorado pelo git: os arquivos
+#: sao grandes e reproduziveis pelo comando do cabecalho. `/tmp` some no
+#: reboot, e uma varredura de M15 custa uma hora.
+DATASETS = Path(__file__).parent / ".datasets"
 SCANS: tuple[tuple[str, str, bool, int], ...] = (
-    ("M15", "/tmp/qf2.json", True, 15),
-    ("M30", "/tmp/qf_m30.json", True, 30),
-    ("H1", "/tmp/qf_h1.json", True, 60),
-    ("H4", "/tmp/qf_h4.json", False, 240),
+    ("M15", str(DATASETS / "qf_m15.json"), True, 15),
+    ("M30", str(DATASETS / "qf_m30.json"), True, 30),
+    ("H1", str(DATASETS / "qf_h1.json"), True, 60),
+    ("H4", str(DATASETS / "qf_h4.json"), False, 240),
 )
 _TF_OF = {"M15": "15m", "M30": "30m", "H1": "1h", "H4": "4h"}
 
