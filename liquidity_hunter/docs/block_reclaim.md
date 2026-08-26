@@ -1524,3 +1524,51 @@ alignment is the strongest per-trade discriminator of all (66.5% against 56.0%)
 yet **loses to the ungated series per day**, the third time that axis has
 produced exactly that shape. Stacking all of them -- the "A++" hypothesis --
 leaves 134 trades in 109 days across two years at +0.220R/day against +0.521.
+
+
+## The setup on a broker's crypto list (2026-08-26)
+
+A reader's question, and the shape of the answer is worth keeping: *does it pay
+to trade only the 30 crypto CFDs FTMO lists, risking 0.25% per trade?*
+`research/ftmo_universe.py` is the recut -- no new measurement, just the four
+per-timeframe scans filtered to those symbols and re-priced under the broker's
+cost sheet.
+
+**The asset selection changes nothing.** 28 of the 30 are in the measured
+universe (XMRUSD and BCHUSD are not USDT perpetuals on Binance and were never
+measured), and their hit rate matches the full universe at every timeframe:
+63.4% against 64.0% on M15, 57.9% against 57.4% on M30, 46.3% against 48.9% on
+H1, 59.1% against 56.8% on H4. What changes is volume -- 39% of the trades
+remain, about 42 a month across the four timeframes.
+
+**The frightening number on the instrument sheet is the harmless one.** The
+swap reads -30% a year, both sides. But the median position resolves in **4 to
+5 candles** -- one hour on M15, sixteen on H4 -- so almost nothing crosses a
+rollover and the swap costs 0.014R to 0.053R. Commission is what decides, and
+it decides very differently per timeframe, because cost in R is
+`commission / r_pct` and the stop distance is the denominator:
+
+| | median R (% of price) | study 0.10% | 0.13% round turn |
+|---|---|---|---|
+| M15 | 0.383% | 0.328R | 0.426R |
+| M30 | 0.514% | 0.237R | 0.309R |
+| H1 | 0.870% | 0.135R | 0.176R |
+| H4 | 1.833% | 0.061R | **0.080R** |
+
+Which is the practical conclusion: **if costs bite, the answer is to move up a
+timeframe, not to risk less.** The percentage risked cancels out of the cost
+entirely -- notional and commission both scale with it -- so 0.25% or 1% per
+trade changes the account arithmetic and not the R arithmetic. The M15 pays
+five times the H4 for the same rule.
+
+Over the window where all four timeframes coexist (Dec 2024 onward, 856 trades,
+~42/month), under the pessimistic reading of the commission (0.065% *per side*):
+**+16.6R/month**, max drawdown 12.6R, worst day -8.9R. At 0.25% per R that is
++4.2% a month against a 3.2% peak drawdown and a -2.2% worst day -- inside a
+10% total / 5% daily limit with room. The study's own 0.10% assumption gives
++20.6R/month, so the broker's commission costs about a fifth of the result.
+
+**What none of this covers:** the measurement is Binance USDT perpetuals and the
+broker sells CFDs. The CFD *spread* appears nowhere in the arithmetic -- only
+the published commission. If there is a spread on top, add it. That is the real
+hole here, and no number above closes it.
