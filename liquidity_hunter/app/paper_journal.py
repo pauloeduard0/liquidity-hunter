@@ -266,6 +266,7 @@ def build_decision(
         vwap_candles=reclaim.vwap_candles,
         trigger_line=reclaim.trigger_line,
         pinbar_grade=reclaim.pinbar_grade,
+        color_agrees=reclaim.color_agrees,
     )
 
 

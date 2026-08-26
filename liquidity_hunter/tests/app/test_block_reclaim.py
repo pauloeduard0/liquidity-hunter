@@ -376,3 +376,26 @@ def test_the_detector_reports_which_grade_fired() -> None:
         candles, zones, vwap, symbol="BTCUSDT", timeframe=TimeFrame.M15
     )
     assert out and all(r.pinbar_grade for r in out)
+
+
+def test_the_trigger_candle_reports_whether_its_colour_agrees() -> None:
+    # The grades measure the body as |close - open| and never ask which way it
+    # closed, so a candle that closed DOWN can carry the bullish label. That
+    # is reported, not filtered: the reclaims whose colour disagrees hit 2R as
+    # often as the ones that agree, and refusing them gives up real profit for
+    # a 0.1R difference in the average.
+    candles, zones, vwap = bullish_case()
+    agrees = detect_block_reclaims(
+        candles, zones, vwap, symbol=SYMBOL, timeframe=TF
+    )[0]
+    assert candles[25].close > candles[25].open
+    assert agrees.color_agrees is True
+
+    # same shape, same tail through the VWAP, but the body closes the other way
+    red = list(candles)
+    red[25] = candle(25, open_=105.7, high=105.9, low=103.0, close=105.6)
+    disagrees = detect_block_reclaims(
+        red, zones, vwap_series(red, 105.0), symbol=SYMBOL, timeframe=TF
+    )[0]
+    assert disagrees.timestamp == red[25].timestamp
+    assert disagrees.color_agrees is False

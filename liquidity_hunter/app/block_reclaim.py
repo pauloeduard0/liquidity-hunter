@@ -495,6 +495,9 @@ def detect_block_reclaims(
                         provisional=i == len(candles) - 1,
                         trigger_line=line,
                         pinbar_grade=",".join(sorted(grades)),
+                        color_agrees=pinbar_color_agrees(
+                            candle, bullish=bullish
+                        ),
                         vwap_candles=accumulated.get(candle.timestamp, 1),
                     )
                 )

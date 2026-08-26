@@ -73,7 +73,10 @@ from pathlib import Path
 from statistics import fmean
 from typing import Any
 
-from liquidity_hunter.app.block_reclaim import detect_block_reclaims
+from liquidity_hunter.app.block_reclaim import (
+    MIN_WICK_FRACTION,
+    detect_block_reclaims,
+)
 from liquidity_hunter.app.dashboard_data import load_dashboard_data
 from liquidity_hunter.app.paper_journal import (
     OPERATING_GATES,
@@ -347,7 +350,17 @@ def f5_penetration(
 # --------------------------------------------------------------------------
 
 
-def scan(symbols: Sequence[str], timeframe: TimeFrame, limit: int, out_path: str) -> list[dict]:
+def scan(
+    symbols: Sequence[str], timeframe: TimeFrame, limit: int, out_path: str,
+    *, pinbar_color: str | None = None, min_tail: float = MIN_WICK_FRACTION,
+) -> list[dict]:
+    """Varre a populacao operacional e anota as features.
+
+    `pinbar_color` e `min_tail` sao as duas correcoes de pinbar que nasceram no
+    estudo do stop profundo e ficaram SO la. Elas mudam quais gatilhos existem,
+    entao nao dao para cortar na analise -- cada uma e uma varredura propria.
+    Os defaults sao os de producao, para o braco base ser o setup como esta.
+    """
     provider, futures = CachedProvider(), NoFuturesProvider()
     max_r_atr, min_vwap = OPERATING_GATES[timeframe]
     rows: list[dict] = []
@@ -373,6 +386,7 @@ def scan(symbols: Sequence[str], timeframe: TimeFrame, limit: int, out_path: str
         reclaims = detect_block_reclaims(
             candles, data.poi_zones, data.vwap,
             symbol=symbol, timeframe=timeframe, ema=ema,
+            require_pinbar_color=pinbar_color, min_tail_fraction=min_tail,
         )
         kept = 0
         for rec in reclaims:
@@ -713,13 +727,18 @@ def main() -> None:
     p.add_argument("--timeframe", default="15m")
     p.add_argument("--limit", type=int, default=60_000)
     p.add_argument("--horizon", type=int, default=MAIN_HORIZON, choices=HORIZONS)
+    p.add_argument("--pinbar-color", default=None, choices=("l2", "all"),
+                   help="exigir que a cor da vela concorde (correcao do deep)")
+    p.add_argument("--min-tail", type=float, default=MIN_WICK_FRACTION,
+                   help="piso da calda; 0.65 e o do deep, que fecha o furo do doji")
     p.add_argument("--out", default="/tmp/qf.json")
     p.add_argument("--report-only", default=None)
     a = p.parse_args()
     if a.report_only:
         report(json.loads(Path(a.report_only).read_text()), a.horizon)
         return
-    rows = scan(a.symbols, TimeFrame(a.timeframe), a.limit, a.out)
+    rows = scan(a.symbols, TimeFrame(a.timeframe), a.limit, a.out,
+                pinbar_color=a.pinbar_color, min_tail=a.min_tail)
     if rows:
         report(rows, a.horizon)
 

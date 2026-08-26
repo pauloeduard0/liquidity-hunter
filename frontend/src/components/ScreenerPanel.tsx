@@ -35,6 +35,9 @@ function rowTitle(entry: BlockReclaimScanEntry): string {
   if (entry.r_atr != null) parts.push(`r_atr ${entry.r_atr.toFixed(2)}`)
   if (entry.reclaim) {
     parts.push(`trigger ${entry.reclaim.trigger_line} · pinbar ${entry.reclaim.pinbar_grade}`)
+    if (!entry.reclaim.color_agrees) {
+      parts.push('candle closed against the trade — a tiebreaker, not a veto')
+    }
     parts.push(`VWAP ${entry.reclaim.vwap_candles} candles old`)
     if (entry.reclaim.vwap_candles < VWAP_CANDLES_FLOOR) {
       parts.push('young VWAP — below the measured accumulation floor')

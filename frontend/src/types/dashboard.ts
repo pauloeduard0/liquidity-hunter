@@ -660,6 +660,15 @@ export interface BlockReclaim {
    * sample — so this is here to be read, not to be filtered on.
    */
   pinbar_grade: string
+  /**
+   * Whether the trigger candle closed the way the trade reads it. The grades
+   * measure the body as |close - open| and never ask, so a red candle can
+   * carry the bullish 'l2' label. Shown, never filtered on: the reclaims whose
+   * colour disagrees hit 2R just as often (62.5% against 62.0%), and refusing
+   * them gives up real profit for a 0.1R difference in the average. Useful
+   * only to choose between two signals standing at the same time.
+   */
+  color_agrees: boolean
   vwap_candles: number
 }
 

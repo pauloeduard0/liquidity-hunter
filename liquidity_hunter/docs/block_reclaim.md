@@ -1432,6 +1432,47 @@ that dict is not gated on depth.
 
 Wired in `passes_gates` (`test_penetrated_block_deeply`).
 
+### The deep study's pinbar corrections do not transfer (2026-08-26)
+
+Two fixes were made to the pinbar definitions while the deep-stop setup was
+being built, and both stayed there: requiring the `l2` grade's colour to agree
+(a red candle can satisfy the *bullish* `l2`, since the grade measures the body
+as `abs(close - open)`), and raising `legacy`'s tail floor to 0.65 (it caps the
+body but says nothing about the nose, so a doji passes). Both are right about
+the candle. Measured here as their own arms -- each changes which triggers
+exist, so each is its own scan rather than a cut -- neither transfers:
+
+| arm | n | 2R | R/trade | R/day | SR |
+|---|---|---|---|---|---|
+| **shipped + depth gate** | 1093 | **64.0%** | **+0.623** | **+0.550** | **9.26** |
+| shipped | 1307 | 62.1% | +0.561 | +0.514 | 8.58 |
+| colour on `l2` + depth | 870 | 62.8% | +0.611 | +0.489 | 8.42 |
+| tail 0.65 + depth | 850 | 63.3% | +0.597 | +0.457 | 7.72 |
+| both + depth | 584 | 62.7% | +0.612 | +0.409 | 7.17 |
+
+Decomposed, the colour rule's cost is not the re-timing it causes (only 29
+trades enter in place of a refused trigger). It is that **the refused trades are
+fine**: the 309 reclaims whose colour disagrees hit 2R at 62.5% against 62.0%
+for the ones that agree, and inside the `l2`-only population they hit *more*
+often (62.5% against 60.7%). What the filter buys is 0.1R on the average
+(+0.486 against +0.584); what it costs is +150R of realized profit.
+
+So the shape of the trigger candle is close to irrelevant in this setup, and the
+location -- block plus VWAP -- is what carries the reading. That is consistent
+with the union of the three grades beating every one of its subsets out of
+sample, which only makes sense if the shape requirement is doing little work.
+
+Why they earn their place in the deep setup and not here: there the stop is
+deeper and there is no `r_atr` gate, so the population is far larger and can
+afford an expensive filter. Here the gate has already selected, and a second
+filter mostly removes sample. A correction that is right about the *mechanism*
+can be wrong about the *population* -- do not carry a gate between setups
+without re-measuring it.
+
+`BlockReclaim.color_agrees` reports the colour so a reader can see it; nothing
+filters on it. Its one supported use is choosing between two signals standing at
+the same time -- the same narrow role the EMA9/VWAP alignment reading has.
+
 The same run measured four other candidate features over this population and
 **none survived**: the VWAP-to-block distance is already implied by the `r_atr`
 gate (all 1307 entries sit within 1 ATR) and the VWAP sitting *inside* the block

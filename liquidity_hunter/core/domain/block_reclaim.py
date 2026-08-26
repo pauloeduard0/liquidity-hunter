@@ -99,6 +99,26 @@ class BlockReclaim(DomainModel):
     #: of 30 declared rules and beats each of its own subsets. Observe this
     #: field; do not filter on it.
     pinbar_grade: str = "legacy"
+    #: Whether the trigger candle closed the way the trade reads it -- green
+    #: for a bullish reclaim, red for a bearish one. `pinbar_grade` measures
+    #: the body as `abs(close - open)` and never asks, so a red candle with a
+    #: heavy body can carry the *bullish* `l2` label (see
+    #: `app.block_reclaim.pinbar_color_agrees`).
+    #:
+    #: **Observe this field; do not filter on it.** The disagreement looks like
+    #: a defect and does not behave like one: over 1307 gated M15 entries the
+    #: 309 reclaims whose colour disagrees hit 2R at 62.5%, against 62.0% for
+    #: the ones that agree, and refusing them gives up +150R of realized profit
+    #: to avoid a 0.1R difference in the average (+0.486 against +0.584 per
+    #: trade). Gating on it measured worse on every ruler, per trade and per
+    #: day (`research/quality_features.py --pinbar-color`), as did the deep
+    #: study's stricter tail floor.
+    #:
+    #: What it is good for is the narrow thing the numbers support: choosing
+    #: between two signals standing at the same time. The same shape as the
+    #: EMA9/VWAP alignment reading -- a tiebreaker, never a reason to refuse
+    #: the only setup on the board.
+    color_agrees: bool = True
     #: How many candles of accumulation the VWAP carried at the reclaim.
     #: The lift tracks this monotonically -- a six-candle average is nobody's
     #: break-even -- so a reading against a barely-started VWAP is weaker

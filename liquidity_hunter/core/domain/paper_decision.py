@@ -56,6 +56,10 @@ class PaperDecision(DomainModel):
     vwap_candles: int = Field(ge=1)
     trigger_line: str
     pinbar_grade: str
+    #: Whether the trigger candle closed the way the trade reads it. Carried
+    #: for the same reason as the rest of this block -- it is a reading, not a
+    #: gate, and gating on it measured worse (see `BlockReclaim.color_agrees`).
+    color_agrees: bool = True
     #: Resolution, filled in by a later pass.
     outcome: PaperOutcome = PaperOutcome.OPEN
     resolved_at: datetime | None = None
