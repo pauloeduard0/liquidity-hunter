@@ -1430,7 +1430,25 @@ nearest thing, and it passes there. And it is measured on **M15 only**;
 `MAX_BLOCK_PENETRATION` therefore lists M15 alone, and a timeframe absent from
 that dict is not gated on depth.
 
-Wired in `passes_gates` (`test_penetrated_block_deeply`).
+Wired in `passes_gates` (`test_penetrated_block_deeply`). M15 only, and that is
+measured rather than merely unmeasured: on H4 the same rule does **not** clear
+the bar it cleared on M15.
+
+Per trade the direction replicates there -- 234 entries over 2020-2026, `pen <
+0.5` moving the 2R hit rate 56.8% -> 59.0% and R +0.649 -> +0.714, improving in
+all four cuts, with the discarded group the weakest of the table (n=29, 41.4%,
++0.193R). Per **day** it does not: `pen < 0.5` reads +0.590 against the ungated
++0.607, and the walk-forward that would settle it returns PBO 0.867 over six
+folds and 192 days carrying a trade -- that test does not disagree, it does not
+know. Since "improves the daily series too" is the criterion that admitted this
+rule on M15 and retired the four features measured beside it, changing rulers
+for H4 would be changing them at the easiest place to fool oneself: 29 discarded
+trades in six years.
+
+The H4 curve also peaks at 0.30 rather than 0.50, which is a second reason to
+stop: fitting a second threshold to 234 points is how a local reading gets
+mistaken for a general one -- the same mistake the `pen <= 0.25` declaration
+made in the other direction.
 
 ### The deep study's pinbar corrections do not transfer (2026-08-26)
 
