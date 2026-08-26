@@ -55,7 +55,7 @@ ida e volta, a divisao busca/holdout congelada em `_symbols.py`, e o controle al
 **casado na direcao e no simbolo** (um controle sem direcao faz qualquer
 periodo que tendeu parecer preditivo).
 
-Alvos 2R e 3R, horizontes 40 e 120 velas.
+Alvos 2R, 2,5R e 3R, horizontes 40 e 120 velas.
 
 Run:
     poetry run python -m research.deep_reclaim --out /tmp/deep_reclaim.json
@@ -86,7 +86,7 @@ from research._symbols import UNIVERSE, sample_of
 #: Ida e volta, taker nas duas pontas. O custo em R e `COST_PCT / r_pct`, e e
 #: por isso que o stop importa duas vezes: ele decide o denominador.
 COST_PCT = 0.0010
-TARGETS = (2.0, 3.0)
+TARGETS = (2.0, 2.5, 3.0)
 HORIZONS = (40, 120)
 ATR_PERIOD = 14
 #: Piso de acumulacao da VWAP, medido em `research/vwap_age_walkforward.py`.

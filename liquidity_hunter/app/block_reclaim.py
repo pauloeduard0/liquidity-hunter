@@ -32,7 +32,12 @@ from liquidity_hunter.core.domain import (
 #: A visit to a block is one test even when price spends several candles
 #: inside it; candles this far apart still count as the same visit.
 MERGE_GAP_CANDLES = 3
-#: How long after the visit a reclaim still belongs to it.
+#: How long after the visit a reclaim still belongs to it. A reader marking
+#: trades off the chart does not carry this clock: on BTCUSDT M15 the block was
+#: touched at 11:00 and the rejection printed at 17:45, 25 candles later, which
+#: this window cuts at 20. Whether the tie really expires is an empirical
+#: question, so it is a parameter (`detect_block_reclaims(max_wait_candles=)`)
+#: measured in `research/wait_window.py` rather than a number argued about.
 MAX_WAIT_CANDLES = 20
 #: The reclaiming candle's shape: a long wick against the close, little body.
 MIN_WICK_FRACTION = 0.5
@@ -354,6 +359,7 @@ def detect_block_reclaims(
     require_body_clears_vwap: bool = False,
     require_pinbar_color: str | None = None,
     min_tail_fraction: float = MIN_WICK_FRACTION,
+    max_wait_candles: int = MAX_WAIT_CANDLES,
 ) -> list[BlockReclaim]:
     """Every VWAP reclaim that followed a test of an order block.
 
@@ -428,7 +434,8 @@ def detect_block_reclaims(
         bullish = zone.direction is MarketDirection.BULLISH
         for start, end, first_test in _visits(candles, zone, vwap_at, bullish=bullish):
             scan_from = start if scan_from_visit_start else end
-            for i in range(scan_from, min(scan_from + MAX_WAIT_CANDLES + 1, len(candles))):
+            wait_end = min(scan_from + max_wait_candles + 1, len(candles))
+            for i in range(scan_from, wait_end):
                 candle = candles[i]
                 vwap_value = vwap_at.get(candle.timestamp)
                 if vwap_value is None:
