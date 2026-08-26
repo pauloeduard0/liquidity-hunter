@@ -1430,14 +1430,35 @@ nearest thing, and it passes there. And it is measured on **M15 only**;
 `MAX_BLOCK_PENETRATION` therefore lists M15 alone, and a timeframe absent from
 that dict is not gated on depth.
 
-Wired in `passes_gates` (`test_penetrated_block_deeply`). M15 only, and that is
-measured rather than merely unmeasured: on H4 the same rule does **not** clear
-the bar it cleared on M15.
+Wired in `passes_gates` (`test_penetrated_block_deeply`) on **M15, M30 and H1**,
+and absent from H4 -- which is measured rather than merely unmeasured, since on
+H4 the same rule does **not** clear the bar it cleared elsewhere.
 
-Per trade the direction replicates there -- 234 entries over 2020-2026, `pen <
+| | trades | 2R | R/trade | daily SR | what it discards |
+|---|---|---|---|---|---|
+| M15 | 1307 | 62.1 -> 64.0% | +0.561 -> +0.623 | 8.65 -> 9.33 | +0.240R |
+| M30 | 1747 | 54.9 -> 57.4% | +0.432 -> +0.506 | 6.56 -> 7.34 | +0.074R |
+| H1 | 938 | 46.7 -> 48.9% | +0.278 -> +0.345 | 3.62 -> 4.17 | +0.005R |
+| H4 | 234 | 56.8 -> 59.0% | +0.649 -> +0.714 | 8.06 -> **8.12** | +0.193R |
+
+M30 is the strongest of the four (PBO 0.333, 35 of 37 folds positive,
+train-to-test degradation −0.24) and peaks at 0.50, the same place M15 does. H1
+improves at *every* threshold per day but returns PBO 0.533, so the choice among
+them is a coin flip there; its own curve leans to 0.30-0.40 and it is wired at
+0.50 anyway, taking the number the larger samples establish rather than fitting
+a third one.
+
+The discarded column is worth reading on its own: the cut gets **cheaper as the
+timeframe thins**. On M15 it gives up trades still worth +0.240R each; on H1 it
+gives up a group returning +0.005R, which is nothing at all. The weaker a
+timeframe's edge, the more of what it holds is this group -- which is a claim
+about where the rule earns its keep, not a reason to expect it everywhere: H4
+is thin too and fails.
+
+Per trade the direction replicates on H4 -- 234 entries over 2020-2026, `pen <
 0.5` moving the 2R hit rate 56.8% -> 59.0% and R +0.649 -> +0.714, improving in
-all four cuts, with the discarded group the weakest of the table (n=29, 41.4%,
-+0.193R). Per **day** it does not: `pen < 0.5` reads +0.590 against the ungated
+all four cuts, with the discarded group the weakest row of its table (n=29,
+41.4%, +0.193R). Per **day** it does not: `pen < 0.5` reads +0.590 against the ungated
 +0.607, and the walk-forward that would settle it returns PBO 0.867 over six
 folds and 192 days carrying a trade -- that test does not disagree, it does not
 know. Since "improves the daily series too" is the criterion that admitted this

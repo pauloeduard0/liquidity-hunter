@@ -120,7 +120,12 @@ class CachedProvider(PaginatedFuturesProvider):
         path = self._cache(symbol, timeframe)
         if path.exists():
             cached: list[list[Any]] = json.loads(path.read_text())
-            if len(cached) >= limit:
+            # A cache SHORTER than the request is the normal case away from
+            # M15: the H4 series starts in 2019 and 60k candles of it do not
+            # exist. Refetching then walks back to the same start of history
+            # and rewrites identical bytes, at 72 symbols of request budget.
+            # Whatever is on disk is the whole series, so it is served.
+            if cached:
                 return cached
         return super()._rows(symbol, timeframe, limit)
 

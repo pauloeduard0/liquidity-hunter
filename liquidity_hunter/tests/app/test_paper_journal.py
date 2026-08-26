@@ -107,10 +107,12 @@ def test_a_test_that_dove_deep_into_the_block_is_not_a_decision() -> None:
 
 
 def test_the_depth_gate_is_only_wired_where_it_was_measured() -> None:
-    # H4 has its own, much thinner core, and this rule was never measured
-    # there. An unmeasured gate applied to it would be the move this project
-    # keeps refusing -- so a timeframe absent from the dict is not gated.
-    assert TimeFrame.M15 in MAX_BLOCK_PENETRATION
+    # H4 is absent because measuring it is what ruled it out: the rule
+    # replicates there per trade and in all four cuts, but reads *below* the
+    # ungated series per day, which is the bar that admitted it elsewhere.
+    # A timeframe absent from the dict is not gated on depth.
+    for timeframe in (TimeFrame.M15, TimeFrame.M30, TimeFrame.H1):
+        assert timeframe in MAX_BLOCK_PENETRATION
     assert TimeFrame.H4 not in MAX_BLOCK_PENETRATION
     deep = reclaim().model_copy(
         update={"timeframe": TimeFrame.H4, "test_extreme": 90.1}

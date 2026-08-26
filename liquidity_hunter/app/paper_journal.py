@@ -101,23 +101,47 @@ DEFAULT_JOURNAL_PATH = Path("paper_journal.jsonl")
 #: not the shallow rejection the layer is about, even when no candle closed out
 #: the far side (which `test_pierced_the_block` already refuses).
 #:
-#: Only M15 is listed because only M15 is measured. A timeframe absent from
-#: this dict is not gated on depth -- applying an unmeasured rule to the thin
-#: H4 core would be exactly the move this project keeps refusing.
+#: Every timeframe here is measured, and H4 is absent because measuring it is
+#: what ruled it out. The bar is the one that admitted the rule in the first
+#: place: it has to improve the **daily** series, not only the per-trade one --
+#: a day filtered out is a day not traded, and three earlier candidates died on
+#: exactly that distinction.
 #:
-#: Measured 2026-08-26 (`research/quality_features.py`, 1307 entries, 70
-#: symbols, ~625 days, over the gated population): 2R hit rate 62.1% -> 64.0%,
-#: R per trade +0.561 -> +0.623, PF 2.15 -> 2.36, and mean adverse excursion
-#: 0.86R -> 0.80R. It keeps 84% of the trades, and it is the only one of five
-#: candidate features that improves the **daily** series as well as the
-#: per-trade one (R/day +0.521 -> +0.557, SR 8.65 -> 9.33) -- the distinction
-#: that has retired three earlier candidates, since a day filtered out is a day
-#: not traded. It gains in all four independent cuts, and gains *most* in the
-#: symbol holdout (+0.086) and the recent half (+0.100).
+#: |    | trades | 2R | R/trade | daily SR | discarded group |
+#: |----|--------|----|---------|----------|-----------------|
+#: | M15 | 1307 | 62.1 -> 64.0% | +0.561 -> +0.623 | 8.65 -> 9.33 | +0.240R |
+#: | M30 | 1747 | 54.9 -> 57.4% | +0.432 -> +0.506 | 6.56 -> 7.34 | +0.074R |
+#: | H1  |  938 | 46.7 -> 48.9% | +0.278 -> +0.345 | 3.62 -> 4.17 | +0.005R |
+#: | H4  |  234 | 56.8 -> 59.0% | +0.649 -> +0.714 | 8.06 -> **8.12** | +0.193R |
 #:
-#: The threshold sits on a **plateau**, which is why it is not a fitted number:
-#: every cut from 0.30 to 1.00 beats the ungated series (SR 9.03-9.33). Only
-#: 0.20 and 0.25 fall back to it -- and `pen <= 0.25` was the one depth rule
+#: H4 replicates per trade and improves in all four cuts, and still does not
+#: qualify: per day it reads +0.590 against the ungated +0.607, and its
+#: walk-forward returns PBO 0.867 over six folds and 192 days carrying a trade
+#: -- a test that does not know rather than one that disagrees. Changing rulers
+#: for the one timeframe that fails this one would be changing them at the
+#: easiest place to fool oneself: 29 discarded trades in six years.
+#:
+#: What the discarded column says is worth reading on its own. The cut gets
+#: *cheaper* as the timeframe thins: on M15 it gives up trades still worth
+#: +0.240R each, on H1 it gives up a group that returns +0.005R -- nothing at
+#: all. The weaker the timeframe's edge, the more of what it holds is this
+#: group.
+#:
+#: Measured 2026-08-26 (`research/quality_features.py`, over each timeframe's
+#: own gated population; M15 was first, at 1307 entries over 70 symbols and
+#: ~625 days). On M15 it keeps 84% of the trades, cuts mean adverse excursion
+#: from 0.86R to 0.80R, gains in all four independent cuts, and gains *most* in
+#: the symbol holdout (+0.086) and the recent half (+0.100). It was the only
+#: one of five candidate features to clear the daily bar.
+#:
+#: The threshold sits on a **plateau**, which is why one number serves three
+#: timeframes: on M15 every cut from 0.30 to 1.00 beats the ungated series (SR
+#: 9.03-9.33), and M30 and H1 repeat that shape. 0.50 is the peak on both M15
+#: and M30 and is carried to H1 rather than refitted -- H1's own curve leans to
+#: 0.30-0.40, but its PBO of 0.533 says the *choice among thresholds* there is
+#: a coin flip, so the number measured on the larger samples is the
+#: conservative one. On M15 only 0.20 and 0.25 fall back to the ungated
+#: series -- and `pen <= 0.25` was the one depth rule
 #: `research/block_test_walkforward.py` declared in advance on 2026-08-25,
 #: which is why that study concluded depth does not separate. Both readings are
 #: right about what each tested; this one found the edge, at the cost of having
@@ -129,6 +153,8 @@ DEFAULT_JOURNAL_PATH = Path("paper_journal.jsonl")
 #: capital are the binding constraint, not opportunity.
 MAX_BLOCK_PENETRATION: dict[TimeFrame, float] = {
     TimeFrame.M15: 0.5,
+    TimeFrame.M30: 0.5,
+    TimeFrame.H1: 0.5,
 }
 
 
