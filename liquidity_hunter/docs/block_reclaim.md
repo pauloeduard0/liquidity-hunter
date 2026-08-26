@@ -1394,3 +1394,53 @@ inside that bucket alone it still splits 34.9%/31.4% against 55.7%/57.1%.
 
 Wired in `passes_gates` (`test_pierced_the_block`). Small: ~5% of result for 8%
 of trades, an order of magnitude less than the re-anchor floor above.
+
+### How deep the test dove, re-measured (2026-08-26)
+
+The section above concludes that depth inside the block does not separate. That
+run declared **one** depth rule, `pen_frac <= 0.25`, and 0.25 turns out to be the
+one place in the range where the reading is absent. Swept end to end over the
+gated population (`research/quality_features.py`, 1307 entries, 70 symbols,
+~625 days, h120), the daily walk-forward reads:
+
+| cut | R/day | SR | trades | days |
+|---|---|---|---|---|
+| ungated | +0.521 | 8.65 | 1307 | 488 |
+| `pen < 0.20` | +0.467 | 8.14 | 761 | 379 |
+| `pen < 0.25` | +0.500 | 8.58 | 848 | 406 |
+| `pen < 0.30` | +0.535 | 9.24 | 923 | 416 |
+| **`pen < 0.50`** | **+0.557** | **9.33** | 1093 | 454 |
+| `pen < 0.80` | +0.537 | 9.07 | 1231 | 472 |
+| `pen < 1.00` | +0.533 | 8.95 | 1279 | 480 |
+
+A **plateau from 0.30 to 1.00**, and the prior study's declared threshold sits
+just outside its lower edge. Both readings are right about what each tested.
+
+Per trade the cut moves the 2R hit rate 62.1% -> 64.0%, R +0.561 -> +0.623, PF
+2.15 -> 2.36, MAE 0.86R -> 0.80R, keeping 84% of the trades; it gains in all
+four independent cuts and gains most in the symbol holdout (+0.086) and the
+recent half (+0.100). Unlike the piercing rule, **what it discards is weak, not
+negative** (+0.240R, 52.3% at 2R, +51R over the window): this one trades
+absolute profit for a better average and a shallower drawdown, which is only
+worth it while attention and capital bind before opportunity does.
+
+Two limits, both real. The threshold was chosen **after** seeing the curve, so
+its walk-forward is not a clean out-of-sample test -- the symbol holdout is the
+nearest thing, and it passes there. And it is measured on **M15 only**;
+`MAX_BLOCK_PENETRATION` therefore lists M15 alone, and a timeframe absent from
+that dict is not gated on depth.
+
+Wired in `passes_gates` (`test_penetrated_block_deeply`).
+
+The same run measured four other candidate features over this population and
+**none survived**: the VWAP-to-block distance is already implied by the `r_atr`
+gate (all 1307 entries sit within 1 ATR) and the VWAP sitting *inside* the block
+measures worse; the displacement that created the block is not monotonic in any
+threshold and its most vertical cut is the family's worst (-0.204R); a liquidity
+sweep before entry helps only where it happens *inside* the block, and the
+"closed back inside" half of that hypothesis measures **worse** than its absence
+(+0.033 against +0.111) -- the trigger is already a rejection; and EMA9/VWAP
+alignment is the strongest per-trade discriminator of all (66.5% against 56.0%)
+yet **loses to the ungated series per day**, the third time that axis has
+produced exactly that shape. Stacking all of them -- the "A++" hypothesis --
+leaves 134 trades in 109 days across two years at +0.220R/day against +0.521.

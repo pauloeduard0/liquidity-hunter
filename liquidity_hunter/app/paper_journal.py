@@ -96,6 +96,41 @@ RESOLVE_LOOKBACK = 200
 
 DEFAULT_JOURNAL_PATH = Path("paper_journal.jsonl")
 
+#: How far into the block the test may reach, as a fraction of the block's own
+#: height, per timeframe. A test that dives most of the way through the box is
+#: not the shallow rejection the layer is about, even when no candle closed out
+#: the far side (which `test_pierced_the_block` already refuses).
+#:
+#: Only M15 is listed because only M15 is measured. A timeframe absent from
+#: this dict is not gated on depth -- applying an unmeasured rule to the thin
+#: H4 core would be exactly the move this project keeps refusing.
+#:
+#: Measured 2026-08-26 (`research/quality_features.py`, 1307 entries, 70
+#: symbols, ~625 days, over the gated population): 2R hit rate 62.1% -> 64.0%,
+#: R per trade +0.561 -> +0.623, PF 2.15 -> 2.36, and mean adverse excursion
+#: 0.86R -> 0.80R. It keeps 84% of the trades, and it is the only one of five
+#: candidate features that improves the **daily** series as well as the
+#: per-trade one (R/day +0.521 -> +0.557, SR 8.65 -> 9.33) -- the distinction
+#: that has retired three earlier candidates, since a day filtered out is a day
+#: not traded. It gains in all four independent cuts, and gains *most* in the
+#: symbol holdout (+0.086) and the recent half (+0.100).
+#:
+#: The threshold sits on a **plateau**, which is why it is not a fitted number:
+#: every cut from 0.30 to 1.00 beats the ungated series (SR 9.03-9.33). Only
+#: 0.20 and 0.25 fall back to it -- and `pen <= 0.25` was the one depth rule
+#: `research/block_test_walkforward.py` declared in advance on 2026-08-25,
+#: which is why that study concluded depth does not separate. Both readings are
+#: right about what each tested; this one found the edge, at the cost of having
+#: chosen its threshold after seeing the curve.
+#:
+#: What it costs: the discarded group is weak, not negative (+0.240R, 52.3% at
+#: 2R, +51R in total over the window). Unlike `test_pierced_the_block`, this cut
+#: gives up real profit for a better average -- worth it while attention and
+#: capital are the binding constraint, not opportunity.
+MAX_BLOCK_PENETRATION: dict[TimeFrame, float] = {
+    TimeFrame.M15: 0.5,
+}
+
 
 def decision_key(entry: BlockReclaimScanEntry) -> str:
     """Identity of a decision: one per trigger candle, symbol and direction."""
@@ -124,7 +159,12 @@ def passes_gates(
         return False
     if entry.reclaim.vwap_candles < min_vwap_candles:
         return False
-    return not test_pierced_the_block(entry.reclaim)
+    if test_pierced_the_block(entry.reclaim):
+        return False
+    max_penetration = MAX_BLOCK_PENETRATION.get(entry.timeframe)
+    return max_penetration is None or not test_penetrated_block_deeply(
+        entry.reclaim, max_fraction=max_penetration
+    )
 
 
 def test_pierced_the_block(reclaim: BlockReclaim) -> bool:
@@ -145,14 +185,45 @@ def test_pierced_the_block(reclaim: BlockReclaim) -> bool:
     blocks: inside the sub-1-ATR bucket alone the split is 34.9%/31.4% against
     55.7%/57.1%.
 
-    Depth *within* the block does not matter and was measured not to -- the
-    shallow graze is fine, which is the opposite of what reading one chart
-    suggested. Only crossing all the way out does.
+    Depth *within* the block was measured here and did not separate -- but that
+    run declared a single depth rule, `pen <= 0.25`, and 0.25 turns out to sit
+    just outside the band where the reading lives. Re-measured across the whole
+    range it does separate, from 0.30 outward; see `MAX_BLOCK_PENETRATION`,
+    which gates it on M15. Crossing all the way out, this function's case,
+    remains the strongest and the only one negative on its own.
     """
     block_low, block_high = reclaim.block_price_low, reclaim.block_price_high
     if reclaim.direction is MarketDirection.BULLISH:
         return reclaim.test_extreme < block_low
     return reclaim.test_extreme > block_high
+
+
+def test_penetrated_block_deeply(
+    reclaim: BlockReclaim, *, max_fraction: float
+) -> bool:
+    """Whether the test dove more than `max_fraction` of the way into the block.
+
+    Measured from the edge the price *arrives* at -- the top of the box for a
+    bullish block, tested from above -- down to the extreme of the test. A
+    block whose height is not positive cannot be divided into, and reads False.
+
+    The rationale is the layer's own: the block is where resting orders sit, and
+    a test that is turned back near its edge says they are there in size. A test
+    that works most of the way through the box says the opposite, and the fact
+    that no candle *closed* out the far side is then a detail of where the
+    candle happened to close, not evidence that anything held.
+
+    See `MAX_BLOCK_PENETRATION` for the measurement, the plateau the threshold
+    sits on, and what the cut gives up.
+    """
+    height = reclaim.block_price_high - reclaim.block_price_low
+    if height <= 0:
+        return False
+    if reclaim.direction is MarketDirection.BULLISH:
+        depth = reclaim.block_price_high - reclaim.test_extreme
+    else:
+        depth = reclaim.test_extreme - reclaim.block_price_low
+    return depth / height > max_fraction
 
 
 def build_decision(

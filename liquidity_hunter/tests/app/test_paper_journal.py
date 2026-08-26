@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 from liquidity_hunter.app.paper_journal import (
+    MAX_BLOCK_PENETRATION,
     _settle,
     build_decision,
     decision_key,
@@ -81,13 +82,41 @@ def test_a_test_that_pierced_the_block_is_not_a_decision() -> None:
     # The detector retires a block only on a *close* beyond it (the POIZone
     # rule). A wick that crosses the whole block on the trigger's own visit
     # leaves it on the board with nothing left holding: price went in one side
-    # and out the other. Depth *inside* the block is fine -- only crossing out.
+    # and out the other.
     e = entry()
-    block = e.reclaim.block_price_low, e.reclaim.block_price_high
-    inside = e.reclaim.model_copy(update={"test_extreme": block[0] + 0.01})
-    through = e.reclaim.model_copy(update={"test_extreme": block[0] - 0.01})
-    assert passes_gates(e.model_copy(update={"reclaim": inside})) is True
+    low = e.reclaim.block_price_low
+    grazed = e.reclaim.model_copy(update={"test_extreme": 91.5})  # 25% deep
+    through = e.reclaim.model_copy(update={"test_extreme": low - 0.01})
+    assert passes_gates(e.model_copy(update={"reclaim": grazed})) is True
     assert passes_gates(e.model_copy(update={"reclaim": through})) is False
+
+
+def test_a_test_that_dove_deep_into_the_block_is_not_a_decision() -> None:
+    # Measured on M15 after the piercing rule was already wired: a test turned
+    # back near the block's edge says resting orders are there in size; one
+    # that works most of the way through says the opposite, and whether a
+    # candle happened to *close* out the far side is then incidental. The
+    # threshold sits on a plateau (every cut from 0.30 to 1.00 beats the
+    # ungated series), so this asserts the shape of the rule, not the number.
+    e = entry()  # block spans 90.0 -> 92.0, tested from above
+    for extreme, taken in ((91.9, True), (91.0, True), (90.9, False), (90.1, False)):
+        row = e.model_copy(
+            update={"reclaim": e.reclaim.model_copy(update={"test_extreme": extreme})}
+        )
+        assert passes_gates(row) is taken, extreme
+
+
+def test_the_depth_gate_is_only_wired_where_it_was_measured() -> None:
+    # H4 has its own, much thinner core, and this rule was never measured
+    # there. An unmeasured gate applied to it would be the move this project
+    # keeps refusing -- so a timeframe absent from the dict is not gated.
+    assert TimeFrame.M15 in MAX_BLOCK_PENETRATION
+    assert TimeFrame.H4 not in MAX_BLOCK_PENETRATION
+    deep = reclaim().model_copy(
+        update={"timeframe": TimeFrame.H4, "test_extreme": 90.1}
+    )
+    h4 = entry().model_copy(update={"timeframe": TimeFrame.H4, "reclaim": deep})
+    assert passes_gates(h4) is True
 
 
 def test_a_stale_row_is_not_a_decision() -> None:
