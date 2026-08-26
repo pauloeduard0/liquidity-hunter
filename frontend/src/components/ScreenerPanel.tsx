@@ -17,12 +17,37 @@ const TF_LABELS: Record<string, string> = {
 const GATE_R_ATR = 1.0
 
 /**
- * The accumulation floor: on M15, a reclaim against a session VWAP younger
- * than ~15 candles measured 46% against the gate's 55% (walk-forwarded,
- * PBO 0.000 — see `docs/block_reclaim.md`). Young-VWAP rows get a `·youngV`
- * hint rather than being hidden, the same emit-don't-filter contract.
+ * The accumulation floor, mirroring `paper_journal.OPERATING_GATES` — the
+ * floor the operating plan actually applies, and it is **per timeframe**.
+ * It exists because the session VWAP re-anchors: on the re-anchor candle it
+ * jumps across price without price having moved, so the trigger fires on the
+ * clock.
+ *
+ * This read 15 for every timeframe, which was the original M15 floor and was
+ * wrong twice over. Walk-forward puts a plateau from 2 to 12 and a drop at 20,
+ * so 15 sat just past the plateau's edge and took the 8–14 band — the best of
+ * all — with it; M15 has been 4 since. And the floor is in candles while what
+ * it measures is a fraction of the anchor period, which is per timeframe: 15
+ * candles is ~4h of a 96-candle M15 day but 2.5 days of a 42-candle H4 week,
+ * so H4 drops only the re-anchor candle itself.
+ *
+ * A row below its own floor gets a `·youngV` hint rather than being hidden,
+ * the same emit-don't-filter contract the detector keeps.
  */
-const VWAP_CANDLES_FLOOR = 15
+const VWAP_CANDLES_FLOOR: Record<string, number> = {
+  '15m': 4,
+  '30m': 1,
+  '1h': 1,
+  '4h': 2,
+}
+
+/** Whether this row sits below the operating floor for its own timeframe. */
+function hasYoungVwap(entry: BlockReclaimScanEntry): boolean {
+  const floor = VWAP_CANDLES_FLOOR[entry.timeframe]
+  return (
+    entry.reclaim != null && floor != null && entry.reclaim.vwap_candles < floor
+  )
+}
 
 const MAX_ROWS = 14
 
@@ -39,8 +64,8 @@ function rowTitle(entry: BlockReclaimScanEntry): string {
       parts.push('candle closed against the trade — a tiebreaker, not a veto')
     }
     parts.push(`VWAP ${entry.reclaim.vwap_candles} candles old`)
-    if (entry.reclaim.vwap_candles < VWAP_CANDLES_FLOOR) {
-      parts.push('young VWAP — below the measured accumulation floor')
+    if (hasYoungVwap(entry)) {
+      parts.push('young VWAP — below this timeframe\'s accumulation floor')
     }
     if (entry.reclaim.provisional) parts.push('candle still forming')
   }
@@ -86,8 +111,8 @@ function ScreenerRow({ entry }: { entry: BlockReclaimScanEntry }) {
         {entry.candles_ago === 0 ? 'live' : `${entry.candles_ago}c`}
         {entry.reclaim?.provisional ? '?' : ''}
       </span>
-      {entry.reclaim != null && entry.reclaim.vwap_candles < VWAP_CANDLES_FLOOR && (
-        <span className="flex-none text-[9px] text-[#ffb300]" title="young VWAP — below the measured accumulation floor">
+      {hasYoungVwap(entry) && (
+        <span className="flex-none text-[9px] text-[#ffb300]" title="young VWAP — below this timeframe's accumulation floor">
           ·youngV
         </span>
       )}
