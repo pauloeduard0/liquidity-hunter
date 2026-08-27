@@ -2264,3 +2264,63 @@ dia mais cheio perderem juntas.
 Numa conta de **$100k**, nenhuma das 1.590 operações medidas fica abaixo do
 lote mínimo: a conta cobre o plano inteiro e a questão do `volume_min` do
 cripto H4 (que morde em $10k e $25k) não existe aqui.
+
+## Manual de operação
+
+### Já instalado, não repetir
+
+O cron do WSL (`crontab -l` deve mostrar `ftmo_live_cron.sh`) e o `refresh.ps1`
+gerado em `C:\mt5-export\`. Só refazer se trocar de máquina.
+
+### Toda vez que ligar a máquina
+
+1. Abrir o **terminal da FTMO** e esperar conectar.
+2. No PowerShell, o laço que mantém os candles frescos — **deixar a janela
+   aberta**:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File C:\mt5-export\refresh.ps1
+   ```
+
+3. Abrir **uma janela do WSL** e deixar aberta. O WSL2 desliga a VM quando não
+   sobra processo e leva o cron junto.
+
+Nada mais. O cron roda sozinho a cada minuto.
+
+### No dia a dia
+
+```bash
+# está tudo vivo?
+./research/ftmo_live_check.sh
+
+# o que entrar, com lote calculado para a conta
+poetry run python -m research.ftmo_sizing
+```
+
+O primeiro verifica as três coisas que falham em silêncio. O segundo imprime a
+ordem pronta de cada decisão aberta — símbolo, lado, entrada, stop, alvo, lote
+e o risco em dinheiro. Padrões: conta de $100.000, risco de 0,35%
+(`--balance` e `--risk` mudam).
+
+### De vez em quando
+
+```bash
+# o que o diário aprendeu (a derrapagem é o número que importa)
+poetry run python -m research.ftmo_live --report-only
+
+# quanto do risco alvo sobrevive ao lote discreto, por tamanho de conta
+poetry run python -m research.ftmo_sizing --table
+
+# a probabilidade de estourar os limites, por nível de risco
+poetry run python -m research.ftmo_risk_budget
+```
+
+### Quando estranhar o silêncio
+
+Diário vazio é o caso comum: o plano prevê ~29 entradas por mês nos seis
+fluxos, cerca de **uma por dia**, e o gate `r_atr <= 1.0` reprova a maioria dos
+disparos. Se `ftmo_live_check.sh` der dois OK, o pipeline está bem
+independentemente do diário estar vazio.
+
+O sinal de problema não é diário vazio — é o `check` reclamando, ou a coluna
+`linhas` do funil zerada (os CSV congelaram).
