@@ -1885,3 +1885,273 @@ means **taking more entries that day**, and a daily loss cap limits the sum, not
 the average -- averaging would penalise the larger portfolio for dilution, which
 is not what happens in the account. Both are reported; `sum` is the one that
 answers the portfolio question, and both pass.
+
+## Câmbio: a terceira classe de ativo (2026-08-27)
+
+> **Os números desta seção foram medidos com o spread errado e estão
+> SUPERADOS** pela seção *"A coluna de spread era o mínimo da barra"*, mais
+> abaixo, escrita no mesmo dia. Ali o spread do câmbio subiu 29-45% (a coluna
+> da barra era o mínimo do período) e isso **matou o M15 e o H1**, que aqui
+> aparecem passando. A carteira final tem **só o H4 no câmbio**, +3,11%/mês.
+>
+> A seção fica como está de propósito: ela é o registro do que foi medido
+> antes, e apagá-la esconderia que a conclusão mudou por causa do insumo e não
+> do método. Leia as duas na ordem.
+
+Os 28 pares da FTMO mais XAUUSD/XAGUSD, exportados do MT5 da corretora
+(`research/ftmo_forex_reclaim.py`), com o custo lido das fichas: **comissão de
+2,5 USD por lote por ponta** no câmbio, **0,0007% por ponta** nos metais,
+spread da própria barra e swap com a virada tripla na **quarta-feira** (a
+convenção do spot, contra a sexta dos índices).
+
+A previsão foi escrita no cabeçalho do script antes de rodar: eu esperava
+empate, porque câmbio não tem fechamento de sessão nem volume real e o
+mecanismo de ponto de Schelling da VWAP não tinha onde se apoiar. Errei.
+
+| TF | n | acerto | líquido/op | Sharpe OOS | folds | veredito |
+|---|---|---|---|---|---|---|
+| M5 | 504 | 59,5% | −0,188R | −3,24 | 2/6 | morto no custo |
+| M15 | 428 | 53,3% | +0,186R | 1,56 | 7/11 | fraco, positivo |
+| M30 | 688 | 50,9% | −0,002R | −0,03 | 11/22 | morto |
+| H1 | 1162 | 46,8% | +0,147R | 1,78 | 28/41 | passa |
+| H4 | 393 | 46,8% | +0,247R | 4,04 | 13/15 | passa, 1,8 ops/mês |
+
+**O M5 é o caso mais limpo de custo mandando em todo o projeto**: acerta 59,5%,
+o melhor de todos os timeframes, e perde dinheiro — bruto +0,782R contra custo
++0,970R. O stop mediano do câmbio é de 4,5 pontos-base, o menor de qualquer
+ativo já medido aqui, então é onde um custo fixo pesa mais. Terceira vez que o
+denominador decide.
+
+**H4 e H1 melhoram fora da amostra** (degradação +0,77 e +0,25). O H4 é positivo
+em cada década separada — +0,154R nos anos 2000, +0,351R nos 2010, +0,216R nos
+2020 — e o spread histórico cai de 3,78bp para 0,40bp no mesmo intervalo, ou
+seja, o feed antigo cobra *mais*, não menos.
+
+Três coisas medidas e rejeitadas:
+
+* **Busca por filtro: PBO 0,933.** As sete regras que servem em índice e cripto
+  se revezam ganhando por acaso no câmbio. O que passou foi a regra sem filtro
+  nenhum, e é assim que ela deve ser operada.
+* **Teto de custo esperado** (calculável antes de entrar, pelo spread mediano do
+  par sobre o stop): piora o M15 (3,30 → 3,14). As operações caras são caras
+  porque o stop é apertado, e stop apertado é o que dá R bom quando acerta.
+* **Metais como bloco:** +1,028R no M5 e +0,574R no M15, mas −0,340R no H1 e
+  −0,048R no H4. O sinal inverte conforme a amostra cresce; é ruído.
+
+O que isso diz sobre o mecanismo: o setup sobrevive na classe onde a VWAP é mais
+fraca. Somado ao empate em ação americana, são duas classes dizendo que o que
+carrega o resultado é a geometria — bloco de ordem, reclaim, stop no extremo
+testado, gate de `r_atr` — e não o prêmio institucional da linha.
+
+### A carteira com câmbio
+
+`ftmo_portfolio_walkforward.py` compete 11 composições. **13 de 13 folds
+positivos nas duas agregações, PBO 0,000 (soma) e 0,067 (média)**; a composição
+completa vence pela média (SR 5,12 contra 4,70 sem câmbio) e empata no topo pela
+soma. Não é volume: os *dias* melhoram.
+
+O **M15 de câmbio foi cortado depois de medido na carteira** — +0,142R por dia
+contra +0,217R do H1, subindo o total por operar muito. Sem ele a carteira sobe
+de R/dia +0,734 para +0,736 com Sharpe 5,12 → 5,61.
+
+Plano resultante, janela comum de 18 meses (presa pelo M5 de índice):
+
+| | sem câmbio | com câmbio H1+H4 |
+|---|---|---|
+| ganho mensal a 0,25% | +3,00% | **+3,53%** |
+| drawdown máximo | 4,21% | 5,04% (teto 10%) |
+| pior dia | −1,30% | −1,50% (teto 5%) |
+| entradas/mês | 28,1 | **38,6** |
+| alvo de 10% em | 3,3 meses | **2,8 meses** |
+
+Ressalvas que a tabela não mostra: a degradação por fold piorou (−1,44 contra os
+−0,16 da carteira de cinco fluxos), efeito mecânico de competir 11 composições em
+vez de 7 — o número de opções oferecidas já está no limite do honesto. A janela
+de 18 meses apaga justamente o que o H4 de câmbio tem de melhor, seus 26 anos. E
+os sete fluxos continuam compartilhando **uma só regra de detecção**, então são
+menos independentes do que sete estratégias seriam.
+
+## A coluna de spread era o mínimo da barra (2026-08-27)
+
+Veio de uma pergunta do usuário — *"por que em M5 com quase 60% de acerto o
+custo mata? Você tem certeza de todos esses custos?"* — e a resposta é que eu
+não tinha.
+
+Todo custo medido em instrumento da corretora sai da coluna `spread` do
+candle exportado do MetaTrader. A documentação do terminal não diz de que
+instante ela é. Exportei o bid/ask **tick a tick** (`mt5_export.py --ticks`,
+`COPY_TICKS_INFO`) e comparei barra a barra (`research/spread_audit.py`):
+**a coluna é o mínimo do período**, em 99,0-99,9% das barras, contra 0,3-10,6%
+de concordância com a média.
+
+### Mas só importa onde o spread flutua — e ele não flutua em todo lugar
+
+Esta foi a segunda metade do achado, e ela desfez a primeira correção que eu
+tinha aplicado. Medido por classe, em 19 símbolos:
+
+| classe | evidência | fator |
+|---|---|---|
+| **índice** | 6 símbolos × ~2.800 barras M5: `min == max == coluna` (US500 60 pts, GER40 133, JP225 1000, USOIL 68, N25 60); só US100 varia | **1,0** |
+| **cripto** | 4 dos 7 CFD não variam nada; mediana entre símbolos 1,00. BNBUSD é outlier (2,6×) sobre o menor spread da lista (0,0015%) | **por símbolo, ~1,0** |
+| **câmbio** | flutua em todos; a coluna subestima sistematicamente | **1,29 (M5) → 1,45 (H4)** |
+
+O fator **não é propriedade do terminal**. O mecanismo — a coluna é o mínimo —
+é; a magnitude é de como a corretora cota aquele instrumento. Índice e a
+maioria do cripto são cotados a spread **fixo**, e ali não há nada a corrigir.
+Aplicar o número do câmbio ao índice foi exatamente o erro que a medição
+seguinte desfez, e ele estava registrado como "provavelmente subestima" —
+estava errado nos dois sentidos.
+
+O fator do câmbio cresce com o timeframe pelo motivo mecânico esperado: barra
+maior tem mais ticks, então o mínimo afunda mais.
+
+### O que a correção matou
+
+Ela pesa na proporção `spread/R`, exatamente onde o intradiário é fraco. No
+walk-forward de regra única (sem filtro, para medir o setup e não a busca):
+
+| fluxo | depois | veredito |
+|---|---|---|
+| câmbio M15 | SR 0,44 · 4/11 folds | morto |
+| câmbio H1 | SR 0,23 · 23/41 folds | morto (cara ou coroa) |
+| câmbio H4 | SR 2,64 · 13/15 · degradação **+0,94** | sobrevive |
+| índice M5 (cru) | SR −2,11 · 3/8 | morto cru |
+| índice M5 (custo ≤0,30R) | +0,427R · 130 ops | sobrevive filtrado |
+
+O câmbio H1 chegou a entrar na carteira antes da correção; com ela rende
+−0,019R por dia e derruba o Sharpe. Foi cortado, restando **só o H4 no
+câmbio**. O filtro de custo do M5 de índice, que já existia por outro motivo,
+faz exatamente o trabalho certo: seleciona as barras baratas.
+
+### O M5 e a aritmética de sempre
+
+A pergunta original tem resposta limpa, e é a quarta aparição da mesma conta.
+O M5 tem o **melhor acerto da régua inteira** (59,5% no câmbio) e ainda assim
+perde:
+
+| TF | acerto | stop | spread | spread em R | precisa acertar |
+|---|---|---|---|---|---|
+| M5 | 59,5% | 2,18 bp | 0,75 bp | 0,668 | 65,7% |
+| M15 | 53,3% | 4,49 bp | 0,72 bp | 0,263 | 46,9% |
+| H1 | 46,8% | 10,72 bp | 0,71 bp | 0,194 | 41,9% |
+| H4 | 46,8% | 27,94 bp | 1,62 bp | 0,100 | 38,4% |
+
+O spread **não muda** de timeframe para timeframe — é o mesmo instrumento. O
+stop encolhe 12,8 vezes do H4 para o M5, e está no denominador. O M5 acerta 6
+pontos a mais que o M15 e precisaria acertar 19 a mais. No M5 o `spread/R`
+mediano é 0,333 mas o p99 é **6,75**: um percentil das operações paga sete
+vezes o risco em spread.
+
+### Um bug menor, no lado otimista
+
+O EURUSD exportado tem `spread = 0` em 65% das barras de M5 — valor faltando,
+não spread. Cobrava 8 entradas de graça. Corrigido em `_mt5.py` (spread zero
+recebe a mediana do próprio símbolo). Imaterial: o spread real do par é 1
+ponto. Os outros 29 símbolos não têm o problema.
+
+### A carteira depois de tudo
+
+Seis fluxos: índice M5 (barato) + M15 + M30, cripto M15 + H4, câmbio H4.
+**11/11 folds positivos, PBO 0,000, Sharpe 6,13, degradação −0,59** — a menor
+já medida aqui. A 0,25% de risco: **+3,11% ao mês**, 29,1 entradas/mês,
+drawdown 4,67% contra teto de 10%, pior dia −1,30% contra teto de 5%, alvo de
+10% em 3,2 meses.
+
+O número ficou **melhor** que o de antes do episódio (+3,00%) por três
+motivos que se somam: o câmbio H1, que diluía, saiu; o índice voltou ao custo
+certo; e o cripto passou a pagar o pouco que faltava. Não foi o custo que
+melhorou — foi a composição, agora medida com o insumo certo.
+
+### O que ainda não foi verificado
+
+Todos os spreads vêm de **servidor demo**. Uma corretora pode cotar spread
+fixo em demo e flutuante em conta real, e é justamente a hipótese que os
+`min == max` de índice tornariam falsa. É a única fonte de custo do plano que
+não tem verificação independente, e só execução real fecha.
+
+## Rodando no feed da corretora (2026-08-27)
+
+`research/ftmo_live.py` roda o plano contra os candles do terminal da FTMO, em
+papel. É o mesmo `paper_journal` de sempre — **nenhuma linha de detecção muda**,
+só o provider: em vez do perpétuo da Binance, `MT5CsvProvider` lê os CSV que
+`mt5_export.py --refresh` mantém atualizados. O que se opera e o que se mede
+passam a ser o mesmo instrumento, que era a última costura solta entre o estudo
+e a conta.
+
+Não manda ordem e não guarda credencial. O número que ele existe para produzir
+é a **derrapagem em R**: todo resultado deste documento assume entrada no
+fechamento da vela do gatilho, e só a fita ao vivo diz o que essa suposição
+custa.
+
+Os seis fluxos (`STREAMS`) são os do plano validado, cada um com a lista de
+símbolos que passou no walk-forward e o gate do seu timeframe. O M5 roda com
+`r_atr <= 1.0` e **sem piso de acumulação de VWAP** — `OPERATING_GATES` para no
+M15 e escolher um número para o M5 seria ajustar sem medir; declarar que não há
+só pode subestimar.
+
+```
+# Windows, com o terminal aberto (deixe a janela rodando)
+powershell -ExecutionPolicy Bypass -File C:\mt5-export\refresh.ps1
+
+# WSL, uma passada por vez (idempotente, bom para cron)
+poetry run python -m research.ftmo_live
+poetry run python -m research.ftmo_live --report-only
+```
+
+O `refresh.ps1` é **gerado** (`--write-refresh`) a partir das listas do módulo,
+nunca editado à mão: um símbolo digitado a mais do lado Windows faria o que roda
+divergir, em silêncio, do que foi medido.
+
+**Verificação da primeira passada** (2026-08-27, dado exportado do dia
+anterior): 98 símbolos encontrados nos seis fluxos, 12 linhas `FIRED`, 0
+passando o gate — todas com `r_atr` entre 1,30 e 6,39. É a resposta certa: o
+gate *é* o setup, e o penhasco no primeiro decil já estava medido. Zero
+decisões registradas porque `MAX_DECISION_AGE_CANDLES = 1` exige que o gatilho
+tenha acabado de fechar, e o dado era de ontem.
+
+### O relógio do servidor, achado na primeira decisão ao vivo
+
+O MetaTrader marca cada vela em **hora do servidor da corretora**, não em UTC —
+a FTMO roda em GMT+3, para o candle diário fechar às 17h de Nova York — e o
+exportador grava esse instante com sufixo `+00:00`. Comparar um timestamp de
+vela com `datetime.now(UTC)` erra por três horas.
+
+O deslocamento é **inferido do próprio dado** (`server_offset`: a vela de M5
+mais nova não pode estar no futuro), não fixado numa constante — o servidor
+muda de offset no horário de verão, e um número fixo quebraria em silêncio duas
+vezes por ano.
+
+Ele **não é aplicado aos candles**. O dia do servidor é a sessão correta para a
+âncora da VWAP, e deslocá-lo mudaria `vwap_candles`, que é gate de produção.
+Só a comparação com o relógio de parede precisa da correção.
+
+### Idade do gatilho em tempo real, não em velas
+
+A primeira decisão registrada ao vivo (NZDJPY H4) tinha derrapagem de −0,113R
+sobre um gatilho que fechara **~1h20 antes**. `MAX_DECISION_AGE_CANDLES = 1`
+limita a idade, mas em unidades de vela — e uma vela do H4 são quatro horas.
+Precificar isso contra a fita de agora mede **deriva de preço**, não
+derrapagem: a mesma classe do bug que registrou +1,6R na primeira passada do
+diário de cripto, só que mais discreta e por isso mais perigosa.
+
+`record_decisions` passou a aceitar `max_signal_age` (tempo real) e
+`clock_offset`, ambos opcionais e neutros por padrão, então o caminho da
+Binance não muda. O runner da corretora usa **5 minutos**: generoso para um
+laço que roda a cada minuto, apertado o bastante para a linha medir o que
+promete. A linha contaminada do arranque foi descartada em vez de deixada
+poluindo a média.
+
+### As três coisas que precisam estar vivas
+
+Nenhuma delas é o cron, e cada uma falha em **silêncio** — o diário fica vazio,
+que é indistinguível de "não houve sinal hoje":
+
+1. **O terminal da corretora**, aberto e logado.
+2. **O `refresh.ps1`** rodando no Windows. Se parar, os CSV congelam e o guard
+   de idade descarta tudo — comportamento certo, mas que não avisa sozinho.
+3. **Uma janela do WSL aberta.** O WSL2 desliga a VM quando não sobra processo,
+   e leva o cron junto.
+
+`research/ftmo_live_check.sh` verifica as três num comando. O script de cron usa
+**caminho absoluto** para o poetry de propósito: o cron roda com PATH mínimo, e
+um `command not found` num job de cron falha em silêncio.

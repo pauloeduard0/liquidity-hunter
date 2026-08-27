@@ -24,7 +24,7 @@ readable in a text editor months later.
 """
 
 from collections.abc import Iterable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from liquidity_hunter.app.screener import (
@@ -316,6 +316,48 @@ def write_journal(
     )
 
 
+#: Quanto tempo uma vela de cada timeframe cobre. Usado so para saber quando
+#: o gatilho FECHOU -- `candles_ago` conta velas, e uma vela do H4 e quatro
+#: horas de fita.
+_TIMEFRAME_DURATION: dict[TimeFrame, timedelta] = {
+    TimeFrame.M1: timedelta(minutes=1),
+    TimeFrame.M5: timedelta(minutes=5),
+    TimeFrame.M15: timedelta(minutes=15),
+    TimeFrame.M30: timedelta(minutes=30),
+    TimeFrame.H1: timedelta(hours=1),
+    TimeFrame.H4: timedelta(hours=4),
+    TimeFrame.D1: timedelta(days=1),
+    TimeFrame.W1: timedelta(weeks=1),
+}
+
+
+def timeframe_timedelta(timeframe: TimeFrame) -> timedelta:
+    """Quanto tempo uma vela deste timeframe cobre."""
+    return _TIMEFRAME_DURATION[timeframe]
+
+
+def signal_age(
+    entry: BlockReclaimScanEntry, *, clock_offset: timedelta = timedelta(0)
+) -> timedelta:
+    """Quanto tempo REAL faz que a vela do gatilho fechou.
+
+    `candles_ago` ja limita a idade, mas em unidades de vela: um candle no H4
+    vale quatro horas, e precificar contra a fita quatro horas depois mede
+    deriva de preco em vez de derrapagem -- a mesma classe do bug que
+    registrou 1,6R na primeira passada ao vivo, so que mais discreta.
+
+    `clock_offset` existe porque nem toda fonte marca a vela em UTC: o
+    MetaTrader marca em **hora do servidor da corretora** (GMT+3 na FTMO), e
+    subtrair um `datetime.now(UTC)` de um timestamp de servidor erra por essas
+    tres horas. O deslocamento nao e aplicado ao candle -- o dia do servidor e
+    a sessao correta para a ancora da VWAP, e mexer nele mudaria `vwap_candles`,
+    que e um gate de producao.
+    """
+    duration = timeframe_timedelta(entry.timeframe)
+    closed_at = entry.timestamp + duration - clock_offset
+    return datetime.now(UTC) - closed_at
+
+
 def record_decisions(
     *,
     path: Path = DEFAULT_JOURNAL_PATH,
@@ -323,8 +365,15 @@ def record_decisions(
     symbols: Sequence[str] = SCREEN_SYMBOLS,
     timeframes: Sequence[TimeFrame] = SCREEN_TIMEFRAMES,
     gates: dict[TimeFrame, tuple[float, int]] = OPERATING_GATES,
+    max_signal_age: timedelta | None = None,
+    clock_offset: timedelta = timedelta(0),
 ) -> list[PaperDecision]:
-    """Append any fired-and-gated row not already journalled. Returns the new ones."""
+    """Append any fired-and-gated row not already journalled. Returns the new ones.
+
+    `max_signal_age`, quando dado, descarta um gatilho que fechou ha mais que
+    isso em tempo REAL -- o limite honesto para uma leitura que so vale se
+    alguem pudesse ter pegado o proximo preco.
+    """
     screen = load_screen(
         provider=provider, symbols=symbols, timeframes=timeframes
     )
@@ -333,6 +382,10 @@ def record_decisions(
     fresh: list[PaperDecision] = []
     for entry in screen.entries:
         if not passes_gates(entry, gates) or decision_key(entry) in known:
+            continue
+        if max_signal_age is not None and signal_age(
+            entry, clock_offset=clock_offset
+        ) > max_signal_age:
             continue
         # `current_price` is the last close of the series fetched moments ago:
         # the tape's price now, not the trigger candle's.
