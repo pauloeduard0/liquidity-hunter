@@ -68,8 +68,13 @@ def every_with_cost(by_binance: dict, summary: list, binance_of: dict) -> list[d
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--max-cost-r", type=float, default=0.20,
-                        help="teto de custo mediano por instrumento para a lista enxuta")
+    parser.add_argument(
+        "--max-spread", type=float, default=0.001,
+        help="teto de SPREAD mediano por instrumento (fracao do preco). O corte "
+        "e no spread e nao no custo total porque a comissao e um PISO igual "
+        "para todos -- cortar por custo reprova a lista inteira por causa de "
+        "um numero que nao distingue ninguem.",
+    )
     args = parser.parse_args()
 
     meta = json.loads((EXPORT / "meta.json").read_text(encoding="utf-8"))
@@ -111,13 +116,14 @@ def main() -> None:
                 nets.append(row[MAIN] - cost)
                 olds.append(row[MAIN] - (CRYPTO_COMMISSION + swap) / row["r_pct"])
                 row["cost_r_real"] = cost
+                row["spread_pct_real"] = spread
             median_cost = st.median(costs)
             summary.append((ticker, median_spread, median_cost, len(trades), st.fmean(nets)))
-            mark = "" if median_cost < args.max_cost_r else "   <- caro"
+            mark = "" if median_spread < args.max_spread else "   <- caro"
             print(f"  {ticker:9}{len(trades):>5}{median_spread:>10.4%}{median_cost:>10.3f}"
                   f"{st.fmean(r[MAIN] for r in trades):>+9.3f}{st.fmean(nets):>+10.3f}"
                   f"{unmatched / len(trades):>10.0%}   {st.fmean(olds):>+7.3f}{mark}")
-            if median_cost < args.max_cost_r:
+            if median_spread < args.max_spread:
                 kept.extend(trades)
 
         # Grava o custo real na base, para a carteira
@@ -125,14 +131,15 @@ def main() -> None:
         out = DATASETS / f"ftmo_crypto_{timeframe.lower()}.json"
         out.write_text(json.dumps([
             {"timestamp": r["timestamp"], "symbol": r["symbol"],
-             "r2_h40": r[MAIN], "cost_r": r["cost_r_real"], "r_pct": r["r_pct"]}
+             "r2_h40": r[MAIN], "cost_r": r["cost_r_real"],
+             "spread_pct": r["spread_pct_real"], "r_pct": r["r_pct"]}
             for r in every_with_cost(by_binance, summary, binance_of)
         ]))
         print(f"\n  gravado {out.name}")
 
         every = every_with_cost(by_binance, summary, binance_of)
         for label, sel in (("todos os medidos", every),
-                           (f"so custo < {args.max_cost_r:.2f}R", kept)):
+                           (f"so spread < {args.max_spread:.2%}", kept)):
             if not sel:
                 continue
             net = st.fmean(r["cost_r_real"] for r in sel)

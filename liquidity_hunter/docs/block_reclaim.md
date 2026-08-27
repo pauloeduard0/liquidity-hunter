@@ -1763,21 +1763,42 @@ $75,720 (**0.009%**), a factor of ~500 across one list. (A 0-point median is a
 tick-resolution floor, not a free trade -- XLMUSD's tick is 0.048% of its price
 -- so the table floors each bar at half a tick.)
 
-**Crypto M15 does not survive it.** Not one of the 28 measured instruments gets
-its median cost under 0.30R, and the whole stream reads -0.601R per entry,
--10.6R a month. The estimate it replaces was +8.17R a month, half of the
-portfolio.
+**Crypto M15 survives it, but only once the expensive instruments are cut, and
+the cut has to be on the spread rather than on total cost.** As a whole list it
+reads -0.601R per entry; restricted to instruments whose median spread is under
+0.1% it reads **+0.161R** across 221 entries, 10.5 a month.
 
-**Crypto H4 does**, at 17 instruments under 0.25R: +0.845R per entry, 1.9
-entries a month, +1.62R. The reason is the denominator again, for the third
-time in this document: an H4 stop measures 2.09% of price against M15's 0.407%,
-so the *same* spread costs a fifth as much in R. Cost is a fraction of price
-and what it consumes is a fraction of R.
+Filtering on total cost -- the criterion that works on the index side -- was an
+error worth recording, because it briefly retired this stream. On an index the
+commission is zero, so cost *is* spread and a cost ceiling separates cheap from
+expensive. In crypto the commission is a **floor**: 0.13% over a 0.2%-of-price
+stop is 0.6R on its own, in **every** instrument, so a 0.30R cost ceiling
+rejects the whole list on a number that distinguishes nobody. What distinguishes
+is the spread, which varies 500x. Same threshold shape, opposite meaning, and
+the difference only shows up where a fixed cost component exists.
 
-The corrected account, indices plus crypto H4, over the common window: 18.4
-entries a month at +0.417R, +7.84R a month, 15.3R maximum drawdown, -3.8R worst
-day. At 0.25% per trade that is **+1.96% a month against a 3.82% drawdown and a
-0.94% worst day** -- the broker's 10% target in ~5.1 months, both limits
+**Crypto H4 is the stronger of the two**: +0.893R per entry at 67.3%, though
+only 1.6 a month. The denominator explains the gap, for the third time in this
+document -- an H4 stop measures 1.4-2.5% of price against M15's 0.2-0.4%, so the
+same commission costs a fifth as much in R (BTCUSD: 0.623R at M15, 0.090R at
+H4).
+
+Which also names what actually kills a liquid crypto entry at M15, and it is not
+the spread the terminal shows. BTCUSD quotes 0.009% of spread against a 0.13%
+commission -- the commission is **seven times** the spread. The spread only
+decides at the illiquid end, where it is catastrophic rather than marginal.
+
+The corrected account -- three index streams plus both crypto streams, each
+restricted to instruments whose spread allows them -- runs 28.1 entries a month
+at +0.339R over the common window: +9.68R a month, 17.9R maximum drawdown, -7.1R
+worst day. At 0.25% per trade that is **+2.42% a month against a 4.47% drawdown
+and a 1.79% worst day**, the broker's 10% target in ~4.1 months, both limits
 untouched, and the busiest day of the sample carries six entries worth 1.50% if
-they all lose. The earlier +4.10% was the same portfolio priced with a spread
-of zero on half of it.
+they all lose. The +4.10% it replaces was this same portfolio priced with a
+spread of zero on half of it.
+
+**The largest remaining lever is a question, not a measurement.** Every number
+above takes the 0.065% commission as charged *per side*. If it is round-trip,
+the account reads **+3.04% a month** at a 3.88% drawdown. Half a point of
+monthly return rests on a line in the instrument sheet that the broker can
+clarify.
