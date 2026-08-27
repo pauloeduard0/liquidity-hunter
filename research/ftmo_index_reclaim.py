@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import statistics as st
+from datetime import datetime
 from pathlib import Path
 
 from liquidity_hunter.core.domain import TimeFrame
@@ -58,23 +59,87 @@ LIMITS = {
 }
 
 
-def attach_spread(rows: list[dict], timeframe: TimeFrame, export: Path) -> list[dict]:
-    """Cada entrada paga o spread da barra em que ela disparou."""
+#: Coeficiente de swap da sexta-feira na ficha dos indices: a virada de sexta
+#: cobra tres noites de uma vez (fim de semana). As demais cobram uma.
+FRIDAY_SWAP_COEFFICIENT = 3
+#: Ate onde procurar a resolucao de uma entrada, para contar quantas viradas
+#: ela atravessa. Alem disso a posicao ja nao e a mesma operacao.
+RESOLVE_SCAN_BARS = 200
+
+
+def _nights_held(candles: list[dict], start: int, row: dict) -> float:
+    """Viradas de dia entre a entrada e a resolucao, com a sexta pesando tres.
+
+    A duracao nao e assumida: a entrada, o stop e o alvo 2R estao na linha, e
+    o caminho a frente esta no CSV, entao a posicao e resolvida vela a vela
+    como no proprio backtest.
+    """
+    bullish = row["direction"] == "bullish"
+    entry, stop = row["entry"], row["stop"]
+    target = entry + 2 * (entry - stop) if bullish else entry - 2 * (stop - entry)
+    end = min(start + RESOLVE_SCAN_BARS, len(candles) - 1)
+    for i in range(start + 1, end + 1):
+        high, low = float(candles[i]["high"]), float(candles[i]["low"])
+        hit_stop = low <= stop if bullish else high >= stop
+        hit_target = high >= target if bullish else low <= target
+        if hit_stop or hit_target:
+            end = i
+            break
+    nights = 0.0
+    for i in range(start, end):
+        day = datetime.fromisoformat(candles[i]["time"])
+        if datetime.fromisoformat(candles[i + 1]["time"]).date() != day.date():
+            nights += FRIDAY_SWAP_COEFFICIENT if day.weekday() == 4 else 1
+    return nights
+
+
+def attach_costs(rows: list[dict], timeframe: TimeFrame, export: Path) -> list[dict]:
+    """Cada entrada paga o spread da SUA barra, mais o swap das noites que dormiu.
+
+    O swap e cobrado **em pontos** e e fortemente assimetrico: no US30 a compra
+    paga 1173 pontos por noite e a venda RECEBE 50, no UK100 e o contrario. Uma
+    media entre os dois lados apagaria justamente isso, entao cada entrada paga
+    o lado dela. A sexta cobra tres noites.
+
+    Custa pouco no total porque quase nada dorme -- a duracao mediana e de 3 a
+    4 velas e so 2% (M5) a 14% (M15) das entradas atravessam a virada -- mas o
+    caso ruim existe: uma compra que atravessa a sexta pagou 0,72R numa
+    operacao so.
+    """
     provider = MT5CsvProvider(export)
     meta = json.loads((export / "meta.json").read_text(encoding="utf-8"))
-    points = {s["symbol"]: s["point"] for s in meta["symbols"]}
-    by_symbol: dict[str, dict[str, float]] = {}
+    info = {s["symbol"]: s for s in meta["symbols"]}
+    spreads: dict[str, dict[str, float]] = {}
+    series: dict[str, tuple[dict[str, int], list[dict]]] = {}
     out = []
     for row in rows:
         symbol = row["symbol"]
-        if symbol not in by_symbol:
-            by_symbol[symbol] = provider.spread_pct_at(symbol, timeframe, points[symbol])
-        spread = by_symbol[symbol].get(row["timestamp"])
-        if spread is None:
+        if symbol not in info:
             continue
+        point = info[symbol]["point"]
+        if symbol not in spreads:
+            spreads[symbol] = provider.spread_pct_at(symbol, timeframe, point)
+            candles = provider.rows(symbol, timeframe)
+            series[symbol] = ({c["time"]: i for i, c in enumerate(candles)}, candles)
+        spread = spreads[symbol].get(row["timestamp"])
+        index, candles = series[symbol]
+        start = index.get(row["timestamp"])
+        if spread is None or start is None:
+            continue
+        swap_points = (
+            info[symbol]["swap_long"]
+            if row["direction"] == "bullish"
+            else info[symbol]["swap_short"]
+        )
+        nights = _nights_held(candles, start, row)
+        # Swap negativo = a corretora cobra. Em R contra a distancia do stop,
+        # a mesma unidade do resto.
+        swap_cost = -nights * swap_points * point / abs(row["entry"] - row["stop"])
         row["spread_pct"] = spread
+        row["swap_r"] = swap_cost
+        row["nights"] = nights
         # Ida e volta paga um spread cheio (entra no ask, sai no bid).
-        row["cost_r"] = spread / row["r_pct"]
+        row["cost_r"] = spread / row["r_pct"] + swap_cost
         out.append(row)
     return out
 
@@ -124,6 +189,8 @@ def main() -> None:
     parser.add_argument("--symbols", nargs="*", default=list(FTMO_INDICES))
     parser.add_argument("--export", default="/mnt/c/mt5-export")
     parser.add_argument("--report-only", action="store_true")
+    parser.add_argument("--recost", action="store_true",
+                        help="reprecifica a base salva sem repetir a varredura")
     args = parser.parse_args()
 
     timeframe = TimeFrame(args.timeframe)
@@ -131,8 +198,11 @@ def main() -> None:
     out = f"research/.datasets/ftmo_{timeframe.value}.json"
     Path(out).parent.mkdir(parents=True, exist_ok=True)
 
-    if args.report_only:
+    if args.report_only or args.recost:
         rows = json.loads(Path(out).read_text())
+        if args.recost:
+            rows = attach_costs(rows, timeframe, export)
+            Path(out).write_text(json.dumps(rows))
     else:
         available = [s for s in args.symbols if MT5CsvProvider(export).path(s, timeframe).exists()]
         missing = [s for s in args.symbols if s not in available]
@@ -141,7 +211,7 @@ def main() -> None:
         rows = scan(available, timeframe, LIMITS[timeframe], out,
                     provider=MT5CsvProvider(export),
                     gates=UNMEASURED_GATES.get(timeframe))
-        rows = attach_spread(rows, timeframe, export)
+        rows = attach_costs(rows, timeframe, export)
         Path(out).write_text(json.dumps(rows))
     report(rows, timeframe, 0)
 

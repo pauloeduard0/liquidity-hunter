@@ -1742,9 +1742,10 @@ same instruments; the timeframe decides whether selection is optional.
 
 ### Not yet done
 
-The tick-volume VWAP is unverified; the test is SPY with both volumes. The
-spread comes from a demo server and no commission is included. M5 needs deeper
-history before it can be judged.
+The tick-volume VWAP is unverified; the test is SPY with both volumes. Every
+spread comes from a demo server. M5's ~100000-bar depth is the broker's own
+retention, so its window stays at 18 months. And the combined portfolio has
+never been walk-forwarded as a portfolio -- only each stream separately.
 
 ### The crypto CFD spread, finally measured
 
@@ -1813,3 +1814,37 @@ a plateau, and only the unfiltered list collapses. The filter is not a tuned
 threshold, it is the exclusion of two disasters -- NEOUSD at 4.8% of spread and
 DASHUSD at 1.35%. The wired 0.1% was chosen before that curve was drawn and is
 kept rather than moved to the 0.2% peak.
+
+### Every cost measured, including the one that was assumed away
+
+The index instrument sheet settles the two remaining assumptions, one in each
+direction.
+
+**Index commission is zero**, as assumed -- `0 % em USD por lote` on
+US500.cash. That assumption held.
+
+**Index swap did not exist in the arithmetic at all**, and it should have. It
+is charged **in points** and it is strongly asymmetric across the list: US30
+charges 1173 points a night on a long and *pays* 50 on a short, UK100 is the
+reverse (+134 long, -369 short), and Friday counts as three nights. An average
+of the two sides would erase exactly that, so `attach_costs` charges each entry
+its own side, and resolves each position candle by candle to count the nights
+it actually slept.
+
+It costs almost nothing, and the reason is holding time rather than the rate:
+the median index position lives 3-4 candles, and only 2% (M5) to 14% (M15) of
+them cross a rollover. Mean swap runs +0.006R to +0.017R, and 4-6% of entries
+*receive* it. The account goes from +3.04% to **+3.00% a month**, with the
+drawdown widening from 3.88% to 4.21%.
+
+The tail is worth knowing even though the mean is not. The worst single entry
+in the sample is not a long -- it is an **AUS200 short held across a Friday**,
+three nights at -165.93 points, costing 0.88-1.00R on its own. A trade whose
+swap side is against it and which sleeps into a weekend can hand back its
+entire expected edge.
+
+So the full account, with commission, spread and swap all read off the broker's
+own instrument sheets and bars: **+3.00% a month at 0.25% per trade, a 4.21%
+drawdown, a -1.30% worst day**, 28.1 entries a month at +0.421R, the 10% target
+in ~3.3 months. Nothing in that number is assumed any more except the two
+things named below.

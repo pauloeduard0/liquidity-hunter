@@ -39,6 +39,7 @@ import json
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 #: Os indices e o petroleo da lista da corretora. Petroleo entra porque e o
 #: unico da lista que nao e mais uma fatia da mesma aposta: US500/US30/US100
@@ -243,13 +244,32 @@ def main() -> None:
             if summary is not None:
                 exports.append(summary)
 
-    (out / "meta.json").write_text(
+    # O meta e ACUMULADO, nao sobrescrito: uma exportacao de cripto nao pode
+    # apagar a ficha dos indices exportados antes. Sem isso, medir o swap de um
+    # instrumento exige reexportar o outro -- que foi exatamente o que
+    # aconteceu.
+    meta_path = out / "meta.json"
+    previous: dict[str, Any] = {}
+    if meta_path.exists():
+        try:
+            previous = json.loads(meta_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            previous = {}
+    merged_symbols = {s["symbol"]: s for s in previous.get("symbols", [])}
+    merged_symbols.update({s["symbol"]: s for s in metas})
+    merged_exports = {
+        (e["symbol"], e["timeframe"]): e for e in previous.get("exports", [])
+    }
+    merged_exports.update({(e["symbol"], e["timeframe"]): e for e in exports})
+    meta_path.write_text(
         json.dumps(
             {
                 "exported_at": datetime.now(UTC).isoformat(),
                 "server": account.server if account is not None else None,
-                "symbols": metas,
-                "exports": exports,
+                "symbols": sorted(merged_symbols.values(), key=lambda s: s["symbol"]),
+                "exports": sorted(
+                    merged_exports.values(), key=lambda e: (e["symbol"], e["timeframe"])
+                ),
             },
             indent=2,
         ),
