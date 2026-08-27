@@ -40,9 +40,36 @@ def klines_row_to_candle(symbol: str, timeframe: TimeFrame, row: list[Any]) -> C
     Shared by the spot and USDT-M futures providers, whose `/api/v3/klines`
     and `/fapi/v1/klines` responses share the same column layout -- notably
     taker buy base asset volume at column index 9, the basis for `volume_delta`.
+
+    **A row can arrive with `taker_buy_volume > volume`**, which is impossible
+    -- the taker buy side is a part of the whole. It is rare (5 rows across 432
+    cached series) and it is not rounding: the excesses measured 4% to 77%. But
+    `Candle` rejects it, correctly, and that `ValidationError` used to travel
+    all the way up and kill the whole symbol/timeframe, so one bad print of
+    2023 removed EGLDUSDT 4h from every study that touched it.
+
+    What is corrupt there is the buy/sell *split*, not the price: OHLC and the
+    bar's place in the series are fine. So the split is treated as **unknown**
+    and set to half the volume, which is exactly the contract the on-chain and
+    equity providers already keep for sources that publish no aggressor side --
+    `volume_delta` then reads a flat zero and every flow layer goes quiet for
+    that bar, instead of a clamp to `volume` inventing a maximally bullish
+    candle out of a data error. The candle itself survives, so the series keeps
+    its shape and no gap opens where a real bar traded.
+
+    The domain invariant stays strict. Deciding what a malformed response means
+    is the provider's job, which is the layer that knows it came from a wire.
     """
     timestamp_ms, open_, high, low, close, volume = row[:6]
-    taker_buy_volume = row[9]
+    volume = float(volume)
+    taker_buy_volume = float(row[9])
+    if taker_buy_volume > volume:
+        logger.warning(
+            "%s %s: taker buy volume %.4f exceeds volume %.4f at %s; "
+            "reading the aggressor split as unknown",
+            symbol, timeframe.value, taker_buy_volume, volume, timestamp_ms,
+        )
+        taker_buy_volume = volume / 2
     return Candle(
         symbol=symbol,
         timeframe=timeframe,
@@ -51,8 +78,8 @@ def klines_row_to_candle(symbol: str, timeframe: TimeFrame, row: list[Any]) -> C
         high=float(high),
         low=float(low),
         close=float(close),
-        volume=float(volume),
-        taker_buy_volume=float(taker_buy_volume),
+        volume=volume,
+        taker_buy_volume=taker_buy_volume,
     )
 
 

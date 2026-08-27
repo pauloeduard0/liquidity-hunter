@@ -8,7 +8,12 @@ import pytest
 
 from liquidity_hunter.core.domain import Candle, TimeFrame
 from liquidity_hunter.data.exceptions import DataProviderConnectionError, DataProviderRequestError
-from liquidity_hunter.data.providers.binance import BinanceDataProvider, to_ccxt_symbol
+from liquidity_hunter.data.providers.binance import (
+    BinanceDataProvider,
+    klines_row_to_candle,
+    to_ccxt_symbol,
+)
+from liquidity_hunter.indicators import volume_delta
 
 # Raw Binance kline row (12 columns): open time, open, high, low, close,
 # volume, close time, quote asset volume, number of trades, taker buy base
@@ -117,3 +122,33 @@ def test_get_ohlcv_raises_request_error_on_exchange_error_without_retry() -> Non
         provider.get_ohlcv("BTCUSDT", TimeFrame.H1, limit=1)
 
     assert mock_exchange.publicGetKlines.call_count == 1
+
+
+def test_a_row_whose_taker_split_is_impossible_still_yields_a_candle() -> None:
+    """A corrupt aggressor split must not cost the whole series.
+
+    Binance occasionally prints `taker_buy_volume > volume`, which cannot
+    happen -- the excesses measured 4% to 77%, so it is corruption, not
+    rounding. `Candle` rejects it and that rejection used to travel up and
+    remove the entire symbol/timeframe from a study. The price is intact, so
+    the bar survives with the split read as unknown: half the volume, which
+    makes `volume_delta` read zero rather than inventing a maximally bullish
+    candle out of a data error.
+    """
+    row = list(SAMPLE_ROW)
+    row[5] = "1000.0"
+    row[9] = "1770.0"  # 77% beyond the whole, the EGLDUSDT 4h shape
+
+    candle = klines_row_to_candle("EGLDUSDT", TimeFrame.H4, row)
+
+    assert candle.volume == 1000.0
+    assert candle.taker_buy_volume == 500.0
+    assert volume_delta(candle) == 0.0
+
+
+def test_an_ordinary_row_keeps_the_split_the_exchange_reported() -> None:
+    """The repair is for the impossible row only, never a blanket rewrite."""
+    candle = klines_row_to_candle("BTCUSDT", TimeFrame.H1, SAMPLE_ROW)
+
+    assert candle.volume == 1234.5
+    assert candle.taker_buy_volume == 617.25
