@@ -37,9 +37,9 @@ de referencia acompanha, mas o *spread* do CFD nao entra em lugar nenhum desta
 conta -- so a comissao anunciada. Se houver spread alem dela, some ao custo.
 Esse e o buraco real da estimativa, e nenhum numero aqui o cobre.
 
-E nao esta estabelecido se os 0,065% sao por lado ou ida e volta. Os dois
-cenarios saem lado a lado; o pessimista (0,13% no total) e o que deve ser lido
-enquanto isso nao for confirmado com a corretora.
+Os 0,065% sao o giro COMPLETO -- confirmado 2026-08-27 na tabela de comissao
+do instrumento, que cobra 0,0325% por lote na entrada e na saida. As duas
+colunas continuam saindo lado a lado por historico; a da esquerda e a boa.
 
 Rodar
 -----
@@ -100,7 +100,10 @@ _TF_OF = {"M15": "15m", "M30": "30m", "H1": "1h", "H4": "4h"}
 MAX_PENETRATION = 0.5
 #: Custo do estudo, para as tabelas continuarem comparaveis com o resto.
 STUDY_COST = 0.0010
-#: O anunciado na ficha do instrumento (BTCUSD, Spot CFD), em fracao.
+#: O giro completo, confirmado na tabela de comissao do instrumento
+#: (2026-08-27): `0,0325 % em USD por lote`, cobrado na entrada e na saida.
+#: Os 0,065% que a ficha resumida anuncia sao portanto o TOTAL, nao o valor
+#: por lado -- a duvida que este arquivo registrava esta respondida.
 FTMO_COMMISSION = 0.00065
 #: Swap anunciado: -30, tipo "percentage". Lido como -30% ao ano sobre o
 #: notional, cobrado no rollover.

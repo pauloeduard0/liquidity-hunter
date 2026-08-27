@@ -44,9 +44,13 @@ from research.ftmo_universe import (
 
 DATASETS = Path(__file__).parent / ".datasets"
 MAIN = "r2_h40"
-#: Ida e volta, a leitura pessimista enquanto a corretora nao confirmar se os
-#: 0,065% sao por lado. O otimista so melhora tudo.
-CRYPTO_COMMISSION = 2 * FTMO_COMMISSION
+#: Ida e volta, **confirmado na ficha do instrumento** (2026-08-27): a tabela
+#: de comissao cobra `0,0325 % em USD por lote` nas transacoes de entrada e de
+#: saida, o que fecha o giro em 0,065%. Os estudos anteriores cobravam o dobro
+#: disso, por nao saber se os 0,065% anunciados eram por lado ou pelo giro --
+#: a leitura pessimista enquanto a duvida existia, e ela custava 0,62 ponto
+#: percentual de retorno mensal.
+CRYPTO_COMMISSION = FTMO_COMMISSION
 #: Permanencia mediana medida em `ftmo_universe.holding_bars`: 4-5 velas.
 #: Quase nada atravessa o rollover, mas o swap entra de qualquer forma.
 SWAP_DAYS = {"M15": 0.05, "H4": 0.7}

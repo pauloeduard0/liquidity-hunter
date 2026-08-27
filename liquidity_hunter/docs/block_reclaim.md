@@ -1797,8 +1797,19 @@ untouched, and the busiest day of the sample carries six entries worth 1.50% if
 they all lose. The +4.10% it replaces was this same portfolio priced with a
 spread of zero on half of it.
 
-**The largest remaining lever is a question, not a measurement.** Every number
-above takes the 0.065% commission as charged *per side*. If it is round-trip,
-the account reads **+3.04% a month** at a 3.88% drawdown. Half a point of
-monthly return rests on a line in the instrument sheet that the broker can
-clarify.
+**The commission question is answered, and it was the optimistic reading.**
+The instrument's commission table charges `0.0325 % em USD por lote` on the
+entry and on the exit, closing the round trip at 0.065% -- so the 0.065% the
+summary sheet announces is the *total*, not the per-side rate, and every
+earlier crypto figure here was priced at twice the real cost. Corrected, the
+account runs **+3.04% a month at a 3.88% drawdown and a -1.30% worst day**,
+28.1 entries a month at +0.426R, the broker's 10% target in ~3.3 months. Crypto
+M15 goes from +0.206R to +0.445R per entry and becomes the second-largest
+stream.
+
+The spread ceiling survives the change, which is the reassuring part: from
+0.05% to 1.00% the crypto M15 stream returns between +3.16R and +4.58R a month,
+a plateau, and only the unfiltered list collapses. The filter is not a tuned
+threshold, it is the exclusion of two disasters -- NEOUSD at 4.8% of spread and
+DASHUSD at 1.35%. The wired 0.1% was chosen before that curve was drawn and is
+kept rather than moved to the 0.2% peak.
