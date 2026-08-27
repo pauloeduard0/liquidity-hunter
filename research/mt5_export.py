@@ -37,7 +37,7 @@ import argparse
 import csv
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 #: Os indices e o petroleo da lista da corretora. Petroleo entra porque e o
@@ -85,13 +85,57 @@ def _load_mt5():  # noqa: ANN202 - modulo so existe em Windows
     return mt5
 
 
-def export_symbol(mt5, symbol: str, timeframe: str, count: int, out: Path) -> dict | None:
+#: `copy_rates_from_pos` para em 100.000 barras -- teto da propria chamada,
+#: nao da configuracao "Max bars in chart" (verificado: com o terminal em
+#: Ilimitado ela devolve exatamente 100.000). Em M5 isso e pouco mais de um
+#: ano num indice que negocia quase 24h, curto demais para atravessar mais de
+#: um regime. `copy_rates_range` nao tem esse teto, entao o modo profundo pede
+#: por intervalo de datas, andando para tras em pedacos ate a historia acabar.
+POS_FETCH_CAP = 100_000
+#: Quantos dias por pedido no modo profundo. Pequeno o bastante para nao
+#: esbarrar no teto de novo em M5 de indice 24h (~276 barras/dia).
+DEEP_CHUNK_DAYS = 180
+#: Quantos pedacos vazios seguidos aceitar antes de concluir que a historia
+#: acabou. Um so seria fragil: feriado longo, suspensao, um buraco no feed.
+DEEP_EMPTY_STREAK = 3
+
+
+def _fetch_deep(mt5, symbol: str, tf: int, since: datetime) -> list:
+    """Anda para tras por intervalo de datas, emendando os pedacos."""
+    import numpy as np
+
+    chunks, empty = [], 0
+    end = datetime.now(UTC) + timedelta(days=1)
+    while end > since and empty < DEEP_EMPTY_STREAK:
+        start = max(since, end - timedelta(days=DEEP_CHUNK_DAYS))
+        part = mt5.copy_rates_range(symbol, tf, start, end)
+        if part is None or len(part) == 0:
+            empty += 1
+        else:
+            empty = 0
+            chunks.append(part)
+        end = start
+    if not chunks:
+        return []
+    joined = np.concatenate(chunks[::-1])
+    # Os pedacos se tocam nas bordas: uma barra pode vir duas vezes.
+    _, keep = np.unique(joined["time"], return_index=True)
+    return joined[sorted(keep)]
+
+
+def export_symbol(
+    mt5, symbol: str, timeframe: str, count: int, out: Path,
+    since: datetime | None = None,
+) -> dict | None:
     """Um CSV por (simbolo, timeframe). Devolve o resumo, ou None se falhou."""
     if not mt5.symbol_select(symbol, True):
         print(f"  {symbol} {timeframe}: nao consegui selecionar no Market Watch")
         return None
     tf = getattr(mt5, f"TIMEFRAME_{timeframe}")
-    rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)
+    if since is not None:
+        rates = _fetch_deep(mt5, symbol, tf, since)
+    else:
+        rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)
     if rates is None or len(rates) == 0:
         print(f"  {symbol} {timeframe}: sem barras ({mt5.last_error()})")
         return None
@@ -119,16 +163,17 @@ def export_symbol(mt5, symbol: str, timeframe: str, count: int, out: Path) -> di
     summary = {
         "symbol": symbol,
         "timeframe": timeframe,
-        "bars_requested": count,
+        "bars_requested": count if since is None else None,
         "bars_returned": len(rates),
-        # `clamped` e o aviso: o terminal tem teto proprio de barras, e uma
-        # janela menor que a pedida muda o que a medicao cobre.
-        "clamped": len(rates) < count,
+        # `clamped` e o aviso: uma janela menor que a pedida muda o que a
+        # medicao cobre. No modo profundo nao ha pedido em barras -- o limite
+        # passa a ser a historia que a corretora guarda.
+        "clamped": since is None and len(rates) >= POS_FETCH_CAP,
         "first": first.isoformat(),
         "last": last.isoformat(),
         "file": path.name,
     }
-    flag = "  (cortado pelo teto do terminal)" if summary["clamped"] else ""
+    flag = "  (cortado em 100k -- use --since para ir mais fundo)" if summary["clamped"] else ""
     print(f"  {symbol} {timeframe}: {len(rates)} barras  {first.date()} -> {last.date()}{flag}")
     return summary
 
@@ -163,8 +208,16 @@ def main() -> None:
     parser.add_argument("--symbols", nargs="*", default=list(DEFAULT_SYMBOLS))
     parser.add_argument("--timeframes", nargs="*", default=list(TIMEFRAMES))
     parser.add_argument("--count", type=int, default=DEFAULT_COUNT)
+    parser.add_argument(
+        "--since",
+        help="AAAA-MM-DD: busca por intervalo de datas em vez de por posicao, "
+        "sem o teto de 100k barras. E o modo para M5.",
+    )
     args = parser.parse_args()
 
+    since = (
+        datetime.fromisoformat(args.since).replace(tzinfo=UTC) if args.since else None
+    )
     mt5 = _load_mt5()
     if not mt5.initialize():
         sys.exit(f"nao consegui falar com o terminal: {mt5.last_error()}")
@@ -186,7 +239,7 @@ def main() -> None:
             continue
         metas.append(meta)
         for timeframe in args.timeframes:
-            summary = export_symbol(mt5, symbol, timeframe, args.count, out)
+            summary = export_symbol(mt5, symbol, timeframe, args.count, out, since)
             if summary is not None:
                 exports.append(summary)
 

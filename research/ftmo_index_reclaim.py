@@ -52,8 +52,8 @@ BLOCS: dict[str, tuple[str, ...]] = {
 UNMEASURED_GATES = {TimeFrame.M5: (1.0, 1)}
 
 LIMITS = {
-    TimeFrame.M5: 60_000,
-    TimeFrame.M15: 60_000, TimeFrame.M30: 60_000,
+    TimeFrame.M5: 120_000,
+    TimeFrame.M15: 120_000, TimeFrame.M30: 120_000,
     TimeFrame.H1: 45_000, TimeFrame.H4: 12_000,
 }
 

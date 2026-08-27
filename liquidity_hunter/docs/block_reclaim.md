@@ -1629,7 +1629,7 @@ an approximation the equity result above licenses but does not verify.
 
 | | n | hit 2R | gross | cost | net | /month | window |
 |---|---|---|---|---|---|---|---|
-| M5 | 186 | 62.4% | +0.850 | 0.525 | +0.325R | 10.3 | 18 months |
+| M5 | 323 | 58.8% | +0.750 | 0.671 | +0.079R | 10.4 | 31 months |
 | M15 | 214 | 54.7% | +0.624 | 0.304 | +0.320R | 5.1 | 42 months |
 | M30 | 335 | 51.9% | +0.558 | 0.255 | +0.304R | 4.6 | 73 months |
 | H1 | 334 | 39.2% | +0.177 | 0.173 | +0.004R | 3.8 | 8 years |
@@ -1641,14 +1641,15 @@ independent windows agreeing. M15 confirms (positive 2024, 2025, 2026) and
 survives dropping GER40, whose 90%-on-10-trades carried 40% of the profit in
 the first, 5-symbol pass.
 
-**M5 has the best gross of the five and the worst cost.** 62.4% hit and 10.3
-entries/month, the only timeframe with real frequency, but the spread eats
-0.525R -- more than half the risk -- and the window is 18 months, i.e. one
-regime. This is exactly the arithmetic that killed M5 in crypto
+**M5 has the best gross of the five and the worst cost, and unfiltered it is
+flat.** 58.8% hit and 10.4 entries/month -- the only timeframe with real
+frequency -- but the spread eats 0.671R of a 0.750R gross, leaving +0.079R and
++1.4R over 31 months. This is exactly the arithmetic that killed M5 in crypto
 (`project_block_reclaim_m5_rejected`): cost is a % of price, what it consumes
 is a % of R, and dropping a timeframe shrinks the denominator. Here the spread
-is ~10x cheaper than Binance's taker fee, so the same mechanism survives
-instead of dying. It is promising and it is one regime; those are both true.
+is ~10x cheaper than Binance's taker fee, which is not enough on its own --
+what makes M5 exist is **selecting the instrument**, and that is the walk-forward's
+finding rather than a filter imposed on it (below).
 
 **H1 is broken and unexplained.** Positive 2019-2022, then 21-33% hit across
 2023, 2024 and 2025 (170 entries), recovering in 2026. A regime story cannot
@@ -1689,7 +1690,7 @@ none of them touches the trigger).
 |---|---|---|---|---|---|
 | M30 | 11 | 3.71 -> 2.81 | 7/11 | **0.000** | passes |
 | M15 | 5 | 5.82 -> 4.54 | 4/5 | **0.133** | passes |
-| M5 | 3 | 5.09 -> 2.24 | 3/3 | 0.467 | undecided |
+| M5 | 8 | 3.66 -> 3.03 | 5/8 | **0.067** | passes, filtered |
 | H1 | 10 | 1.80 -> **-0.54** | 6/10 | 0.533 | dead |
 
 **M30 is the strongest reading this setup has produced in any market.** PBO
@@ -1699,18 +1700,45 @@ the procedure's answer is *don't touch it*, that is worth more than the number,
 because wanting to touch it is where overfitting comes from. M15 passes at the
 same PBO as the H4 ladder already in production.
 
-**M5 is undecided, not rejected**, and the cause is sample length, not result.
-Its three folds were all positive, but PBO 0.467 is a coin flip and 18 months
-is one regime: 60000 M5 bars cover 208 trading days, which yields three folds,
-so the PBO estimate is itself noise. The instability shows elsewhere too --
-`r_atr <= 0.7` returns +0.21R/day while `r_atr <= 0.5` returns **-0.11R/day**,
-a sign flip from a small tightening. The 60000 was the exporter's default
-`--count`, not the terminal's ceiling (the export reported no clamp), so deeper
-M5 history is available for the asking; at 8-10 folds the question answers
-itself.
+**M5 passes, but only with the instrument filter, and the filter is the
+finding.** Unfiltered, the daily return is +0.006R -- 323 trades, +1.4R over 31
+months, a flat line. Restricted to instruments whose median cost is under 0.30R
+(GER40, JP225, UKOIL, US100, US30, US500) it returns +0.194R/day, 130 trades,
++45.1R, at 56.9% and +0.440R per trade -- roughly 6.5 entries/month, better
+frequency *and* better R than M15 or M30.
+
+What makes that credible is not the number but who chose it: **the folds picked
+a cost filter in 7 of 8**, seeing only their own training window each time. A
+filter I select after looking at a table is a degree of freedom; a filter the
+procedure re-derives eight times from training data alone is a result. The
+threshold family matters more than its value -- 0.30 was picked five times and
+0.20 twice, while 0.10 leaves no trades at all.
+
+The remaining caveat is calendar, not method: the eight folds come from ~500
+trading days spanning 2025-2026, two years against M30's six. M5 is the
+narrowest of the three that pass.
+
+(An earlier pass of this measurement read PBO 0.467 on three folds and was
+recorded here as undecided. It was scanning 60000 of the 100000 exported bars
+-- a cap in the runner, not in the data. The conclusion was wrong in the
+direction of caution, which is the cheaper direction, but it was wrong.)
+
+The broker's M5 retention is the real ceiling and it has been probed: both
+`copy_rates_from_pos` (capped at 100000 bars) and a date-ranged
+`copy_rates_range` request reaching back to 2019 return the same start dates,
+so ~100000 bars is what FTMO serves, not what the API allows. Note the spans
+differ per instrument at equal bar counts -- a 24h index CFD spends 276 M5 bars
+a day against a local-session index's ~108 -- so the American indices carry the
+least calendar.
 
 **H1 is confirmed dead** rather than noisy: ten folds, ample data, negative
 test SR, and the base rule returns -0.0098R/day.
+
+The instructive contrast is between the two ends. **M30 rejects every filter**
+-- the folds chose "all" four times out of eleven, and nothing offered beats
+the bare setup -- while **M5 requires one**. Cost explains it: at 0.255R per
+entry M30 can carry any instrument on the list, at 0.671R M5 cannot. Same rule,
+same instruments; the timeframe decides whether selection is optional.
 
 ### Not yet done
 
