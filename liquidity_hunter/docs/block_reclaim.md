@@ -1679,9 +1679,41 @@ next to the spread, and GER40's fat spread tail is **closed-session**, not news
 -- 0.0155% overnight against 0.0047% between 09:00 and 22:00 UTC. Trading hours
 are a filter the crypto work never needed.
 
+### Walk-forward: M30 and M15 pass, M5 is undecided, H1 is dead
+
+`research/ftmo_walkforward.py`, daily net series with the per-bar spread as
+cost, seven competing rules (instrument selection by cost, gate tightening --
+none of them touches the trigger).
+
+| | folds | SR train -> test | positive folds | PBO | verdict |
+|---|---|---|---|---|---|
+| M30 | 11 | 3.71 -> 2.81 | 7/11 | **0.000** | passes |
+| M15 | 5 | 5.82 -> 4.54 | 4/5 | **0.133** | passes |
+| M5 | 3 | 5.09 -> 2.24 | 3/3 | 0.467 | undecided |
+| H1 | 10 | 1.80 -> **-0.54** | 6/10 | 0.533 | dead |
+
+**M30 is the strongest reading this setup has produced in any market.** PBO
+0.000 -- none of the apparent advantage is search -- and the rule the folds
+picked most often is **"all"** (4 of 11): no filter beats the bare setup. When
+the procedure's answer is *don't touch it*, that is worth more than the number,
+because wanting to touch it is where overfitting comes from. M15 passes at the
+same PBO as the H4 ladder already in production.
+
+**M5 is undecided, not rejected**, and the cause is sample length, not result.
+Its three folds were all positive, but PBO 0.467 is a coin flip and 18 months
+is one regime: 60000 M5 bars cover 208 trading days, which yields three folds,
+so the PBO estimate is itself noise. The instability shows elsewhere too --
+`r_atr <= 0.7` returns +0.21R/day while `r_atr <= 0.5` returns **-0.11R/day**,
+a sign flip from a small tightening. The 60000 was the exporter's default
+`--count`, not the terminal's ceiling (the export reported no clamp), so deeper
+M5 history is available for the asking; at 8-10 folds the question answers
+itself.
+
+**H1 is confirmed dead** rather than noisy: ten folds, ample data, negative
+test SR, and the base rule returns -0.0098R/day.
+
 ### Not yet done
 
-No formal walk-forward or PBO on any of the above (`research/_wf.py`) -- the
-year-by-year consistency is strong evidence, not the project's standard. The
-tick-volume VWAP is unverified; the test is SPY with both volumes. The spread
-comes from a demo server and no commission is included.
+The tick-volume VWAP is unverified; the test is SPY with both volumes. The
+spread comes from a demo server and no commission is included. M5 needs deeper
+history before it can be judged.

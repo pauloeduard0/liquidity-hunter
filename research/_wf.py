@@ -39,14 +39,19 @@ Rule = Callable[[dict[str, Any]], bool]
 
 
 def daily_matrix(
-    trades: Sequence[dict], rules: dict[str, Rule], key: str, cost_pct: float
+    trades: Sequence[dict], rules: dict[str, Rule], key: str, cost_pct: float,
+    cost_key: str | None = None,
 ) -> tuple[np.ndarray, list, list[str]]:
+    """`cost_key` le o custo em R de cada linha em vez de derivar de um custo
+    fixo. E o que o CFD exige: o spread nao e uma constante do mercado, e uma
+    propriedade da barra, e num instrumento caro ele muda o SINAL do
+    resultado (ver `docs/block_reclaim.md`)."""
     by_rule: dict[str, dict] = {n: defaultdict(list) for n in rules}
     for row in trades:
         if row.get(key) is None:
             continue
         day = datetime.fromisoformat(row["timestamp"]).date()
-        net = row[key] - cost_pct / row["r_pct"]
+        net = row[key] - (row[cost_key] if cost_key else cost_pct / row["r_pct"])
         for name, keep in rules.items():
             if keep(row):
                 by_rule[name][day].append(net)
@@ -61,11 +66,11 @@ def daily_matrix(
 
 def run_walkforward(
     trades: Sequence[dict], rules: dict[str, Rule], *, key: str, cost_pct: float,
-    train_days: int = 60, test_days: int = 20, step_days: int = 20,
+    cost_key: str | None = None, train_days: int = 60, test_days: int = 20, step_days: int = 20,
     purge_days: int = 1, embargo_days: int = 2, pbo_groups: int = 6,
 ) -> None:
     """Roda folds + PBO + Sharpe deflacionado e imprime o relatorio."""
-    matrix, days, names = daily_matrix(trades, rules, key, cost_pct)
+    matrix, days, names = daily_matrix(trades, rules, key, cost_pct, cost_key)
     cfg = WalkForwardConfig(
         train_size=train_days, test_size=test_days, step_size=step_days,
         purge_size=purge_days, embargo_size=embargo_days, window_type="rolling",
