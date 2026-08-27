@@ -40,6 +40,28 @@ EXPORT = Path("/mnt/c/mt5-export")
 SCANS = (("M15", "qf_m15.json", True), ("H4", "qf_h4.json", False))
 
 
+#: Quanto a coluna `spread` da barra subestima o spread NO INSTANTE DA
+#: ENTRADA, por simbolo. A coluna e o MINIMO da barra (medido em
+#: `research/spread_audit.py`, 99% das barras), entao onde o spread flutua ela
+#: cobra o melhor caso.
+#:
+#: Ao contrario do cambio, aqui o fator e **por simbolo e quase sempre 1,0**:
+#: dos 7 CFD auditados contra o bid/ask tick a tick (M15, ~890 barras cada),
+#: quatro tem `min == max` na barra inteira -- a corretora cota spread fixo
+#: nesses -- e a mediana entre simbolos e 1,00. Os numeros abaixo sao a
+#: medicao de M15, que tem amostra grande; o H4 concorda dentro do ruido de
+#: 57 barras.
+#:
+#: BNBUSD e o unico fator grande, e e o menor spread da lista (0,0015%): 2,6x
+#: quase-nada continua quase-nada. Simbolo nao auditado recebe **1,0**, a
+#: mediana medida -- e nao o pior caso, que inventaria custo onde a evidencia
+#: diz que nao ha.
+SPREAD_UNDERESTIMATE: dict[str, float] = {
+    "BNBUSD": 2.60, "AAVUSD": 1.33, "BTCUSD": 1.24,
+    "SOLUSD": 1.00, "VECUSD": 1.00, "MANUSD": 1.00, "DOGEUSD": 1.00,
+}
+
+
 def spread_table(ticker: str, timeframe: str, point: float) -> dict[str, float]:
     """Spread por barra, em fracao do preco.
 
@@ -52,9 +74,10 @@ def spread_table(ticker: str, timeframe: str, point: float) -> dict[str, float]:
     path = EXPORT / f"{ticker}_{timeframe}.csv"
     if not path.exists():
         return {}
+    factor = SPREAD_UNDERESTIMATE.get(ticker, 1.0)
     with path.open(encoding="utf-8") as handle:
         return {
-            row["time"]: max(int(row["spread"]), 0.5) * point / float(row["close"])
+            row["time"]: max(int(row["spread"]), 0.5) * point * factor / float(row["close"])
             for row in csv.DictReader(handle)
             if float(row["close"]) > 0
         }

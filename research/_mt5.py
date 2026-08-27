@@ -25,6 +25,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime
 from pathlib import Path
+from statistics import median
 
 from liquidity_hunter.core.domain import Candle, TimeFrame
 from liquidity_hunter.data.exceptions import DataProviderError
@@ -100,9 +101,18 @@ class MT5CsvProvider(OHLCVProvider):
 
         Cada entrada paga o spread da SUA barra, nao a mediana do periodo: o
         gatilho dispara em momento de movimento, que e onde o spread abre.
+
+        **Spread zero nao e spread**: e um valor faltando. O feed devolve zero
+        em partes da historia de alguns simbolos (no EURUSD exportado, 65% das
+        barras de M5), e cobrar zero ali seria dar de graca a operacao mais
+        cara da amostra. Essas barras recebem a MEDIANA do proprio simbolo --
+        conservador no sentido certo, porque o buraco cai preferencialmente na
+        historia antiga, onde o spread era maior, nao menor.
         """
+        rows = [r for r in self.rows(symbol, timeframe) if float(r["close"]) > 0]
+        known = [int(r["spread"]) for r in rows if int(r["spread"]) > 0]
+        fallback = median(known) if known else 0.0
         return {
-            row["time"]: int(row["spread"]) * point / float(row["close"])
-            for row in self.rows(symbol, timeframe)
-            if float(row["close"]) > 0
+            r["time"]: (int(r["spread"]) or fallback) * point / float(r["close"])
+            for r in rows
         }

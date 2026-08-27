@@ -35,6 +35,7 @@ from research.ftmo_portfolio import (
     M5_MAX_COST_R,
     RISK_PER_TRADE,
     crypto_stream,
+    forex_stream,
     index_stream,
 )
 
@@ -43,6 +44,16 @@ COMMON_START = "2025-03"
 
 INDEX = ("indice M5", "indice M15", "indice M30")
 CRYPTO = ("cripto M15", "cripto H4")
+#: **So o H4.** Todo o cambio intradiario caiu quando o spread foi corrigido
+#: para o instante da entrada (`SPREAD_UNDERESTIMATE`, em
+#: `ftmo_index_reclaim`): a coluna da barra era o MINIMO do periodo, e a
+#: correcao pesa na proporcao spread/R -- justamente onde o intradiario e
+#: fraco. No walk-forward proprio, sem filtro nenhum: M15 ficou com SR 0,44 e
+#: 4 de 11 folds, H1 com SR 0,23 e 23 de 41 (cara ou coroa), enquanto o H4
+#: ficou com SR 2,64, 13 de 15 folds e degradacao POSITIVA (+0,94). O H1
+#: chegou a entrar na carteira antes da correcao; com ela, rende -0,019R por
+#: dia e derruba o Sharpe de 4,85 para 4,08.
+FOREX = ("cambio H4",)
 
 
 def build_rows() -> list[dict]:
@@ -54,6 +65,7 @@ def build_rows() -> list[dict]:
                                     max_spread=CRYPTO_MAX_SPREAD),
         "cripto H4": crypto_stream("H4", str(DATASETS / "qf_h4.json"), False,
                                    max_spread=CRYPTO_MAX_SPREAD),
+        "cambio H4": forex_stream("4h"),
     }
     rows = []
     for name, trades in streams.items():
@@ -80,6 +92,7 @@ def rules() -> dict:
         "indices + cripto M15": only(*INDEX, "cripto M15"),
         "sem o M5 de indice": only("indice M15", "indice M30", *CRYPTO),
         "os dois maiores": only("indice M5", "cripto M15"),
+        "sem cambio": only(*INDEX, *CRYPTO),
     }
 
 
@@ -96,7 +109,7 @@ def contribution(rows: list[dict]) -> None:
     days = sorted(by_day)
     print(f"\n  {'fluxo':<20}{'dias':>7}{'R/dia seu':>12}{'nos dias dele,':>17}")
     print(f"  {'':<20}{'':>7}{'':>12}{'o resto rende':>17}")
-    for name in [*INDEX, *CRYPTO]:
+    for name in [*INDEX, *CRYPTO, *FOREX]:
         mine = [d for d in days if name in by_day[d]]
         if not mine:
             continue

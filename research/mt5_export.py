@@ -23,12 +23,29 @@ O que ele traz alem do OHLC:
 - O `meta.json` com `point`, `digits`, `trade_contract_size` e o spread
   corrente, sem os quais a coluna de spread em points nao vira percentual.
 
+**O que a coluna `spread` da barra NAO responde** (`--ticks`, abaixo): ela e
+um numero por barra, e a documentacao do terminal nao diz de que instante --
+abertura, minimo, ultimo tick. Numa barra de M5 o spread abre e fecha varias
+vezes, e o gatilho do setup dispara em movimento, que e onde ele abre. Com
+stop de 2 pontos-base o custo e dois tercos do R, entao a diferenca entre "o
+spread medio da barra" e "o spread no instante da entrada" deixa de ser
+detalhe. `--ticks` exporta o bid/ask de verdade (`COPY_TICKS_INFO`) para uma
+janela curta, com o proposito de **auditar** a coluna da barra, nao de
+substitui-la: tick para 30 simbolos por anos nao cabe em disco nem e
+necessario -- se a coluna estiver honesta na janela auditada, ela serve para
+o resto.
+
 Uso, no PowerShell ou cmd do Windows, com o terminal da corretora aberto:
 
     py -m pip install MetaTrader5
     py mt5_export.py --out C:\\mt5-export
 
 Depois, do WSL, os arquivos aparecem em `/mnt/c/mt5-export/`.
+
+Para a auditoria de spread, uma janela curta basta:
+
+    py mt5_export.py --out C:\\mt5-export --ticks --tick-days 30 \\
+        --symbols EURUSD GBPJPY XAUUSD
 """
 
 from __future__ import annotations
@@ -62,6 +79,21 @@ TIMEFRAMES: tuple[str, ...] = ("M5", "M15", "M30", "H1", "H4")
 #: `project_measurement_window_clamp`, onde uma janela declarada nao era a
 #: janela executada.
 DEFAULT_COUNT = 60_000
+
+#: Colunas do CSV de ticks. `bid` e `ask` sao o ponto inteiro: a diferenca
+#: entre eles e o spread real, no instante real, sem agregacao nenhuma.
+TICK_COLUMNS = ("time", "bid", "ask", "last", "flags")
+
+#: Quantas barras pedir no modo `--refresh`, que existe para RODAR AO VIVO em
+#: laco e nao para medir. O diario de papel so olha o passado recente (o
+#: gatilho tem que ter acabado de fechar, e a liquidacao anda 40 velas), entao
+#: uma cauda curta basta e o pedido volta em segundos em vez de minutos.
+REFRESH_BARS = 3_000
+
+#: Quantos dias de tick pedir por padrao. Trinta dias de um par liquido ja sao
+#: alguns milhoes de linhas; a auditoria nao precisa de mais do que isso, e
+#: pedir anos so enche o disco para responder a mesma pergunta.
+DEFAULT_TICK_DAYS = 30
 
 COLUMNS = (
     "time",
@@ -179,6 +211,42 @@ def export_symbol(
     return summary
 
 
+def export_ticks(mt5, symbol: str, days: int, out: Path) -> dict | None:
+    """Bid/ask tick a tick, para auditar a coluna `spread` das barras.
+
+    `copy_ticks_range` com `COPY_TICKS_INFO` traz as mudancas de cotacao (nao
+    os negocios), que e exatamente o que forma o spread. O arquivo sai
+    separado dos candles e nenhuma medicao le ele por padrao: quem le e
+    `research/spread_audit.py`, cuja unica pergunta e se o numero por barra
+    mente.
+    """
+    end = datetime.now(UTC)
+    start = end - timedelta(days=days)
+    ticks = mt5.copy_ticks_range(symbol, start, end, mt5.COPY_TICKS_INFO)
+    if ticks is None or len(ticks) == 0:
+        print(f"  {symbol} ticks: nada ({mt5.last_error()})")
+        return None
+    path = out / f"{symbol.replace('.', '_')}_TICKS.csv"
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(TICK_COLUMNS)
+        for row in ticks:
+            writer.writerow([
+                datetime.fromtimestamp(int(row["time_msc"]) / 1000, UTC).isoformat(
+                    timespec="milliseconds"
+                ),
+                row["bid"], row["ask"], row["last"], int(row["flags"]),
+            ])
+    first = datetime.fromtimestamp(int(ticks[0]["time_msc"]) / 1000, UTC)
+    last = datetime.fromtimestamp(int(ticks[-1]["time_msc"]) / 1000, UTC)
+    print(f"  {symbol} ticks: {len(ticks)} linhas  {first.date()} -> {last.date()}")
+    return {
+        "symbol": symbol, "timeframe": "TICKS", "bars_requested": None,
+        "bars_returned": len(ticks), "clamped": False,
+        "first": first.isoformat(), "last": last.isoformat(), "file": path.name,
+    }
+
+
 def symbol_meta(mt5, symbol: str) -> dict | None:
     """O que converte spread em points para spread em percentual do preco."""
     info = mt5.symbol_info(symbol)
@@ -214,7 +282,20 @@ def main() -> None:
         help="AAAA-MM-DD: busca por intervalo de datas em vez de por posicao, "
         "sem o teto de 100k barras. E o modo para M5.",
     )
+    parser.add_argument(
+        "--ticks", action="store_true",
+        help="exporta bid/ask tick a tick para auditar a coluna de spread das "
+        "barras, em vez de exportar candles",
+    )
+    parser.add_argument("--tick-days", type=int, default=DEFAULT_TICK_DAYS)
+    parser.add_argument(
+        "--refresh", action="store_true",
+        help=f"exporta so a cauda recente ({REFRESH_BARS} barras) e nao "
+        "reescreve o meta.json -- o modo para rodar em laco ao vivo",
+    )
     args = parser.parse_args()
+    if args.refresh:
+        args.count = REFRESH_BARS
 
     since = (
         datetime.fromisoformat(args.since).replace(tzinfo=UTC) if args.since else None
@@ -239,6 +320,11 @@ def main() -> None:
             print(f"  {symbol}: nao existe neste terminal -- confira o nome exato no Market Watch")
             continue
         metas.append(meta)
+        if args.ticks:
+            summary = export_ticks(mt5, symbol, args.tick_days, out)
+            if summary is not None:
+                exports.append(summary)
+            continue
         for timeframe in args.timeframes:
             summary = export_symbol(mt5, symbol, timeframe, args.count, out, since)
             if summary is not None:
@@ -249,6 +335,13 @@ def main() -> None:
     # instrumento exige reexportar o outro -- que foi exatamente o que
     # aconteceu.
     meta_path = out / "meta.json"
+    if args.refresh and meta_path.exists():
+        # A ficha do instrumento (point, swap, contrato) nao muda a cada
+        # minuto, e reescrever o meta a cada volta do laco so cria uma janela
+        # em que o leitor do outro lado pega o arquivo pela metade.
+        mt5.shutdown()
+        print(f"\n{len(exports)} arquivos atualizados em {out.resolve()}")
+        return
     previous: dict[str, Any] = {}
     if meta_path.exists():
         try:

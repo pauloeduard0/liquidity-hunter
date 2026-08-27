@@ -59,6 +59,35 @@ LIMITS = {
 }
 
 
+#: **A coluna `spread` da barra e o MINIMO do periodo, nao a media nem a do
+#: fechamento.** Medido contra o bid/ask tick a tick (`research/spread_audit.py`):
+#: a coluna bate com o minimo dos ticks em 99,0-99,9% das barras e com a media
+#: em 0,3-10,6%. Cobrar essa coluna e cobrar o melhor caso de cada barra.
+#:
+#: **Mas so importa onde o spread FLUTUA, e ele nao flutua em todo lugar.**
+#: Medido por classe, e o resultado separou as tres:
+#:
+#: * **Indice: fixo.** Em 6 simbolos x ~2.800 barras de M5, `min == max ==
+#:   coluna` (US500 60 points, GER40 133, JP225 1000, USOIL 68, N25 60); so o
+#:   US100 varia, e pouco. Fator **1,0** -- nao ha o que corrigir.
+#: * **Cripto: fixo na maioria.** Dos 7 CFD auditados, 4 nao variam nada
+#:   (SOL, VEC, MAN, DOGE) e a mediana entre simbolos e 1,00. BNBUSD e o
+#:   outlier (2,6x), mas sobre o menor spread da lista (0,0015%).
+#: * **Cambio: flutua.** Aqui sim a coluna subestima, e o fator abaixo
+#:   corrige para o spread no INSTANTE DA ENTRADA (os ultimos 20 segundos da
+#:   barra que dispara, onde a ordem vai). Ele cresce com o timeframe pelo
+#:   motivo mecanico esperado: barra maior tem mais ticks, entao o minimo
+#:   afunda mais.
+#:
+#: A licao e que o fator NAO e propriedade do terminal -- o mecanismo (a
+#: coluna e o minimo) e, mas a magnitude e de como a corretora cota aquele
+#: instrumento. Aplicar o numero do cambio a indice foi exatamente o erro que
+#: a medicao seguinte desfez.
+FOREX_SPREAD_UNDERESTIMATE: dict[TimeFrame, float] = {
+    TimeFrame.M5: 1.29, TimeFrame.M15: 1.34, TimeFrame.M30: 1.38,
+    TimeFrame.H1: 1.42, TimeFrame.H4: 1.45,
+}
+
 #: Coeficiente de swap da sexta-feira na ficha dos indices: a virada de sexta
 #: cobra tres noites de uma vez (fim de semana). As demais cobram uma.
 FRIDAY_SWAP_COEFFICIENT = 3
@@ -67,8 +96,10 @@ FRIDAY_SWAP_COEFFICIENT = 3
 RESOLVE_SCAN_BARS = 200
 
 
-def _nights_held(candles: list[dict], start: int, row: dict) -> float:
-    """Viradas de dia entre a entrada e a resolucao, com a sexta pesando tres.
+def _nights_held(
+    candles: list[dict], start: int, row: dict, triple_weekday: int = 4
+) -> float:
+    """Viradas de dia entre a entrada e a resolucao, com a virada tripla pesando tres.
 
     A duracao nao e assumida: a entrada, o stop e o alvo 2R estao na linha, e
     o caminho a frente esta no CSV, entao a posicao e resolvida vela a vela
@@ -89,11 +120,14 @@ def _nights_held(candles: list[dict], start: int, row: dict) -> float:
     for i in range(start, end):
         day = datetime.fromisoformat(candles[i]["time"])
         if datetime.fromisoformat(candles[i + 1]["time"]).date() != day.date():
-            nights += FRIDAY_SWAP_COEFFICIENT if day.weekday() == 4 else 1
+            nights += FRIDAY_SWAP_COEFFICIENT if day.weekday() == triple_weekday else 1
     return nights
 
 
-def attach_costs(rows: list[dict], timeframe: TimeFrame, export: Path) -> list[dict]:
+def attach_costs(
+    rows: list[dict], timeframe: TimeFrame, export: Path, triple_weekday: int = 4,
+    spread_factor: float = 1.0,
+) -> list[dict]:
     """Cada entrada paga o spread da SUA barra, mais o swap das noites que dormiu.
 
     O swap e cobrado **em pontos** e e fortemente assimetrico: no US30 a compra
@@ -131,10 +165,13 @@ def attach_costs(rows: list[dict], timeframe: TimeFrame, export: Path) -> list[d
             if row["direction"] == "bullish"
             else info[symbol]["swap_short"]
         )
-        nights = _nights_held(candles, start, row)
+        nights = _nights_held(candles, start, row, triple_weekday)
         # Swap negativo = a corretora cobra. Em R contra a distancia do stop,
         # a mesma unidade do resto.
         swap_cost = -nights * swap_points * point / abs(row["entry"] - row["stop"])
+        # O que a entrada paga de verdade, e nao o melhor caso da barra --
+        # onde o spread flutua. Onde ele e fixo o fator e 1,0 e isto e no-op.
+        spread *= spread_factor
         row["spread_pct"] = spread
         row["swap_r"] = swap_cost
         row["nights"] = nights

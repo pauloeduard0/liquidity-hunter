@@ -15,6 +15,12 @@ nenhuma outra:
 * **Indice H1** -- fora. Reprovado (SR de teste negativo em 10 folds).
 * **Cripto M15 e H4** -- os nucleos do plano operacional
   (`project_operating_plan_block_reclaim`), com o custo da corretora.
+* **Cambio H1 e H4** -- os dois que passaram o walk-forward proprio, sem
+  filtro (no cambio a busca por filtro deu PBO 0,933). M5 e M30 de cambio
+  foram medidos e **reprovados**: o custo come o R inteiro, com o M5 acertando
+  59,5% e ainda assim perdendo dinheiro. O M15 de cambio passa, mas **fica de
+  fora da carteira**: e o fluxo mais fraco de todos (+0,142R por dia contra
+  +0,217 do H1), e sobe o total por operar muito, nao por ser bom.
 
 O R nao e comparavel entre fluxos por acaso: R e a distancia ate o stop, que
 e a mesma unidade de risco em qualquer ativo e timeframe. Por isso a conta
@@ -77,6 +83,21 @@ def index_stream(timeframe: str, max_cost_r: float | None = None) -> list[dict]:
             by[row["symbol"]].append(row["cost_r"])
         keep = {s for s, v in by.items() if st.median(v) < max_cost_r}
         rows = [r for r in rows if r["symbol"] in keep]
+    return [
+        {"timestamp": r["timestamp"], "symbol": r["symbol"],
+         "net": r[MAIN] - r["cost_r"], "won": r[MAIN] > 0}
+        for r in rows
+    ]
+
+
+def forex_stream(timeframe: str) -> list[dict]:
+    """O cambio, com comissao, spread da barra e swap ja embutidos no `cost_r`.
+
+    Sem corte por simbolo: no cambio a busca por filtro deu PBO 0,933 -- as
+    regras de selecao que servem em indice e cripto se revezam ganhando por
+    acaso aqui, e o que passou no walk-forward foi a regra sem filtro nenhum.
+    """
+    rows = json.loads((DATASETS / f"ftmo_fx_{timeframe}.json").read_text())
     return [
         {"timestamp": r["timestamp"], "symbol": r["symbol"],
          "net": r[MAIN] - r["cost_r"], "won": r[MAIN] > 0}
@@ -236,6 +257,7 @@ def main() -> None:
                                     max_spread=CRYPTO_MAX_SPREAD),
         "cripto H4": crypto_stream("H4", str(DATASETS / "qf_h4.json"), False,
                                    max_spread=CRYPTO_MAX_SPREAD),
+        "cambio H4": forex_stream("4h"),
     }
     report(streams, args.risk)
 
