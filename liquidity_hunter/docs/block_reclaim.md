@@ -1744,8 +1744,9 @@ same instruments; the timeframe decides whether selection is optional.
 
 The tick-volume VWAP is unverified; the test is SPY with both volumes. Every
 spread comes from a demo server. M5's ~100000-bar depth is the broker's own
-retention, so its window stays at 18 months. And the combined portfolio has
-never been walk-forwarded as a portfolio -- only each stream separately.
+retention, so its window stays at 18 months. The portfolio's 18-month common window
+is short, and its five streams share one detection rule, so they are less
+independent than five separate strategies would be.
 
 ### The crypto CFD spread, finally measured
 
@@ -1848,3 +1849,39 @@ own instrument sheets and bars: **+3.00% a month at 0.25% per trade, a 4.21%
 drawdown, a -1.30% worst day**, 28.1 entries a month at +0.421R, the 10% target
 in ~3.3 months. Nothing in that number is assumed any more except the two
 things named below.
+
+### The portfolio's own walk-forward
+
+Each stream had cleared its own (`research/ftmo_walkforward.py`), which answers
+"does this rule work". The portfolio asks something else: **was combining these
+five a good choice, or the combination that happened to look best over the whole
+period?** A stream can pass alone and still not deserve a seat -- if it loses on
+the same days the others lose, it worsens the daily series, which is where the
+broker's limits live, without paying for itself.
+
+`research/ftmo_portfolio_walkforward.py` competes seven *compositions* (nothing
+touches how an entry is detected) over the window common to all five, on a daily
+series already net of commission, per-bar spread and per-side swap.
+
+| | folds | SR train -> test | positive | PBO |
+|---|---|---|---|---|
+| daily **sum** (the portfolio question) | 11 | 6.72 -> 6.56 | **11/11** | **0.000** |
+| daily **mean** (the rule question) | 11 | 5.72 -> 4.66 | 10/11 | 0.067 |
+
+**The full portfolio wins, and the folds pick it more often than anything else**
+(4 of 11). It also beats every subset, including each half alone -- indices at
+SR 4.47, crypto at 4.42, together 6.08 -- which is diversification doing its job
+rather than a bigger number from more trades. A degradation of -0.16 between
+training and test is the smallest this project has measured.
+
+No stream is dead weight either: on the days each one trades, both it *and* the
+rest of the portfolio return positive, so none of them enters by dragging the
+others down.
+
+The aggregation is a real methodological choice and it changes the answer.
+`daily_matrix` averaged each day's trades, which is right for comparing rules
+because it normalises for how much a rule trades. But switching a stream on
+means **taking more entries that day**, and a daily loss cap limits the sum, not
+the average -- averaging would penalise the larger portfolio for dilution, which
+is not what happens in the account. Both are reported; `sum` is the one that
+answers the portfolio question, and both pass.
