@@ -1745,3 +1745,39 @@ same instruments; the timeframe decides whether selection is optional.
 The tick-volume VWAP is unverified; the test is SPY with both volumes. The
 spread comes from a demo server and no commission is included. M5 needs deeper
 history before it can be judged.
+
+### The crypto CFD spread, finally measured
+
+This document has been carrying the same hole since the first broker study:
+the crypto measurement is Binance perpetuals, the broker sells CFDs, and only
+the announced commission ever entered the arithmetic. `research/ftmo_portfolio.py`
+made it urgent by showing the sensitivity -- at +20bp of unmeasured spread the
+account's month falls from +4.10% to +0.88%, at +40bp it goes negative -- and
+`research/ftmo_crypto_spread.py` closes it the same way the index side was
+closed: the spread comes off the broker's own bars, matched to each entry's
+own bar.
+
+The spread is real and it is enormous at the illiquid end. NEOUSD quotes $0.35
+on an $8.4 instrument (**4.2%**), DASHUSD $0.40 on $32; BTCUSD quotes $6.62 on
+$75,720 (**0.009%**), a factor of ~500 across one list. (A 0-point median is a
+tick-resolution floor, not a free trade -- XLMUSD's tick is 0.048% of its price
+-- so the table floors each bar at half a tick.)
+
+**Crypto M15 does not survive it.** Not one of the 28 measured instruments gets
+its median cost under 0.30R, and the whole stream reads -0.601R per entry,
+-10.6R a month. The estimate it replaces was +8.17R a month, half of the
+portfolio.
+
+**Crypto H4 does**, at 17 instruments under 0.25R: +0.845R per entry, 1.9
+entries a month, +1.62R. The reason is the denominator again, for the third
+time in this document: an H4 stop measures 2.09% of price against M15's 0.407%,
+so the *same* spread costs a fifth as much in R. Cost is a fraction of price
+and what it consumes is a fraction of R.
+
+The corrected account, indices plus crypto H4, over the common window: 18.4
+entries a month at +0.417R, +7.84R a month, 15.3R maximum drawdown, -3.8R worst
+day. At 0.25% per trade that is **+1.96% a month against a 3.82% drawdown and a
+0.94% worst day** -- the broker's 10% target in ~5.1 months, both limits
+untouched, and the busiest day of the sample carries six entries worth 1.50% if
+they all lose. The earlier +4.10% was the same portfolio priced with a spread
+of zero on half of it.

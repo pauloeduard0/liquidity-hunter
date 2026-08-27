@@ -55,6 +55,10 @@ SWAP_DAYS = {"M15": 0.05, "H4": 0.7}
 #: que ele produz. Nao e escolha minha: os folds pegaram um filtro de custo em
 #: 7 de 8 janelas, vendo so o proprio treino.
 M5_MAX_COST_R = 0.30
+#: Mesmo criterio no cripto, e com o spread medido ele elimina o M15 inteiro:
+#: um stop de 0,407% do preco nao carrega o spread de um CFD, enquanto o H4,
+#: com stop de 2,09%, carrega o MESMO spread por um quinto do custo em R.
+CRYPTO_MAX_COST_R = 0.25
 
 
 def index_stream(timeframe: str, max_cost_r: float | None = None) -> list[dict]:
@@ -72,7 +76,29 @@ def index_stream(timeframe: str, max_cost_r: float | None = None) -> list[dict]:
     ]
 
 
-def crypto_stream(label: str, path: str, gated: bool) -> list[dict]:
+def crypto_stream(label: str, path: str, gated: bool,
+                  max_cost_r: float | None = None) -> list[dict]:
+    """Cripto com o spread REAL da corretora quando ele existir.
+
+    `research/ftmo_crypto_spread.py` grava `ftmo_crypto_<tf>.json` com o custo
+    de cada entrada lido do feed. Sem esse arquivo, o custo cai para "so
+    comissao", que e a estimativa que este estudo carregava antes de o spread
+    ser medido -- e que superestimava o cripto em muito.
+    """
+    measured = DATASETS / f"ftmo_crypto_{label.lower()}.json"
+    if measured.exists():
+        rows = json.loads(measured.read_text())
+        if max_cost_r is not None:
+            by: dict[str, list[float]] = defaultdict(list)
+            for row in rows:
+                by[row["symbol"]].append(row["cost_r"])
+            keep = {s for s, v in by.items() if st.median(v) < max_cost_r}
+            rows = [r for r in rows if r["symbol"] in keep]
+        return [
+            {"timestamp": r["timestamp"], "symbol": r["symbol"],
+             "net": r[MAIN] - r["cost_r"], "won": r[MAIN] > 0}
+            for r in rows
+        ]
     wanted = set(FTMO_CRYPTO.values())
     rows = [r for r in load(path, gated) if r["symbol"] in wanted]
     swap = SWAP_DAYS.get(label, 0.2)
@@ -198,8 +224,10 @@ def main() -> None:
         "indice M5 (baratos)": index_stream("5m", M5_MAX_COST_R),
         "indice M15": index_stream("15m"),
         "indice M30": index_stream("30m"),
-        "cripto M15": crypto_stream("M15", str(DATASETS / "qf_m15.json"), True),
-        "cripto H4": crypto_stream("H4", str(DATASETS / "qf_h4.json"), False),
+        # M15 de cripto fica FORA: com o spread medido, nenhum dos 28
+        # instrumentos chega a 0,30R de custo. Ver `ftmo_crypto_spread.py`.
+        "cripto H4": crypto_stream("H4", str(DATASETS / "qf_h4.json"), False,
+                                   max_cost_r=CRYPTO_MAX_COST_R),
     }
     report(streams, args.risk)
 
