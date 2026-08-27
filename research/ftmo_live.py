@@ -172,7 +172,13 @@ def available(symbols: tuple[str, ...], timeframe: TimeFrame,
     return tuple(s for s in symbols if provider.path(s, timeframe).exists())
 
 
-def write_refresh(export: Path) -> str:
+#: A distribuicao do WSL que o laco do Windows mantem viva. Se voce renomear
+#: ou trocar de distro, `wsl.exe -l` diz o nome e este e o unico lugar a
+#: mudar.
+WSL_DISTRO = "Ubuntu"
+
+
+def write_refresh(export: Path, distro: str = WSL_DISTRO) -> str:
     """Gera o laco do lado Windows a partir das listas deste modulo.
 
     Gerado e nao escrito a mao porque as listas sao as que passaram no
@@ -198,6 +204,10 @@ def write_refresh(export: Path) -> str:
         "while ($true) {",
         "  $t = Get-Date -Format 'HH:mm:ss'",
         "  Write-Host \"[$t] atualizando...\"",
+        "  # Mantem a VM do WSL viva: ela desliga quando nao sobra processo, e",
+        "  # levaria o cron do diario junto. Uma chamada por volta basta, e",
+        "  # dispensa deixar uma janela do WSL aberta so para isso.",
+        f"  wsl.exe -d {distro} -e true 2>$null",
     ]
     for label, symbols, timeframes in blocks:
         lines.append(f"  # {label}")

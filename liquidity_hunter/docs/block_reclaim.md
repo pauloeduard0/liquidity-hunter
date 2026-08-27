@@ -2141,16 +2141,21 @@ laço que roda a cada minuto, apertado o bastante para a linha medir o que
 promete. A linha contaminada do arranque foi descartada em vez de deixada
 poluindo a média.
 
-### As três coisas que precisam estar vivas
+### As duas coisas que precisam estar vivas
 
-Nenhuma delas é o cron, e cada uma falha em **silêncio** — o diário fica vazio,
+Nenhuma delas é o cron, e ambas falham em **silêncio** — o diário fica vazio,
 que é indistinguível de "não houve sinal hoje":
 
 1. **O terminal da corretora**, aberto e logado.
-2. **O `refresh.ps1`** rodando no Windows. Se parar, os CSV congelam e o guard
-   de idade descarta tudo — comportamento certo, mas que não avisa sozinho.
-3. **Uma janela do WSL aberta.** O WSL2 desliga a VM quando não sobra processo,
-   e leva o cron junto.
+2. **O `refresh.ps1`** rodando no Windows. Se parar, os CSV congelam, o guard
+   de idade descarta tudo, e a VM do WSL acaba desligando com o cron dentro.
+
+Era três: a janela do WSL entrou no laço (`wsl.exe -e true` por volta), então
+o `refresh.ps1` segura as duas pontas.
+
+**Nada disso é o servidor da API** (`uvicorn liquidity_hunter.api.main:app`).
+Aquele serve o gráfico React e não tem relação nenhuma com o diário — o
+`ftmo_live` lê os CSV direto, sem HTTP no meio.
 
 `research/ftmo_live_check.sh` verifica as três num comando. O script de cron usa
 **caminho absoluto** para o poetry de propósito: o cron roda com PATH mínimo, e
@@ -2282,10 +2287,9 @@ gerado em `C:\mt5-export\`. Só refazer se trocar de máquina.
    powershell -ExecutionPolicy Bypass -File C:\mt5-export\refresh.ps1
    ```
 
-3. Abrir **uma janela do WSL** e deixar aberta. O WSL2 desliga a VM quando não
-   sobra processo e leva o cron junto.
-
-Nada mais. O cron roda sozinho a cada minuto.
+Nada mais. O `refresh.ps1` chama `wsl.exe -e true` a cada volta, o que mantém
+a VM do WSL viva — ela desligaria quando não sobrasse processo e levaria o cron
+junto. Não é preciso deixar uma janela do WSL aberta só para isso.
 
 ### No dia a dia
 
