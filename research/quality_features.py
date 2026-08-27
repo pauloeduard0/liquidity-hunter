@@ -84,6 +84,7 @@ from liquidity_hunter.app.paper_journal import (
 )
 from liquidity_hunter.core.domain import Candle, MarketDirection, TimeFrame
 from liquidity_hunter.data.exceptions import DataProviderError
+from liquidity_hunter.data.providers.base import OHLCVProvider
 from liquidity_hunter.indicators import ema_series
 from pydantic import ValidationError
 from research._paginated import NoFuturesProvider, PaginatedFuturesProvider
@@ -358,6 +359,8 @@ def f5_penetration(
 def scan(
     symbols: Sequence[str], timeframe: TimeFrame, limit: int, out_path: str,
     *, pinbar_color: str | None = None, min_tail: float = MIN_WICK_FRACTION,
+    provider: OHLCVProvider | None = None,
+    gates: tuple[float, int] | None = None,
 ) -> list[dict]:
     """Varre a populacao operacional e anota as features.
 
@@ -365,9 +368,19 @@ def scan(
     estudo do stop profundo e ficaram SO la. Elas mudam quais gatilhos existem,
     entao nao dao para cortar na analise -- cada uma e uma varredura propria.
     Os defaults sao os de producao, para o braco base ser o setup como esta.
+
+    `provider` troca a fonte sem tocar em nada da medicao: e assim que a
+    mesma varredura roda em acao americana (`research/equity_reclaim.py`),
+    para que a comparacao entre classes de ativo seja entre o mesmo codigo e
+    nao entre dois scripts parecidos.
     """
-    provider, futures = CachedProvider(), NoFuturesProvider()
-    max_r_atr, min_vwap = OPERATING_GATES[timeframe]
+    provider = provider or CachedProvider()
+    futures = NoFuturesProvider()
+    # `gates` so existe para o timeframe que NAO tem gate calibrado (M5, que
+    # foi medido e rejeitado em cripto e por isso nunca ganhou um). Passar um
+    # gate a mao e declarar uma escolha; o default continua sendo o de
+    # producao, e nenhum timeframe medido usa este caminho.
+    max_r_atr, min_vwap = gates or OPERATING_GATES[timeframe]
     rows: list[dict] = []
     t0 = time.time()
     for n, symbol in enumerate(symbols, 1):

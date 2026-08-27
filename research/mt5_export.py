@@ -1,0 +1,210 @@
+"""Exporta candles do MetaTrader 5 para CSV, para rodar no lado Windows.
+
+Este arquivo nao roda no WSL: a biblioteca `MetaTrader5` conversa com o
+terminal por memoria compartilhada e so existe em Windows. O caminho e o
+inverso do resto de `research/` -- em vez de puxar dados de uma API, a gente
+pede ao terminal que ja esta aberto e logado na corretora, e le o resultado
+do outro lado do `/mnt/c/`.
+
+O que ele traz alem do OHLC:
+
+- **`spread`**, em points, por candle. Essa coluna e a razao inteira de
+  exportar do MT5 em vez de uma fonte melhor: e o custo do instrumento que
+  voce operaria de fato, medido pelo proprio feed da corretora. O buraco
+  declarado do estudo de cripto (`docs/block_reclaim.md`: "medi perpetuo da
+  Binance e a FTMO vende CFD, o spread do CFD nao esta em nenhuma dessas
+  contas") se fecha exatamente aqui.
+- **`tick_volume`** e **`real_volume`**. Num CFD de indice o `real_volume`
+  vem zerado -- o feed conta ticks, nao contratos. Exportamos os dois sem
+  preencher um com o outro, para que a diferenca fique visivel no CSV em vez
+  de virar um numero inventado. A VWAP institucional de indice mora no
+  futuro subjacente (ES/NQ/FDAX), nao aqui; este CSV serve para medir
+  volatilidade e custo, nao para medir a VWAP.
+- O `meta.json` com `point`, `digits`, `trade_contract_size` e o spread
+  corrente, sem os quais a coluna de spread em points nao vira percentual.
+
+Uso, no PowerShell ou cmd do Windows, com o terminal da corretora aberto:
+
+    py -m pip install MetaTrader5
+    py mt5_export.py --out C:\\mt5-export
+
+Depois, do WSL, os arquivos aparecem em `/mnt/c/mt5-export/`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+#: Os indices e o petroleo da lista da corretora. Petroleo entra porque e o
+#: unico da lista que nao e mais uma fatia da mesma aposta: US500/US30/US100
+#: se movem juntos, e a Europa idem.
+DEFAULT_SYMBOLS: tuple[str, ...] = (
+    "US500.cash",
+    "US100.cash",
+    "US30.cash",
+    "GER40.cash",
+    "USOIL.cash",
+)
+
+#: Os quatro timeframes que o setup ja mede em cripto, para que a comparacao
+#: seja entre as mesmas reguas.
+TIMEFRAMES: tuple[str, ...] = ("M5", "M15", "M30", "H1", "H4")
+
+#: Quantos candles pedir por timeframe. O terminal corta isso pelo seu
+#: proprio teto ("Max bars in chart"); o script relata o que veio de fato em
+#: vez de assumir que o pedido foi atendido -- a licao de
+#: `project_measurement_window_clamp`, onde uma janela declarada nao era a
+#: janela executada.
+DEFAULT_COUNT = 60_000
+
+COLUMNS = (
+    "time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "tick_volume",
+    "spread",
+    "real_volume",
+)
+
+
+def _load_mt5():  # noqa: ANN202 - modulo so existe em Windows
+    try:
+        import MetaTrader5 as mt5  # noqa: N813
+    except ImportError:
+        sys.exit(
+            "MetaTrader5 nao encontrado. Este script roda no Windows, com o "
+            "terminal da corretora aberto:\n    py -m pip install MetaTrader5"
+        )
+    return mt5
+
+
+def export_symbol(mt5, symbol: str, timeframe: str, count: int, out: Path) -> dict | None:
+    """Um CSV por (simbolo, timeframe). Devolve o resumo, ou None se falhou."""
+    if not mt5.symbol_select(symbol, True):
+        print(f"  {symbol} {timeframe}: nao consegui selecionar no Market Watch")
+        return None
+    tf = getattr(mt5, f"TIMEFRAME_{timeframe}")
+    rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)
+    if rates is None or len(rates) == 0:
+        print(f"  {symbol} {timeframe}: sem barras ({mt5.last_error()})")
+        return None
+
+    path = out / f"{symbol.replace('.', '_')}_{timeframe}.csv"
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(COLUMNS)
+        for row in rates:
+            writer.writerow(
+                [
+                    datetime.fromtimestamp(int(row["time"]), UTC).isoformat(),
+                    row["open"],
+                    row["high"],
+                    row["low"],
+                    row["close"],
+                    int(row["tick_volume"]),
+                    int(row["spread"]),
+                    int(row["real_volume"]),
+                ]
+            )
+
+    first = datetime.fromtimestamp(int(rates[0]["time"]), UTC)
+    last = datetime.fromtimestamp(int(rates[-1]["time"]), UTC)
+    summary = {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "bars_requested": count,
+        "bars_returned": len(rates),
+        # `clamped` e o aviso: o terminal tem teto proprio de barras, e uma
+        # janela menor que a pedida muda o que a medicao cobre.
+        "clamped": len(rates) < count,
+        "first": first.isoformat(),
+        "last": last.isoformat(),
+        "file": path.name,
+    }
+    flag = "  (cortado pelo teto do terminal)" if summary["clamped"] else ""
+    print(f"  {symbol} {timeframe}: {len(rates)} barras  {first.date()} -> {last.date()}{flag}")
+    return summary
+
+
+def symbol_meta(mt5, symbol: str) -> dict | None:
+    """O que converte spread em points para spread em percentual do preco."""
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return None
+    return {
+        "symbol": symbol,
+        "description": info.description,
+        "digits": info.digits,
+        "point": info.point,
+        "spread_current_points": info.spread,
+        "spread_float": bool(info.spread_float),
+        "trade_contract_size": info.trade_contract_size,
+        "trade_tick_size": info.trade_tick_size,
+        "trade_tick_value": info.trade_tick_value,
+        "volume_min": info.volume_min,
+        "volume_step": info.volume_step,
+        "currency_profit": info.currency_profit,
+        "swap_long": info.swap_long,
+        "swap_short": info.swap_short,
+        "swap_mode": info.swap_mode,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", default="mt5-export", help="pasta de destino")
+    parser.add_argument("--symbols", nargs="*", default=list(DEFAULT_SYMBOLS))
+    parser.add_argument("--timeframes", nargs="*", default=list(TIMEFRAMES))
+    parser.add_argument("--count", type=int, default=DEFAULT_COUNT)
+    args = parser.parse_args()
+
+    mt5 = _load_mt5()
+    if not mt5.initialize():
+        sys.exit(f"nao consegui falar com o terminal: {mt5.last_error()}")
+
+    account = mt5.account_info()
+    if account is not None:
+        print(f"terminal: {account.server} / conta {account.login} ({account.company})")
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+
+    exports: list[dict] = []
+    metas: list[dict] = []
+    for symbol in args.symbols:
+        print(symbol)
+        meta = symbol_meta(mt5, symbol)
+        if meta is None:
+            print(f"  {symbol}: nao existe neste terminal -- confira o nome exato no Market Watch")
+            continue
+        metas.append(meta)
+        for timeframe in args.timeframes:
+            summary = export_symbol(mt5, symbol, timeframe, args.count, out)
+            if summary is not None:
+                exports.append(summary)
+
+    (out / "meta.json").write_text(
+        json.dumps(
+            {
+                "exported_at": datetime.now(UTC).isoformat(),
+                "server": account.server if account is not None else None,
+                "symbols": metas,
+                "exports": exports,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    mt5.shutdown()
+    print(f"\n{len(exports)} arquivos + meta.json em {out.resolve()}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1572,3 +1572,116 @@ Over the window where all four timeframes coexist (Dec 2024 onward, 856 trades,
 broker sells CFDs. The CFD *spread* appears nowhere in the arithmetic -- only
 the published commission. If there is a spread on top, add it. That is the real
 hole here, and no number above closes it.
+
+## The setup outside crypto: equities and index CFDs
+
+Two questions, measured 2026-08-26, both with the same code the crypto studies
+use (`quality_features.scan` only changes provider):
+
+1. Does the rule survive a different asset class at all?
+2. Is the VWAP worth more where it is a stronger Schelling point?
+
+### The hole above, closed
+
+The section before this one ends by naming its own gap: the measurement was
+Binance perpetuals while the broker sells CFDs, and the CFD spread appeared
+nowhere. `research/mt5_export.py` exports the broker's own bars from the
+MetaTrader 5 terminal, **including the per-bar spread in points**, so every
+number below prices each entry at the spread of the bar it actually fired on.
+That is the instrument, the feed and the cost, all first-hand.
+
+### US equities: the rule transfers, the thesis does not
+
+`research/equity_reclaim.py`, 100 liquid US names (Yahoo, real consolidated
+volume, RTH only), H1, 159 entries:
+
+| H1, 2R | US equities | crypto |
+|---|---|---|
+| hit 2R | 46.5% | 47.2% |
+| gross | +0.396R | +0.407R |
+| net (each class's own cost) | +0.339R | +0.283R |
+
+The prediction was written into the script's docstring **before the run**: if
+the VWAP earns its keep by being the institutional benchmark, equities -- real
+tape, session anchor, the line execution desks are graded against -- had to
+score higher. It did not. It tied, and tied across all four independent cuts
+(search 46.7 / holdout 46.4, early 46.3 / late 46.9).
+
+Read both halves. As robustness this is the hardest out-of-sample the setup
+has ever passed: every parameter was fitted on crypto perpetuals and the gross
+edge survived a move to a different tape, a different anchor, a different
+session structure. As a hypothesis test it is a **negative** -- the
+institutional-VWAP premium does not exist, which pushes the explanation toward
+the plainer one: the VWAP marks where the recently-entered population sits at
+break-even, arithmetic that any market with volume has. That agrees with the
+event-anchor result (`project_vwap_schelling_point`): what matters is that the
+line **accumulated**, not that it is prestigious.
+
+The equity M15 arm is **undecided, not negative**: Yahoo caps 15m history at 60
+days, which yielded 16 entries. The index ETFs that motivated the study gave
+n=5 at H1 -- the setup barely fires on an index.
+
+### The broker's index CFDs
+
+`research/ftmo_index_reclaim.py`, 15 index/oil CFDs, per-bar spread as cost.
+The VWAP here is weighted by **tick volume** (a CFD publishes no real volume) --
+an approximation the equity result above licenses but does not verify.
+
+| | n | hit 2R | gross | cost | net | /month | window |
+|---|---|---|---|---|---|---|---|
+| M5 | 186 | 62.4% | +0.850 | 0.525 | +0.325R | 10.3 | 18 months |
+| M15 | 214 | 54.7% | +0.624 | 0.304 | +0.320R | 5.1 | 42 months |
+| M30 | 335 | 51.9% | +0.558 | 0.255 | +0.304R | 4.6 | 73 months |
+| H1 | 334 | 39.2% | +0.177 | 0.173 | +0.004R | 3.8 | 8 years |
+| H4 | 24 | 58.3% | +0.750 | 0.030 | +0.720R | 1.2 | -- |
+
+**M30 is the sturdiest reading**, not for its n but for six consecutive
+positive years (+0.48 / +0.16 / +0.23 / +0.26 / +0.19 / +0.68) -- six
+independent windows agreeing. M15 confirms (positive 2024, 2025, 2026) and
+survives dropping GER40, whose 90%-on-10-trades carried 40% of the profit in
+the first, 5-symbol pass.
+
+**M5 has the best gross of the five and the worst cost.** 62.4% hit and 10.3
+entries/month, the only timeframe with real frequency, but the spread eats
+0.525R -- more than half the risk -- and the window is 18 months, i.e. one
+regime. This is exactly the arithmetic that killed M5 in crypto
+(`project_block_reclaim_m5_rejected`): cost is a % of price, what it consumes
+is a % of R, and dropping a timeframe shrinks the denominator. Here the spread
+is ~10x cheaper than Binance's taker fee, so the same mechanism survives
+instead of dying. It is promising and it is one regime; those are both true.
+
+**H1 is broken and unexplained.** Positive 2019-2022, then 21-33% hit across
+2023, 2024 and 2025 (170 entries), recovering in 2026. A regime story cannot
+carry it: M15 and M30 were positive in those same years on those same symbols.
+Recorded as an open question rather than rationalised. H4 (n=24) decides
+nothing.
+
+### Instrument selection is a cost decision
+
+Spread varies **tenfold across one broker's list**, and on M5 it decides the
+sign of the result:
+
+| M5 | n | hit | cost | net |
+|---|---|---|---|---|
+| all 15 | 186 | 62.4% | 0.525R | +0.325R |
+| the cheap four (JP225, US100, US30, US500) | 54 | 57.4% | 0.203R | +0.487R |
+
+N25 costs **1.417R** per M5 entry: it hits 60% and loses money. US2000 costs
+1.132R. US100 costs 0.119R. Choosing instruments by spread is not picking
+winners in hindsight -- spread is a property of the instrument, knowable before
+trading, the same shape as the crypto fee-tier finding. The 0.20R cut-off,
+though, was chosen after seeing the costs, and that is the degree of freedom in
+it.
+
+`research/index_cost.py` measures the cost side alone (ATR%, spread%, cost in
+R, and spread by hour). Two things it settled: the broker's swap is irrelevant
+next to the spread, and GER40's fat spread tail is **closed-session**, not news
+-- 0.0155% overnight against 0.0047% between 09:00 and 22:00 UTC. Trading hours
+are a filter the crypto work never needed.
+
+### Not yet done
+
+No formal walk-forward or PBO on any of the above (`research/_wf.py`) -- the
+year-by-year consistency is strong evidence, not the project's standard. The
+tick-volume VWAP is unverified; the test is SPY with both volumes. The spread
+comes from a demo server and no commission is included.
