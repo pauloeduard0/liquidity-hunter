@@ -56,17 +56,22 @@ def build_rules(rows: list[dict]) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timeframes", nargs="*", default=["5m", "15m", "30m", "1h"])
+    parser.add_argument("--bare", action="store_true",
+                        help="compete SO a regra sem filtro: a degradacao passa a "
+                             "medir o proprio setup, nao a busca por filtro")
+    parser.add_argument("--prefix", default="", help="'fx_' para a carteira de cambio")
     parser.add_argument("--train", type=int, default=60)
     parser.add_argument("--test", type=int, default=20)
     args = parser.parse_args()
 
     for timeframe in args.timeframes:
-        path = Path(f"research/.datasets/ftmo_{timeframe}.json")
+        path = Path(f"research/.datasets/ftmo_{args.prefix}{timeframe}.json")
         rows = json.loads(path.read_text())
         print(f"\n{'=' * 78}\n{timeframe.upper()}   {len(rows)} operacoes   "
               f"custo = spread da propria barra\n{'=' * 78}")
+        rules = {"todos": lambda r: True} if args.bare else build_rules(rows)
         run_walkforward(
-            rows, build_rules(rows), key=MAIN, cost_pct=0.0, cost_key="cost_r",
+            rows, rules, key=MAIN, cost_pct=0.0, cost_key="cost_r",
             train_days=args.train, test_days=args.test,
         )
 

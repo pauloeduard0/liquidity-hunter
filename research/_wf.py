@@ -94,8 +94,14 @@ def run_walkforward(
     print("  escolhida por fold: " + ", ".join(
         f"{k} x{c}" for k, c in sorted(chosen.items(), key=lambda x: -x[1])))
 
-    pbo = probability_of_backtest_overfitting(matrix, n_groups=pbo_groups)
-    print(f"\nPBO {pbo.pbo:.3f}  (rank OOS medio {pbo.mean_oos_rank:.3f})")
+    if len(names) > 1:
+        pbo = probability_of_backtest_overfitting(matrix, n_groups=pbo_groups)
+        print(f"\nPBO {pbo.pbo:.3f}  (rank OOS medio {pbo.mean_oos_rank:.3f})")
+    else:
+        # Com uma regra so nao ha selecao, e PBO mede exatamente o custo de
+        # selecionar. A degradacao acima passa a ser a leitura inteira: ela
+        # mede o proprio setup em vez da busca em volta dele.
+        print("\nPBO nao se aplica: uma regra so, nada foi selecionado")
 
     counts = {n: sum(1 for r in trades if rules[n](r)) for n in names}
     print(f"\n{'regra':<26}{'R/dia':>9}{'SR anual':>10}{'dias':>7}{'trades':>8}"
