@@ -109,7 +109,23 @@ FTMO_COMMISSION = 0.00065
 #: notional, cobrado no rollover.
 FTMO_SWAP_YEAR = 0.30
 #: Limites da conta, para o resultado sair em % em vez de so em R.
-RISK_PER_TRADE = 0.0025
+#:
+#: **0,35% por operacao** (2026-08-27, antes 0,25%), escolhido contra a
+#: probabilidade de estourar e nao contra o drawdown do caminho historico --
+#: o maximo de uma amostra de tamanho UM nao e limite superior de nada.
+#: Reamostrando a serie diaria em blocos de 5 dias (`research/ftmo_risk_budget.py`),
+#: em caminhos de 120 dias:
+#:
+#:     risco    dd p95    dd p99   P(estoura 10%)
+#:     0,25%     4,81%     6,14%        0,0%
+#:     0,35%     6,73%     8,60%        0,3%
+#:     0,50%     9,61%    12,28%        4,0%
+#:
+#: O salto esta entre 0,35% e 0,50%, nao antes: 0,3% de chance de queimar a
+#: conta e um preco defensavel por 40% mais retorno, 4,0% nao e. O teto
+#: diario de 5% nunca e ameacado em nenhum dos tres (P = 0,0%), porque o pior
+#: dia medido e de 5,2R e seriam precisos 14R.
+RISK_PER_TRADE = 0.0035
 FTMO_MAX_DRAWDOWN = 0.10
 FTMO_MAX_DAILY_LOSS = 0.05
 FTMO_PROFIT_TARGET = 0.10

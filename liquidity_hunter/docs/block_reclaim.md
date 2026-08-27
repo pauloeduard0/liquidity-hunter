@@ -2155,3 +2155,112 @@ que é indistinguível de "não houve sinal hoje":
 `research/ftmo_live_check.sh` verifica as três num comando. O script de cron usa
 **caminho absoluto** para o poetry de propósito: o cron roda com PATH mínimo, e
 um `command not found` num job de cron falha em silêncio.
+
+## De R para lotes: o tamanho da ordem (2026-08-27)
+
+O estudo inteiro vive em **R**, e isso é de propósito — o percentual arriscado
+cancela na conta de custo, então medir em R deixa a conclusão independente do
+tamanho da conta. Mas na hora de mandar a ordem alguém converte, e a conversão
+tem duas armadilhas que o R esconde. `research/ftmo_sizing.py` faz a conta e,
+mais útil, **mede quanto elas mordem** nas operações que o plano produziu.
+
+O insumo é o `meta.json`. `trade_tick_value` já vem na moeda da **conta** —
+verificado: GBPJPY tem 100 JPY por tick virando 0,6277 USD e EURGBP tem 1 GBP
+virando 1,3590 — então não há conversão de moeda a fazer. Mas o valor foi lido
+no dia da exportação e, para um par cruzado, anda com o câmbio: um erro de 2%
+no `tick_value` é um erro de 2% no lote, menor que o próprio arredondamento e
+maior que zero.
+
+### O arredondamento custa pouco
+
+Risco real médio contra o alvo de 0,25%, por conta:
+
+| fluxo | $10k | $25k | $50k | $100k | $200k |
+|---|---|---|---|---|---|
+| índice M5 | 0,250% | 0,250% | 0,250% | 0,250% | 0,250% |
+| índice M15 | 0,249% | 0,250% | 0,250% | 0,250% | 0,250% |
+| índice M30 | 0,249% | 0,250% | 0,250% | 0,250% | 0,250% |
+| cripto M15 | 0,243% | 0,248% | 0,249% | 0,249% | 0,250% |
+| cripto H4 | **0,266%** | **0,242%** | 0,239% | 0,245% | 0,247% |
+| câmbio H4 | 0,235% | 0,243% | 0,246% | 0,248% | 0,249% |
+
+O lote é arredondado sempre para **baixo**: arredondar para cima estoura o
+risco pretendido, e o limite diário da corretora é sobre a perda, não sobre a
+intenção. O custo disso é de 0 a 6%, maior onde a conta é pequena.
+
+### O lote mínimo, esse morde
+
+O `0,266%` do cripto H4 em $10k está **acima** do alvo, e é o sintoma: em 12%
+das operações o lote ideal fica abaixo de `volume_min`, e a ordem só existe
+arriscando mais do que se pretendia.
+
+O caso pior medido, verificado à mão:
+
+```
+GRTUSD  entrada 0,20384  stop 0,19229   (5,67%)
+  contrato = 1.000.000 tokens   tick_value = 10 USD   volume_min = 0,01
+  perda por lote cheio          = 11.550 USD
+  lote ideal para arriscar 25   = 0,0022   ->  mínimo 0,01
+  risco real                    = 115,50 USD = 1,155%
+```
+
+Um lote de GRT é **um milhão de tokens**. Com stop de H4 o mínimo já arrisca
+4,6× o alvo numa conta de $10k. Os afetados são os CFD de contrato grande e
+preço baixo (GRT, IMX, GALA, HBAR) no H4, onde o stop é largo: 7 de 56
+operações em $10k, 3 em $25k, **nenhuma em $50k**.
+
+Isso não invalida o plano — invalida **o cripto H4 numa conta pequena**. Em
+$50k para cima a questão desaparece.
+
+### O que ainda não é verificado: margem
+
+Um stop muito curto produz um lote correto em risco e grande demais em
+nocional — 83 lotes de US500 com stop de 0,03% são ~$444k de nocional numa
+conta de $50k. Isso é risco certo e margem possivelmente insuficiente, e o
+exportador não trazia `margin_initial`. Agora traz (junto com `volume_max`),
+mas **o `meta.json` precisa ser reexportado** para os campos aparecerem, e o
+limite ainda não foi medido. Até lá, um stop muito apertado pode virar recusa
+da corretora — o pior lugar para descobrir.
+
+## O risco por operação: 0,25% → 0,35% (2026-08-27)
+
+Subir o risco multiplica o drawdown linearmente, e a tentação é comparar o
+resultado com o teto e parar aí. Isso subestima o problema: o drawdown que
+`ftmo_portfolio.py` reporta é o **do caminho que aconteceu**, uma amostra de
+tamanho **um**, e o máximo de uma amostra de um não é limite superior de nada.
+
+`research/ftmo_risk_budget.py` reamostra a série diária para estimar a
+**probabilidade de estourar**, que é a grandeza que decide. Duas
+reamostragens, de propósito, porque discordam pelo motivo certo: **iid**
+(sorteia dias soltos, destrói o agrupamento de perdas e por isso subestima —
+serve de piso) e **blocos de 5 dias** (preserva o agrupamento — a estimativa
+honesta). 20.000 caminhos de 120 dias:
+
+| risco | dd mediano | dd p95 | dd p99 | P(estoura 10%) | P(estoura 5%/dia) | P(+10%) |
+|---|---|---|---|---|---|---|
+| 0,25% | 2,66% | 4,81% | 6,14% | **0,0%** | 0,0% | 97,3% |
+| **0,35%** | 3,73% | 6,73% | 8,60% | **0,3%** | 0,0% | 99,1% |
+| 0,50% | 5,32% | 9,61% | 12,28% | **4,0%** | 0,0% | 99,7% |
+
+O salto está entre 0,35% e 0,50%, não antes. Uma chance de 0,3% de queimar a
+conta é um preço defensável por 40% mais retorno; 4,0% não é. O teto **diário**
+de 5% nunca é ameaçado em nenhum dos três (P = 0,0%): o pior dia medido é de
+5,2R e seriam precisos 14R.
+
+A de blocos fica só um pouco pior que a iid (2,66% contra 2,46% na mediana), o
+que diz que existe agrupamento de perdas nesta série mas ele é brando — o
+método pegaria se fosse grave.
+
+**A ressalva que nenhuma reamostragem remove:** ela sorteia do que foi medido,
+então não contém regime que a amostra de 297 dias não conteve. O `P(+10%) =
+99,1%` é condicional a a vantagem persistir como medida, e não é uma promessa.
+
+### O plano a 0,35%
+
+**+4,35% ao mês**, alvo de 10% em 2,3 meses, drawdown medido 6,54% (teto 10%),
+pior dia −1,82% (teto 5%), pior caso aritmético 2,10% se as seis operações do
+dia mais cheio perderem juntas.
+
+Numa conta de **$100k**, nenhuma das 1.590 operações medidas fica abaixo do
+lote mínimo: a conta cobre o plano inteiro e a questão do `volume_min` do
+cripto H4 (que morde em $10k e $25k) não existe aqui.

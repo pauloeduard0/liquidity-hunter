@@ -263,7 +263,15 @@ def symbol_meta(mt5, symbol: str) -> dict | None:
         "trade_tick_size": info.trade_tick_size,
         "trade_tick_value": info.trade_tick_value,
         "volume_min": info.volume_min,
+        "volume_max": info.volume_max,
         "volume_step": info.volume_step,
+        # A margem nao entra no dimensionamento por risco, mas LIMITA a ordem:
+        # um stop muito curto produz um lote correto em risco e grande demais
+        # em nocional. Sem estes campos o limite so aparece na recusa da
+        # corretora, que e o pior lugar para descobrir.
+        "margin_initial": info.margin_initial,
+        "margin_maintenance": info.margin_maintenance,
+        "trade_mode": info.trade_mode,
         "currency_profit": info.currency_profit,
         "swap_long": info.swap_long,
         "swap_short": info.swap_short,
