@@ -427,9 +427,8 @@ Full architecture rationale, including SOLID notes, is documented in
   plus `is_onchain_symbol`: sends `<network>:<address>` symbols and bare
   base58/0x addresses to the on-chain source and everything else to the
   exchange chain, capping each request to its own source's limit (the
-  `FallbackOHLCVProvider` shape). `load_dashboard_data`'s default provider is
-  `RoutingOHLCVProvider(FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(),
-  BinanceDataProvider()), GeckoTerminalDataProvider())`.
+  `FallbackOHLCVProvider` shape). Every leaf of that tree is wrapped in a
+  `CachingOHLCVProvider` (below) in `default_ohlcv_provider()`.
 - **`data/providers/fallback.py`** — `FallbackOHLCVProvider(primary, secondary)`:
   an `OHLCVProvider` that tries `primary` and falls back to `secondary` on
   `DataProviderRequestError` (e.g. a symbol with no perpetual), clamping the
@@ -438,14 +437,64 @@ Full architecture rationale, including SOLID notes, is documented in
   default provider is `FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(),
   BinanceDataProvider())` (futures candles, spot fallback for spot-only pairs).
 
+- **`data/providers/caching.py`** — `CachingOHLCVProvider(inner, store, …)`:
+  serves candles from a persistent store and asks `inner` only for the tail it
+  is missing. The sources answer *"the last N candles"* and nothing narrower,
+  so a refresh that gains one bar re-downloads the other 999 — the whole cost
+  model on GeckoTerminal, where the binding constraint is a per-IP request
+  budget. The mechanisms already in that provider cache **requests** (by URL,
+  50s, in memory); this one caches **history**, which is sound because a closed
+  candle is immutable.
+  `get_ohlcv` reads the store's last timestamp, sizes the fetch from the
+  elapsed bars plus `_OVERLAP_CANDLES` = 3, and splices stored history in front
+  of the fresh segment. Three consequences: a cold start after a restart is no
+  longer cold; history accumulates **past the source's per-request cap** just by
+  running (the window slides forward, old bars stay), which is why the on-chain
+  leg is wired with `max_fetch_limit=_ONCHAIN_CACHED_FETCH_LIMIT` = 1500 over
+  GeckoTerminal's own 1000; and the request that does go out is small.
+  Two invariants carry the correctness:
+  - **The live edge is never stored.** The newest candle is still forming, and
+    freezing a partial bar into a series the detectors read as closed is not
+    cosmetic — `_reanchor_bos_close_break` confirms a BOS on a *close*. The
+    store therefore ends at the last closed bar, the next refresh's tail covers
+    it, and the upsert replaces it with its final print.
+  - **A gap discards stored history rather than splicing it.** If the fresh
+    segment does not reach back into what is stored (a long outage), the two
+    are served *not* joined: a discontinuity the detectors cannot see is worse
+    than a shorter window.
+  Keyed by `inner.series_key(symbol)`, not by the symbol — see the port note
+  below. Wrapped **per leaf** rather than around `FallbackOHLCVProvider`, since
+  only the leaf knows whether the perpetual or the spot book answered.
+  Measured 2026-08-28 on the M5→W1 ladder at 1500 candles: **Binance BTCUSDT
+  3.5s → 1.9s** warm (request *count* unchanged at 7, but each is the tail
+  instead of 1500 bars — the saving is klines weight, the resource the ban
+  incident spent); on-chain the store is what makes the deep window reachable
+  at all.
+- **`data/repositories/candle_store.py`** — `SQLiteCandleStore`, the archive
+  behind it. SQLite because the access pattern is a range query on
+  `(series, timeframe, timestamp)` and the writers are threads (the prefetch
+  pool, the overview ladder); WAL, one connection per thread. `save` upserts
+  (the re-fetched bar is the authority), `load` returns the newest `limit`
+  rows oldest-first with an optional `before` bound, and stamps them with the
+  caller's `symbol` since the rows are keyed by series. `default_candle_store_path()`
+  is `~/.cache/liquidity-hunter/candles.sqlite3`.
+
 The `OHLCVProvider` port carries a `max_fetch_limit` class attribute (default
 1000, the per-request candle cap) that callers read instead of assuming a fixed
-limit; `klines_row_to_candle` (in `binance.py`) is the shared 12-column row →
+limit; **`series_key(symbol)`** names the identity of the series a symbol
+resolves to, for persistence — the symbol is not always that identity. A
+GeckoTerminal *token* address resolves to whichever pool is deepest by USD
+reserve, and liquidity migrates, so one symbol can name two different charts
+weeks apart (`gt:<network>:<pool>:<denomination>`, the denomination included
+because `MARKET_CAP` scales every price by supply); Binance spot and perpetual
+are different books under one ticker (`binance-spot:` / `binance-futures:`).
+The default is the symbol itself; `klines_row_to_candle` (in `binance.py`) is the shared 12-column row →
 `Candle` parser used by both the spot and futures providers.
 
 `BinanceDataProvider`, `BinanceFuturesOHLCVProvider`, `FallbackOHLCVProvider`,
 `OHLCVProvider`, `BinanceFuturesDataProvider`, `FuturesDataProvider`,
-`GeckoTerminalDataProvider`, `PriceDenomination`, `RoutingOHLCVProvider`, and
+`GeckoTerminalDataProvider`, `PriceDenomination`, `RoutingOHLCVProvider`,
+`CachingOHLCVProvider`, `SQLiteCandleStore`, `default_candle_store_path`, and
 `is_onchain_symbol` are re-exported from `liquidity_hunter.data`.
 
 ### Indicators layer (`liquidity_hunter/indicators`)

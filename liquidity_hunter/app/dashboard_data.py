@@ -53,11 +53,13 @@ from liquidity_hunter.data import (
     BinanceDataProvider,
     BinanceFuturesDataProvider,
     BinanceFuturesOHLCVProvider,
+    CachingOHLCVProvider,
     FallbackOHLCVProvider,
     FuturesDataProvider,
     GeckoTerminalDataProvider,
     OHLCVProvider,
     RoutingOHLCVProvider,
+    SQLiteCandleStore,
     is_onchain_symbol,
 )
 from liquidity_hunter.data.exceptions import DataProviderError
@@ -923,6 +925,14 @@ _INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER = 300
 # across refreshes (a major extreme is a fixed price point, not a sliding
 # offset). See `_structural_anchor_index`.
 _STRUCTURAL_ANCHOR_REGION = 300
+
+
+#: What an on-chain request may ask for once history is cached. Above
+#: GeckoTerminal's own 1000-per-request cap, so the buffered window
+#: (`limit` + `_INTERNAL_STRUCTURE_BOOTSTRAP_BUFFER`) can be served whole
+#: from the store; the source is still only asked for the tail, and a cold
+#: series simply returns the shorter window it can.
+_ONCHAIN_CACHED_FETCH_LIMIT = 1500
 
 
 @dataclass(frozen=True)
@@ -2509,9 +2519,24 @@ def default_ohlcv_provider() -> OHLCVProvider:
     GeckoTerminal for on-chain symbols (a `network:address` pair or a bare
     token/pool address), which no exchange lists at all.
     """
+    store = SQLiteCandleStore()
     return RoutingOHLCVProvider(
-        exchange=FallbackOHLCVProvider(BinanceFuturesOHLCVProvider(), BinanceDataProvider()),
-        onchain=GeckoTerminalDataProvider(),
+        exchange=FallbackOHLCVProvider(
+            CachingOHLCVProvider(BinanceFuturesOHLCVProvider(), store),
+            CachingOHLCVProvider(BinanceDataProvider(), store),
+        ),
+        # Wrapped per leaf rather than around the fallback: spot and perpetual
+        # are different series under one ticker, and only the leaf knows which
+        # one it returned.
+        onchain=CachingOHLCVProvider(
+            GeckoTerminalDataProvider(),
+            store,
+            # Above GeckoTerminal's own 1000-per-request cap: once history has
+            # accumulated, the buffered window (`limit` + the 300-candle
+            # bootstrap buffer) is served from the store without a second
+            # round-trip, which is depth the source cannot serve at all.
+            max_fetch_limit=_ONCHAIN_CACHED_FETCH_LIMIT,
+        ),
     )
 
 

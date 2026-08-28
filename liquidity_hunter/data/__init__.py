@@ -9,6 +9,7 @@ from liquidity_hunter.data.providers import (
     BinanceDataProvider,
     BinanceFuturesDataProvider,
     BinanceFuturesOHLCVProvider,
+    CachingOHLCVProvider,
     FallbackOHLCVProvider,
     FuturesDataProvider,
     GeckoTerminalDataProvider,
@@ -17,17 +18,21 @@ from liquidity_hunter.data.providers import (
     RoutingOHLCVProvider,
     is_onchain_symbol,
 )
+from liquidity_hunter.data.repositories import SQLiteCandleStore, default_candle_store_path
 
 __all__ = [
     "DataProviderBannedError",
     "BinanceDataProvider",
     "BinanceFuturesDataProvider",
     "BinanceFuturesOHLCVProvider",
+    "CachingOHLCVProvider",
     "FallbackOHLCVProvider",
     "FuturesDataProvider",
     "GeckoTerminalDataProvider",
     "OHLCVProvider",
     "PriceDenomination",
     "RoutingOHLCVProvider",
+    "SQLiteCandleStore",
+    "default_candle_store_path",
     "is_onchain_symbol",
 ]

@@ -47,6 +47,15 @@ class BinanceFuturesOHLCVProvider(OHLCVProvider):
         self._max_retries = max_retries
         self._retry_base_delay_seconds = retry_base_delay_seconds
 
+    def series_key(self, symbol: str) -> str:
+        """`binance-futures:<symbol>` -- the venue is part of the identity.
+
+        The spot and perpetual books for one ticker are different series
+        with the same name, and `FallbackOHLCVProvider` can serve either,
+        so a cache keyed on the symbol alone would splice the two.
+        """
+        return f"binance-futures:{symbol.upper()}"
+
     def get_ohlcv(self, symbol: str, timeframe: TimeFrame, limit: int = 500) -> list[Candle]:
         """Fetch up to `limit` futures candles for `symbol`/`timeframe`.
 

@@ -277,6 +277,19 @@ class GeckoTerminalDataProvider(OHLCVProvider):
         )
         return candles
 
+    def series_key(self, symbol: str) -> str:
+        """`gt:<network>:<pool>:<denomination>` -- what the candles describe.
+
+        The symbol is not the identity here. A *token* address resolves to
+        whichever pool is deepest by USD reserve, and liquidity migrates, so
+        the same symbol can name two different charts weeks apart. The
+        denomination is part of it too: `MARKET_CAP` scales every price by the
+        token's supply, so cached USD bars would be off by that factor.
+        """
+        network, address = self._split_symbol(symbol)
+        pool = self._resolve_pool(network, address)
+        return f"gt:{network}:{pool}:{self._denomination.value}"
+
     # -- symbol / pool resolution -------------------------------------------------
 
     def _split_symbol(self, symbol: str) -> tuple[str, str]:

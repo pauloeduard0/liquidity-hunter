@@ -4,6 +4,7 @@ from liquidity_hunter.data.providers.base import FuturesDataProvider, OHLCVProvi
 from liquidity_hunter.data.providers.binance import BinanceDataProvider
 from liquidity_hunter.data.providers.binance_futures import BinanceFuturesDataProvider
 from liquidity_hunter.data.providers.binance_futures_ohlcv import BinanceFuturesOHLCVProvider
+from liquidity_hunter.data.providers.caching import CachingOHLCVProvider
 from liquidity_hunter.data.providers.fallback import FallbackOHLCVProvider
 from liquidity_hunter.data.providers.geckoterminal import (
     GeckoTerminalDataProvider,
@@ -15,6 +16,7 @@ __all__ = [
     "BinanceDataProvider",
     "BinanceFuturesDataProvider",
     "BinanceFuturesOHLCVProvider",
+    "CachingOHLCVProvider",
     "FallbackOHLCVProvider",
     "FuturesDataProvider",
     "GeckoTerminalDataProvider",

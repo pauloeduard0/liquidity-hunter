@@ -33,6 +33,22 @@ class OHLCVProvider(ABC):
         """
         raise NotImplementedError
 
+    def series_key(self, symbol: str) -> str:
+        """Stable identity of the series `symbol` resolves to, for persistence.
+
+        A cached candle is only reusable while it describes the *same* series,
+        and a symbol is not always that identity: `GeckoTerminalDataProvider`
+        resolves a token address to its deepest pool by USD reserve, and that
+        pool changes as liquidity migrates -- two different charts under one
+        symbol. It also scales prices by the chosen `PriceDenomination`, so the
+        same pool yields different numbers per denomination.
+
+        The default is the symbol itself, which is right for a venue whose
+        listing *is* the series. A provider that resolves or transforms
+        overrides this to name what it actually returned.
+        """
+        return symbol
+
 
 class FuturesDataProvider(ABC):
     """A source of perpetual-futures market-state data.
