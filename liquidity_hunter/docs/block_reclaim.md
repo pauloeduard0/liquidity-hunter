@@ -2287,9 +2287,15 @@ gerado em `C:\mt5-export\`. Só refazer se trocar de máquina.
    powershell -ExecutionPolicy Bypass -File C:\mt5-export\refresh.ps1
    ```
 
-Nada mais. O `refresh.ps1` chama `wsl.exe -e true` a cada volta, o que mantém
-a VM do WSL viva — ela desligaria quando não sobrasse processo e levaria o cron
-junto. Não é preciso deixar uma janela do WSL aberta só para isso.
+Nada mais — **uma janela só**, mesmo com o robô ligado. O `refresh.ps1` faz
+três coisas a cada volta: chama `wsl.exe -e true` (mantém a VM do WSL viva, que
+é o que segura o cron), exporta os candles, e chama `mt5_trader.py` em passada
+única. O laço é o relógio do executor, então ele não precisa de um próprio.
+
+Para voltar ao modo papel, comente a linha do `mt5_trader.py` no `refresh.ps1`
+— ou tire o `AUTO=1` do cron, que é o que enche a fila. Qualquer uma das duas
+basta, e as duas falham em modo seguro: sem candles fresco nada é enfileirado;
+sem executor a fila só cresce.
 
 ### No dia a dia
 
@@ -2328,3 +2334,73 @@ independentemente do diário estar vazio.
 
 O sinal de problema não é diário vazio — é o `check` reclamando, ou a coluna
 `linhas` do funil zerada (os CSV congelaram).
+
+## O robô: automatizar sem duplicar a regra (2026-08-27)
+
+O diário em papel decide e registra. Automatizar acrescenta uma pergunta só —
+**quem manda a ordem** — e a resposta tinha duas opções ruins e uma boa.
+
+A opção óbvia era portar a detecção para MQL5 e rodar tudo dentro do terminal.
+Foi recusada pelo mesmo motivo que o `refresh.ps1` é gerado e não editado à
+mão: o código medido é o Python deste projeto, e uma segunda implementação da
+regra diverge da primeira em silêncio. O dia em que as duas discordassem, o
+histórico de medição passaria a descrever um robô que não existe.
+
+A segunda era instalar o projeto inteiro no Python do Windows. Funciona, e
+troca uma cópia da regra por uma cópia do ambiente — poetry, pydantic e a
+árvore toda, num interpretador cuja versão não está sob controle do projeto.
+
+### O corte: decidir de um lado, mandar do outro
+
+A regra fica onde já estava e a superfície que toca ordem fica mínima:
+
+| lado | peça | responsabilidade |
+|------|------|------------------|
+| WSL | `research/ftmo_orders.py` | lê o diário, converte R → lotes, **enfileira** |
+| Windows | `research/mt5_trader.py` | lê a fila, confere limites, **manda** |
+
+O executor não importa uma linha do projeto — só `MetaTrader5` e a biblioteca
+padrão — e não sabe o que é um bloco, um reclaim ou uma VWAP. **Essa burrice é
+a defesa:** um executor que soubesse a regra poderia discordar dela; este só
+consegue errar mandando o que a fila pediu, ou não mandando nada. Os dois modos
+de falha são visíveis, porque cada tentativa vira linha em `fills.jsonl`,
+inclusive as recusadas, com o motivo.
+
+A fila (`orders.jsonl`) é o **próprio registro do que já foi enfileirado**. Não
+há um segundo arquivo de estado para dessincronizar com ela.
+
+### Os guardas, e o que cada um impede
+
+| guarda | valor | o que impede |
+|--------|-------|--------------|
+| conta demo | trava padrão | mandar ordem numa conta real logada por engano |
+| `HALT` | arquivo | parar tudo na hora sem matar o processo |
+| perda do dia | 4% | passar do limite de 5% da corretora |
+| perda total | 8% | passar do limite de 10% |
+| posições abertas | 10 | limitar o estrago de um defeito que enfileire em laço |
+| idade da intenção | 10 min | mandar a mercado um gatilho de ontem |
+| lote abaixo do mínimo | recusa | pegar a operação arriscando **mais** do que o plano |
+
+Dois deles têm um detalhe que só aparece no pior momento. **A perda do dia sai
+do histórico de negócios do terminal**, não de um contador em arquivo: um
+contador se perde no reinício, e é justamente reiniciando depois de um dia ruim
+que ele precisaria estar certo. E **a perda total é medida contra uma âncora
+gravada em disco** (`equity_anchor.json`), não contra a equity de quando o
+processo subiu — essa segunda versão, que foi a primeira que escrevi,
+redefiniria o ponto de partida para o valor já afundado a cada reinício e
+liberaria outra queda inteira a partir dali.
+
+Stop e alvo vão **na ordem**, não num acompanhamento em Python: se o executor
+morrer, a posição continua protegida pelo servidor. Um robô que só protege
+enquanto está vivo não protege.
+
+### O que a automação acrescenta à medição
+
+A derrapagem deixa de ser estimada. O diário em papel compara o close do
+gatilho com o próximo preço observado; `fills.jsonl` traz o **preço de
+execução de verdade**, e `ftmo_orders --report-only` reporta a mediana em R.
+É o insumo que faltava para refazer a conta líquida do plano — e o número que
+pode reprovar algum dos seis fluxos.
+
+Ligar é uma variável de ambiente no cron (`AUTO=1`); sem ela, o pipeline
+continua sendo o diário em papel de sempre.

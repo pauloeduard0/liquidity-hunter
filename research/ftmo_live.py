@@ -17,7 +17,8 @@ medido) nem menos.
 
 Como rodar, com o terminal da corretora aberto:
 
-    # 1. no Windows, o laco que mantem os CSV frescos (deixe a janela aberta)
+    # 1. no Windows, o laco que mantem os CSV frescos (deixe a janela aberta).
+    #    Ele tambem chama o executor a cada volta -- veja `write_refresh`.
     powershell -ExecutionPolicy Bypass -File C:\\mt5-export\\refresh.ps1
 
     # 2. no WSL, uma passada por vez -- idempotente, bom para cron
@@ -186,6 +187,7 @@ def write_refresh(export: Path, distro: str = WSL_DISTRO) -> str:
     roda divergir, em silencio, do que foi medido.
     """
     exe = "py C:\\mt5-export\\mt5_export.py --out C:\\mt5-export --refresh"
+    trader = "py C:\\mt5-export\\mt5_trader.py --out C:\\mt5-export"
     blocks = [
         ("indices M5 (so os 6 baratos)", INDEX_M5, ["M5"]),
         ("indices M15 e M30 (os 15)", INDEX_ALL, ["M15", "M30"]),
@@ -216,6 +218,14 @@ def write_refresh(export: Path, distro: str = WSL_DISTRO) -> str:
             f"--symbols {' '.join(symbols)}"
         )
     lines += [
+        "  # O executor, em passada UNICA: este laco e o relogio dele, entao ele",
+        "  # nao precisa de um proprio. Sem `--loop` ele confere a fila, manda o",
+        "  # que houver e sai -- se a fila estiver vazia (o caso comum) nao faz",
+        "  # nada. E ele NAO le candle nenhum: quem alimenta a decisao sao as",
+        "  # linhas acima, e por isso a ordem aqui importa.",
+        "  #",
+        "  # Comente esta linha para voltar ao modo papel sem mexer em mais nada.",
+        f"  {trader}",
         "  # Uma volta a cada 60s: a vela mais rapida do plano e de 5 minutos,",
         "  # entao atualizar mais rapido nao traz vela nova -- so gasta pedido.",
         "  Start-Sleep -Seconds 60",
