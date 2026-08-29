@@ -4263,3 +4263,113 @@ def test_ena_seed_drop_flips_through_the_failed_choch(seed: bool) -> None:
         and e.reference_price_level == pytest.approx(0.07463, abs=0.0002)
         for e in events
     )
+
+
+def _trailing_pair(**flags: object) -> tuple[list[MarketStructure], list[MarketStructure]]:
+    """The same real series read with the trailing ATR off and on."""
+    candles = _load_window_candles()
+
+    def run(trailing: bool) -> list[MarketStructure]:
+        return InternalStructureDetector(
+            swing_lookback=5,
+            persistence_candles=2,
+            confluence_filter=False,
+            mean_tr_trailing=trailing,
+            **flags,  # type: ignore[arg-type]
+        ).detect(candles)
+
+    return run(False), run(True)
+
+
+def test_mean_tr_trailing_defaults_to_the_series_mean() -> None:
+    """Off by default: the gate keeps reading the whole-series unit.
+
+    The flag exists to be measured before it is wired, so its default must
+    reproduce the historical stream exactly -- every fixture in this file is
+    that assertion, and this one names it.
+    """
+    off, also_off = _trailing_pair()
+    assert [(e.timestamp, e.event) for e in off] == [(e.timestamp, e.event) for e in also_off][
+        : len(off)
+    ]
+
+    explicit = InternalStructureDetector(
+        swing_lookback=5, persistence_candles=2, confluence_filter=False
+    ).detect(_load_window_candles())
+    assert [(e.timestamp, e.event) for e in explicit] == [(e.timestamp, e.event) for e in off]
+
+
+def test_mean_tr_trailing_is_inert_when_no_atr_gate_is_wired() -> None:
+    """With no `N x ATR` feature on, the unit is never consulted either way.
+
+    This is what makes the flag safe to leave in the constructor: it can only
+    move a decision that is measured in ATR at all.
+    """
+    off, on = _trailing_pair()
+    assert [(e.timestamp, e.event, e.direction) for e in off] == [
+        (e.timestamp, e.event, e.direction) for e in on
+    ]
+
+
+def _load_sol_4h_long_candles() -> list[Candle]:
+    """1500 SOL 4h candles -- long enough to have a settled region behind a cut."""
+    rows = json.loads(
+        (
+            Path(__file__).parent / "data" / "solusdt_4h_2025_11_06_2026_07_14.json"
+        ).read_text()
+    )
+    return [
+        Candle(
+            symbol="SOLUSDT",
+            timeframe=TimeFrame.H4,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def test_mean_tr_trailing_holds_settled_decisions_against_later_candles() -> None:
+    """The property the flag exists for: the past stops depending on the future.
+
+    The state machine is causal, but the whole-series `mean_tr_pct` is not, so
+    volatility printed weeks later moves the threshold an old decision was
+    judged against -- the JIMOTHY 1H case, where the unit at the deciding
+    candle was 17,09% against the window's 11,55%, and the event read
+    `LIQUIDITY_SWEEP` under the first and `CHANGE_OF_CHARACTER` under the
+    second.
+
+    The same series is read twice, once truncated. Events more than `margin`
+    candles behind the shorter run's edge are settled -- past the emission lag
+    a confirming pivot needs -- so with the trailing unit they must be
+    identical in both runs.
+    """
+    candles = _load_sol_4h_long_candles()
+    margin = 100
+    cut = len(candles) - 120
+    settled = candles[cut - margin].timestamp
+
+    def run(series: list[Candle]) -> list[tuple[datetime, StructureEvent, MarketDirection]]:
+        events = InternalStructureDetector(
+            swing_lookback=5,
+            persistence_candles=2,
+            confluence_filter=False,
+            mean_tr_trailing=True,
+            choch_fail_level_buffer_atr=0.5,
+            choch_success_displacement_atr=3.0,
+        ).detect(series)
+        return [
+            (e.timestamp, e.event, e.direction)
+            for e in events
+            if e.timestamp < settled and not e.provisional
+        ]
+
+    settled_events = run(candles[:cut])
+    # Guard against the assertion below passing on two empty lists.
+    assert len(settled_events) > 10
+    assert settled_events == run(candles)

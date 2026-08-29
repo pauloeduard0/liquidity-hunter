@@ -4,6 +4,7 @@ from functools import partial
 
 from fastapi import APIRouter
 
+from liquidity_hunter.api.anchors import anchor_store
 from liquidity_hunter.api.cache import TTLCache
 from liquidity_hunter.app.overview import (
     OVERVIEW_TIMEFRAMES,
@@ -52,12 +53,28 @@ def get_overview(symbol: str = "BTCUSDT") -> MarketOverview:
     snapshots = [
         _snapshot_cache.get_or_set(
             (symbol, timeframe),
-            partial(load_timeframe_structure, symbol=symbol, timeframe=timeframe),
+            partial(_load_snapshot, symbol, timeframe),
             ttl_seconds=_snapshot_ttl(symbol, timeframe),
         )
         for timeframe in OVERVIEW_TIMEFRAMES
     ]
     return build_overview(symbol, snapshots)
+
+
+def _load_snapshot(symbol: str, timeframe: TimeFrame) -> TimeframeStructureSnapshot:
+    """One timeframe's snapshot, with the structural anchor held steady.
+
+    The ladder and the chart share one store, so a timeframe reads the same
+    structure through either endpoint. See `api.anchors` for why the state
+    lives in this layer and not in `app/`.
+    """
+    snapshot = load_timeframe_structure(
+        symbol=symbol,
+        timeframe=timeframe,
+        anchor_hint=anchor_store.get(symbol, timeframe),
+    )
+    anchor_store.remember(symbol, timeframe, snapshot.structural_anchor)
+    return snapshot
 
 
 def _snapshot_ttl(symbol: str, timeframe: TimeFrame) -> float:

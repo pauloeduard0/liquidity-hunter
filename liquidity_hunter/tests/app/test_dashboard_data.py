@@ -501,6 +501,48 @@ def test_structural_anchor_index_picks_most_recent_high() -> None:
     assert _structural_anchor_index(candles, candles[15].timestamp) == 12
 
 
+def test_structural_anchor_hint_holds_the_previous_anchor() -> None:
+    # The hysteresis: a fresh extreme entering the region does NOT steal the
+    # anchor while the previous one is still in range. Without this, 26-32% of
+    # refreshes moved the anchor and rewrote already-settled structure.
+    highs = [100.0] * 20
+    lows = [90.0] * 20
+    lows[4] = 80.0  # the anchor a previous run picked
+    highs[12] = 110.0  # a newer extreme that would steal it
+    candles = make_series(highs, lows)
+
+    assert _structural_anchor_index(candles, candles[15].timestamp) == 12
+    assert _structural_anchor_index(candles, candles[15].timestamp, candles[4].timestamp) == 4
+
+
+def test_structural_anchor_hint_outside_the_region_is_dropped() -> None:
+    # Self-correcting: once the held anchor slides out of the region, the rule
+    # re-derives instead of pointing at a candle detection can no longer reach.
+    n = _STRUCTURAL_ANCHOR_REGION + 20
+    highs = [100.0] * n
+    lows = [90.0] * n
+    lows[5] = 70.0  # held anchor, now outside the region
+    lows[n - 60] = 80.0
+    candles = make_series(highs, lows)
+
+    assert (
+        _structural_anchor_index(candles, candles[n - 5].timestamp, candles[5].timestamp)
+        == n - 60
+    )
+
+
+def test_structural_anchor_hint_none_reproduces_stateless_behaviour() -> None:
+    highs = [100.0] * 20
+    lows = [90.0] * 20
+    highs[5] = 110.0
+    lows[10] = 80.0
+    candles = make_series(highs, lows)
+
+    assert _structural_anchor_index(candles, candles[15].timestamp, None) == (
+        _structural_anchor_index(candles, candles[15].timestamp)
+    )
+
+
 def test_structural_anchor_index_no_buffer_returns_zero() -> None:
     candles = make_series([100.0] * 10, [90.0] * 10)
     # The visible window is the entire series: no pre-visible candles to anchor in.

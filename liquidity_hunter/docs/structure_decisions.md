@@ -2901,3 +2901,96 @@ between runs, not the pass. On the motivating case the BOS now reports
 no reversal reference, so its next CHoCH is weak by construction. And "a brutal
 move exhausts the cycle" (the user's second observation) has no counterpart in
 the project beyond the `choch_origin` displacement retirement.
+
+---
+
+## Retroactive repaint: the window and the ATR unit (2026-08-29)
+
+A non-provisional `MarketStructure` describes a stretch of chart that already
+happened. New candles must not change it — the state machine walks the pivots
+in order, and the `provisional` contract is precisely that only the live edge
+may repaint. Measured, that contract was not being kept.
+
+**The report.** A reader noticed a bullish `CHoCH*` on the JIMOTHY 1H pool
+anchored at 2026-07-26 20:00 UTC that had not been there before. Replay ruled
+out the obvious cause: the same candles through today's code and through
+`bb2ed7b~1` (before the last detector change) differ by exactly one event, the
+2026-08-12 BOS re-pointed by `17cdab0`. Truncating the series instead, the
+event at `2026-07-29 03:00` reads `LIQUIDITY_SWEEP` up to a cut at 2026-08-20
+and `CHANGE_OF_CHARACTER` from 2026-08-21 — the same code, 24 more candles.
+
+**The measurement** (`research/atr_window_stability.py`): churn of
+non-provisional events more than 100 candles behind the live edge (comfortably
+past `research/event_lag.py`'s p90 emission lag of 30), over 12 symbols ×
+15m/1h/4h, 20 refreshes of 24 candles, ~101 events per window. A 2×2 of
+sliding vs anchored window and whole-series vs frozen ATR, plus the two fixes:
+
+| arm | refreshes touching the past | events changed/refresh |
+|---|---|---|
+| sliding/global (**production**) | **36,8%** | **4,39** |
+| sliding/frozen ATR | 33,1% | 3,79 |
+| anchored/global | 7,1% | 0,54 |
+| anchored/frozen | 0,3% | 0,00 |
+| **sliding/hysteresis** (fix 1) | **15,4%** | **1,53** |
+| sliding/trailing ATR (fix 2) | 33,9% | 3,87 |
+| **sliding/hysteresis + trailing** | **9,7%** | **1,16** |
+
+Two independent causes, and the first is the big one.
+
+### 1. The structural anchor slides (the dominant cause)
+
+`_structural_anchor_index`'s docstring promised stability across refreshes.
+The extreme it picks is a fixed price point, but the *region* it is picked from
+— `[visible_start - 300, visible_start)` — slides with the window's right edge.
+Measured (`research/anchor_stability.py`): the anchor moves on **26-32%** of
+refreshes, and a new anchor re-seeds the bootstrap and rewrites the stream.
+Decomposed: 1-5% the held extreme leaving the region, 22-26% alternating
+low↔high, and **69-76% a fresher candle entering from the right and being a new
+extreme**. That is the rule itself, not an edge case.
+
+**No pure rule fixes it.** A wider region cannot exist (with `limit=1200`, the
+300-candle buffer and the provider's 1500 cap, the region already *is* the
+whole buffer — 600 and 900 measure identical by construction). Picking the
+dominant extreme instead of the most recent is **worse** (40-47%): prominence
+is measured against the price at the edge, which also moves. A quantized edge
+only dilutes (30-32%). Rolling the hysteresis inside the window — the attempt
+at hysteresis without state — scores **100%**: it pins its seed to the window's
+*left* edge, which is exactly what slides, and then propagates that unstable
+point forward instead of damping it.
+
+**Adopted: hysteresis with state, held outside `app/`.** `_structural_anchor_index`
+takes an optional `hint` that wins while its candle is still in the region;
+`_run_internal_structure`, `load_dashboard_data` and `load_timeframe_structure`
+take `anchor_hint` and return the anchor used. The memory lives in
+`liquidity_hunter/api/anchors.py` (`AnchorStore`, 1h TTL, 512-pair cap,
+thread-safe), shared by `/api/dashboard` and `/api/overview` so both read a
+timeframe off one anchor. **With no hint the pipeline is byte-identical to
+before**, which is what keeps replays, fixtures and `research/` reproducible —
+a study must not depend on which requests a server happened to serve first.
+
+### 2. The ATR unit averages the future (the residue, and the JIMOTHY cause)
+
+`detect` computed `mean_tr_pct` over the *whole series* and fed it to every
+`N × ATR` gate. The machine is causal; the threshold was not.
+
+On JIMOTHY the trailing unit at the deciding candle is **17,09%** against the
+window's **11,55%**, and forcing each value over the same candles gives
+`LIQUIDITY_SWEEP` under the first and `CHANGE_OF_CHARACTER` under the second —
+the sweep being the reading that day's volatility supports, and the one the
+chart's price action agrees with (nothing structural broke and it did not
+hold).
+
+Note the two causes do not overlap: **on JIMOTHY the anchor fix does nothing**.
+The on-chain provider returns 1000 candles against `limit=1200`, so there is no
+pre-visible buffer and the anchor is candle 0 on every refresh. That symbol's
+repaint is entirely the ATR.
+
+**Wired, but OFF**: `InternalStructureDetector(mean_tr_trailing=...)` and
+`dashboard_data._MEAN_TR_TRAILING = False`. Each gate now resolves its unit at
+the candle being judged (`mean_tr_at(index)`, a running mean computed once);
+with the flag off it returns the series mean, so the detector is byte-identical
+to before and every fixture reproduces. Measured impact of turning it on, over
+12 symbols × 15m/1h/4h on the production window: **7,0% of events change**
+(+144/−142 over 4062; 11,9% on 15m, 7,5% on 1h, 2,2% on 4h) and `final_trend`
+moves in **1 of 36 combos**. It is left off until that 7% is reviewed on the
+chart — the flag exists to be measured, not to be assumed.

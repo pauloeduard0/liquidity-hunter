@@ -28,6 +28,7 @@ structure points and who its resting liquidity is, never what to do.
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from liquidity_hunter.app.dashboard_data import (
     _HIGHER_TIMEFRAME_MAP,
@@ -105,6 +106,9 @@ class TimeframeStructureSnapshot:
     # Confirmed consolidation ranges overlapping the visible window (same
     # composition post-pass `load_dashboard_data` exposes).
     consolidation_ranges: list[ConsolidationRange] = field(default_factory=list)
+    # The structural anchor this run detected from, for a caller that wants to
+    # hold it steady across refreshes (see `_structural_anchor_index`).
+    structural_anchor: datetime | None = None
 
 
 def load_timeframe_structure(
@@ -113,6 +117,7 @@ def load_timeframe_structure(
     timeframe: TimeFrame = TimeFrame.H1,
     limit: int = 1200,
     confluence_filter: bool = False,
+    anchor_hint: datetime | None = None,
 ) -> TimeframeStructureSnapshot:
     """Fetch and detect one timeframe's structure snapshot (the cacheable unit).
 
@@ -120,10 +125,16 @@ def load_timeframe_structure(
     uses (`_run_internal_structure`: buffered fetch, structural anchor,
     per-timeframe detector wiring, composition passes), plus the equal-level
     zone detection the per-timeframe hunt needs.
+
+    ``anchor_hint`` holds the detection slice still across refreshes; the
+    anchor used comes back on the snapshot. Omitting it is today's stateless
+    behaviour. See `dashboard_data._structural_anchor_index`.
     """
     if provider is None:
         provider = default_ohlcv_provider()
-    run = _run_internal_structure(provider, symbol, timeframe, limit, confluence_filter)
+    run = _run_internal_structure(
+        provider, symbol, timeframe, limit, confluence_filter, anchor_hint=anchor_hint
+    )
     liquidity_zones = mark_swept_zones(
         [
             *_equal_high_detector().detect(run.candles),
@@ -138,6 +149,7 @@ def load_timeframe_structure(
         trend=run.trend,
         liquidity_zones=liquidity_zones,
         consolidation_ranges=run.consolidation_ranges,
+        structural_anchor=run.structural_anchor,
     )
 
 

@@ -4,6 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 
+from liquidity_hunter.api.anchors import anchor_store
 from liquidity_hunter.api.cache import TTLCache
 from liquidity_hunter.api.schemas import DashboardDataResponse
 from liquidity_hunter.app.dashboard_data import (
@@ -48,15 +49,26 @@ def get_dashboard(
     `cache.DEFAULT_TTL_SECONDS` seconds to avoid redundant Binance requests.
     """
     cache_key = (symbol, timeframe, limit, swing_lookback, narrative)
-    data = _cache.get_or_set(
-        cache_key,
-        lambda: load_dashboard_data(
+
+    def load() -> DashboardData:
+        # Hold the structural anchor still across refreshes, so a poll cannot
+        # rewrite structure that has long since settled. The state lives in the
+        # store rather than in `app/`, which stays a pure function of the
+        # series -- see `api.anchors`.
+        snapshot = load_dashboard_data(
             symbol=symbol,
             timeframe=timeframe,
             limit=limit,
             swing_lookback=swing_lookback,
             compute_narrative=narrative,
-        ),
+            anchor_hint=anchor_store.get(symbol, timeframe),
+        )
+        anchor_store.remember(symbol, timeframe, snapshot.structural_anchor)
+        return snapshot
+
+    data = _cache.get_or_set(
+        cache_key,
+        load,
         ttl_seconds=_ONCHAIN_TTL_SECONDS if is_onchain_symbol(symbol) else None,
     )
     return DashboardDataResponse.model_validate(data)

@@ -1519,6 +1519,15 @@ measured, the ladder costs ~1s both ways). The providers hold no per-request
 state, only stateless public GETs, the same property that lets the prefetch
 pool share them across threads.
 
+`load_dashboard_data`, `_run_internal_structure` and `load_timeframe_structure`
+also accept **`anchor_hint`** (default `None`): the structural anchor a previous
+call for this symbol/timeframe used, which `_structural_anchor_index` keeps
+while that candle is still inside its region. The anchor the run chose comes
+back as `DashboardData.structural_anchor` /
+`TimeframeStructureSnapshot.structural_anchor`. The state itself lives in
+`api.anchors` — with no hint every one of these is byte-identical to the
+stateless pipeline, so a replay or a fixture reproduces exactly.
+
 `load_dashboard_data` also accepts **`compute_narrative`** (default `True`;
 `False` skips the `NarrativeEngine` synthesis entirely, `narrative=None`) and
 its buffered-fetch + internal-detection front half now lives in
@@ -1568,6 +1577,19 @@ only on `app` and `core` (an alternative presentation layer to
   is recomputed per request. A cold overview costs one buffered-klines fetch
   per ladder timeframe (~2.5s); warm requests only refresh expired intraday
   snapshots.
+- **`api/anchors.py`** — `AnchorStore` (module-level `anchor_store`), the
+  **only stateful piece of the structure pipeline**, deliberately in the
+  presentation layer. It remembers the structural anchor last used per
+  `(symbol, timeframe)` (1h TTL, 512-pair cap, thread-safe) and both routes
+  feed it back as `anchor_hint`, so `_structural_anchor_index` holds its
+  anchor while that candle stays in the region instead of letting a fresh
+  extreme steal it. Without this, 36.8% of refreshes rewrote non-provisional
+  events more than 100 candles behind the live edge — repainting settled
+  history, which the `provisional` marks exist to confine to the live edge;
+  with it, 15.4% (measured, `research/atr_window_stability.py`). The state is
+  here and never in `app/`: passing no hint reproduces the stateless pipeline
+  byte for byte, which is what keeps replays, fixtures and `research/`
+  reproducible. Full measurement in `docs/structure_decisions.md`.
 - **`api/cache.py`** — `TTLCache`, a minimal generic in-memory
   time-based cache (`get_or_set(key, factory, ttl_seconds=None)`; the
   optional per-call `ttl_seconds` overrides the cache-wide TTL for entries

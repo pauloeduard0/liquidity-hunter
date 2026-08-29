@@ -1004,6 +1004,10 @@ class DashboardData:
     # and side (see `app.liquidity_grabs`). The full stream: which few belong
     # on a chart is presentation.
     liquidity_grabs: list[LiquidityGrab] = field(default_factory=list)
+    # The structural anchor this run detected from (`_structural_anchor_index`).
+    # Not presentation -- it exists so a caller that wants stable history can
+    # feed it back as the next call's `anchor_hint`.
+    structural_anchor: datetime | None = None
     # Every VWAP reclaim in the window that followed a test of an order block
     # (see `app.block_reclaim`), each carrying `r_atr` -- how far the reclaim
     # sat from the tested block in the series' own volatility. The reading is
@@ -1035,7 +1039,23 @@ class DashboardData:
     higher_timeframe_events: list[MarketStructure] = field(default_factory=list)
 
 
-def _structural_anchor_index(candles: list[Candle], visible_start: datetime) -> int:
+# Measure every `N x ATR` gate in the volatility that had printed by the candle
+# being judged, instead of averaging the whole series. The state machine is
+# causal, but the threshold was not: a candle printed weeks later moved the unit
+# a months-old decision was measured in, and the decision could fall on the
+# other side of it -- repainting resolved history, which is what the
+# `provisional` marks exist to confine to the live edge.
+#
+# OFF until measured on the matrix. With it off the detector is byte-identical
+# to before. See `research/atr_window_stability.py`.
+_MEAN_TR_TRAILING = False
+
+
+def _structural_anchor_index(
+    candles: list[Candle],
+    visible_start: datetime,
+    hint: datetime | None = None,
+) -> int:
     """Index in ``candles`` where internal-structure detection should start.
 
     Returns the most recent *major extreme* -- the candle with the lowest low or
@@ -1043,18 +1063,47 @@ def _structural_anchor_index(candles: list[Candle], visible_start: datetime) -> 
     ``_STRUCTURAL_ANCHOR_REGION`` candles preceding the visible window (the
     candles before ``visible_start``). Anchoring detection at this deterministic
     structural point seeds the detector's trend from the move actually heading
-    into the visible window, while staying stable across refreshes (the extreme
-    is a fixed price point, not an offset that slides with the window's right
-    edge). Falls back to ``0`` when there is no pre-visible buffer (e.g. the
-    provider returned only the visible window).
+    into the visible window, rather than at a fixed offset that would inherit
+    whatever pivot happens to sit there.
+
+    ``hint`` is a previously chosen anchor, and it wins whenever its candle is
+    still inside the region -- the hysteresis. The extreme itself is a fixed
+    price point, but the *region* it is picked from is not: it slides with the
+    window's right edge, so a fresh candle entering from the right can be a new
+    extreme and steal the anchor. Measured across 12 symbols x 15m/1h/4h
+    (`research/anchor_stability.py`), that happens on 26-32% of refreshes, and
+    each move re-seeds the bootstrap and rewrites already-settled structure --
+    36,8% of refreshes changed non-provisional events more than 100 candles
+    behind the live edge (`research/atr_window_stability.py`). Holding the
+    previous anchor while it remains valid cuts the anchor's own churn to
+    ~9,5%. No pure rule does this: a wider region cannot exist (with the
+    production wiring the region already *is* the whole buffer), picking the
+    dominant extreme instead of the most recent is worse (40-47%), and rolling
+    the hysteresis inside the window scores 100% -- it pins its seed to the
+    window's left edge, which is precisely what slides.
+
+    The hint is therefore state, and it is deliberately the *caller's* state:
+    this function and the pipeline above it stay pure, so a replay, a fixture
+    and a measurement pass ``None`` and reproduce exactly today's behaviour.
+
+    Falls back to ``0`` when there is no pre-visible buffer (e.g. the provider
+    returned only the visible window).
     """
     visible_start_index = next(
         (i for i, candle in enumerate(candles) if candle.timestamp >= visible_start),
         0,
     )
-    region = candles[max(0, visible_start_index - _STRUCTURAL_ANCHOR_REGION) : visible_start_index]
+    region_start = max(0, visible_start_index - _STRUCTURAL_ANCHOR_REGION)
+    region = candles[region_start:visible_start_index]
     if not region:
         return 0
+    if hint is not None:
+        held = next(
+            (i for i, candle in enumerate(region) if candle.timestamp == hint),
+            None,
+        )
+        if held is not None:
+            return region_start + held
     lowest = min(region, key=lambda candle: candle.low)
     highest = max(region, key=lambda candle: candle.high)
     anchor = lowest if lowest.timestamp > highest.timestamp else highest
@@ -2166,6 +2215,8 @@ def _build_internal_detector(
         choch_pending_fail_min_recovery_frac=_CHOCH_PENDING_FAIL_MIN_RECOVERY_FRAC,
         # See _CHOCH_FAIL_LEVEL_BUFFER_ATR.
         choch_fail_level_buffer_atr=_CHOCH_FAIL_LEVEL_BUFFER_ATR,
+        # See _MEAN_TR_TRAILING.
+        mean_tr_trailing=_MEAN_TR_TRAILING,
         # A pending BOS discarded without emitting -- a phantom advance whose
         # confirming pullback came in too deep (below the prior BOS's confirming
         # pullback but still above the leg origin, so it neither emits nor
@@ -2207,6 +2258,10 @@ class InternalStructureRun:
     # Confirmed consolidation ranges overlapping the visible window (see
     # `_detect_consolidations`).
     consolidation_ranges: list[ConsolidationRange]
+    # The candle the detection slice started at (`_structural_anchor_index`).
+    # A caller that wants stable history feeds it back as the next run's
+    # `anchor_hint`; see that function's note on why the state lives outside.
+    structural_anchor: datetime | None = None
 
 
 def _run_internal_structure(
@@ -2215,6 +2270,8 @@ def _run_internal_structure(
     timeframe: TimeFrame,
     limit: int,
     confluence_filter: bool,
+    *,
+    anchor_hint: datetime | None = None,
 ) -> InternalStructureRun:
     """Fetch and run the production internal-structure pipeline for one timeframe.
 
@@ -2235,7 +2292,8 @@ def _run_internal_structure(
     # extreme before the visible window) rather than a fixed candle offset, so
     # the trend it bootstraps reflects the move actually entering the window
     # instead of a stale, far-back regime. See `_structural_anchor_index`.
-    internal_candles = buffered_candles[_structural_anchor_index(buffered_candles, visible_start) :]
+    anchor_index = _structural_anchor_index(buffered_candles, visible_start, anchor_hint)
+    internal_candles = buffered_candles[anchor_index:]
 
     detector = _build_internal_detector(timeframe, confluence_filter=confluence_filter)
 
@@ -2332,6 +2390,7 @@ def _run_internal_structure(
         events=events,
         trend=detector.final_trend,
         consolidation_ranges=consolidation_ranges,
+        structural_anchor=buffered_candles[anchor_index].timestamp,
     )
 
 
@@ -2612,12 +2671,20 @@ def load_dashboard_data(
     confluence_filter: bool = False,
     futures_provider: FuturesDataProvider | None = None,
     compute_narrative: bool = True,
+    anchor_hint: datetime | None = None,
 ) -> DashboardData:
     """Fetch candles and assemble liquidity, ranking, and retail bias data.
 
     ``compute_narrative=False`` skips the `NarrativeEngine` synthesis entirely
     (``narrative=None`` in the snapshot) -- a lighter profile for consumers
     that do not render the narrative/anomaly panel.
+
+    ``anchor_hint`` is the structural anchor a previous call for this
+    symbol/timeframe used; passing it back holds the detection slice still
+    while the anchor's candle stays in range, so settled structure stops being
+    rewritten as the window slides (see `_structural_anchor_index`). The
+    anchor actually used comes back as ``DashboardData.structural_anchor``.
+    Omitting it reproduces the stateless behaviour exactly.
     """
     if provider is None:
         provider = default_ohlcv_provider()
@@ -2647,7 +2714,9 @@ def load_dashboard_data(
         else None
     )
 
-    internal_run = _run_internal_structure(provider, symbol, timeframe, limit, confluence_filter)
+    internal_run = _run_internal_structure(
+        provider, symbol, timeframe, limit, confluence_filter, anchor_hint=anchor_hint
+    )
     buffered_candles = internal_run.buffered_candles
     candles = internal_run.candles
 
@@ -2910,6 +2979,7 @@ def load_dashboard_data(
         oi_analysis=oi_analysis,
         market_control=market_control,
         consolidation_ranges=internal_run.consolidation_ranges,
+        structural_anchor=internal_run.structural_anchor,
         liquidity_grabs=build_liquidity_grabs(
             symbol=symbol,
             timeframe=timeframe,

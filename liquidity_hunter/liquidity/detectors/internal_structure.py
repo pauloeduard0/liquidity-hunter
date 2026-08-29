@@ -862,6 +862,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_pending_fail_persistence_candles: int | None = None,
         choch_pending_fail_min_recovery_frac: float | None = None,
         choch_fail_level_buffer_atr: float | None = None,
+        mean_tr_trailing: bool = False,
         choch_fizzle_reclaim_candles: int | None = None,
         choch_fizzle_reclaim_origin_buffer_atr: float | None = None,
         choch_failed_fallback_suppress_candles: int | None = None,
@@ -1019,6 +1020,23 @@ class InternalStructureDetector(MarketStructureDetector):
             choch_pending_fail_min_recovery_frac
         )
         self._choch_fail_level_buffer_atr = choch_fail_level_buffer_atr
+        # Measure the volatility unit every `N x ATR` gate uses *up to the
+        # candle being judged*, instead of over the whole series.
+        #
+        # The state machine is causal -- it walks the pivots in order -- but the
+        # threshold was not: `mean_tr_pct` averaged the entire series, so a
+        # candle printed weeks later changed the unit a months-old decision was
+        # measured in, and the decision fell on the other side of it. That is
+        # repainting resolved history, which is exactly what the `provisional`
+        # marks exist to confine to the live edge.
+        #
+        # Measured on the JIMOTHY 1H pool: the trailing unit at the decision
+        # candle (2026-07-29 03:00) is 17,09% against the global window's
+        # 11,55%, and the event reads `LIQUIDITY_SWEEP` under the first and
+        # `CHANGE_OF_CHARACTER` under the second -- the sweep being the reading
+        # the volatility of the day supports. See
+        # `research/atr_window_stability.py`.
+        self._mean_tr_trailing = mean_tr_trailing
         self._choch_fizzle_reclaim_candles = choch_fizzle_reclaim_candles
         self._choch_fizzle_reclaim_origin_buffer_atr = (
             choch_fizzle_reclaim_origin_buffer_atr
@@ -1135,6 +1153,7 @@ class InternalStructureDetector(MarketStructureDetector):
         # shallow-pullback leg-origin promotion). `None` when unused or the
         # series is too short to measure a range.
         mean_tr_pct: float | None = None
+        trailing_mean_tr: list[float] = []
         if (
             self._bos_leg_origin_release_gap_atr is not None
             or self._bos_leg_origin_min_pullback_atr is not None
@@ -1144,7 +1163,7 @@ class InternalStructureDetector(MarketStructureDetector):
             or self._choch_fail_level_buffer_atr is not None
             or self._provisional_choch_break_buffer_atr is not None
         ) and len(candles) > 1:
-            mean_tr_pct = fmean(
+            tr_pcts = [
                 max(
                     curr.high - curr.low,
                     abs(curr.high - prev.close),
@@ -1152,7 +1171,37 @@ class InternalStructureDetector(MarketStructureDetector):
                 )
                 / curr.close
                 for prev, curr in zip(candles, candles[1:], strict=False)
-            )
+            ]
+            mean_tr_pct = fmean(tr_pcts)
+            if self._mean_tr_trailing:
+                # Running mean of the same series, so `mean_tr_at(i)` is the
+                # unit as it stood at candle `i` -- O(n) once, not per lookup.
+                running = 0.0
+                trailing_mean_tr = []
+                for count, value in enumerate(tr_pcts, start=1):
+                    running += value
+                    trailing_mean_tr.append(running / count)
+
+        def mean_tr_at(index: int | None) -> float | None:
+            """The volatility unit as it stood at candle ``index``.
+
+            With `mean_tr_trailing` off this is the whole-series mean, which is
+            the historical behaviour and what every fixture and measurement
+            reproduces. With it on, a decision is measured in the volatility
+            that had actually printed by the candle deciding it -- an unknown
+            index (`None`) still falls back to the series mean, since a gate
+            with no candle to anchor to has nothing better to use.
+
+            The running mean is over `tr_pcts`, which starts at candle 1 (a
+            true range needs a previous close), hence the shift.
+            """
+            if not self._mean_tr_trailing or mean_tr_pct is None or index is None:
+                return mean_tr_pct
+            if not trailing_mean_tr:
+                return mean_tr_pct
+            position = min(max(index - 1, 0), len(trailing_mean_tr) - 1)
+            return trailing_mean_tr[position]
+
         release_gap = self._bos_leg_origin_release_gap_pct
         if self._bos_leg_origin_release_gap_atr is not None and mean_tr_pct is not None:
             release_gap = self._bos_leg_origin_release_gap_atr * mean_tr_pct
@@ -1879,8 +1928,8 @@ class InternalStructureDetector(MarketStructureDetector):
                 if (
                     self._stale_reanchor_displacement_atr is not None
                     and self._stale_reanchor_displacement_candles is not None
-                    and mean_tr_pct is not None
-                    and mean_tr_pct > 0
+                    and (decision_atr := mean_tr_at(current_index)) is not None
+                    and decision_atr > 0
                 ):
                     if trend is MarketDirection.BEARISH:
                         disp_ref = validated_choch_high or choch_origin_high or active_high
@@ -1902,7 +1951,7 @@ class InternalStructureDetector(MarketStructureDetector):
                         )
                     if (
                         gap_pct is not None
-                        and gap_pct >= self._stale_reanchor_displacement_atr * mean_tr_pct
+                        and gap_pct >= self._stale_reanchor_displacement_atr * decision_atr
                     ):
                         displaced = True
                         stale_after = (
@@ -2319,14 +2368,14 @@ class InternalStructureDetector(MarketStructureDetector):
                 # `choch_success_displacement_atr`.
                 if (
                     self._choch_success_displacement_atr is not None
-                    and mean_tr_pct is not None
-                    and mean_tr_pct > 0
+                    and (decision_atr := mean_tr_at(current_index)) is not None
+                    and decision_atr > 0
                     and bear_fail_pivot is not None
                     and bear_leg_low is not None
                     and candles[current_index].close > 0
                     and (bear_fail_pivot.price - bear_leg_low)
                     / candles[current_index].close
-                    >= self._displacement_success_threshold(mean_tr_pct)
+                    >= self._displacement_success_threshold(decision_atr)
                 ):
                     bear_choch_origin = None
                     bear_choch_fail_ref = None
@@ -2348,7 +2397,7 @@ class InternalStructureDetector(MarketStructureDetector):
                 bear_fail_scan_start = max(prev_high_pivot_index + 1, bear_choch_arm_index + 1)
                 bear_fail_level = (
                     self._fail_break_level(
-                        bear_fail_pivot.price, mean_tr_pct, bullish_reclaim=True
+                        bear_fail_pivot.price, mean_tr_at(current_index), bullish_reclaim=True
                     )
                     if bear_fail_pivot is not None and bear_fail_pivot is bear_choch_fail_ref
                     else (bear_fail_pivot.price if bear_fail_pivot is not None else 0.0)
@@ -2993,13 +3042,13 @@ class InternalStructureDetector(MarketStructureDetector):
                             if (
                                 self._bos_leg_origin_choch_ref
                                 and self._bos_leg_origin_min_pullback_atr is not None
-                                and mean_tr_pct is not None
+                                and (pullback_atr := mean_tr_at(current_index)) is not None
                                 and active_high is not None
                                 and active_low is not None
                                 and pending_low is not None
                                 and pending_low.price < active_low.price
                                 and (active_high.price - active_low.price) / active_low.price
-                                < self._bos_leg_origin_min_pullback_atr * mean_tr_pct
+                                < self._bos_leg_origin_min_pullback_atr * pullback_atr
                             ):
                                 pullback_ref_snapshot = pending_low
                             # Mirror of the bearish case: consecutive highs with
@@ -3449,14 +3498,14 @@ class InternalStructureDetector(MarketStructureDetector):
                 # `choch_success_displacement_atr`.
                 if (
                     self._choch_success_displacement_atr is not None
-                    and mean_tr_pct is not None
-                    and mean_tr_pct > 0
+                    and (decision_atr := mean_tr_at(current_index)) is not None
+                    and decision_atr > 0
                     and bull_fail_pivot is not None
                     and bull_leg_high is not None
                     and candles[current_index].close > 0
                     and (bull_leg_high - bull_fail_pivot.price)
                     / candles[current_index].close
-                    >= self._displacement_success_threshold(mean_tr_pct)
+                    >= self._displacement_success_threshold(decision_atr)
                 ):
                     bull_choch_origin = None
                     bull_choch_fail_ref = None
@@ -3476,7 +3525,7 @@ class InternalStructureDetector(MarketStructureDetector):
                 bull_fail_scan_start = max(prev_low_pivot_index + 1, bull_choch_arm_index + 1)
                 bull_fail_level = (
                     self._fail_break_level(
-                        bull_fail_pivot.price, mean_tr_pct, bullish_reclaim=False
+                        bull_fail_pivot.price, mean_tr_at(current_index), bullish_reclaim=False
                     )
                     if bull_fail_pivot is not None and bull_fail_pivot is bull_choch_fail_ref
                     else (bull_fail_pivot.price if bull_fail_pivot is not None else 0.0)
@@ -4080,13 +4129,13 @@ class InternalStructureDetector(MarketStructureDetector):
                             if (
                                 self._bos_leg_origin_choch_ref
                                 and self._bos_leg_origin_min_pullback_atr is not None
-                                and mean_tr_pct is not None
+                                and (pullback_atr := mean_tr_at(current_index)) is not None
                                 and active_high is not None
                                 and active_low is not None
                                 and pending_high is not None
                                 and pending_high.price > active_high.price
                                 and (active_high.price - active_low.price) / active_high.price
-                                < self._bos_leg_origin_min_pullback_atr * mean_tr_pct
+                                < self._bos_leg_origin_min_pullback_atr * pullback_atr
                             ):
                                 pullback_ref_snapshot = pending_high
                             # Consecutive lows with no intervening high pivot
@@ -4252,20 +4301,20 @@ class InternalStructureDetector(MarketStructureDetector):
                 )
                 if (
                     self._choch_success_displacement_atr is not None
-                    and mean_tr_pct is not None
-                    and mean_tr_pct > 0
+                    and (decision_atr := mean_tr_at(last_index)) is not None
+                    and decision_atr > 0
                     and le_fail_pivot is not None
                     and bull_leg_high is not None
                     and candles[last_index].close > 0
                     and (bull_leg_high - le_fail_pivot.price)
                     / candles[last_index].close
-                    >= self._displacement_success_threshold(mean_tr_pct)
+                    >= self._displacement_success_threshold(decision_atr)
                 ):
                     le_fail_pivot = None
                 le_fail_persistence = self._persistence_candles
                 le_fail_level = (
                     self._fail_break_level(
-                        le_fail_pivot.price, mean_tr_pct, bullish_reclaim=False
+                        le_fail_pivot.price, mean_tr_at(last_index), bullish_reclaim=False
                     )
                     if le_fail_pivot is not None and le_fail_pivot is bull_choch_fail_ref
                     else (le_fail_pivot.price if le_fail_pivot is not None else 0.0)
@@ -4352,20 +4401,20 @@ class InternalStructureDetector(MarketStructureDetector):
                 )
                 if (
                     self._choch_success_displacement_atr is not None
-                    and mean_tr_pct is not None
-                    and mean_tr_pct > 0
+                    and (decision_atr := mean_tr_at(last_index)) is not None
+                    and decision_atr > 0
                     and le_fail_pivot is not None
                     and bear_leg_low is not None
                     and candles[last_index].close > 0
                     and (le_fail_pivot.price - bear_leg_low)
                     / candles[last_index].close
-                    >= self._displacement_success_threshold(mean_tr_pct)
+                    >= self._displacement_success_threshold(decision_atr)
                 ):
                     le_fail_pivot = None
                 le_fail_persistence = self._persistence_candles
                 le_fail_level = (
                     self._fail_break_level(
-                        le_fail_pivot.price, mean_tr_pct, bullish_reclaim=True
+                        le_fail_pivot.price, mean_tr_at(last_index), bullish_reclaim=True
                     )
                     if le_fail_pivot is not None and le_fail_pivot is bear_choch_fail_ref
                     else (le_fail_pivot.price if le_fail_pivot is not None else 0.0)
@@ -4728,10 +4777,10 @@ class InternalStructureDetector(MarketStructureDetector):
                 break_level = ref.price
                 if (
                     self._provisional_choch_break_buffer_atr is not None
-                    and mean_tr_pct is not None
-                    and mean_tr_pct > 0
+                    and (edge_atr := mean_tr_at(len(candles) - 1)) is not None
+                    and edge_atr > 0
                 ):
-                    band = ref.price * self._provisional_choch_break_buffer_atr * mean_tr_pct
+                    band = ref.price * self._provisional_choch_break_buffer_atr * edge_atr
                     break_level = ref.price - band if bearish_choch else ref.price + band
 
                 def _beyond(candle: Candle) -> bool:
@@ -4879,11 +4928,9 @@ class InternalStructureDetector(MarketStructureDetector):
                 if (
                     self._choch_fizzle_reclaim_origin_buffer_atr is not None
                     and standing_choch_origin is not None
-                    and mean_tr_pct is not None
+                    and (fizzle_atr := mean_tr_at(standing_choch_index)) is not None
                 ):
-                    buffer_frac = (
-                        self._choch_fizzle_reclaim_origin_buffer_atr * mean_tr_pct
-                    )
+                    buffer_frac = self._choch_fizzle_reclaim_origin_buffer_atr * fizzle_atr
                     reclaim_ref = (
                         standing_choch_origin.price * (1.0 + buffer_frac)
                         if bearish
