@@ -570,6 +570,28 @@ class InternalStructureDetector(MarketStructureDetector):
     the bare price -- the escape valve is never hardened. The emitted
     `CHOCH_FAILED` reports the true level, not the buffered one.
 
+    `choch_weak_fail_clear_counter_pivot` (default `False` = off) changes
+    *which level* a weak-referenced CHoCH is invalidated at. The buffer above
+    only widens a band around the broken level; this says the broken level is
+    the wrong price to watch at all. A CHoCH breaks a low (bearish) or a high
+    (bullish), and price coming back over that same level is the most ordinary
+    thing it does after a reversal -- it is a retrace into the zone the break
+    just vacated, not a loss of structure. What actually invalidates a bearish
+    reversal is a close back above the **lower high** the drop left behind.
+    When set, the weak fail ref arms at the nearest counter pivot (`active_high`
+    for a bearish CHoCH, `active_low` for a bullish one) instead of the broken
+    level. Motivating case, SOLUSDT H4 2026-07-13: a bearish CHoCH at 74.06
+    (weak ref 76.24) was killed on 07-14 by a bounce closing 77.35 -- over the
+    broken 76.24, but under every lower high of the leg (79.64 / 78.86 / 78.19),
+    and price then resumed straight down. The ✕ cost the leg its first bearish
+    BOS, which reappeared four days late at 72.30/73.36 instead of at
+    73.36/74.06 on 07-24. The arm stays *far* tighter than the leg-extreme
+    origin the structural path waits for, so the weak shortcut still catches
+    what it exists for (the BTCUSDT D1 -30% crash read as sweeps under a stale
+    bullish trend). Requires `choch_weak_ref_fail_at_broken_level`; with
+    `choch_origin_leg_extreme` off the counter pivot *is* the origin and the
+    shortcut degenerates to the origin check.
+
     `choch_pending_fail_min_recovery_frac` (default `None` = off) adds a
     **depth** requirement to that pending-fail path, which is otherwise purely
     a *time* rule: six closes a hair above the broken level kill the reversal
@@ -863,6 +885,7 @@ class InternalStructureDetector(MarketStructureDetector):
         choch_pending_fail_persistence_candles: int | None = None,
         choch_pending_fail_min_recovery_frac: float | None = None,
         choch_fail_level_buffer_atr: float | None = None,
+        choch_weak_fail_clear_counter_pivot: bool = False,
         mean_tr_trailing: bool = False,
         choch_fizzle_reclaim_candles: int | None = None,
         choch_fizzle_reclaim_origin_buffer_atr: float | None = None,
@@ -1027,6 +1050,7 @@ class InternalStructureDetector(MarketStructureDetector):
             choch_pending_fail_min_recovery_frac
         )
         self._choch_fail_level_buffer_atr = choch_fail_level_buffer_atr
+        self._choch_weak_fail_clear_counter_pivot = choch_weak_fail_clear_counter_pivot
         # Measure the volatility unit every `N x ATR` gate uses *up to the
         # candle being judged*, instead of over the whole series.
         #
@@ -1431,6 +1455,12 @@ class InternalStructureDetector(MarketStructureDetector):
         # of origin and this level; structural CHoCHs are untouched.
         bull_choch_fail_ref: Pivot | None = None
         bear_choch_fail_ref: Pivot | None = None
+        # Under `choch_weak_fail_clear_counter_pivot` the weak fail ref is the
+        # *trailing* counter pivot, so it must never ratchet below the level
+        # the CHoCH actually broke -- that floor is today's behaviour and the
+        # rule is only ever allowed to make the failure harder, never easier.
+        bull_choch_fail_floor: Pivot | None = None
+        bear_choch_fail_floor: Pivot | None = None
         # Whether the armed fail ref above came from a *weak* reference (the
         # `choch_weak_ref_fail_at_broken_level` path, base persistence +
         # weak-level staircase re-seed on failure) or a *structural* one (the
@@ -2409,18 +2439,34 @@ class InternalStructureDetector(MarketStructureDetector):
                 # it has plainly succeeded, so retire the origin rather than let a
                 # later mean-reversion bounce fire a false CHOCH_FAILED. See
                 # `choch_success_displacement_atr`.
+                # Displacement is measured from the level the CHoCH BROKE, not
+                # from the trailing counter pivot: under
+                # `choch_weak_fail_clear_counter_pivot` the fail pivot sits a
+                # whole pullback higher, and letting that inflate the drop turns
+                # ordinary legs into "plainly succeeded" retirements (NEARUSDT
+                # D1 2026-07-27 retired its exit outright and could no longer
+                # fail at all). The floor is the pre-flag pivot, so this keeps
+                # the retirement measuring exactly what it always measured.
+                bear_disp_pivot = (
+                    bear_choch_fail_floor
+                    if self._choch_weak_fail_clear_counter_pivot
+                    and bear_choch_fail_ref_weak
+                    and bear_choch_fail_floor is not None
+                    else bear_fail_pivot
+                )
                 if (
                     self._choch_success_displacement_atr is not None
                     and (decision_atr := mean_tr_at(current_index)) is not None
                     and decision_atr > 0
                     and bear_fail_pivot is not None
+                    and bear_disp_pivot is not None
                     and bear_leg_low is not None
                     and candles[current_index].close > 0
-                    and (bear_fail_pivot.price - bear_leg_low)
+                    and (bear_disp_pivot.price - bear_leg_low)
                     / candles[current_index].close
                     >= self._displacement_success_threshold(decision_atr)
                 ):
-                    retire_gap = (bear_fail_pivot.price - bear_leg_low) / candles[
+                    retire_gap = (bear_disp_pivot.price - bear_leg_low) / candles[
                         current_index
                     ].close
                     bear_choch_origin = None
@@ -2457,6 +2503,29 @@ class InternalStructureDetector(MarketStructureDetector):
                 # start the scan past the arming pivot, never before (else the
                 # pre-CHoCH rally is mis-read as the reclaim -- see
                 # `bear_choch_arm_index`).
+                # The weak fail ref TRAILS the structure it guards: the level a
+                # reclaim must clear is the lower high standing *now*, not the
+                # one frozen at the CHoCH. Without this a months-old high
+                # shields a leg that has since descended far below it
+                # (NEARUSDT D1 2026-07-27: armed at the 07-15 high of 2.106
+                # while the leg went on to print 1.768 and 1.683 -- a +19%
+                # recovery to 2.016 cleared both and still would not have
+                # failed the CHoCH). Floored at the level the CHoCH actually
+                # broke, so this only ever makes the failure harder than the
+                # bare-level check, never easier.
+                if (
+                    self._choch_weak_fail_clear_counter_pivot
+                    and bear_choch_fail_ref_weak
+                    and bear_choch_fail_ref is not None
+                    and active_high is not None
+                    and active_high.price < bear_choch_fail_ref.price
+                ):
+                    bear_choch_fail_ref = (
+                        bear_choch_fail_floor
+                        if bear_choch_fail_floor is not None
+                        and active_high.price < bear_choch_fail_floor.price
+                        else active_high
+                    )
                 bear_fail_scan_start = max(prev_high_pivot_index + 1, bear_choch_arm_index + 1)
                 bear_fail_level = (
                     self._fail_break_level(
@@ -2846,7 +2915,22 @@ class InternalStructureDetector(MarketStructureDetector):
                     bull_choch_fail_ref_weak = False
                     if choch_high_weak_ref:
                         if self._choch_weak_ref_fail_at_broken_level:
-                            bull_choch_fail_ref = choch_high_ref
+                            # Under `choch_weak_fail_clear_counter_pivot` the
+                            # invalidation level is the nearest *counter* pivot
+                            # (the higher low the rally stands on), not the
+                            # broken high itself: a pullback into the level a
+                            # CHoCH just broke is ordinary, and only the loss of
+                            # the structure's own last low invalidates it. Still
+                            # far tighter than the leg-extreme origin, so the
+                            # weak shortcut keeps doing its job.
+                            bull_choch_fail_floor = choch_high_ref
+                            if (
+                                self._choch_weak_fail_clear_counter_pivot
+                                and active_low is not None
+                            ):
+                                bull_choch_fail_ref = active_low
+                            else:
+                                bull_choch_fail_ref = choch_high_ref
                             bull_choch_fail_ref_weak = True
                     elif self._choch_pending_fail_at_broken_level:
                         bull_choch_fail_ref = choch_high_ref
@@ -3573,18 +3657,28 @@ class InternalStructureDetector(MarketStructureDetector):
                 # the origin here anyway -- so retire it: a later reversal is a
                 # fresh opposite CHoCH, not a failure of this one. See
                 # `choch_success_displacement_atr`.
+                # Mirror of the bearish case: displacement is measured from the
+                # broken level, never from the trailing counter pivot.
+                bull_disp_pivot = (
+                    bull_choch_fail_floor
+                    if self._choch_weak_fail_clear_counter_pivot
+                    and bull_choch_fail_ref_weak
+                    and bull_choch_fail_floor is not None
+                    else bull_fail_pivot
+                )
                 if (
                     self._choch_success_displacement_atr is not None
                     and (decision_atr := mean_tr_at(current_index)) is not None
                     and decision_atr > 0
                     and bull_fail_pivot is not None
+                    and bull_disp_pivot is not None
                     and bull_leg_high is not None
                     and candles[current_index].close > 0
-                    and (bull_leg_high - bull_fail_pivot.price)
+                    and (bull_leg_high - bull_disp_pivot.price)
                     / candles[current_index].close
                     >= self._displacement_success_threshold(decision_atr)
                 ):
-                    retire_gap = (bull_leg_high - bull_fail_pivot.price) / candles[
+                    retire_gap = (bull_leg_high - bull_disp_pivot.price) / candles[
                         current_index
                     ].close
                     bull_choch_origin = None
@@ -3630,6 +3724,21 @@ class InternalStructureDetector(MarketStructureDetector):
                         bear_choch_rearm = None
                 # Mirror of the bearish case: the reclaim must come after the
                 # CHoCH formed, so start the scan past the arming pivot.
+                # Mirror of the bearish case: the weak fail ref trails to the
+                # higher low standing now, floored at the broken level.
+                if (
+                    self._choch_weak_fail_clear_counter_pivot
+                    and bull_choch_fail_ref_weak
+                    and bull_choch_fail_ref is not None
+                    and active_low is not None
+                    and active_low.price > bull_choch_fail_ref.price
+                ):
+                    bull_choch_fail_ref = (
+                        bull_choch_fail_floor
+                        if bull_choch_fail_floor is not None
+                        and active_low.price > bull_choch_fail_floor.price
+                        else active_low
+                    )
                 bull_fail_scan_start = max(prev_low_pivot_index + 1, bull_choch_arm_index + 1)
                 bull_fail_level = (
                     self._fail_break_level(
@@ -3973,7 +4082,22 @@ class InternalStructureDetector(MarketStructureDetector):
                     bear_choch_fail_ref_weak = False
                     if choch_low_weak_ref:
                         if self._choch_weak_ref_fail_at_broken_level:
-                            bear_choch_fail_ref = choch_low_ref
+                            # Mirror of the bullish case: under
+                            # `choch_weak_fail_clear_counter_pivot` the reclaim
+                            # must clear the nearest lower high, not merely the
+                            # low the CHoCH broke. SOLUSDT H4 2026-07-13: the
+                            # bearish CHoCH at 74.06 died on 07-14 to a bounce
+                            # that closed 77.35 -- back over the broken 76.24
+                            # but under every lower high of the leg (79.64 /
+                            # 78.86 / 78.19), i.e. an ordinary retrace.
+                            bear_choch_fail_floor = choch_low_ref
+                            if (
+                                self._choch_weak_fail_clear_counter_pivot
+                                and active_high is not None
+                            ):
+                                bear_choch_fail_ref = active_high
+                            else:
+                                bear_choch_fail_ref = choch_low_ref
                             bear_choch_fail_ref_weak = True
                     elif self._choch_pending_fail_at_broken_level:
                         bear_choch_fail_ref = choch_low_ref

@@ -3120,3 +3120,119 @@ to before and every fixture reproduces. Measured impact of turning it on, over
 (+144/−142 over 4062; 11,9% on 15m, 7,5% on 1h, 2,2% on 4h) and `final_trend`
 moves in **1 of 36 combos**. It is left off until that 7% is reviewed on the
 chart — the flag exists to be measured, not to be assumed.
+
+## O `CHoCH ✕` falha cedo demais? — MEDIDO E NEGATIVO (2026-08-30)
+
+**Caso motivador** (SOLUSDT H4): o CHoCH de baixa de 2026-07-13 12h (nível
+76,24) vive um dia. Em 07-14 12h um repique fecha em 77,35 — **0,26 ATR** acima
+do gatilho `nível + choch_fail_level_buffer_atr` (76,97) — e o `CHOCH_FAILED`
+dispara. Nas duas semanas seguintes o preço faz 73,32, 72,26 e 70,51: a
+reversão que o ✕ matou estava certa. A hipótese natural é que a falha precise
+de uma barreira de persistência própria, como o CHoCH tem para confirmar.
+
+**Medição** (`research/choch_fail_reversion.py`, 8 símbolos × 15m/1h/4h/1d,
+1200 candles, n=88 `CHOCH_FAILED` não-provisionais). Para cada ✕, "retomou@H" =
+algum dos H candles seguintes **fecha além do extremo do próprio CHoCH** na
+direção dele — a mesma prova de retomada que `_drop_resumed_fizzle_markers`
+usa, e o que tornaria o ✕ retrospectivamente prematuro.
+
+Dois controles, ambos casados em direção. O aleatório é o de praxe; o
+**casado em impulso** é o que decide a questão, porque o candle que mata não é
+um candle qualquer — ele acabou de fechar forte contra o CHoCH. Ele sorteia
+âncoras cujos dois últimos fechamentos correram a mesma distância, no mesmo
+sentido, e mede o mesmo alvo à mesma distância.
+
+| H | n | retomou | aleatório | impulso | vs impulso |
+|---|---|---|---|---|---|
+| 10 | 88 | 2,3% | 13,9% | 18,3% | −16,1pp |
+| 20 | 88 | 10,2% | 21,6% | 30,5% | −20,3pp |
+| 40 | 88 | 21,6% | 34,5% | 42,9% | −21,3pp |
+| 80 | 88 | 39,8% | 47,5% | 53,2% | −13,4pp |
+
+O ✕ marca um nível que a direção morta reclama **menos** que um impulso
+comparável — em todo horizonte, e em 3 dos 4 timeframes (1d −38pp, 4h −22pp,
+1h −18pp; o 15m empata em +3pp com n=13). Vida mediana do CHoCH até o ✕: 18
+candles (p25 10, p75 35), ou seja o caso SOL de um dia é a cauda, não o corpo.
+
+**E não há alavanca no excesso.** Se o ✕ prematuro fosse o que passa raspando
+do gatilho, o excesso do fechamento que mata (em ATR) separaria os dois grupos.
+Por quartis, retomada@40: Q1 [−0,17..+0,10] 9,1% · Q2 [+0,11..+0,31] 36,4% ·
+Q3 [+0,31..+0,71] 13,6% · Q4 [+0,71..+2,90] 27,3% — sem monotonia e sem sinal
+a n=22 por quartil. Uma banda maior ou uma persistência na falha não teriam
+onde morder: elas atrasariam o ✕ uniformemente, matando os corretos junto.
+
+**Conclusão**: nenhuma barreira de persistência na falha foi implementada. O
+`CHOCH_FAILED` segue com a persistência base + a banda `0,5 × ATR`
+(`choch_fail_level_buffer_atr`), e o SOL H4 de julho fica registrado como um
+erro real e atípico, não como sintoma de um limiar mal calibrado.
+
+## Falha de CHoCH fraco exige o pivô contrário — MEDIDO E LIGADO (2026-08-30)
+
+**A observação (do usuário, SOLUSDT H4 2026-07-13).** Um CHoCH de baixa quebra
+um *fundo*. O preço voltar por cima desse fundo é o retrace mais ordinário que
+existe depois de uma reversão — e era o que matava o CHoCH. Aqui: CHoCH em
+74.06 contra a referência fraca 76.24, morto em 07-14 por um fechamento de
+77.35 que ficou **abaixo de todos os topos mais baixos da perna** (79.64 /
+78.86 / 78.19). O preço então caiu para 72.30, e o primeiro BOS de baixa da
+perna chegou quatro dias atrasado (07-28 / 72.30 / ref 73.36, em vez de 07-24 /
+73.36 / ref 74.06). O que invalida uma reversão de baixa é fechar acima do topo
+mais baixo que a perna deixou, não reocupar o fundo que ela quebrou.
+
+**Implementado** como `choch_weak_fail_clear_counter_pivot` +
+`_CHOCH_WEAK_FAIL_CLEAR_COUNTER_PIVOT` (**True**): a referência de falha *fraca*
+arma no pivô contrário mais próximo, **trailing** (o topo válido agora, não o
+congelado no CHoCH) e com **piso** no nível quebrado — a falha nunca fica mais
+fácil que antes. Duas armadilhas medidas e corrigidas no caminho:
+
+1. *Congelar* o pivô deixa um topo velho blindar uma perna que já desceu muito
+   abaixo dele (NEARUSDT D1 2026-07-27 armava em 2.106 de 07-15 enquanto a
+   perna imprimia 1.768 e 1.683; +19% de recuperação não falhava o CHoCH).
+2. `choch_success_displacement_atr` media o deslocamento **a partir do pivô de
+   falha**; com o pivô elevado, pernas comuns viravam "sucesso por
+   deslocamento" e aposentavam a saída inteira — o mesmo NEAR D1 deixava de
+   *poder* falhar. Passou a medir a partir do nível quebrado (o piso).
+
+**A medição que autorizou ligar** (`research/choch_weak_fail_counter_pivot.py`,
+12 símbolos x 15m/1h/4h/1d, 1200 velas). Cada `CHOCH_FAILED` do baseline é
+classificado pelo que a regra faz com ele e medido por `resumed@H` (algum dos H
+candles seguintes fecha além do extremo do próprio CHoCH, na direção dele — o ✕
+estava errado), **cada braço contra o seu próprio placebo casado em impulso**:
+
+| braço | n | resumed@40 | placebo casado | delta |
+|---|---|---|---|---|
+| `removed` | 21 | 52,4% | 53,3% | **−0,9pp** |
+| `delayed` | 27 | 3,7% | 45,1% | −41,4pp |
+| `kept` | 90 | 15,6% | 45,3% | −29,7pp |
+
+Os ✕ que a regra **apaga são indistinguíveis de um impulso qualquer** — não
+carregavam informação nenhuma. Os que ela mantém (e mais ainda os que ela
+adia) predizem fortemente. `removed` vs `kept` em resumed@40: 52,4% contra
+15,6%, Fisher unilateral **p = 0,0012**, e positivo nos 4 timeframes
+(15m 100%/25%, 1h 100%/14,3%, 1d 75%/18,8%, 4h 25%/10%). O placebo casado
+evento a evento é o que descarta a explicação "série que andou": cada braço é
+comparado na sua própria série.
+
+**Assinatura agregada:** 15/32 combos mudam, `CHOCH_FAILED` −21/+15 (a maioria
+é a mesma falha re-precificada no nível trailing: NEAR D1 1.721 → 1.768, AAVE
+1h 1.995 → 1.955), **0 mudanças de direção final**. Atraso mediano da falha
+adiada: 9 candles.
+
+**As cinco fixtures que mudaram** — nenhuma é perda de leitura:
+
+* `test_btc_1d_crash_resolves_bearish_with_bottom_bos`: a falha de janeiro
+  confirma 10 dias depois e mais baixo (01-29 / 89242.0, era 01-19 / 94760.3).
+  A tendência final continua bearish; **não** volta a ler o crash como sweeps.
+* `test_mu_4h_rearm_off_crash_reads_as_sweeps_under_stuck_trend` e
+  `test_btc_15m_shallow_retest_does_not_negate_choch`: a regra é uma **terceira
+  cura independente** para a mesma falsa falha, então é desligada nos braços
+  que existem para demonstrar a doença (como já se fazia com a banda de ruído).
+* `test_near_1h_displacement_retirement_off_marks_false_failures`: muda *quais*
+  falsas falhas o modo-off exibe (2.045 → 2.093), não a patologia.
+* `test_sol_4h_range_breakouts_stage_additive_events`: o BOS staged de
+  2026-03-27 08:00 some porque o CHoCH de alta de 03-05 deixa de ser falsamente
+  falhado (o preço correu 80.18 → 93.38 depois dele) e a virada imprime como
+  **CHoCH real** no mesmo 81.76 — exatamente quando o staging deve se abster.
+
+**Ressalva:** n=21 no braço decisivo. O sinal é forte, consistente nos 4
+timeframes e espalhado por 6+ símbolos, mas uma reconfirmação com janela ou
+universo maior é barata e vale antes de tratar o número como assentado.

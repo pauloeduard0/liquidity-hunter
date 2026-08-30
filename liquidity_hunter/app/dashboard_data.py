@@ -586,6 +586,21 @@ _CHOCH_PENDING_FAIL_MIN_RECOVERY_FRAC: float | None = None
 # solved the mirror over-fire one door down.
 _CHOCH_FAIL_LEVEL_BUFFER_ATR: float | None = 0.5
 
+# Weak-referenced CHoCH invalidation at the nearest *counter pivot*
+# (`InternalStructureDetector.choch_weak_fail_clear_counter_pivot`). The buffer
+# above widens a band around the broken level; this changes the level. A
+# bearish CHoCH breaks a low, and price returning over that low is the most
+# ordinary post-reversal retrace there is -- what invalidates the reversal is a
+# close back above the lower high the drop left behind. Motivating case
+# (SOLUSDT H4 2026-07-13): the bearish CHoCH at 74.06 against the weak 76.24
+# died on 07-14 to a bounce that closed 77.35 -- over 76.24, under every lower
+# high of the leg (79.64 / 78.86 / 78.19) -- and price resumed straight down;
+# the ✕ pushed the leg's first bearish BOS from 07-24 (73.36 / ref 74.06) out
+# to 07-28 (72.30 / ref 73.36). Still far tighter than the leg-extreme origin,
+# so the weak shortcut keeps the BTCUSDT D1 crash-read-as-sweeps case it
+# exists for.
+_CHOCH_WEAK_FAIL_CLEAR_COUNTER_PIVOT = True
+
 # Weak-referenced CHoCH invalidation at the broken level itself
 # (`InternalStructureDetector.choch_weak_ref_fail_at_broken_level`). A CHoCH
 # fired against a *weak* reference (a synthetic re-anchor level or the
@@ -2276,6 +2291,7 @@ def _build_internal_detector(
         choch_pending_fail_min_recovery_frac=_CHOCH_PENDING_FAIL_MIN_RECOVERY_FRAC,
         # See _CHOCH_FAIL_LEVEL_BUFFER_ATR.
         choch_fail_level_buffer_atr=_CHOCH_FAIL_LEVEL_BUFFER_ATR,
+        choch_weak_fail_clear_counter_pivot=_CHOCH_WEAK_FAIL_CLEAR_COUNTER_PIVOT,
         # See _MEAN_TR_TRAILING.
         mean_tr_trailing=_MEAN_TR_TRAILING,
         # A pending BOS discarded without emitting -- a phantom advance whose

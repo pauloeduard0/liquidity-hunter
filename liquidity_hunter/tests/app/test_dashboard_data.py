@@ -1533,14 +1533,17 @@ def test_btc_1d_crash_resolves_bearish_with_bottom_bos() -> None:
         for e in run.events
     )
     # January: the bullish CHoCH is invalidated by the crash's first leg
-    # (a real pending-fail, not a fizzle marker). It confirms on 01-19, the
-    # first close that clears the level by the `_CHOCH_FAIL_LEVEL_BUFFER_ATR`
-    # noise band -- the crash keeps going, so the reading is unchanged.
+    # (a real pending-fail, not a fizzle marker). Under
+    # `_CHOCH_WEAK_FAIL_CLEAR_COUNTER_PIVOT` (2026-08-30) the reclaim is
+    # measured against the standing counter pivot rather than the bare broken
+    # level, so the same failure confirms ten days later and lower (01-29 at
+    # 89242.0, was 01-19 at 94760.3). The protected conclusion is untouched:
+    # the crash keeps going and the standing trend stays bearish.
     assert any(
         e.event is StructureEvent.CHOCH_FAILED
         and not e.provisional
         and e.direction is MarketDirection.BULLISH
-        and e.timestamp == datetime(2026, 1, 19, tzinfo=UTC)
+        and e.timestamp == datetime(2026, 1, 29, tzinfo=UTC)
         for e in run.events
     )
     # ... and June prints the continuation BOS at the bottom.
@@ -1716,7 +1719,12 @@ def test_near_1h_displacement_retirement_off_marks_false_failures(
         and e.direction is MarketDirection.BULLISH
         and datetime(2026, 6, 6, tzinfo=UTC) <= e.timestamp <= datetime(2026, 6, 22, tzinfo=UTC)
     }
-    assert fail_refs == {2.045, 2.083}
+    # Under `_CHOCH_WEAK_FAIL_CLEAR_COUNTER_PIVOT` (2026-08-30) the false
+    # failure at the 2.045 origin no longer fires (the pullback never
+    # clears the standing counter pivot) and the 06-16 leg contributes
+    # one at 2.093 instead -- the pathology this off-mode documents is
+    # unchanged, only which of its instances survive.
+    assert fail_refs == {2.083, 2.093}
     # The re-fired CHoCH at the failed level (the re-arm in action).
     assert any(
         e.event is StructureEvent.CHANGE_OF_CHARACTER
@@ -2077,13 +2085,28 @@ def test_sol_4h_range_breakouts_stage_additive_events() -> None:
 
     run = _run_internal_structure(provider, "SOLUSDT", TimeFrame.H4, 1200, False)
 
-    # The staged continuation BOS at the defended floor survives (non-provisional).
+    # The March box's bearish resolution is marked. Before
+    # `_CHOCH_WEAK_FAIL_CLEAR_COUNTER_PIVOT` (2026-08-30) the state machine
+    # left it unmarked and the breakout pass staged a continuation BOS at
+    # 2026-03-27 08:00; with the rule wired the 03-05 bullish CHoCH is no
+    # longer falsely failed (price ran 80.18 -> 93.38 after it, so the CHoCH
+    # was right), the leg reads bullish into 03-16, and the turn down prints
+    # as a *real* bearish CHoCH at the same 81.76 floor -- which is exactly
+    # when staging is supposed to stand down (a real same-direction event
+    # inside the dedup window).
     assert any(
+        e.timestamp == datetime(2026, 3, 27, tzinfo=UTC)
+        and e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BEARISH
+        and not e.provisional
+        and e.price_level == pytest.approx(81.76)
+        for e in run.events
+    ), "missing real bearish CHoCH at 2026-03-27 00:00"
+    assert not any(
         e.timestamp == datetime(2026, 3, 27, 8, tzinfo=UTC)
         and e.event is StructureEvent.BREAK_OF_STRUCTURE
-        and not e.provisional
         for e in run.events
-    ), "missing staged continuation BOS at 2026-03-27 08:00"
+    ), "staged BOS should stand down once the move is really marked"
     # Staged reversal CHoCH? superseded by a later real advance are removed by
     # the drop pass -- no stale `CHoCH?` lingers in history.
     superseded_reversals = [
@@ -2510,6 +2533,9 @@ def test_mu_4h_rearm_off_crash_reads_as_sweeps_under_stuck_trend(
     """
     monkeypatch.setattr(dashboard_data, "_CHOCH_FAILED_REARM", False)
     monkeypatch.setattr(dashboard_data, "_CHOCH_FAIL_LEVEL_BUFFER_ATR", None)
+    monkeypatch.setattr(
+        dashboard_data, "_CHOCH_WEAK_FAIL_CLEAR_COUNTER_PIVOT", False
+    )  # a third, independent cure for the same false 07-03 failure
     candles = _load_mu_4h_rearm_candles()
     provider = _FuturesLimitFakeProvider({TimeFrame.H4: candles})
 
@@ -3527,6 +3553,11 @@ def test_btc_15m_shallow_retest_does_not_negate_choch(
 
     # The pathology, with the noise band off: fire, die, re-fire at one level.
     monkeypatch.setattr(dashboard_data, "_CHOCH_FAIL_LEVEL_BUFFER_ATR", None)
+    # ...and the counter-pivot rule is a third independent cure for this
+    # very ✕, so it comes off too: this arm shows what the *band* is for.
+    monkeypatch.setattr(
+        dashboard_data, "_CHOCH_WEAK_FAIL_CLEAR_COUNTER_PIVOT", False
+    )
     assert [
         (e.event, e.timestamp) for e in _btc_fail_buffer_choch_events(run())
     ] == [
