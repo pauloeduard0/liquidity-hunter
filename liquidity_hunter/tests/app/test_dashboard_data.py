@@ -1170,12 +1170,26 @@ def test_repolarize_weak_failure_bos_repoints_to_last_formed_pivot() -> None:
     assert result[2].reference_timestamp == events[0].timestamp
 
 
-def test_repolarize_weak_failure_bos_keeps_floor_the_break_did_not_clear() -> None:
+def test_repolarize_weak_failure_bos_drops_bos_that_cleared_no_pivot() -> None:
     # The only candidate pivot sits *above* the break candle's close: the leg
-    # never cleared it, so it is not the level the BOS broke and the original
-    # floor stands (the pass is never subtractive and never invents a level).
+    # cleared no level of its own polarity, so the only thing this BOS broke is
+    # the failure's low -- it broke no structure and goes (SOLUSDT H4
+    # 2026-07-15 16h, which closed at 77.18 under every lower high of the leg).
     events, candles = _weak_failure_stream()
     events[0] = events[0].model_copy(update={"price_level": 130.0})
+
+    result = _repolarize_weak_failure_bos(events, candles)
+
+    assert result == [events[0], events[1], *events[3:]]
+
+
+def test_repolarize_weak_failure_bos_keeps_bos_without_a_weak_failure() -> None:
+    # The drop is scoped to the weak-failure inheritance: with no failure
+    # reporting the BOS's level, an unclearable floor is none of this pass's
+    # business and the mark stands untouched.
+    events, candles = _weak_failure_stream()
+    events[0] = events[0].model_copy(update={"price_level": 130.0})
+    events[1] = events[1].model_copy(update={"reference_price_level": 42.0})
 
     assert _repolarize_weak_failure_bos(events, candles) == events
 

@@ -784,6 +784,17 @@ _STAGE_REVERSAL_EATEN_BOS = True
 # reads CHoCH -> BOS 0.07908 -> BOS 0.07760 -> CHoCH.
 _RESCUE_LEG_LAUNCH_BOS = True
 
+# The major (swing) stream gets `_repolarize_weak_failure_bos` as well. It is the
+# stream the chart's SMC staircase draws, and it reaches the same weak-level
+# failure re-seed the internal stream does -- but it ran only the two BOS passes,
+# so a bullish continuation kept the *bearish* failure's level as its floor.
+_REPOLARIZE_MAJOR_WEAK_FAILURE_BOS = True
+
+# ...and when the re-point finds nothing to point at, the mark goes. See the
+# `floor is None` branch of `_repolarize_weak_failure_bos` for why a BOS in that
+# state broke no structure of its own polarity.
+_DROP_UNREPOINTABLE_WEAK_FAILURE_BOS = True
+
 # Superseded-continuation BOS staging
 # (`InternalStructureDetector.stage_superseded_continuation_bos`). A BOS only
 # *emits* once a confirming opposite pullback pivot forms. In an impulsive leg
@@ -1548,7 +1559,17 @@ def _repolarize_weak_failure_bos(
             None,
         )
         if floor is None:
-            repointed.append(event)
+            # No pivot of the BOS's own polarity was cleared by the break: the
+            # only level this mark broke is the failure's, which is a low under
+            # a bullish BOS (a high under a bearish one). A continuation whose
+            # sole broken level has the wrong polarity broke no structure at
+            # all -- SOLUSDT H4 2026-07-15 16h closed at 77.18 with every lower
+            # high of the leg still above it (79.64 / 78.86 / 78.19), and drew
+            # a green BOS on 76.24, the fundo the `CHoCH X` already occupied.
+            # Dropping is narrow by construction: it needs the weak-failure
+            # inheritance *and* a break that cleared nothing of its own side.
+            if not _DROP_UNREPOINTABLE_WEAK_FAILURE_BOS:
+                repointed.append(event)
             continue
         repointed.append(
             event.model_copy(
@@ -2800,6 +2821,14 @@ def load_dashboard_data(
         all_major_events, buffered_candles, rescue_leg_launch=_RESCUE_LEG_LAUNCH_BOS
     )
     all_major_events = _drop_pre_break_reference_bos(all_major_events)
+    if _REPOLARIZE_MAJOR_WEAK_FAILURE_BOS:
+        # ...and the weak-failure re-point too: the swing detector re-seeds the
+        # resumed staircase at the failed CHoCH's own level exactly like the
+        # internal one, so without this pass its first continuation reports the
+        # level the `CHoCH X` already occupies (SOLUSDT H4 2026-08-19: a bullish
+        # BOS at 102.84 reporting 75.28 from 07-31, drawing a green line through
+        # July stacked on the failure's).
+        all_major_events = _repolarize_weak_failure_bos(all_major_events, buffered_candles)
     market_structure_events = [
         e for e in all_major_events if visible_start <= e.timestamp <= visible_end
     ]
