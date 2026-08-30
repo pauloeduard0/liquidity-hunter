@@ -499,6 +499,55 @@ function isFailedChoch(choch: MarketStructure, allEvents: MarketStructure[]): bo
   return failedChochTime(choch, allEvents, { includeFizzle: false }) !== null
 }
 
+/** The price a structure event's reference line is drawn at. */
+function structureLinePrice(event: MarketStructure): number {
+  return (event.event === 'change_of_character' ||
+    event.event === 'choch_failed' ||
+    event.event === 'break_of_structure') &&
+    event.reference_price_level != null
+    ? event.reference_price_level
+    : event.price_level
+}
+
+// The real `choch_failed` this CHoCH died on, or `null`.
+function pairedFailure(
+  choch: MarketStructure,
+  allEvents: MarketStructure[],
+): MarketStructure | null {
+  const failedAt = failedChochTime(choch, allEvents, { includeFizzle: false })
+  if (failedAt === null) return null
+  return (
+    allEvents.find(
+      (e) =>
+        e.event === 'choch_failed' &&
+        e.provisional !== true &&
+        e.scope === choch.scope &&
+        e.direction === choch.direction &&
+        toChartTime(e.timestamp) === failedAt,
+    ) ?? null
+  )
+}
+
+// Whether the `CHoCH ✕` fully stands in for the CHoCH it killed: it does only
+// when both draw on the *same* level. A level-armed failure reclaims the very
+// price the CHoCH broke, so the two lines coincide and drawing both plots one
+// CHoCH twice. An *origin*-armed failure does not: it sits at the low/high the
+// CHoCH's leg launched from, a different price entirely (BTCUSDT D1 — the
+// bullish CHoCH broke 94760.3 on 01-13, and its ✕ sits at the 89242.0 origin),
+// and hiding the CHoCH there leaves an orphan ✕ with nothing to explain what
+// died or where it came from.
+function failureReplacesChoch(
+  choch: MarketStructure,
+  allEvents: MarketStructure[],
+): boolean {
+  const failure = pairedFailure(choch, allEvents)
+  if (failure === null) return false
+  const chochPrice = structureLinePrice(choch)
+  const failurePrice = structureLinePrice(failure)
+  if (chochPrice <= 0) return failurePrice === chochPrice
+  return Math.abs(failurePrice - chochPrice) / chochPrice < 0.001
+}
+
 function structureLineEndTime(
   event: MarketStructure,
   allEvents: MarketStructure[],
@@ -2203,7 +2252,7 @@ export function MainChart({
       // original CHoCH line too would plot two overlapping CHoCHs, so skip it —
       // the failure mark replaces it. (Fizzle markers are excluded from
       // `isFailedChoch`, so a fizzled CHoCH still renders normally.)
-      if (event.event === 'change_of_character' && isFailedChoch(event, scopeEvents)) {
+      if (event.event === 'change_of_character' && failureReplacesChoch(event, scopeEvents)) {
         continue
       }
       const style = STRUCTURE_EVENT_STYLES[event.event]
@@ -2221,14 +2270,19 @@ export function MainChart({
         (directionColored ? STRUCTURE_DIRECTION_COLORS[event.direction] : undefined) ??
         style.color
       const directionIcon = directionColored ? '' : (TREND_ICONS[event.direction] ?? '')
+      // `choch_failed.direction` names the CHoCH that *died*, not the way the
+      // market resolved. Appending the arrow after the ✕ (`CHoCH ✕ ▲`) reads
+      // as "a bullish thing happened here" on the very candle that lost the
+      // low, and flipping the arrow to the resolved side reads as "a bearish
+      // CHoCH failed" -- both wrong. The arrow belongs to the CHoCH, so it
+      // goes *before* the cancellation: `CHoCH ▲ ✕` = "the bullish CHoCH is
+      // cancelled" (BTCUSDT D1 2026-01-29).
+      const labelWithDirection =
+        event.event === 'choch_failed' && directionIcon
+          ? `${style.label.replace(' ✕', '')} ${directionIcon} ✕`
+          : `${style.label}${directionIcon ? ` ${directionIcon}` : ''}`
       const startTime = toChartTime(event.timestamp)
-      const linePrice =
-        (event.event === 'change_of_character' ||
-          event.event === 'choch_failed' ||
-          event.event === 'break_of_structure') &&
-        event.reference_price_level != null
-          ? event.reference_price_level
-          : event.price_level
+      const linePrice = structureLinePrice(event)
 
       // A failed CHoCH is a point-in-time invalidation, not a live reference
       // level: its line spans only the CHoCH's own lifetime (the broken level's
@@ -2381,7 +2435,7 @@ export function MainChart({
         price: linePrice,
         color: lineColor,
         below: labelBelow,
-        text: `${style.label}${labelSuffix}${reactivatedChoch ? ' ↻' : ''}${directionIcon ? ` ${directionIcon}` : ''}${oiSuffix ? ` ${oiSuffix}` : ''}${blockSuffix}${counterHtfFlip ? ' ⚠' : ''}${confluenceSuffix}`,
+        text: `${labelWithDirection}${labelSuffix}${reactivatedChoch ? ' ↻' : ''}${oiSuffix ? ` ${oiSuffix}` : ''}${blockSuffix}${counterHtfFlip ? ' ⚠' : ''}${confluenceSuffix}`,
       })
     }
 
