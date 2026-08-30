@@ -7,7 +7,7 @@ import pytest
 
 from liquidity_hunter.core.domain import Candle, TimeFrame
 from liquidity_hunter.data.providers.base import OHLCVProvider
-from liquidity_hunter.data.providers.caching import CachingOHLCVProvider
+from liquidity_hunter.data.providers.caching import _OVERLAP_CANDLES, CachingOHLCVProvider
 from liquidity_hunter.data.repositories import SQLiteCandleStore
 
 _PERIOD = timedelta(hours=1)
@@ -208,3 +208,42 @@ def test_a_source_with_no_more_history_is_not_asked_again(store: SQLiteCandleSto
 
     assert inner.calls == [1 + 1 + 3]
     assert len(result) == 120
+
+
+def test_small_caller_does_not_pin_the_window_of_a_larger_one(
+    store: SQLiteCandleStore,
+) -> None:
+    """A shallow caller must not retire the series for a deeper one.
+
+    The overview ladder asks for a narrow window; the dashboard asks for the
+    full one. Once the narrow caller had settled -- its second request is a
+    tail, which by construction starts after the oldest stored bar -- the
+    series was marked exhausted, and every later dashboard request served the
+    narrow store plus a tail instead of the window it asked for. On ETH 30m
+    that showed as a chart starting a week back rather than 25 days.
+    """
+    now = _now_aligned()
+    provider = FakeProvider(_series(1000, end=now))
+    caching = CachingOHLCVProvider(provider, store)
+
+    caching.get_ohlcv("TEST", TimeFrame.H1, 300)
+    caching.get_ohlcv("TEST", TimeFrame.H1, 300)
+
+    deep = caching.get_ohlcv("TEST", TimeFrame.H1, 900)
+    assert len(deep) == 900
+    assert deep[0].timestamp == provider.history[-900].timestamp
+
+
+def test_exhaustion_still_stops_a_repeated_full_window_request(
+    store: SQLiteCandleStore,
+) -> None:
+    """A full-window attempt that reaches no further back is not repeated."""
+    now = _now_aligned()
+    provider = FakeProvider(_series(200, end=now))
+    caching = CachingOHLCVProvider(provider, store)
+
+    caching.get_ohlcv("TEST", TimeFrame.H1, 500)
+    provider.calls.clear()
+    caching.get_ohlcv("TEST", TimeFrame.H1, 500)
+
+    assert provider.calls and provider.calls[0] <= _OVERLAP_CANDLES + 2

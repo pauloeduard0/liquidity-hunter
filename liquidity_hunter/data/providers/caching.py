@@ -72,10 +72,15 @@ class CachingOHLCVProvider(OHLCVProvider):
         self._inner = inner
         self._store = store
         #: Series whose stored history already reaches back as far as the
-        #: source will serve. Process-local rather than persisted: the cost of
-        #: forgetting is one full request after a restart, which is the cold
-        #: start already being paid, and it keeps the store's schema to candles.
-        self._exhausted: set[tuple[str, TimeFrame]] = set()
+        #: source will serve, mapped to *the window size that proved it*. The
+        #: depth matters: a caller asking for 400 candles can only ever prove
+        #: the source has nothing beyond 400, and a later caller asking for
+        #: 1500 has to be allowed to try again. Recorded as a set, the smaller
+        #: caller pinned the series at its own depth for every caller after it.
+        #: Process-local rather than persisted: the cost of forgetting is one
+        #: full request after a restart, which is the cold start already being
+        #: paid, and it keeps the store's schema to candles.
+        self._exhausted: dict[tuple[str, TimeFrame], int] = {}
         self._exhausted_lock = threading.Lock()
         #: May exceed the inner source's per-request cap: a request larger than
         #: one round-trip is served by topping up stored history, which is how
@@ -93,19 +98,26 @@ class CachingOHLCVProvider(OHLCVProvider):
         stored_count = self._store.count(series, timeframe)
         stored_oldest = self._store.oldest_timestamp(series, timeframe)
 
+        ceiling = min(limit, self._inner.max_fetch_limit)
         fetch_size = self._fetch_size(series, stored_last, stored_count, timeframe, limit)
         fresh = self._inner.get_ohlcv(symbol, timeframe, fetch_size)
         if fresh:
             # Everything but the still-forming last bar.
             self._store.save(series, fresh[:-1])
-            if len(fresh) < fetch_size or (
-                stored_oldest is not None and fresh[0].timestamp >= stored_oldest
+            # Only a *full-window* attempt says anything about how far back the
+            # source goes. A tail request returns few candles starting after
+            # the oldest stored bar by construction, so reading exhaustion off
+            # one would retire a series that was never asked for its history.
+            if fetch_size == ceiling and (
+                len(fresh) < fetch_size
+                or (stored_oldest is not None and fresh[0].timestamp >= stored_oldest)
             ):
                 # The source gave back less than it was asked for, or nothing
                 # older than what is already held: this series has no more
-                # history behind it, so stop asking for a full window.
+                # history behind it *at this depth*, so stop asking for a full
+                # window until someone asks for a deeper one.
                 with self._exhausted_lock:
-                    self._exhausted.add((series, timeframe))
+                    self._exhausted[(series, timeframe)] = fetch_size
 
         merged = self._merge(series, symbol, timeframe, fresh, stored_last, limit)
         logger.info(
@@ -144,8 +156,8 @@ class CachingOHLCVProvider(OHLCVProvider):
         # holding a full window still counts one short of it.
         if stored_count < ceiling - 1:
             with self._exhausted_lock:
-                deepened = (series, timeframe) in self._exhausted
-            if not deepened:
+                proven_depth = self._exhausted.get((series, timeframe))
+            if proven_depth is None or ceiling > proven_depth:
                 return ceiling
         period = _TIMEFRAME_SECONDS[timeframe]
         elapsed = (datetime.now(UTC) - stored_last).total_seconds()
