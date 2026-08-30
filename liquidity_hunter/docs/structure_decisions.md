@@ -783,6 +783,35 @@ regression fixture:
 (1395-candle production H4 slice). Off = byte-for-byte identical. Not mirrored
 into `SwingStructureDetector` (not drawn).
 
+**Displaced re-anchor window opens after the leg's own extreme**
+(`InternalStructureDetector`, as of 2026-08-29):
+`stale_reanchor_displacement_post_extreme` (constructor default `False`; wired
+**`True`** in `load_dashboard_data` via
+`_STALE_REANCHOR_DISPLACEMENT_POST_EXTREME`). The displacement release above
+opens its window at `last_advance_index + 1` and calls the result "the
+post-move range" — but an advance is stamped on the candle that *broke* the
+level, and an impulsive leg runs well past it, so on a violent move the window
+opens *inside* the move and its extreme is simply the first bar of the
+continuation. That bar's high is a price no pullback ever formed at, and it
+becomes the standing (weak) bullish CHoCH reference. The **JIMOTHY H1
+2026-07-26 case**: the window reopened one bar into a −60% dump and anchored
+the reference at **9,913,949** — the high of the 26/07 20:00 UTC bar, mid-dump
+— which then fired a `CHoCH ▲` on 07-29 against a level with no structural
+meaning. When set, the window reopens just after the *leg's own* extreme
+within it (the lowest low for a bearish trend, the highest high for a bullish
+one), so the level is a price actually reclaimed *after* the move: JIMOTHY's
+reference becomes **8,373,869** (27/07 23:00 UTC), the `LOWER_HIGH` of the
+post-dump consolidation. Measured 2026-08-29 (BTC/ETH/SOL/NEAR/AAVE/ENA/ZEC/
+LINK × 15m/30m/1h/4h/1d, `limit=1200`, whole-stream diff): **9/40 combos
+change, 0 `final_trend` flips**, 4801 → 4811 events. The changes are the
+motivating pattern — ENA 4h and ZEC 4h trade runs of sweeps for a
+`CHoCH` + BOS staircase across their June legs, ZEC 30m gains the
+`CHoCH ↓ → ✕ → CHoCH ↓ → BOS` cycle around 08-24, BTC 1d moves its March
+bullish cycle onto the 72,300 level (and drops the mid-crash 06-25 BOS whose
+reference dated to February). Confirmed by visual review (2026-08-29). Off =
+byte-for-byte identical. Not mirrored into `SwingStructureDetector` (not
+drawn).
+
 **Provisional CHoCH against weak references** (`InternalStructureDetector`, as
 of 2026-07-11): `emit_provisional_choch_weak` (constructor default `False`,
 requires `emit_provisional_choch`; wired **`True`** in `load_dashboard_data`).

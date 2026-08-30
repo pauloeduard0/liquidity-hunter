@@ -141,6 +141,14 @@ _STALE_REANCHOR_CANDLES: dict[TimeFrame, int] = {
 }
 _DEFAULT_STALE_REANCHOR_CANDLES = 60
 
+# The displaced re-anchor window opens after the *leg's own extreme* inside it,
+# not at `last_advance_index + 1` (`stale_reanchor_displacement_post_extreme`).
+# An advance is stamped on the candle that broke the level, and an impulsive
+# leg runs well past it, so the "post-move range" could open one bar into the
+# move and anchor the reversal reference on a mid-move bar high -- a level no
+# pullback ever formed. Measured 2026-08-29 (see below).
+_STALE_REANCHOR_DISPLACEMENT_POST_EXTREME = True
+
 # Displacement release for the staleness re-anchor
 # (`InternalStructureDetector.stale_reanchor_displacement_atr` /
 # `stale_reanchor_displacement_candles`, internal detector only). The staleness
@@ -2022,6 +2030,7 @@ def _build_internal_detector(
         # ETH H4 month-long stuck BOS). See _STALE_REANCHOR_DISPLACEMENT_ATR.
         stale_reanchor_displacement_atr=_STALE_REANCHOR_DISPLACEMENT_ATR,
         stale_reanchor_displacement_candles=_STALE_REANCHOR_DISPLACEMENT_CANDLES,
+        stale_reanchor_displacement_post_extreme=_STALE_REANCHOR_DISPLACEMENT_POST_EXTREME,
         # Stage a continuation BOS at each impulsive advance that displaces the
         # prior BOS level by this fraction, so a sharp multi-leg move shows a
         # staircase instead of one long event-free stretch (the impulsive leg

@@ -834,6 +834,7 @@ class InternalStructureDetector(MarketStructureDetector):
         stale_reanchor_candles: int | None = None,
         stale_reanchor_displacement_atr: float | None = None,
         stale_reanchor_displacement_candles: int | None = None,
+        stale_reanchor_displacement_post_extreme: bool = False,
         impulse_bos_displacement_pct: float | None = None,
         bos_pullback_max_wick_pct: float | None = None,
         stage_wick_rejected_bos: bool = False,
@@ -967,6 +968,9 @@ class InternalStructureDetector(MarketStructureDetector):
         self._stale_reanchor_candles = stale_reanchor_candles
         self._stale_reanchor_displacement_atr = stale_reanchor_displacement_atr
         self._stale_reanchor_displacement_candles = stale_reanchor_displacement_candles
+        self._stale_reanchor_displacement_post_extreme = (
+            stale_reanchor_displacement_post_extreme
+        )
         self._impulse_bos_displacement_pct = impulse_bos_displacement_pct
         self._bos_pullback_max_wick_pct = bos_pullback_max_wick_pct
         self._stage_wick_rejected_bos = stage_wick_rejected_bos
@@ -1965,6 +1969,25 @@ class InternalStructureDetector(MarketStructureDetector):
                         if displaced
                         else max(0, current_index - stale_after + 1)
                     )
+                    if displaced and self._stale_reanchor_displacement_post_extreme:
+                        # The post-move range starts where the *leg* ended, not
+                        # where the advance was recorded. An advance is stamped
+                        # at the candle that broke the level, and an impulsive
+                        # leg keeps running well past it -- so a window opening
+                        # at `last_advance_index + 1` opens *inside* the move,
+                        # and its extreme is simply the first bar of the
+                        # continuation rather than a pullback. Re-open the
+                        # window just after the leg's own extreme within it, so
+                        # the level is a high price actually *reclaimed* after
+                        # the move (the JIMOTHY H1 2026-07-26 case: the window
+                        # opened one bar into a -60% dump and anchored the
+                        # bullish CHoCH reference on that bar's high).
+                        span = range(window_start, current_index + 1)
+                        if trend is MarketDirection.BEARISH:
+                            extreme_index = min(span, key=lambda i: candles[i].low)
+                        else:
+                            extreme_index = max(span, key=lambda i: candles[i].high)
+                        window_start = extreme_index + 1
                     window = candles[window_start : current_index + 1]
                     if window:
                         if trend is MarketDirection.BEARISH:
