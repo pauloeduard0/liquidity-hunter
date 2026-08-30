@@ -812,6 +812,26 @@ reference dated to February). Confirmed by visual review (2026-08-29). Off =
 byte-for-byte identical. Not mirrored into `SwingStructureDetector` (not
 drawn).
 
+The same rule applied to the **non-displaced (trailing) staleness window** was
+prototyped immediately after and **rejected by measurement** (2026-08-29).
+A probe over the live matrix showed the pathology's *shape* is far more common
+there — of 310 effective trailing re-anchors, **72% pick a level whose bar
+precedes the window's own extreme** (against 16% on the displaced path) — but
+the shape means something different: a trailing window is the last N candles,
+not a leg, so "before the extreme" is the ordinary case rather than evidence
+of a defect. Cutting the window at the extreme changes **21/40 combos** (vs
+9/40 for the displaced fix) with a net event balance of ~zero (4802 → 4805)
+and large symmetric rewrites (SOL 1d +30/−32, NEAR 4h +23/−25, ZEC 1d, LINK
+1d). Nothing measured better *or* worse: CHoCH reference age is flat to
+slightly better (median 39 → 35 candles, p90 96 → 95) and CHoCH count rises
+333 → 373. An individually inspected case (SOL 1d gaining a CHoCH against a
+3½-month-old reference) suggested the trailing re-anchor was being suppressed
+where it is needed, but the aggregate does not support that reading — it was
+cherry-picked. What is missing is the thing the displaced fix had: a
+motivating case. No chart-visible nonsense level has been traced to this path,
+so a state-machine change rewriting half the matrix buys churn against no
+recorded defect. Revisit only if such a case appears.
+
 **Provisional CHoCH against weak references** (`InternalStructureDetector`, as
 of 2026-07-11): `emit_provisional_choch_weak` (constructor default `False`,
 requires `emit_provisional_choch`; wired **`True`** in `load_dashboard_data`).
