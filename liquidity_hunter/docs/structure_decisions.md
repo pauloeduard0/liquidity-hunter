@@ -832,6 +832,83 @@ motivating case. No chart-visible nonsense level has been traced to this path,
 so a state-machine change rewriting half the matrix buys churn against no
 recorded defect. Revisit only if such a case appears.
 
+**Closing a displacement-spent cycle** (`InternalStructureDetector`, as of
+2026-08-29): `choch_displacement_retire_blind_spot` +
+`choch_displacement_retire_atr` (constructor defaults `False`/`None`; wired
+**`True` / 5.0**). A CHoCH whose leg explodes *without ever emitting a BOS*
+leaves the reversal machinery with nothing: no BOS ever promoted
+`validated_choch_<opposite>`, so the reference falls back on
+`choch_origin_<opposite>` -- the low the leg launched from, often 50-65% behind
+price -- which **outranks the trailing local extreme**. Every later loss of a
+local low then reports as a `LIQUIDITY_SWEEP` while the opposite CHoCH waits
+for a price that is not coming back. The JIMOTHY H1 legs of 2026-07-29 and
+2026-08-07 both did this: the second printed four sweeps and no BOS, and its
+bearish CHoCH landed 2026-08-11 (at 4.95M) instead of 2026-08-09 (at 8.00M,
+the loss of the 08-08 higher low). The displacement-success test already
+declares such a leg established; retiring the blind spot with it lets the local
+extreme carry the reversal, and the leg that follows prints a real BOS
+staircase.
+
+`choch_displacement_retire_atr` is the retirement's **own, uncapped**
+threshold, and it is load-bearing. The displacement-success test it rides on is
+capped at `choch_success_displacement_max_pct` (20% of price); on a volatile
+series that cap binds, and the gate degenerates into "the leg moved 20%" -- one
+candle on a memecoin. Measured on JIMOTHY H1, the legs that earned the
+retirement ran **6.9 and 11.3 ATR** while an ordinary **3.9-ATR** leg cleared
+the capped gate and opened a cycle whose bounce printed a spurious bullish
+CHoCH one day into a decline that continued for another week. Retiring the
+reversal reference is a bigger claim than declining to mark a failure, so it
+asks for a real impulse; 5.0 separates the two groups.
+
+Measured 2026-08-29 (BTC/ETH/SOL/NEAR/AAVE/ENA/ZEC/LINK x 15m/30m/1h/4h/1d,
+`limit=1200`, whole-stream diff, together with the phantom-promotion fix
+below): 23/40 combos change, one `final_trend` flip (ETH 30m), 4791 -> 4792
+events. Judged on what the change is *for* -- how long a cycle stays open after
+its leg is spent -- **16 cycles close earlier (median 107 candles, max 237) and
+one later**, with 250 unchanged; the single "later" case is an artefact of the
+metric (ENA 4h relabels that point `CHOCH_FAILED`, the same reversal read more
+conservatively). The aggregate cycle length does *not* move (median 32 candles
+either way): the trigger is rare by design, and the gain concentrates in the
+legs it catches. `test_aave_1h_pending_fail_off_leaves_stale_bearish_trend` had
+to switch this flag off as well -- it reaches the same stale trend by a second
+route, so the test now isolates the flag it names.
+
+A **strength inversion** shipped alongside it (a CHoCH closing such a cycle
+carrying the *inverse* of the strength of the CHoCH it ends) was built and
+**reverted on review the same day**: `reference_structural` has a concrete,
+established meaning -- whether the level this CHoCH broke is structural -- and
+overwriting it with a claim about the *previous* cycle's quality made the `*`
+label mean two different things on one chart. It also propagated: the inverted
+label became the next cycle's input.
+
+**Phantom-advance promotion requires a close** (`InternalStructureDetector`, as
+of 2026-08-29): `phantom_promotion_requires_close` (constructor default
+`False`; wired **`True`**). When a pending BOS is discarded because the pivot
+already reclaimed its leg origin, that origin is promoted to
+`validated_choch_<side>` -- and it declared the level **structural
+unconditionally**, while the sibling promotion at an *emitted* BOS requires
+`pending_bos.floor_closed` ("only a close-confirmed break makes the leg origin
+structural"). The path that never confirmed was the more confident of the two.
+The same test now governs both. Measured 2026-08-29 (same matrix): 15/40 combos
+change, **no `final_trend` flips**, 4803 -> 4801 events, and **26 of the
+changes are the `*` label alone** -- exactly what the fix is for; the rest is
+small (7 BOS gained, 5 lost, NEAR 4h trading a sweep for a `CHoCH ✕`).
+
+*Not* fixed by any of this: a bounce that recovers a local level inside a
+still-falling market can read as a bullish CHoCH (JIMOTHY H1 2026-07-31). Four
+hypotheses were tested against the three CHoCH the user endorsed on that chart
+and the one they rejected, and **none separates them**: leg retracement (the
+rejected case sits at 41.9%, *above* an endorsed one at 30.0% -- no threshold
+exists), reversal displacement (the rejected case at 89.8% sits *above* two
+endorsed ones at 58.6% and 63.2%), blocking the phantom promotion (the
+reference falls through to the staleness re-anchor and the CHoCH fires
+anyway), and ranking the blind-spot origin above a weak `validated` (no change
+-- the origin is one-shot and no longer armed there). The rejected mark is a
+consequence of the endorsed cycle existing at all: once a bearish cycle opens,
+the bounce clears every local reference with persistence to spare. Revisit if
+more instances turn up on other symbols -- one case did not yield a
+discriminant.
+
 **Provisional CHoCH against weak references** (`InternalStructureDetector`, as
 of 2026-07-11): `emit_provisional_choch_weak` (constructor default `False`,
 requires `emit_provisional_choch`; wired **`True`** in `load_dashboard_data`).

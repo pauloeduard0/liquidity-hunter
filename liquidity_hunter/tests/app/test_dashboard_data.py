@@ -1837,6 +1837,12 @@ def test_aave_1h_pending_fail_off_leaves_stale_bearish_trend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(dashboard_data, "_CHOCH_PENDING_FAIL_AT_BROKEN_LEVEL", False)
+    # `choch_displacement_retire_blind_spot` reaches the same stale trend by a
+    # second route (this rally follows a leg that displaced without a BOS, so
+    # retiring the blind spot lets the local low carry the reversal): switch it
+    # off too, or this test measures the two flags together instead of the one
+    # it names.
+    monkeypatch.setattr(dashboard_data, "_CHOCH_DISPLACEMENT_RETIRE_BLIND_SPOT", False)
     candles = _load_aave_1h_pending_fail_candles()
     provider = _FuturesLimitFakeProvider({TimeFrame.H1: candles})
 

@@ -149,6 +149,34 @@ _DEFAULT_STALE_REANCHOR_CANDLES = 60
 # pullback ever formed. Measured 2026-08-29 (see below).
 _STALE_REANCHOR_DISPLACEMENT_POST_EXTREME = True
 
+# Closing a displacement-spent cycle (`choch_displacement_retire_blind_spot`).
+# A CHoCH whose leg exploded without ever emitting a BOS leaves no
+# `validated_choch_<opposite>` (nothing promoted it) and a blind-spot origin far
+# behind price, which outranks the trailing low/high -- so every later loss of a
+# *local* extreme reports as a sweep and the opposite CHoCH waits days for a
+# price that is not coming back. The displacement-success test already declares
+# such a leg established; retire the blind spot with it, so the local extreme
+# carries the reversal.
+_CHOCH_DISPLACEMENT_RETIRE_BLIND_SPOT = True
+
+# ...but only for a leg that really ran: N x mean true-range%, *uncapped*. The
+# displacement-success test it rides on is capped at 20% of price, which on a
+# volatile series pins the gate there ("the leg moved 20%" -- one candle on a
+# memecoin) and retires the reference after ordinary legs too. Measured on
+# JIMOTHY H1: the legs that earned the retirement ran 6.9 and 11.3 ATR; an
+# ordinary 3.9-ATR leg cleared the capped gate and produced a spurious bullish
+# CHoCH one day into a decline that carried on for another week.
+_CHOCH_DISPLACEMENT_RETIRE_ATR = 5.0
+
+# A discarded pending BOS promotes its leg origin as the reversal reference. It
+# declared that level *structural* unconditionally, while the sibling promotion
+# at an emitted BOS requires `floor_closed` -- so the path that never confirmed
+# was the more confident of the two. The same test now governs both. Measured
+# 2026-08-29 (8 symbols x 15m..1d, whole-stream diff): 15/40 combos change, no
+# `final_trend` flips, 4803 -> 4801 events, and 26 of the changes are the `*`
+# label alone -- exactly what the fix is for.
+_PHANTOM_PROMOTION_REQUIRES_CLOSE = True
+
 # Displacement release for the staleness re-anchor
 # (`InternalStructureDetector.stale_reanchor_displacement_atr` /
 # `stale_reanchor_displacement_candles`, internal detector only). The staleness
@@ -2031,6 +2059,9 @@ def _build_internal_detector(
         stale_reanchor_displacement_atr=_STALE_REANCHOR_DISPLACEMENT_ATR,
         stale_reanchor_displacement_candles=_STALE_REANCHOR_DISPLACEMENT_CANDLES,
         stale_reanchor_displacement_post_extreme=_STALE_REANCHOR_DISPLACEMENT_POST_EXTREME,
+        choch_displacement_retire_blind_spot=_CHOCH_DISPLACEMENT_RETIRE_BLIND_SPOT,
+        choch_displacement_retire_atr=_CHOCH_DISPLACEMENT_RETIRE_ATR,
+        phantom_promotion_requires_close=_PHANTOM_PROMOTION_REQUIRES_CLOSE,
         # Stage a continuation BOS at each impulsive advance that displaces the
         # prior BOS level by this fraction, so a sharp multi-leg move shows a
         # staircase instead of one long event-free stretch (the impulsive leg

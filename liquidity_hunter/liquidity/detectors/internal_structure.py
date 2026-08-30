@@ -873,6 +873,9 @@ class InternalStructureDetector(MarketStructureDetector):
         stage_choch_failed_window_bos: bool = False,
         choch_success_displacement_atr: float | None = None,
         choch_success_displacement_max_pct: float | None = None,
+        choch_displacement_retire_blind_spot: bool = False,
+        choch_displacement_retire_atr: float | None = None,
+        phantom_promotion_requires_close: bool = False,
         stage_reversal_eaten_bos: bool = False,
         stage_superseded_continuation_bos: bool = False,
         bos_pullback_seed_choch_origin: bool = False,
@@ -1054,6 +1057,9 @@ class InternalStructureDetector(MarketStructureDetector):
         self._stage_choch_failed_window_bos = stage_choch_failed_window_bos
         self._choch_success_displacement_atr = choch_success_displacement_atr
         self._choch_success_displacement_max_pct = choch_success_displacement_max_pct
+        self._choch_displacement_retire_blind_spot = choch_displacement_retire_blind_spot
+        self._choch_displacement_retire_atr = choch_displacement_retire_atr
+        self._phantom_promotion_requires_close = phantom_promotion_requires_close
         self._stage_reversal_eaten_bos = stage_reversal_eaten_bos
         self._stage_superseded_continuation_bos = stage_superseded_continuation_bos
         self._bos_pullback_seed_choch_origin = bos_pullback_seed_choch_origin
@@ -2188,8 +2194,22 @@ class InternalStructureDetector(MarketStructureDetector):
                             and pb is not None
                             and price > pb.price
                         ):
+                            # A discarded pending BOS declares its leg origin
+                            # *structural* unconditionally, while the sibling
+                            # promotion at an emitted BOS (above) requires
+                            # `floor_closed` -- so the path that never confirmed
+                            # is the more confident of the two. Under
+                            # `phantom_promotion_requires_close` the same test
+                            # governs both: an advance whose floor never closed
+                            # beyond promotes a *weak* reference, which the
+                            # new-cycle barrier governs and re-anchors may still
+                            # slide.
                             validated_choch_high = pb
-                            validated_choch_high_structural = True
+                            validated_choch_high_structural = (
+                                pending_bos.floor_closed
+                                if self._phantom_promotion_requires_close
+                                else True
+                            )
                             choch_origin_high = None
                         # Mirror of the bullish case: a phantom advance blocked by
                         # the origin-staircase gate (a lower-high below the leg
@@ -2400,9 +2420,29 @@ class InternalStructureDetector(MarketStructureDetector):
                     / candles[current_index].close
                     >= self._displacement_success_threshold(decision_atr)
                 ):
+                    retire_gap = (bear_fail_pivot.price - bear_leg_low) / candles[
+                        current_index
+                    ].close
                     bear_choch_origin = None
                     bear_choch_fail_ref = None
                     bear_fail_pivot = None
+                    # The blind-spot retirement carries its own, stricter and
+                    # *uncapped* threshold. The displacement-success test above
+                    # is capped at `choch_success_displacement_max_pct` (20% of
+                    # price), and on a volatile series it pins there -- turning
+                    # the gate into "the leg moved 20%", one candle on a
+                    # memecoin. Retiring the reversal reference is a bigger claim
+                    # than declining to mark a failure, so it asks for a real
+                    # impulse. Measured on JIMOTHY H1: the legs that earned it
+                    # ran 6.9 and 11.3 ATR, while an ordinary leg that cleared
+                    # the capped threshold ran 3.9 -- and produced a spurious
+                    # 07-31 bullish CHoCH one day into a decline that continued.
+                    if self._choch_displacement_retire_blind_spot and (
+                        self._choch_displacement_retire_atr is None
+                        or retire_gap >= self._choch_displacement_retire_atr * decision_atr
+                    ):
+                        # Mirror of the bullish case above.
+                        choch_origin_high = None
                     # Displacement-success stands in for the confirming BOS the
                     # impulse never printed: the bearish structure is confirmed
                     # (and the bullish re-arm memory retires with it, as at a
@@ -3358,8 +3398,22 @@ class InternalStructureDetector(MarketStructureDetector):
                             and pb is not None
                             and price < pb.price
                         ):
+                            # A discarded pending BOS declares its leg origin
+                            # *structural* unconditionally, while the sibling
+                            # promotion at an emitted BOS (above) requires
+                            # `floor_closed` -- so the path that never confirmed
+                            # is the more confident of the two. Under
+                            # `phantom_promotion_requires_close` the same test
+                            # governs both: an advance whose floor never closed
+                            # beyond promotes a *weak* reference, which the
+                            # new-cycle barrier governs and re-anchors may still
+                            # slide.
                             validated_choch_low = pb
-                            validated_choch_low_structural = True
+                            validated_choch_low_structural = (
+                                pending_bos.floor_closed
+                                if self._phantom_promotion_requires_close
+                                else True
+                            )
                             choch_origin_low = None
                         # Phantom advance blocked by the origin-staircase gate
                         # (a higher-low above the leg origin but below the prior
@@ -3530,9 +3584,40 @@ class InternalStructureDetector(MarketStructureDetector):
                     / candles[current_index].close
                     >= self._displacement_success_threshold(decision_atr)
                 ):
+                    retire_gap = (bull_leg_high - bull_fail_pivot.price) / candles[
+                        current_index
+                    ].close
                     bull_choch_origin = None
                     bull_choch_fail_ref = None
                     bull_fail_pivot = None
+                    # The blind-spot retirement carries its own, stricter and
+                    # *uncapped* threshold. The displacement-success test above
+                    # is capped at `choch_success_displacement_max_pct` (20% of
+                    # price), and on a volatile series it pins there -- turning
+                    # the gate into "the leg moved 20%", one candle on a
+                    # memecoin. Retiring the reversal reference is a bigger claim
+                    # than declining to mark a failure, so it asks for a real
+                    # impulse. Measured on JIMOTHY H1: the legs that earned it
+                    # ran 6.9 and 11.3 ATR, while an ordinary leg that cleared
+                    # the capped threshold ran 3.9 -- and produced a spurious
+                    # 07-31 bullish CHoCH one day into a decline that continued.
+                    if self._choch_displacement_retire_blind_spot and (
+                        self._choch_displacement_retire_atr is None
+                        or retire_gap >= self._choch_displacement_retire_atr * decision_atr
+                    ):
+                        # The blind-spot fallback (`choch_origin_low`) is the low
+                        # this leg launched from, and it outranks the trailing
+                        # `active_low` in the reversal reference. After a
+                        # displacement success that is the wrong level: the leg
+                        # ran away from it (often 50-65%), so every later loss of
+                        # a *local* low reports as a sweep and the opposite CHoCH
+                        # waits days for a price that is not coming back. The
+                        # impulse also printed no BOS, so nothing ever promoted
+                        # `validated_choch_low` -- the trailing low is the only
+                        # honest reference left. Retire the blind spot with the
+                        # origin it belongs to (the JIMOTHY H1 2026-07-29 and
+                        # 2026-08-07 legs).
+                        choch_origin_low = None
                     # Displacement-success stands in for the confirming BOS the
                     # impulse never printed: the bullish structure is confirmed
                     # (and the bearish re-arm memory retires with it, as at a
