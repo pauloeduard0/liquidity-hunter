@@ -105,6 +105,36 @@ extreme high/low over a trailing window of `stale_reanchor_candles` candles.
 internal staleness re-anchor is what fixes the visible lock; the major one feeds
 `market_structure_events` (in the API, not currently drawn).
 
+**Staleness re-anchor on a swing pivot** (`InternalStructureDetector` only,
+composition-wired, as of 2026-08-31): `stale_reanchor_swing_pivot` (constructor
+default `False` = off; wired **True** via `_STALE_REANCHOR_SWING_PIVOT`) makes
+the internal detector's staleness window anchor on its most extreme **confirmed
+swing pivot** rather than on its raw highest high / lowest low. The window of the
+non-displaced branch is purely *rolling* (`current_index - stale_after + 1`), so
+it opens wherever the timer happens to land and its raw extreme is frequently the
+window's own first bar — a candle mid-slide, not a level anything turned at.
+SOLUSDT 1d 2026-08-16: the 40-candle window opened on 07-08 and anchored the
+bullish reversal at 80.74, that opening bar's high, while two genuine swing highs
+sat inside it (78.87 on 07-21, 77.88 on 08-09); the `CHoCH?*` line then ran from
+a level with no top on it. This is the same pathology
+`stale_reanchor_displacement_post_extreme` fixes on the *displaced* branch (the
+JIMOTHY H1 case), which never covered the plain-staleness path. The raw extreme
+remains the fallback when the window holds no pivot on the reversal side — the
+blind-spot case the re-anchor exists for (an impulsive leg confirms no pivots).
+Measured (10 symbols x M15/H1/H4/D1, full event-stream diff, ON vs OFF on
+identical candles): **11/40 combos change, 0 final-trend flips**. The aggregate
+signature is close to neutral — CHoCH 366 -> 370, `CHOCH_FAILED` 104 -> 106, BOS
+730 -> 732, HL/LH −8 — and the whipsaw rate (a CHoCH whose next flip is a
+same-direction failure) is unchanged at 27.9% -> 28.1%, so this buys **no
+measured edge**: it is a correctness fix for *where the level sits*, justified by
+the docstring's own contract ("the most recent local swing extreme"), and the
+measurement is here to show it costs nothing. Where the reference moves it
+generally moves *closer* to price (a real pivot is at or below the raw extreme),
+so the reversal CHoCH tends to fire a little earlier (BTC 1d 03-15 -> 03-14, BNB
+1d 03-15 -> 03-11, LINK 1d 05-08 -> 05-05). Regression: the two
+`test_stale_reanchor_*` tests in `tests/app/test_dashboard_data.py` over
+`solusdt_1d_2022_12_29_2026_08_31.json`.
+
 **Impulse BOS staging** (`InternalStructureDetector` only, as of 2026-06-29):
 `impulse_bos_displacement_pct` (constructor default `None` = off; wired in
 `load_dashboard_data` via `_IMPULSE_BOS_DISPLACEMENT_PCT = 0.015`). A clean

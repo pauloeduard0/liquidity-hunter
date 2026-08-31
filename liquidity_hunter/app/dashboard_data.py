@@ -149,6 +149,11 @@ _DEFAULT_STALE_REANCHOR_CANDLES = 60
 # pullback ever formed. Measured 2026-08-29 (see below).
 _STALE_REANCHOR_DISPLACEMENT_POST_EXTREME = True
 
+# The staleness re-anchor anchors on the window's most extreme confirmed swing
+# pivot instead of its raw extreme (`stale_reanchor_swing_pivot`). See the
+# wiring comment in `_build_internal_detector`.
+_STALE_REANCHOR_SWING_PIVOT = True
+
 # Closing a displacement-spent cycle (`choch_displacement_retire_blind_spot`).
 # A CHoCH whose leg exploded without ever emitting a BOS leaves no
 # `validated_choch_<opposite>` (nothing promoted it) and a blind-spot origin far
@@ -2095,6 +2100,15 @@ def _build_internal_detector(
         stale_reanchor_displacement_atr=_STALE_REANCHOR_DISPLACEMENT_ATR,
         stale_reanchor_displacement_candles=_STALE_REANCHOR_DISPLACEMENT_CANDLES,
         stale_reanchor_displacement_post_extreme=_STALE_REANCHOR_DISPLACEMENT_POST_EXTREME,
+        # The staleness re-anchor picks the window's most extreme *confirmed
+        # swing pivot* rather than its raw highest high / lowest low. A rolling
+        # staleness window opens wherever the timer lands, so its raw extreme is
+        # frequently the first bar of the window -- a candle mid-slide, not a
+        # level the market turned at (SOLUSDT 1d 2026-08-16: reference 80.74, the
+        # high of the 07-08 sell-off bar, with real swing highs at 78.87 and
+        # 77.88 inside the same window). Falls back to the raw extreme when the
+        # window holds no pivot -- the blind-spot case the re-anchor exists for.
+        stale_reanchor_swing_pivot=_STALE_REANCHOR_SWING_PIVOT,
         choch_displacement_retire_blind_spot=_CHOCH_DISPLACEMENT_RETIRE_BLIND_SPOT,
         choch_displacement_retire_atr=_CHOCH_DISPLACEMENT_RETIRE_ATR,
         phantom_promotion_requires_close=_PHANTOM_PROMOTION_REQUIRES_CLOSE,

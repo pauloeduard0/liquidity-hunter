@@ -3761,3 +3761,71 @@ def test_provisional_choch_guards_require_the_provisional_choch_flag() -> None:
         InternalStructureDetector(
             emit_provisional_choch=True, provisional_choch_break_buffer_atr=-0.1
         )
+
+
+def _load_sol_1d_stale_reanchor_candles() -> list[Candle]:
+    """SOLUSDT 1d 2022-12-29..2026-08-31, the production slice from the
+    structural anchor. 5-column rows: ts/open/high/low/close.
+
+    Regression window for `stale_reanchor_swing_pivot`: on 2026-08-16 the
+    staleness re-anchor fires with a rolling 40-candle window opening on
+    2026-07-08, whose raw highest high (80.74) is that opening bar's own high --
+    a sell-off candle, not a top. Two genuine swing highs sit inside the same
+    window (78.87 on 07-21, 77.88 on 08-09).
+    """
+    import json
+    from pathlib import Path
+
+    data_path = (
+        Path(__file__).parent.parent
+        / "liquidity"
+        / "detectors"
+        / "data"
+        / "solusdt_1d_2022_12_29_2026_08_31.json"
+    )
+    rows = json.loads(data_path.read_text())
+    return [
+        Candle(
+            symbol="SOLUSDT",
+            timeframe=TimeFrame.D1,
+            timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+            taker_buy_volume=0.5,
+        )
+        for timestamp_ms, open_, high, low, close in rows
+    ]
+
+
+def _sol_stale_reanchor_choch_reference(*, swing_pivot: bool) -> float | None:
+    candles = _load_sol_1d_stale_reanchor_candles()
+    original = dashboard_data._STALE_REANCHOR_SWING_PIVOT
+    dashboard_data._STALE_REANCHOR_SWING_PIVOT = swing_pivot
+    try:
+        events = _build_internal_detector(TimeFrame.D1, confluence_filter=False).detect(candles)
+    finally:
+        dashboard_data._STALE_REANCHOR_SWING_PIVOT = original
+    bullish_choch = [
+        e
+        for e in events
+        if e.event is StructureEvent.CHANGE_OF_CHARACTER
+        and e.direction is MarketDirection.BULLISH
+    ]
+    assert bullish_choch
+    return bullish_choch[-1].reference_price_level
+
+
+def test_stale_reanchor_without_swing_pivot_uses_the_raw_window_extreme() -> None:
+    """Off, the staleness re-anchor takes the window's highest high -- here the
+    high of the 07-08 sell-off bar that happens to open the rolling window, so
+    the `CHoCH?` line runs from a level no top ever formed at."""
+    assert _sol_stale_reanchor_choch_reference(swing_pivot=False) == 80.74
+
+
+def test_stale_reanchor_swing_pivot_anchors_on_a_real_top() -> None:
+    """On (production), the window's most extreme *confirmed swing high* governs
+    instead: the 78.87 lower high of 2026-07-21, a level the market turned at."""
+    assert _sol_stale_reanchor_choch_reference(swing_pivot=True) == 78.87

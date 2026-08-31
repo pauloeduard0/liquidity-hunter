@@ -857,6 +857,7 @@ class InternalStructureDetector(MarketStructureDetector):
         stale_reanchor_displacement_atr: float | None = None,
         stale_reanchor_displacement_candles: int | None = None,
         stale_reanchor_displacement_post_extreme: bool = False,
+        stale_reanchor_swing_pivot: bool = False,
         impulse_bos_displacement_pct: float | None = None,
         bos_pullback_max_wick_pct: float | None = None,
         stage_wick_rejected_bos: bool = False,
@@ -997,6 +998,7 @@ class InternalStructureDetector(MarketStructureDetector):
         self._stale_reanchor_displacement_post_extreme = (
             stale_reanchor_displacement_post_extreme
         )
+        self._stale_reanchor_swing_pivot = stale_reanchor_swing_pivot
         self._impulse_bos_displacement_pct = impulse_bos_displacement_pct
         self._bos_pullback_max_wick_pct = bos_pullback_max_wick_pct
         self._stage_wick_rejected_bos = stage_wick_rejected_bos
@@ -2026,20 +2028,51 @@ class InternalStructureDetector(MarketStructureDetector):
                         window_start = extreme_index + 1
                     window = candles[window_start : current_index + 1]
                     if window:
-                        if trend is MarketDirection.BEARISH:
-                            local = max(window, key=lambda c: c.high)
-                            reanchor_opposite(
-                                local.high,
-                                local.timestamp,
-                                current_price=candles[current_index].close,
-                            )
-                        else:
-                            local = min(window, key=lambda c: c.low)
-                            reanchor_opposite(
-                                local.low,
-                                local.timestamp,
-                                current_price=candles[current_index].close,
-                            )
+                        bearish_side = trend is MarketDirection.BEARISH
+                        # The level to re-anchor on. By default the window's raw
+                        # extreme -- but a *rolling* staleness window (the
+                        # non-displaced branch, whose start is just
+                        # `current_index - stale_after + 1`) opens wherever the
+                        # timer happens to land, so its highest high is often the
+                        # first bar of the window: a candle mid-slide, not a top.
+                        # SOLUSDT 1d 2026-08-16 anchored the bullish reversal at
+                        # 80.74, the high of the 07-08 sell-off bar that opened the
+                        # 40-candle window, while two genuine swing highs sat inside
+                        # it (78.87 on 07-21, 77.88 on 08-09) -- the `CHoCH?*` line
+                        # then ran from a level no top ever formed at. Under
+                        # `stale_reanchor_swing_pivot` the window's most extreme
+                        # *confirmed swing pivot* governs instead, so the reversal
+                        # reference is a level the market actually turned at. The
+                        # raw extreme remains the fallback when the window holds no
+                        # pivot at all -- the blind-spot case this re-anchor exists
+                        # for (an impulsive leg confirms no pivots), which
+                        # `stale_reanchor_displacement_post_extreme` already
+                        # handles on the displaced side.
+                        level_candle = (
+                            max(window, key=lambda c: c.high)
+                            if bearish_side
+                            else min(window, key=lambda c: c.low)
+                        )
+                        level = level_candle.high if bearish_side else level_candle.low
+                        level_ts = level_candle.timestamp
+                        if self._stale_reanchor_swing_pivot:
+                            want = "high" if bearish_side else "low"
+                            edge_ts = candles[current_index].timestamp
+                            window_ts = candles[window_start].timestamp
+                            in_window = [
+                                (pivot_price, pivot_ts)
+                                for pivot_ts, pivot_kind, pivot_price in pivots
+                                if pivot_kind == want and window_ts <= pivot_ts <= edge_ts
+                            ]
+                            if in_window:
+                                level, level_ts = (
+                                    max(in_window) if bearish_side else min(in_window)
+                                )
+                        reanchor_opposite(
+                            level,
+                            level_ts,
+                            current_price=candles[current_index].close,
+                        )
 
             if kind == "high":
                 # Record a counter-trend staircase break while a bearish CHoCH
