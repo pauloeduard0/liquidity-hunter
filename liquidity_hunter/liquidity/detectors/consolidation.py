@@ -407,11 +407,25 @@ def stage_breakout_events(
     advance_indices = sorted(direction_by_index)
 
     real_advance_indices: list[tuple[int, MarketDirection]] = []
+    # Provisional live-edge CHoCH marks, per direction. They are not structure
+    # advances (the state machine never flipped), so they never gate a
+    # continuation BOS -- but a *reversal* breakout staged on top of one draws
+    # the same dimmed reversal twice (ENAUSDT 1d 2026-08-20: the detector's
+    # `CHoCH?` off the 0.09827 sweep level and a box-top `CHoCH?*` off 0.09843,
+    # 0.16% apart, on the same candle). The machine already spoke about this
+    # break; staging adds nothing.
+    provisional_choch_indices: list[tuple[int, MarketDirection]] = []
     # Real (non-provisional) BOS extremes, per direction, ordered by candle
     # index -- the standing staircase a continuation breakout must extend.
     real_bos_extremes: list[tuple[int, MarketDirection, float]] = []
     for event in existing_events:
-        if event.provisional or event.event not in (
+        if event.provisional:
+            if event.event is StructureEvent.CHANGE_OF_CHARACTER:
+                event_index = index_by_timestamp.get(event.timestamp)
+                if event_index is not None:
+                    provisional_choch_indices.append((event_index, event.direction))
+            continue
+        if event.event not in (
             StructureEvent.BREAK_OF_STRUCTURE,
             StructureEvent.CHANGE_OF_CHARACTER,
         ):
@@ -469,6 +483,14 @@ def stage_breakout_events(
         )
         breakout = candles[end_index]
         is_continuation = range_.resolved_direction is segment_trend
+        # A reversal breakout the detector's own live-edge `CHoCH?` already
+        # covers: same direction, same break window. Drop the staged twin.
+        if not is_continuation and any(
+            direction is range_.resolved_direction
+            and abs(index - end_index) <= dedup_candles
+            for index, direction in provisional_choch_indices
+        ):
+            continue
         # A continuation breakout must not plot a BOS *beneath a still-standing
         # real same-direction BOS line*. If a real BOS in this direction made a
         # more-extreme level than the broken boundary (box top below a prior
