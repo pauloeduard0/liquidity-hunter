@@ -26,7 +26,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from liquidity_hunter.app.paper_journal import read_journal
+from liquidity_hunter.app.paper_journal import read_journal, timeframe_timedelta
 from liquidity_hunter.core.domain import MarketDirection, PaperOutcome
 from research._mt5 import EXPORT_DIR
 from research.ftmo_live import JOURNAL_PATH, MAX_SIGNAL_AGE, server_offset
@@ -104,7 +104,17 @@ def enqueue(*, journal: Path, export: Path, balance: float, risk: float,
         if decision.outcome is not PaperOutcome.OPEN or decision.key in known:
             continue
         if offset is not None:
-            closed_at = decision.signal_timestamp - offset
+            # O timestamp da vela e a ABERTURA dela: o gatilho so existe no
+            # FECHAMENTO, uma duracao depois. Sem somar a duracao, toda
+            # decisao chega aqui ja envelhecida de uma vela inteira (15 min no
+            # M15, quatro horas no H4) contra um limite de cinco minutos, e a
+            # fila nunca aceita nada -- e o mesmo erro que `signal_age` no
+            # diario ja corrige do lado da decisao.
+            closed_at = (
+                decision.signal_timestamp
+                + timeframe_timedelta(decision.timeframe)
+                - offset
+            )
             if now - closed_at > MAX_SIGNAL_AGE:
                 continue
         intent = build_intent(decision, info, balance, risk)

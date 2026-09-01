@@ -196,9 +196,63 @@ def send(intent: dict, fills: Path) -> None:
         record(fills, intent, "recusada",
                detail=f"{result.retcode} {result.comment}")
     else:
-        record(fills, intent, "filled", price=result.price,
+        price, commission, waited = fill_price(result)
+        record(fills, intent, "filled", price=price, commission=commission,
                volume=result.volume, ticket=result.order,
-               detail=f"{result.volume} @ {result.price}")
+               lookup_seconds=round(waited, 3),
+               detail=f"{result.volume} @ {price}")
+
+
+#: Quanto esperar pelo negocio aparecer no historico depois do envio. Medido
+#: na demo: o `order_send` volta DONE antes de o negocio estar consultavel, e
+#: cinco segundos e folga larga sobre o que se observou (menos de um). O teto
+#: existe para o executor nunca ficar preso -- ele roda dentro do laco de 60s.
+FILL_LOOKUP_TIMEOUT = 5.0
+FILL_LOOKUP_STEP = 0.1
+
+
+def fill_price(result) -> tuple[float, float, float]:
+    """O preco EXECUTADO, a comissao e quanto se esperou por eles.
+
+    Sob execucao a mercado o retorno vem com `price` zerado mesmo num
+    `TRADE_RETCODE_DONE`: o preco so existe no NEGOCIO que o servidor gerou, e
+    o negocio ainda NAO esta consultavel quando o `order_send` retorna. Gravar
+    esse zero nao e cosmetico -- a derrapagem e o unico numero que a
+    `fills.jsonl` existe para produzir, e um zero contamina a media em vez de
+    faltar visivelmente.
+
+    Tres pegadinhas, todas descobertas mandando ordem de teste na demo:
+
+    * a consulta e por `position=`, nao por `ticket=`. O `result.deal` e o
+      ticket do NEGOCIO, e `history_deals_get(ticket=...)` devolve `None`
+      para ele; quem casa e o `position_id`, que e o `result.order`.
+    * nem o negocio nem a posicao existem no instante do retorno -- por isso
+      isto e um laco com teto, e nao uma leitura unica.
+    * o tempo de espera volta junto e vai para o registro: se um dia ele
+      encostar no teto, o numero estara la em vez de o preco silenciosamente
+      zerar de novo.
+
+    A comissao vem de graca no mesmo negocio, e e custo real: vale gravar.
+    """
+    position_id = getattr(result, "order", 0)
+    started = time.monotonic()
+    while True:
+        waited = time.monotonic() - started
+        if position_id:
+            deals = mt5.history_deals_get(position=position_id)
+            if deals:
+                deal = deals[0]
+                return (float(deal.price),
+                        float(getattr(deal, "commission", 0.0)), waited)
+            for position in mt5.positions_get() or []:
+                if position.ticket == position_id:
+                    return float(position.price_open), 0.0, waited
+        price = float(getattr(result, "price", 0.0) or 0.0)
+        if price > 0:
+            return price, 0.0, waited
+        if waited >= FILL_LOOKUP_TIMEOUT:
+            return 0.0, 0.0, waited
+        time.sleep(FILL_LOOKUP_STEP)
 
 
 def run_once(export: Path, start_equity: float) -> None:
