@@ -39,6 +39,23 @@ from research.ftmo_universe import RISK_PER_TRADE
 ORDERS_NAME = "orders.jsonl"
 FILLS_NAME = "fills.jsonl"
 
+#: Quanto da conta UMA operacao pode comprometer em margem. Existe porque em
+#: cripto a margem e 1:1 -- uma posicao de tamanho cheio come a conta inteira
+#: e a proxima decisao e recusada por falta de margem, e recusada e pior que
+#: encolhida (zero do tamanho em vez de uma fracao).
+#:
+#: Medido sobre as 871 operacoes dos seis fluxos na janela comum de
+#: 2024-12 a 2026-07, com a permanencia maxima do horizonte: sem orcamento,
+#: 22,2% das operacoes seriam recusadas por margem; com 50%, 11,7% -- e o
+#: tamanho medio NAO muda (76,3% contra 76,5%), porque o que o teto tira de
+#: uma operacao grande demais volta na seguinte, que agora cabe. Abaixo disso
+#: comeca a custar: 33% troca cinco pontos de tamanho por sete de bloqueio.
+#:
+#: Quem e bloqueado tambem foi medido, e desmente o motivo que quase escolheu
+#: este numero: o cambio H4 NUNCA aparece na lista (margem 1/30, pequena
+#: demais para competir). A cripto M15 atrapalha a si mesma e ao indice.
+MARGIN_BUDGET = 0.5
+
 
 def queued_keys(orders: Path) -> set[str]:
     """As decisoes que ja viraram intencao. A fila e a propria memoria."""
@@ -70,6 +87,7 @@ def build_intent(decision, info: dict, balance: float, risk: float) -> dict | No
     sizing = position_size(
         entry=decision.observed_price, stop=decision.stop_price,
         balance=balance, info=spec, risk=risk,
+        free_margin=balance * MARGIN_BUDGET,
     )
     if sizing is None or not sizing.takeable:
         return None
