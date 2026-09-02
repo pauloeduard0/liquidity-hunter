@@ -189,6 +189,18 @@ def send(intent: dict, fills: Path) -> None:
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling_mode(symbol),
     }
+    # A margem e a ULTIMA coisa que muda entre a decisao e o envio: o lado WSL
+    # cortou o lote contra uma margem estatica, mas quem sabe quanto sobrou
+    # agora -- com as outras posicoes ja abertas competindo por ela, e em
+    # cripto sem alavancagem, onde uma posicao come o nocional inteiro -- e o
+    # terminal. Perguntar antes troca um `No money` (que gasta a intencao, ja
+    # que recusa nao e repetida) por uma recusa com o numero dentro.
+    check = mt5.order_check(request)
+    if check is not None and check.retcode != 0 and check.margin_free < 0:
+        record(fills, intent, "sem-margem",
+               detail=f"faltam {-check.margin_free:,.2f} "
+                      f"(margem da ordem {check.margin:,.2f})")
+        return
     result = mt5.order_send(request)
     if result is None:
         record(fills, intent, "erro", detail=str(mt5.last_error()))

@@ -58,6 +58,11 @@ def build_intent(decision, info: dict, balance: float, risk: float) -> dict | No
     ideal fica abaixo do minimo da corretora: nesse caso a unica ordem que
     existe arrisca MAIS do que o plano pediu, e pegar uma operacao fora do
     tamanho e pior do que nao pegar.
+
+    O teto e outra historia: `position_size` ja CORTA o lote para caber no
+    `volume_max` e na margem, e a ordem sai menor em vez de nao sair. Cortar
+    nao muda o resultado em R, so o dinheiro -- por isso os dois lotes vao no
+    registro.
     """
     spec = info.get(decision.symbol)
     if spec is None:
@@ -73,6 +78,13 @@ def build_intent(decision, info: dict, balance: float, risk: float) -> dict | No
         "symbol": decision.symbol,
         "side": "buy" if decision.direction is MarketDirection.BULLISH else "sell",
         "lots": sizing.lots,
+        # O lote PRETENDIDO pelo risco, ao lado do que cabe de fato. Sem os
+        # dois no registro, a fracao de tamanho que o fluxo consegue operar
+        # continua sendo estimativa -- e e ela que corrige o retorno esperado,
+        # ja que R e escala-livre e so o dinheiro por operacao encolhe.
+        "intended_lots": round(sizing.exact_lots, 4),
+        "size_fraction": round(sizing.size_fraction, 4),
+        "capped_by": sizing.capped_by,
         "stop": decision.stop_price,
         "target": decision.target_price,
         # Levados junto para o executor poder recusar sozinho o que envelheceu

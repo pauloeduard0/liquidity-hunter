@@ -59,11 +59,23 @@ class Sizing:
     #: True quando o ideal fica abaixo de `volume_min`: a ordem so existe
     #: arriscando MAIS do que se pretendia.
     below_minimum: bool
+    #: O que limitou o lote, quando algo limitou: "volume_max" (teto da
+    #: corretora por ordem) ou "margem". `None` quando o risco mandou sozinho.
+    capped_by: str | None = None
+    #: A fracao do tamanho PRETENDIDO que sobrou. 1.0 quando nada cortou.
+    #: E este o numero que corrige o retorno esperado do fluxo: R e
+    #: escala-livre, entao cortar o lote nao muda o acerto nem o R por
+    #: operacao -- muda, proporcionalmente, o dinheiro que ele entrega.
+    size_fraction: float = 1.0
 
     @property
     def takeable(self) -> bool:
         """Da para pegar sem estourar o risco pretendido?"""
         return not self.below_minimum and self.lots > 0
+
+    @property
+    def capped(self) -> bool:
+        return self.capped_by is not None
 
 
 def position_size(
@@ -73,11 +85,26 @@ def position_size(
     balance: float,
     info: dict,
     risk: float = RISK_PER_TRADE,
+    free_margin: float | None = None,
 ) -> Sizing | None:
     """Lotes para arriscar `risk` da conta entre `entry` e `stop`.
 
     `None` quando a distancia do stop e zero -- nao ha ordem a mandar, e
     dividir por ela produziria um lote infinito em vez de um erro.
+
+    O risco escolhe o lote, mas nao e o unico limite: a corretora tem um teto
+    por ordem (`volume_max`) e cobra margem. Um stop curto produz um lote
+    correto em risco e grande demais em nocional -- medido, isso corta 39% do
+    tamanho pretendido no fluxo de cripto M15, onde a margem e 1:1.
+
+    O teto CORTA, o piso DESCARTA, e a assimetria e proposital: R e
+    escala-livre, entao metade do tamanho da o mesmo resultado em R com metade
+    do dinheiro -- o plano medido continua valendo. Abaixo do `volume_min` nao
+    ha essa saida: a unica ordem que existe arrisca MAIS do que se pretendia,
+    e isso sim seria outro plano.
+
+    `free_margin` default e o proprio `balance`, que e a hipotese otimista de
+    conta vazia. Quem sabe a margem real no instante do envio e o executor.
     """
     distance = abs(entry - stop)
     tick_size = info["trade_tick_size"]
@@ -93,11 +120,14 @@ def position_size(
     minimum = info["volume_min"] or step
     # Para BAIXO, sempre: arredondar para cima estoura o risco pretendido, e o
     # limite diario da corretora e sobre a perda, nao sobre a intencao.
-    lots = math.floor(exact / step) * step
+    allowed, capped_by = _ceiling(exact, entry, info, free_margin
+                                  if free_margin is not None else balance)
+    lots = math.floor(min(exact, allowed) / step) * step
     below = exact < minimum
     if below:
         # Reporta o piso, e o risco que ELE implica -- que e maior que o alvo.
         lots = minimum
+        capped_by = None
     lots = round(lots, 8)
     return Sizing(
         lots=lots,
@@ -105,7 +135,33 @@ def position_size(
         risk_pct=lots * loss_per_lot / balance,
         exact_lots=exact,
         below_minimum=below,
+        capped_by=capped_by,
+        size_fraction=min(1.0, lots / exact) if exact > 0 else 0.0,
     )
+
+
+def _ceiling(exact: float, price: float, info: dict,
+             free_margin: float) -> tuple[float, str | None]:
+    """O maior lote que a corretora aceita nesta ordem, e quem mandou nele.
+
+    Dois limites, e o menor vence. Ambos sao OPCIONAIS na ficha: um `meta.json`
+    exportado antes destes campos existirem nao pode fazer o dimensionador
+    mentir um teto -- sem o campo, nao ha teto, que e o comportamento de antes.
+    """
+    limit, reason = float("inf"), None
+    volume_max = info.get("volume_max") or 0.0
+    if volume_max > 0 and volume_max < limit:
+        limit, reason = volume_max, "volume_max"
+    rate = info.get("margin_rate") or 0.0
+    contract = info.get("trade_contract_size") or 0.0
+    margin_per_lot = price * contract * rate
+    if margin_per_lot > 0:
+        by_margin = free_margin / margin_per_lot
+        if by_margin < limit:
+            limit, reason = by_margin, "margem"
+    if exact <= limit:
+        return limit, None
+    return limit, reason
 
 
 def load_info(export: Path = EXPORT_DIR) -> dict[str, dict]:

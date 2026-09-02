@@ -247,6 +247,24 @@ def export_ticks(mt5, symbol: str, days: int, out: Path) -> dict | None:
     }
 
 
+def _margin_rate(mt5, symbol: str, info) -> dict:
+    """A fracao do nocional que a corretora exige como margem, por lote.
+
+    Devolve um dicionario para poder sair vazio: sem preco (mercado fechado,
+    simbolo nao selecionado) e melhor NAO gravar o campo do que gravar um
+    numero errado que ninguem consegue distinguir de um certo.
+    """
+    tick = mt5.symbol_info_tick(symbol)
+    price = getattr(tick, "ask", 0.0) if tick else 0.0
+    notional = price * info.trade_contract_size
+    if notional <= 0:
+        return {}
+    margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, symbol, 1.0, price)
+    if not margin or margin <= 0:
+        return {}
+    return {"margin_rate": margin / notional}
+
+
 def symbol_meta(mt5, symbol: str) -> dict | None:
     """O que converte spread em points para spread em percentual do preco."""
     info = mt5.symbol_info(symbol)
@@ -271,6 +289,18 @@ def symbol_meta(mt5, symbol: str) -> dict | None:
         # corretora, que e o pior lugar para descobrir.
         "margin_initial": info.margin_initial,
         "margin_maintenance": info.margin_maintenance,
+        # A TAXA de margem, e nao a margem em dolares: `margin_per_lot =
+        # preco * trade_contract_size * margin_rate`. Guardar a taxa em vez do
+        # valor e o que deixa a medicao historica usar o preco da EPOCA -- a
+        # margem em dolares vale so para o preco do dia da exportacao, e um
+        # estudo que a usasse mediria o limite de hoje sobre trades de dois
+        # anos atras.
+        #
+        # Vem do `order_calc_margin` e nao de uma conta nossa porque a taxa
+        # muda por CLASSE e sem aviso: medido nesta conta, cripto e 1:1
+        # (margem = nocional), indice 15x e cambio 30x, com a conta declarando
+        # 1:30. Derivar do `leverage` da conta erraria em cripto por 30 vezes.
+        **_margin_rate(mt5, symbol, info),
         "trade_mode": info.trade_mode,
         "currency_profit": info.currency_profit,
         "swap_long": info.swap_long,
@@ -296,6 +326,13 @@ def main() -> None:
         "barras, em vez de exportar candles",
     )
     parser.add_argument("--tick-days", type=int, default=DEFAULT_TICK_DAYS)
+    parser.add_argument(
+        "--meta-only", action="store_true",
+        help="regera so o meta.json (fichas dos simbolos), sem tocar em "
+             "candle nenhum. E o modo para adotar um campo novo da ficha: o "
+             "`--refresh` do laco ao vivo NAO reescreve o meta, entao um meta "
+             "antigo sobrevive indefinidamente a uma atualizacao do exportador.",
+    )
     parser.add_argument(
         "--refresh", action="store_true",
         help=f"exporta so a cauda recente ({REFRESH_BARS} barras) e nao "
@@ -328,6 +365,8 @@ def main() -> None:
             print(f"  {symbol}: nao existe neste terminal -- confira o nome exato no Market Watch")
             continue
         metas.append(meta)
+        if args.meta_only:
+            continue
         if args.ticks:
             summary = export_ticks(mt5, symbol, args.tick_days, out)
             if summary is not None:
@@ -343,7 +382,7 @@ def main() -> None:
     # instrumento exige reexportar o outro -- que foi exatamente o que
     # aconteceu.
     meta_path = out / "meta.json"
-    if args.refresh and meta_path.exists():
+    if args.refresh and not args.meta_only and meta_path.exists():
         # A ficha do instrumento (point, swap, contrato) nao muda a cada
         # minuto, e reescrever o meta a cada volta do laco so cria uma janela
         # em que o leitor do outro lado pega o arquivo pela metade.
