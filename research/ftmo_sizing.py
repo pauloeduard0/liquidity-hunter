@@ -59,14 +59,19 @@ class Sizing:
     #: True quando o ideal fica abaixo de `volume_min`: a ordem so existe
     #: arriscando MAIS do que se pretendia.
     below_minimum: bool
-    #: O que limitou o lote, quando algo limitou: "volume_max" (teto da
-    #: corretora por ordem) ou "margem". `None` quando o risco mandou sozinho.
+    #: O que limitou o lote, quando algo limitou: "margem", ou "volume_max"
+    #: quando nem repartir em `MAX_ORDER_SPLITS` ordens alcanca o pretendido.
+    #: `None` quando o risco mandou sozinho.
     capped_by: str | None = None
     #: A fracao do tamanho PRETENDIDO que sobrou. 1.0 quando nada cortou.
     #: E este o numero que corrige o retorno esperado do fluxo: R e
     #: escala-livre, entao cortar o lote nao muda o acerto nem o R por
     #: operacao -- muda, proporcionalmente, o dinheiro que ele entrega.
     size_fraction: float = 1.0
+    #: Como `lots` se reparte em ORDENS. O `volume_max` da corretora e um teto
+    #: POR ORDEM, nao por posicao: uma posicao maior que ele existe, so nao
+    #: cabe num `order_send` so. Quase sempre uma unica fatia igual a `lots`.
+    order_lots: tuple[float, ...] = ()
 
     @property
     def takeable(self) -> bool:
@@ -128,7 +133,17 @@ def position_size(
         # Reporta o piso, e o risco que ELE implica -- que e maior que o alvo.
         lots = minimum
         capped_by = None
-    lots = round(lots, 8)
+    # O que sobra depois de repartir e o que a corretora aceita de fato: uma
+    # sobra menor que `volume_min` nao vira ordem, e um pretendido grande
+    # demais para `MAX_ORDER_SPLITS` fatias fica no teto delas. Nos dois casos
+    # `lots` passa a ser a SOMA do que sai, para o risco declarado nao ser
+    # maior que o mandado.
+    orders = split_orders(lots, info)
+    if not orders:
+        return None
+    if capped_by is None and math.fsum(orders) < lots - step / 2:
+        capped_by = "volume_max"
+    lots = round(math.fsum(orders), 8)
     return Sizing(
         lots=lots,
         risk_money=lots * loss_per_lot,
@@ -137,21 +152,58 @@ def position_size(
         below_minimum=below,
         capped_by=capped_by,
         size_fraction=min(1.0, lots / exact) if exact > 0 else 0.0,
+        order_lots=orders,
     )
+
+
+#: Em quantas ordens uma posicao pode ser repartida. Existe porque o
+#: `volume_max` de alguns simbolos e minusculo perto do lote que um stop curto
+#: pede (VECUSD: 1,0 contra 17,5 pretendidos), e sem teto nenhum uma decisao
+#: viraria dezenas de envios -- cada um com sua derrapagem, seu retcode e sua
+#: chance de preencher a metade. Dez e o mesmo numero de `MAX_OPEN_POSITIONS`
+#: do executor: acima disso o defeito e mais provavel que a intencao.
+MAX_ORDER_SPLITS = 10
+
+
+def split_orders(lots: float, info: dict) -> tuple[float, ...]:
+    """`lots` repartidos em ordens que cabem no `volume_max` do simbolo.
+
+    Sem `volume_max` na ficha, uma fatia so -- o comportamento de antes. A
+    ultima fatia e DESCARTADA quando cai abaixo do `volume_min`: ela seria
+    recusada pela corretora, e uma recusa no meio de uma posicao ja aberta e
+    pior do que um lote um pouco menor.
+    """
+    step = info.get("volume_step") or 0.01
+    minimum = info.get("volume_min") or step
+    volume_max = info.get("volume_max") or 0.0
+    if lots <= 0:
+        return ()
+    if volume_max <= 0 or lots <= volume_max:
+        return (round(lots, 8),)
+    full = min(int(lots // volume_max), MAX_ORDER_SPLITS)
+    orders = [round(volume_max, 8)] * full
+    if full < MAX_ORDER_SPLITS:
+        rest = math.floor((lots - full * volume_max) / step) * step
+        if rest >= minimum:
+            orders.append(round(rest, 8))
+    return tuple(orders)
 
 
 def _ceiling(exact: float, price: float, info: dict,
              free_margin: float) -> tuple[float, str | None]:
-    """O maior lote que a corretora aceita nesta ordem, e quem mandou nele.
+    """O maior lote que a corretora aceita nesta POSICAO, e quem mandou nele.
 
-    Dois limites, e o menor vence. Ambos sao OPCIONAIS na ficha: um `meta.json`
-    exportado antes destes campos existirem nao pode fazer o dimensionador
-    mentir um teto -- sem o campo, nao ha teto, que e o comportamento de antes.
+    So a margem. O `volume_max` NAO entra aqui: ele limita uma ordem, nao uma
+    posicao, e `split_orders` reparte o excedente em ordens que cabem. Trata-lo
+    como teto de posicao cortava o tamanho sem motivo -- na primeira decisao
+    ao vivo (VECUSD, 2026-09-04) derrubou 17,5 lotes para 1,0, e com eles o
+    risco de 0,35% para 0,02%: o fluxo operava, mas por dinheiro nenhum.
+
+    O limite e OPCIONAL na ficha: um `meta.json` exportado antes destes campos
+    existirem nao pode fazer o dimensionador mentir um teto -- sem o campo,
+    nao ha teto, que e o comportamento de antes.
     """
     limit, reason = float("inf"), None
-    volume_max = info.get("volume_max") or 0.0
-    if volume_max > 0 and volume_max < limit:
-        limit, reason = volume_max, "volume_max"
     rate = info.get("margin_rate") or 0.0
     contract = info.get("trade_contract_size") or 0.0
     margin_per_lot = price * contract * rate

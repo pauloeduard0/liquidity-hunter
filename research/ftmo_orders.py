@@ -76,10 +76,10 @@ def build_intent(decision, info: dict, balance: float, risk: float) -> dict | No
     existe arrisca MAIS do que o plano pediu, e pegar uma operacao fora do
     tamanho e pior do que nao pegar.
 
-    O teto e outra historia: `position_size` ja CORTA o lote para caber no
-    `volume_max` e na margem, e a ordem sai menor em vez de nao sair. Cortar
-    nao muda o resultado em R, so o dinheiro -- por isso os dois lotes vao no
-    registro.
+    O teto e outra historia: `position_size` ja CORTA o lote para caber na
+    margem, e a ordem sai menor em vez de nao sair. Cortar nao muda o
+    resultado em R, so o dinheiro -- por isso os dois lotes vao no registro.
+    O `volume_max` nao corta mais nada: ele reparte (`order_lots`).
     """
     spec = info.get(decision.symbol)
     if spec is None:
@@ -96,6 +96,10 @@ def build_intent(decision, info: dict, balance: float, risk: float) -> dict | No
         "symbol": decision.symbol,
         "side": "buy" if decision.direction is MarketDirection.BULLISH else "sell",
         "lots": sizing.lots,
+        # Em quantas ordens o lote sai. O `volume_max` da corretora limita uma
+        # ORDEM, nao a posicao -- o executor manda as fatias e o `fills.jsonl`
+        # volta com uma linha so, ja com o preco medio ponderado.
+        "order_lots": list(sizing.order_lots),
         # O lote PRETENDIDO pelo risco, ao lado do que cabe de fato. Sem os
         # dois no registro, a fracao de tamanho que o fluxo consegue operar
         # continua sendo estimativa -- e e ela que corrige o retorno esperado,
@@ -172,7 +176,11 @@ def report_fills(export: Path) -> str:
     porque e assim que o custo entra na conta do plano: os mesmos pontos-base
     doem o dobro num stop com metade da largura.
     """
-    fills = read_fills(export)
+    # Uma execucao de TESTE nao e uma decisao: ela nasce de uma intencao
+    # escrita a mao para provar que a corrente chega ate o `order_send`, sem
+    # gatilho nenhum atras. Contar a derrapagem dela poluiria o unico numero
+    # que este relatorio existe para produzir.
+    fills = [f for f in read_fills(export) if not f.get("test")]
     done = [f for f in fills if f.get("status") == "filled"]
     if not done:
         return "sem execucoes ainda"

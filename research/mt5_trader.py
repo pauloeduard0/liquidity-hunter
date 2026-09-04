@@ -94,6 +94,30 @@ def record(fills: Path, intent: dict, status: str, **extra) -> None:
     print(f"  {intent['symbol']:<12} {status:<10} {detail}")
 
 
+#: Tamanho maximo do comentario de uma ordem no MT5.
+COMMENT_MAX = 31
+
+
+def order_comment(intent: dict) -> str:
+    """Um comentario que o terminal ACEITA.
+
+    A chave da decisao nao serve: `MetaTrader5` recusou
+    `VECUSD|15m|bearish|2026-09-04T03:15:00+00:00` truncada em 31 com
+    `(-2, 'Invalid "comment" argument')`, e a recusa custou a primeira ordem
+    do robo (2026-09-04) inteira -- a decisao existiu, foi dimensionada,
+    enfileirada, e morreu no `order_send`. Sobram so ASCII simples, e curto.
+
+    A identidade nao se perde: quem casa a ordem com a decisao e o `magic`
+    mais a linha da `fills.jsonl`, que leva a chave completa. O comentario e
+    para o humano que olha o terminal.
+    """
+    side = "B" if intent.get("side") == "buy" else "S"
+    raw = f"LH-{intent.get('symbol', '')}-{intent.get('timeframe', '')}{side}"
+    clean = "".join(c if (c.isascii() and (c.isalnum() or c in "-_.")) else "-"
+                    for c in raw)
+    return clean[:COMMENT_MAX]
+
+
 def filling_mode(symbol: str):
     """O modo de preenchimento que ESTE simbolo aceita.
 
@@ -162,6 +186,18 @@ def guards_ok(export: Path, start_equity: float) -> str | None:
     return None
 
 
+def intent_slices(intent: dict) -> list[float]:
+    """As ordens em que esta intencao sai, e uma so quando nada repartiu.
+
+    O `volume_max` da corretora e um teto POR ORDEM: um lote maior que ele nao
+    e uma posicao proibida, e uma posicao que precisa de mais de um envio. A
+    fila ja traz a conta pronta em `order_lots` -- o executor continua burro,
+    so obedece. Fila antiga (sem o campo) manda o lote inteiro, como antes.
+    """
+    slices = [float(v) for v in intent.get("order_lots") or [] if float(v) > 0]
+    return slices or [float(intent["lots"])]
+
+
 def send(intent: dict, fills: Path) -> None:
     symbol = intent["symbol"]
     if not mt5.symbol_select(symbol, True):
@@ -172,10 +208,9 @@ def send(intent: dict, fills: Path) -> None:
         record(fills, intent, "sem-preco", detail="mercado fechado?")
         return
     buy = intent["side"] == "buy"
-    request = {
+    base = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
-        "volume": float(intent["lots"]),
         "type": mt5.ORDER_TYPE_BUY if buy else mt5.ORDER_TYPE_SELL,
         "price": tick.ask if buy else tick.bid,
         # Os niveis vao NA ordem, e nao num acompanhamento em Python: se este
@@ -185,34 +220,57 @@ def send(intent: dict, fills: Path) -> None:
         "tp": float(intent["target"]),
         "deviation": DEVIATION_POINTS,
         "magic": MAGIC,
-        "comment": intent["key"][:31],
+        "comment": order_comment(intent),
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling_mode(symbol),
     }
-    # A margem e a ULTIMA coisa que muda entre a decisao e o envio: o lado WSL
-    # cortou o lote contra uma margem estatica, mas quem sabe quanto sobrou
-    # agora -- com as outras posicoes ja abertas competindo por ela, e em
-    # cripto sem alavancagem, onde uma posicao come o nocional inteiro -- e o
-    # terminal. Perguntar antes troca um `No money` (que gasta a intencao, ja
-    # que recusa nao e repetida) por uma recusa com o numero dentro.
-    check = mt5.order_check(request)
-    if check is not None and check.retcode != 0 and check.margin_free < 0:
-        record(fills, intent, "sem-margem",
-               detail=f"faltam {-check.margin_free:,.2f} "
-                      f"(margem da ordem {check.margin:,.2f})")
-        return
-    result = mt5.order_send(request)
-    if result is None:
-        record(fills, intent, "erro", detail=str(mt5.last_error()))
-    elif result.retcode != mt5.TRADE_RETCODE_DONE:
-        record(fills, intent, "recusada",
-               detail=f"{result.retcode} {result.comment}")
-    else:
+    # Uma LINHA por intencao, mesmo quando saem varias ordens: a `fills.jsonl`
+    # e o registro de idempotencia (`done_keys` casa pela chave) e a fonte da
+    # derrapagem. Duas linhas com a mesma chave contariam a mesma decisao
+    # duas vezes na media e ainda assim nao a mandariam de novo.
+    filled, cost, waited, tickets, prices = 0.0, 0.0, 0.0, [], []
+    for lots in intent_slices(intent):
+        request = {**base, "volume": lots}
+        # A margem e a ULTIMA coisa que muda entre a decisao e o envio: o lado
+        # WSL cortou o lote contra uma margem estatica, mas quem sabe quanto
+        # sobrou agora -- com as outras posicoes ja abertas competindo por
+        # ela, e em cripto sem alavancagem, onde uma posicao come o nocional
+        # inteiro -- e o terminal. Perguntar antes troca um `No money` (que
+        # gasta a intencao, ja que recusa nao e repetida) por uma recusa com o
+        # numero dentro. Vale por FATIA: a margem encolhe a cada uma que
+        # preenche, e a que nao couber para aqui em vez de ser recusada.
+        check = mt5.order_check(request)
+        if check is not None and check.retcode != 0 and check.margin_free < 0:
+            if not filled:
+                record(fills, intent, "sem-margem",
+                       detail=f"faltam {-check.margin_free:,.2f} "
+                              f"(margem da ordem {check.margin:,.2f})")
+                return
+            break
+        result = mt5.order_send(request)
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            if not filled:
+                detail = (str(mt5.last_error()) if result is None
+                          else f"{result.retcode} {result.comment}")
+                record(fills, intent, "erro" if result is None else "recusada",
+                       detail=detail)
+                return
+            # Ja ha posicao aberta: parar de mandar e melhor que insistir, e a
+            # fatia que faltou aparece no `volume` gravado contra o `lots`.
+            break
         price, commission, waited = fill_price(result)
-        record(fills, intent, "filled", price=price, commission=commission,
-               volume=result.volume, ticket=result.order,
-               lookup_seconds=round(waited, 3),
-               detail=f"{result.volume} @ {price}")
+        filled += float(result.volume)
+        cost += commission
+        prices.append((price, float(result.volume)))
+        tickets.append(result.order)
+    traded = sum(v for _, v in prices) or 1.0
+    average = sum(p * v for p, v in prices) / traded
+    status = "filled" if abs(filled - float(intent["lots"])) < 1e-8 else "parcial"
+    record(fills, intent, status, price=round(average, 10), commission=cost,
+           volume=round(filled, 8), ticket=tickets[0] if tickets else None,
+           tickets=tickets, lookup_seconds=round(waited, 3),
+           detail=f"{round(filled, 8)} de {intent['lots']} @ {average} "
+                  f"({len(tickets)} ordem(ns))")
 
 
 #: Quanto esperar pelo negocio aparecer no historico depois do envio. Medido
