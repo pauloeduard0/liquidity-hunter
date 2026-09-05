@@ -130,7 +130,8 @@ Other references: `docs/architecture.md` (SOLID rationale),
 `docs/estrutura_bos_choch.md` (Portuguese BOS/CHoCH walkthrough),
 `docs/psychology.md` (bias formula), `docs/scoring.md`,
 `docs/volume_profile.md`, `docs/volume_e_confluencia.md`,
-`docs/block_reclaim.md`.
+`docs/block_reclaim.md`, `docs/deep_reclaim.md` (o setup do leitor -- a
+visita rasa e curta -- medido a parte, com o que foi rejeitado).
 
 ### Scoring layer (`liquidity_hunter/scoring`)
 
