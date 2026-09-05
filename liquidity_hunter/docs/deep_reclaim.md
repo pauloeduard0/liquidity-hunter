@@ -36,7 +36,12 @@ Stop no fundo da visita, alvo **2R**, horizonte 120 velas.
 | universo inteiro do gatilho | 27,7% / -0,040R | 27,9% / -0,028R |
 
 Stop: `r_atr` mediano 1,22, `r_pct` mediano 0,62%, custo mediano 0,16R.
-Frequencia: 396 operacoes em ~890 dias sobre 72 simbolos.
+
+**Frequencia: ~20 operacoes por mes** no universo de 72 simbolos (396 no total,
+span mediano de 619 dias por simbolo; nos ultimos doze meses fechados, 13 a 34
+por mes com mediana 20). Isso e **0,27 por simbolo-mes** -- o fluxo so existe
+por causa do universo, nenhum simbolo sozinho entrega o setup. A ~+0,46R
+liquidos por operacao, ~9R/mes.
 
 ## O que a medicao estabeleceu
 
@@ -44,12 +49,27 @@ Frequencia: 396 operacoes em ~890 dias sobre 72 simbolos.
   / 44,1%; `visita<3` sozinha da 44,7% / 45,4% mas **perde dinheiro** quando o
   `r_atr` nao acompanha (22,7%, -0,233R). Juntos, 52,7% / 51,8%. A profundidade
   e necessaria; a duracao e o que faltava.
-- **Walk-forward (41 folds, 60/20 rolantes):** como regra FIXA, SR treino 2,11
-  -> teste 1,84, degradacao **-0,27**, 29/41 folds positivos. Deixando o fold
-  escolher entre as 14 candidatas declaradas, **PBO 0,800**. A leitura: a
-  *familia* paga (toda variante rende SR 2,1-2,6), mas **qual limiar
-  exatamente e ruido** -- calibrar o numero e perda de tempo e vai dar PBO alto
-  para sempre. Limitacao: ~7 operacoes por janela de teste de 20 dias.
+- **Walk-forward sobre a regra final** (53 folds, 60/20 rolantes, 15
+  candidatas declaradas -- as vencedoras, as variantes de limiar, as perdedoras
+  da grade e a versao sem os gates):
+
+  | | SR treino -> teste | degradacao | folds positivos |
+  |---|---|---|---|
+  | a regra final, FIXA | 2,03 -> 1,93 | **-0,10** | 29/53 |
+  | a mesma sem os dois gates | 1,51 -> 1,22 | -0,29 | 31/53 |
+
+  **PBO 0,467** (era 0,800 antes de o gate de cor sair; a queda e amostra:
+  317 -> 396 operacoes). Por SR anual as candidatas formam um **plato**, nao um
+  pico: 2,85 (a final), 2,59, 2,50, 2,42, 2,36, 2,13. Esse formato e o de um
+  eixo real com um limiar que **nao se calibra** -- a regra final e a melhor
+  das 15 e nao e defensavelmente melhor que a segunda. As perdedoras continuam
+  perdendo, o que e o controle de sanidade: `sem sweep` SR 0,04, `tudo` 0,00,
+  so os gates 0,46.
+
+  **29/53 folds positivos e 55%**: a regra passa metade das janelas de 20 dias
+  no vermelho. Com ~7 operacoes por janela isso e o esperado de um acerto de
+  56% em 2R, mas quer dizer que um mes ruim e normal e **nao** e sinal de
+  quebra.
 - **Dentro do par, a briga do stop acaba.** `visit3`, `visit10` e `look10`
   colapsam no MESMO preco (a visita durou 1-2 velas, entao os tres "fundos" sao
   o mesmo fundo), e ate o stop no pinbar empata (53,1% / 50,0%) depois de ter
@@ -97,5 +117,4 @@ isolado neste setup.
 
 M30, H1 e H4 -- o M15 e o M5 estao medidos. Como o custo em R cai com o
 timeframe, a expectativa e que o par fique mais folgado la em cima; nao
-medido. E o walk-forward precisa ser refeito sobre a regra final (ele rodou
-antes do gate de cor sair).
+medido.

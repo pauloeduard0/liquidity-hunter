@@ -17,7 +17,7 @@ A serie e diaria e liquida de custo (`COST_PCT / r_pct`), porque as regras
 mudam o numero de operacoes e comparar em R bruto favorece quem opera mais.
 
 Run:
-    poetry run python -m research.deep_visit_walkforward research/.datasets/deep_m15_geo.json
+    poetry run python -m research.deep_visit_walkforward research/.datasets/deep_m15_open.json
 """
 
 from __future__ import annotations
@@ -40,23 +40,45 @@ def _num(row: dict, field: str) -> float:
     return 9e9 if v is None else float(v)
 
 
-#: Toda linha que a grade imprimiu, mais as duas combinacoes. `tudo` fica como
-#: piso: uma regra que nao bate o proprio universo nao esta selecionando nada.
+def _base(row: dict) -> bool:
+    """Os dois gates que a passada de portas abertas PAGOU: EMA9 a favor e o
+    bloco nao atravessado. Entram como base porque cada um replicou sozinho
+    nas duas amostras -- e a versao sem eles fica declarada abaixo, para o
+    walk-forward poder desmenti-los em vez de os herdar."""
+    return (row.get("ema9_slope_lag1") or -1) > 0 and not row.get("pierced")
+
+
+def _visit(row: dict) -> float:
+    v = row.get("visit_candles")
+    return 99.0 if v is None else float(v)
+
+
+def _num(row: dict, field: str) -> float:
+    v = row.get(field)
+    return 9e9 if v is None else float(v)
+
+
+#: As candidatas declaradas -- as vencedoras, as variantes de limiar E as
+#: perdedoras da grade. Declarar so a regra final faria o PBO medir uma busca
+#: que nao aconteceu: a busca real foi a tabela inteira.
 RULES = {
     "tudo": lambda r: True,
-    "r_atr<=2": lambda r: r["r_atr"] <= 2,
-    "r_atr<=3": lambda r: r["r_atr"] <= 3,
-    "visita<3": lambda r: _visit(r) < 3,
-    "visita<6": lambda r: _visit(r) < 6,
-    "pen<0.25": lambda r: _num(r, "penetration") < 0.25,
-    "gap<=1": lambda r: _num(r, "gap_to_trigger") <= 1,
-    "bloco<30": lambda r: _num(r, "block_age") < 30,
-    "sem sweep": lambda r: _num(r, "sweeps_in_block") < 1,
-    "sem as linhas": lambda r: not r.get("lines_ok"),
-    "r_atr<=2 & visita<3": lambda r: r["r_atr"] <= 2 and _visit(r) < 3,
-    "r_atr<=2 & visita<6": lambda r: r["r_atr"] <= 2 and _visit(r) < 6,
-    "r_atr<=3 & visita<3": lambda r: r["r_atr"] <= 3 and _visit(r) < 3,
-    "r_atr<=2 & pen<0.25": lambda r: r["r_atr"] <= 2 and _num(r, "penetration") < 0.25,
+    "so os gates": _base,
+    "r_atr<=2": lambda r: _base(r) and r["r_atr"] <= 2,
+    "r_atr<=3": lambda r: _base(r) and r["r_atr"] <= 3,
+    "visita<3": lambda r: _base(r) and _visit(r) < 3,
+    "visita<6": lambda r: _base(r) and _visit(r) < 6,
+    "pen<0.25": lambda r: _base(r) and _num(r, "penetration") < 0.25,
+    "gap<=1": lambda r: _base(r) and _num(r, "gap_to_trigger") <= 1,
+    "bloco<30": lambda r: _base(r) and _num(r, "block_age") < 30,
+    "sem sweep": lambda r: _base(r) and _num(r, "sweeps_in_block") < 1,
+    "FINAL r<=2 & vis<3": lambda r: _base(r) and r["r_atr"] <= 2 and _visit(r) < 3,
+    "r<=2 & vis<6": lambda r: _base(r) and r["r_atr"] <= 2 and _visit(r) < 6,
+    "r<=3 & vis<3": lambda r: _base(r) and r["r_atr"] <= 3 and _visit(r) < 3,
+    "r<=2 & pen<0.25": lambda r: (_base(r) and r["r_atr"] <= 2
+                                  and _num(r, "penetration") < 0.25),
+    # Sem os gates, para o walk-forward poder dizer que eles nao valem nada.
+    "FINAL sem os gates": lambda r: r["r_atr"] <= 2 and _visit(r) < 3,
 }
 
 
