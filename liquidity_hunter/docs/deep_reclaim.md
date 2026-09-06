@@ -75,6 +75,27 @@ liquidos por operacao, ~9R/mes.
   o mesmo fundo), e ate o stop no pinbar empata (53,1% / 50,0%) depois de ter
   sido um desastre na grade geral (-0,204R).
 
+## Os quatro timeframes
+
+| TF | busca | holdout | por mes | custo em R |
+|---|---|---|---|---|
+| M5 | 43,8% / +0,004 | 39,8% / **-0,070** | -- | 0,32 |
+| **M15** | **57,0% / +0,510** | **55,7% / +0,460** | **19,5** | 0,16 |
+| M30 | 47,8% / +0,288 | 45,8% / +0,234 | 9,1 | 0,15 |
+| H1 | 49,4% / +0,413 (n=79) | n=39, sem amostra | 1,8 | 0,07 |
+
+**O setup mora no M15**, e a curva nao e a que a intuicao do custo previa. O
+custo em R cai monotonicamente subindo de timeframe (0,32 -> 0,07), mas a
+frequencia despenca (19,5 -> 1,8) e o bruto nao melhora. O M5 morre pelo custo;
+o H1 morre por falta de ocorrencia -- `visita<3` no H1 quer dizer que o preco
+tocou o bloco e reagiu dentro de duas horas, e isso quase nao acontece, entao o
+holdout nem alcanca o piso de 40 do relatorio; o M30 funciona e entrega metade
+(e nao por ser mais caro: o custo la e MENOR, 0,149 contra 0,162 -- o que cai e
+o bruto, +0,437 contra +0,672). So o M15 tem as duas coisas ao mesmo tempo.
+
+O H4 nao foi rodado de proposito: com 1,8 por mes no H1, o H4 produziria um
+"poucos" e nada mais.
+
 ## O que foi medido e REJEITADO
 
 - **As tres regras de linha do leitor** (perna acima das duas linhas,
@@ -115,6 +136,9 @@ isolado neste setup.
 
 ## Pendente
 
-M30, H1 e H4 -- o M15 e o M5 estao medidos. Como o custo em R cai com o
-timeframe, a expectativa e que o par fique mais folgado la em cima; nao
-medido.
+Os quatro timeframes estao medidos e o M15 venceu. O que falta e o **custo
+real**: os 0,10% usados aqui sao uma constante, e no feed da FTMO o spread e
+propriedade da barra -- ja esta medido neste projeto que isso chegou a inverter
+o sinal do resultado em instrumento caro (ver
+`project_mt5_spread_is_bar_minimum` na memoria). Nada disso deve virar conversa
+sobre operar antes desse passo.
