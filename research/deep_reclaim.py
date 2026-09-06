@@ -86,6 +86,20 @@ Tres diferencas em relacao ao original, e so tres:
    (sweep dentro de OB casado, `held@5` 76% contra 60%; 3+ sweeps na mesma
    zona, +14pp com dose-resposta) e nunca tinha sido ligada ao reclaim.
 
+8. **O momento, tambem emitido sem filtro** (2026-09-06). O pedido do leitor
+   e um filtro de momento que **nao corte o fluxo** -- com ~20 entradas por
+   mes, um gate caro nao tem espaco. Entra RSI(14)
+   (`liquidity_hunter/indicators/rsi.py`, novo), em quatro leituras:
+   `rsi`/`rsi_lag1` (nivel na vela do gatilho e na anterior),
+   `rsi_slope_lag1` (a inclinacao do momento antes do gatilho),
+   `rsi_recovery` (quanto o RSI subiu desde o FUNDO da visita ate o gatilho)
+   e `rsi_div` (divergencia contra a visita anterior ao mesmo bloco).
+
+   O eixo da hipotese e o `rsi_recovery`, nao o nivel: "sobrevendido" e uma
+   leitura de reversao, e este setup ja tem a reversao no gatilho. A pergunta
+   util e se a perna que fez a visita **ja tinha perdido forca** quando o
+   pinbar apareceu. Como sempre aqui, nenhum dos cinco filtra.
+
 O que **nao** muda: o gatilho (`detect_block_reclaims`, uniao dos tres graus de
 pinbar, rotas VWAP e EMA), o piso de acumulacao da VWAP -- `vwap_candles>=4`,
 que existe porque a VWAP de sessao reancora a meia-noite UTC e cruza o preco
@@ -123,7 +137,7 @@ from liquidity_hunter.core.domain import (
     TimeFrame,
 )
 from liquidity_hunter.data.exceptions import DataProviderError
-from liquidity_hunter.indicators import ema_series
+from liquidity_hunter.indicators import ema_series, rsi_series
 from pydantic import ValidationError
 from research._paginated import NoFuturesProvider, PaginatedFuturesProvider
 from research._symbols import UNIVERSE, sample_of
@@ -312,6 +326,7 @@ def run(symbols, timeframe, limit, out, *, gap, require_ema9, min_vwap,
             continue
         idx = {c.timestamp: i for i, c in enumerate(candles)}
         e9 = ema_series(candles, 9)
+        r14 = rsi_series(candles, 14)
         vwap_by_ts = {point.timestamp: point.value for point in data.vwap.points}
         vwap_at = [vwap_by_ts.get(c.timestamp) for c in candles]
         # Os sweeps ja detectados nesta serie, como (indice, preco). Servem
@@ -416,6 +431,44 @@ def run(symbols, timeframe, limit, out, *, gap, require_ema9, min_vwap,
                 (j, lvl) for j, lvl in sweeps
                 if j < i0 and rec.block_price_low <= lvl <= rec.block_price_high
             ]
+            # --- o momento, tambem emitido e nunca filtrado --------------
+            # O RSI(14) entra pelo mesmo motivo que a EMA9 e a VWAP: e um
+            # ponto de Schelling, olhado igual por todo mundo. A pergunta
+            # deste setup NAO e "sobrevendido": e se a queda que fez a visita
+            # ja tinha perdido forca quando o gatilho apareceu. Por isso o
+            # eixo principal e `rsi_recovery` (o RSI subiu desde o fundo da
+            # visita?) e nao o nivel solto -- e por isso nada aqui corta.
+            vs = visit_start(touches, i0, gap)
+            ext_i = (
+                min(range(vs, i0 + 1), key=lambda j: candles[j].low) if bull
+                else max(range(vs, i0 + 1), key=lambda j: candles[j].high)
+            )
+
+            def _sig(a, b, sign=sign):
+                return None if a is None or b is None else sign * (a - b)
+
+            # A divergencia classica, contra a visita ANTERIOR ao mesmo bloco:
+            # preco fez extremo pior, momento nao acompanhou. Sem visita
+            # anterior nao ha divergencia a medir -- fica `None`, nao `False`,
+            # porque "nao houve" e "nao deu" nao sao a mesma linha.
+            rsi_div = None
+            if len(clusters) >= 2:
+                pa, pb = clusters[-2]
+                prev_i = (
+                    min(range(pa, pb + 1), key=lambda j: candles[j].low) if bull
+                    else max(range(pa, pb + 1), key=lambda j: candles[j].high)
+                )
+                worse = (
+                    candles[ext_i].low < candles[prev_i].low if bull
+                    else candles[ext_i].high > candles[prev_i].high
+                )
+                if r14[ext_i] is not None and r14[prev_i] is not None:
+                    rsi_div = bool(
+                        worse and (
+                            r14[ext_i] > r14[prev_i] if bull
+                            else r14[ext_i] < r14[prev_i]
+                        )
+                    )
             all_stops = stops(
                 candles, i0, bull=bull, block_low=rec.block_price_low,
                 block_high=rec.block_price_high, touches=touches,
@@ -477,6 +530,22 @@ def run(symbols, timeframe, limit, out, *, gap, require_ema9, min_vwap,
                 # Sweeps ja detectados DENTRO da faixa do bloco antes do
                 # gatilho: a zona defendeu preco antes de voce entrar nela?
                 "sweeps_in_block": len(in_block),
+                # --- RSI(14) ------------------------------------------
+                # Na vela do gatilho e na ANTERIOR a ela, pela mesma razao
+                # que a EMA9 e lida com defasagem: um pinbar de reclaim
+                # move o RSI sozinho, e sem a defasagem o eixo vira o
+                # proprio gatilho dito com outro nome.
+                "rsi": r14[i0],
+                "rsi_lag1": r14[i0 - 1] if i0 else None,
+                # Inclinacao do momento nas tres velas anteriores ao gatilho,
+                # com sinal a favor da operacao.
+                "rsi_slope_lag1": _sig(r14[i0 - 1], r14[i0 - 4]) if i0 >= 4 else None,
+                # O momento no FUNDO da visita, e o quanto ele recuperou de
+                # la ate o gatilho. Este e o eixo da hipotese.
+                "rsi_at_extreme": r14[ext_i],
+                "rsi_recovery": _sig(r14[i0], r14[ext_i]),
+                # Divergencia contra a visita anterior ao mesmo bloco.
+                "rsi_div": rsi_div,
             }
             row.update(_row_outcomes(candles, i0, entry, stop, r, bull=bull))
             # Cada definicao de stop MEDIDA por inteiro, na mesma passada.
@@ -553,6 +622,9 @@ def report(rows: Sequence[dict], horizon: int = HORIZONS[0]) -> None:
         ("prior_visits", ((0, 1), (1, 3), (3, 6), (6, 12), (12, INF))),
         ("sweeps_in_block", ((0, 1), (1, 2), (2, 4), (4, 8), (8, INF))),
         ("block_age", ((0, 30), (30, 80), (80, 200), (200, INF))),
+        ("rsi_lag1", ((0, 30), (30, 45), (45, 55), (55, 70), (70, 101))),
+        ("rsi_recovery", ((-INF, 0), (0, 5), (5, 10), (10, 20), (20, INF))),
+        ("rsi_slope_lag1", ((-INF, -5), (-5, 0), (0, 5), (5, INF))),
     )
     for sample in ("search", "holdout"):
         S = [r for r in rows if r["sample"] == sample]

@@ -21,7 +21,7 @@ Sobre o gatilho de producao (`detect_block_reclaims`), quatro condicoes:
 | condicao | o que e |
 |---|---|
 | `r_atr <= 2` | o fundo da visita ficou perto da entrada -- a **visita rasa** |
-| `visit_candles < 3` | a visita durou uma ou duas velas -- o **toque limpo** |
+| `visit_candles < 6` | a visita foi curta -- o **toque limpo** (era `< 3` ate 2026-09-06; ver abaixo) |
 | `ema9_slope_lag1 > 0` | EMA9 inclinada a favor, medida ate a vela ANTERIOR ao gatilho |
 | `not pierced` | o pavio da visita nao atravessou o bloco de ponta a ponta |
 
@@ -95,6 +95,105 @@ o bruto, +0,437 contra +0,672). So o M15 tem as duas coisas ao mesmo tempo.
 
 O H4 nao foi rodado de proposito: com 1,8 por mes no H1, o H4 produziria um
 "poucos" e nada mais.
+
+## O gate de duracao afrouxado para `< 6` (2026-09-06)
+
+Pedido de fluxo: ~20 operacoes/mes e pouco. O funil diz quem corta -- na
+busca, universo 19.433 -> EMA9 10.582 -> nao-atravessado 7.219 -> `r_atr<=2`
+**790** -> `visita<3` **256**. O `r_atr` mata 89% do que chega nele; os dois
+gates de contexto quase nao custam fluxo.
+
+**O R total e plano na superficie de afrouxamento.** Varrendo `r_atr` de 1,5 a
+99 contra `visit_candles` de 3 a 99, o total fica entre +118R e +140R na busca
+e +57R e +93R no holdout em TODA ela. Os gates nao produzem dinheiro,
+**concentram** o mesmo dinheiro em menos operacoes.
+
+| regra | busca | holdout | fluxo |
+|---|---|---|---|
+| `r<=2 & vis<3` | 57,0% / +130,6R (n=256) | 55,7% / +64,4R (n=140) | -- |
+| `r<=2 & vis<6` | 52,1% / +136,4R (n=359) | 52,4% / +70,8R (n=191) | +40% |
+| `r<=2,5 & vis<6` | 48,6% / +127,5R (n=442) | 49,4% / +73,7R (n=247) | +73% |
+
+**O walk-forward NAO endossou a troca, e a razao e a unidade de risco.** O
+`_wf` agrega o dia pela MEDIA das operacoes que caem nele -- isso e arriscar
+1R por DIA repartido entre os sinais daquele dia, e uma segunda entrada no
+mesmo dia DILUI a primeira em vez de somar. Nessa contabilidade `vis<6` mede
+**+110,6R contra +116,1R**: pior. Com `--aggregate sum` (1R por OPERACAO)
+inverte para **+207,2R contra +195,0R**: melhor. Nas duas, o SR anual cai
+(2,72 contra 2,92; 2,50 contra 2,85).
+
+Ou seja: a troca compra **39% mais operacoes por dinheiro praticamente igual**,
+e cobra em risco ajustado. Ela so e boa se o tamanho for por operacao e nao
+por dia -- que e o caso quando ha orcamento de margem por posicao
+(`ftmo_orders.MARGIN_BUDGET`). Fica LIGADA por escolha de fluxo, com o `<3`
+declarado ao lado em `deep_visit_walkforward` para poder ser desfeita.
+
+O preco escondido esta no custo: R/trade cai de +0,46 para +0,37 com o custo
+de 0,16R parado, entao ele passa de 35% para 43% do bruto. Afrouxar aumenta a
+exposicao ao unico parametro do estudo que ainda e constante chutada.
+
+## Stops com folga -- MEDIDOS, quinta rejeicao
+
+Premissa a corrigir: stop mais largo **nao** estoura margem, alivia -- o lote
+e risco / distancia, entao stop largo da lote menor. E o encanamento ja
+resolve isso cortando o lote (`ftmo_orders.MARGIN_BUDGET`, medido: 22,2% ->
+11,7% de recusas com tamanho medio inalterado).
+
+Os stops alternativos sobre AS MESMAS entradas (holdout):
+
+| stop | acerto | liquido | stop em % do preco | custo |
+|---|---|---|---|---|
+| `visit10` (atual) | 55,7% | +0,460R | 0,6% | 0,170R |
+| `look20` | 50,7% | +0,367R | 0,9% | 0,108R |
+| `blockedge` | 43,6% | +0,199R | 1,1% | 0,090R |
+| `visit40` | 40,7% | +0,048R | 2,1% | 0,047R |
+
+A folga barateia o custo e destroi o resultado: `visit40` tem stop 3,5x mais
+largo e entrega +6,7R no lugar de +64,4R. Monotonico na profundidade, como
+nas quatro rejeicoes anteriores.
+
+## O momento (RSI) — MEDIDO E REJEITADO como filtro
+
+Medido em 2026-09-06, com RSI(14) de Wilder recém-adicionado ao projeto
+(`liquidity_hunter/indicators/rsi.py`). Cinco leituras emitidas sem filtrar:
+`rsi`, `rsi_lag1`, `rsi_slope_lag1`, `rsi_recovery` (quanto o RSI subiu do
+fundo da visita até o gatilho) e `rsi_div` (divergência contra a visita
+anterior ao mesmo bloco). Os quatro cortes foram declarados no
+`deep_visit_walkforward` ao lado dos perdedores, para o PBO pagar a busca.
+
+| corte | busca | holdout | fluxo |
+|---|---|---|---|
+| FINAL (sem RSI) | 57,0% / +0,510R (n=256) | 55,7% / +0,460R (n=140) | 100% |
+| `rsi>=50` | 63,8% / +0,723R | **54,4% / +0,426R** | 53% |
+| `rsi_slope_lag1>=0` | 61,8% / +0,656R | **50,0% / +0,205R** | 13% |
+| `rsi_recovery>=2` | 61,5% / +0,687R | 65,0% / +0,785R | **15%** |
+| `rsi_div` | não dispara | 3 casos, −0,265R | ~2% |
+
+**O nível não replica.** `rsi>=50` é o melhor achado da busca e cai ABAIXO da
+regra sem filtro no holdout. O `rsi_slope_lag1` faz o mesmo, mais forte. No
+walk-forward, `rsi>=50` empata em SR anual (2,83 contra 2,85) cortando 47%
+das operações — 209 trades e +90,6R contra 396 e +116,1R. Empatar em risco
+ajustado entregando 25R a menos não é filtro, é imposto.
+
+**A causa é mecânica, e é o achado que fica:** a regra final já seleciona uma
+população de RSI neutro. Dentro dela 85,4% das entradas têm RSI entre 45 e 55
+(desvio 3,62), contra 53,4% no universo do gatilho (desvio 7,05). Não sobra
+variância de momento para filtrar — o `r_atr<=2` e o `visit_candles<3` já
+consumiram o eixo.
+
+**O `rsi_recovery` é incompatível com o gate de duração**, pela mesma razão
+estrutural que derrubou as regras de linha: com `visit_candles<3` a visita tem
+uma ou duas velas, e quando tem uma o gatilho **é** o extremo — a recuperação
+vale exatamente zero em 81,3% das entradas da regra final (100% quando
+`visit_candles=1`, 27% em 2, 3% em 6). O corte `rsi_recovery>=2` replicou nas
+duas amostras, mas o que ele seleciona não é momento: é "o fundo da visita foi
+antes do gatilho", com n=39/20. Se algum dia for perseguido, tem que ser como
+setup próprio, com gate próprio, e não pendurado nesta regra.
+
+`rsi_div` não tem amostra: dentro do gate de visita curta, três casos.
+
+O indicador fica no projeto de qualquer jeito — era o bloqueador nomeado do
+score multi-TF (`docs/project_status.md`), e agora existe e está testado.
 
 ## O que foi medido e REJEITADO
 

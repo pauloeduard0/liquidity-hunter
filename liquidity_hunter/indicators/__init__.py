@@ -6,6 +6,7 @@ Depends only on `core` and `data`.
 """
 
 from liquidity_hunter.indicators.ema import DEFAULT_PERIOD, ema, ema_series
+from liquidity_hunter.indicators.rsi import rsi, rsi_series
 from liquidity_hunter.indicators.supertrend import (
     DEFAULT_MULTIPLIER,
     DEFAULT_PERIODS,
@@ -42,6 +43,8 @@ __all__ = [
     "anchored_vwap",
     "cumulative_volume_delta",
     "infer_tick_size",
+    "rsi",
+    "rsi_series",
     "supertrend",
     "true_range_series",
     "typical_price",
