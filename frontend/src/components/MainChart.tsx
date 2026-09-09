@@ -32,6 +32,7 @@ import {
 } from '../charting/VolumeProfilePrimitive'
 import { EqlZonesPrimitive, type EqlZoneInput } from '../charting/EqlZonesPrimitive'
 import { RibbonPrimitive } from '../charting/RibbonPrimitive'
+import { legStateAt } from '../utils/legState'
 import { buildStallMarks } from '../utils/stallMarker'
 import { buildPhase, buildRibbon, structureTrendByCandle } from '../utils/tideRibbon'
 import type { DefendedMark } from '../utils/defendedLevels'
@@ -2084,8 +2085,15 @@ export function MainChart({
     }
     eqlZonesPrimitiveRef.current?.setZones(eqlZones)
 
-    // Tide ribbon (VWAP envelope x structure x control). Cleared rather than
-    // hidden when off, so a toggled-off ribbon costs nothing to draw.
+    // Tide ribbon (VWAP envelope x structure x control x leg state). Cleared
+    // rather than hidden when off, so a toggled-off ribbon costs nothing to
+    // draw.
+    //
+    // `legState` is derived here, at the last step before drawing: the hue and
+    // the conviction come from `buildRibbon` untouched, and the leg's state only
+    // decides how much ink the segment gets. It is read per candle rather than
+    // per payload so the dimming starts at `stale_since` -- the leg really was
+    // advancing before that, and repainting that stretch would rewrite it.
     ribbonPrimitiveRef.current?.setSegments(
       showRibbon
         ? buildRibbon(data).map((b) => ({
@@ -2097,6 +2105,7 @@ export function MainChart({
             conviction: b.conviction,
             controller: b.controller,
             funded: b.controller !== 'balanced',
+            legState: legStateAt(data.structural_stall, b.timestamp),
           }))
         : [],
     )

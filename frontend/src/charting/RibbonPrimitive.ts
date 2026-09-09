@@ -9,6 +9,7 @@ import type {
   Time,
 } from 'lightweight-charts'
 import type { CanvasRenderingTarget2D } from 'fancy-canvas'
+import { type LegState, legStateAlpha } from '../utils/legState'
 
 export interface RibbonSegmentInput {
   time: Time
@@ -27,6 +28,11 @@ export interface RibbonSegmentInput {
    *  midline's solidity, kept separate from `conviction` because the two
    *  answer different questions: how hard, versus whether it is fresh money. */
   funded: boolean
+  /** Whether the standing leg is still advancing at this candle. Drawn as
+   *  opacity only — the hue keeps saying which way structure points, because a
+   *  stalled bullish leg is bullish and inactive, not bearish. Defaults to
+   *  `active`, so a caller that does not pass it draws exactly as before. */
+  legState?: LegState
 }
 
 interface ResolvedPoint {
@@ -37,6 +43,10 @@ interface ResolvedPoint {
   color: [number, number, number]
   edgeColor: [number, number, number]
   alpha: number
+  /** Edge and midline opacity, carried per point because a stalled leg scales
+   *  every channel down together rather than only the fill. */
+  edgeAlpha: number
+  midAlpha: number
   funded: boolean
 }
 
@@ -95,7 +105,9 @@ function runsOf(points: ResolvedPoint[]): ResolvedPoint[][] {
   let key = ''
   let lastX = Number.NaN
   for (const p of points) {
-    const k = `${p.color.join(',')}|${p.edgeColor.join(',')}|${p.funded}`
+    // `alpha` is part of the key so the band seams where the leg goes stale,
+    // exactly as it seams on a trend or funding change.
+    const k = `${p.color.join(',')}|${p.edgeColor.join(',')}|${p.funded}|${p.alpha}`
     const broken = Number.isFinite(lastX) && Math.abs(p.x - lastX) > MAX_GAP_PX
     if (k !== key || broken) {
       // Carry the boundary point into the next run so the fill has no seam gap,
@@ -139,7 +151,7 @@ class RibbonRenderer implements IPrimitivePaneRenderer {
         // but carrying the controller's colour, which is what makes a band
         // whose hue and border disagree legible as such.
         const [er, eg, eb] = run[0].edgeColor
-        context.strokeStyle = `rgba(${er}, ${eg}, ${eb}, ${EDGE_ALPHA})`
+        context.strokeStyle = `rgba(${er}, ${eg}, ${eb}, ${run[0].edgeAlpha})`
         context.lineWidth = run[0].funded ? CONTROLLED_EDGE_WIDTH : EDGE_WIDTH
         for (const edge of ['yUpper', 'yLower'] as const) {
           context.beginPath()
@@ -149,7 +161,7 @@ class RibbonRenderer implements IPrimitivePaneRenderer {
         }
 
         // The VWAP itself — the population's break-even, the line that matters.
-        context.strokeStyle = `rgba(${r}, ${g}, ${b}, ${MID_ALPHA})`
+        context.strokeStyle = `rgba(${r}, ${g}, ${b}, ${run[0].midAlpha})`
         context.lineWidth = 1.75
         context.setLineDash(run[0].funded ? [] : [5, 4])
         context.beginPath()
@@ -193,6 +205,7 @@ class RibbonPaneView implements IPrimitivePaneView {
       // With no side credited there is nothing to say about who is paying, so
       // the edge stays the band's own colour and the envelope reads as before.
       const controlBase = CONTROLLER_RGB[s.controller]
+      const legState = s.legState ?? 'active'
       resolved.push({
         x,
         yUpper,
@@ -200,7 +213,9 @@ class RibbonPaneView implements IPrimitivePaneView {
         yMid,
         color,
         edgeColor: controlBase ? mix(QUIET_RGB, controlBase, t * MAX_SATURATION) : color,
-        alpha: FILL_ALPHA_MIN + t * (FILL_ALPHA_MAX - FILL_ALPHA_MIN),
+        alpha: legStateAlpha(FILL_ALPHA_MIN + t * (FILL_ALPHA_MAX - FILL_ALPHA_MIN), legState),
+        edgeAlpha: legStateAlpha(EDGE_ALPHA, legState),
+        midAlpha: legStateAlpha(MID_ALPHA, legState),
         funded: s.funded,
       })
     }
@@ -215,7 +230,8 @@ class RibbonPaneView implements IPrimitivePaneView {
  * candle, hue carrying the structural trend, saturation carrying how much
  * conviction is behind it, and the edges carrying which side is credited with
  * control (see `utils/tideRibbon.ts` for why the layers are separate channels
- * rather than one average).
+ * rather than one average), and opacity carrying whether the standing leg is
+ * still advancing (`utils/legState.ts`).
  *
  * Rendered beneath the candles. Attach once to the candlestick series and call
  * `setSegments()` on each refresh.
