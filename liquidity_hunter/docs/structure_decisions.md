@@ -3266,3 +3266,121 @@ adiada: 9 candles.
 **Ressalva:** n=21 no braço decisivo. O sinal é forte, consistente nos 4
 timeframes e espalhado por 6+ símbolos, mas uma reconfirmação com janela ou
 universo maior é barata e vale antes de tratar o número como assentado.
+
+## 2026-09-09 — O atraso da estrutura confirmada: seis rejeicoes
+
+Seis hipoteses sobre por que o `CHoCH` chega tarde em expansoes com poucos
+pullbacks. **Nenhuma mudou producao.** O fechamento arquitetural esta em
+[`confirmed_structure_limits.md`](confirmed_structure_limits.md); aqui ficam
+os numeros de cada rejeicao.
+
+O caso que abriu a linha: ZECUSDT D1, CHoCH bearish de 2026-06-04, precedido
+de uma alta de ~220% entre 29/04 e 16/05 **sem um unico pullback confirmado**.
+
+### 4.1 — `CHoCH` como opener geral de `StructuralStall` — REJEITADO
+
+`research/choch_leg_opener.py`. Aceitar BOS **ou** CHoCH confirmado (nunca
+`CHOCH_FAILED`) como abertura de perna leva as pernas de 11.272 para 16.646 e
+os stalls de 1.219 para 1.361. As pernas de BOS ficam **identicas bit a bit**
+(0 alteradas), entao o efeito e todo dos 142 stalls novos — e eles retomam
+muito mais: `qr40` 22% contra 8% do controle de BOS, com M15 em 25% e H1 em
+32%. Sao exatamente os quick resumes que o stall existe para nao marcar.
+
+### 4.2 — N por timeframe / `structural_age_ratio` — REJEITADO
+
+`research/stall_time_normalization.py`. O ritmo estrutural em **barras** ja e
+quase invariante: 29 / 26 / 25 / 31 candles medianos entre advances em
+M15/H1/H4/D1 — 1,24x de amplitude. `N=50` ja vale 1,6-2,0 intervalos tipicos
+em todo timeframe. A politica por razao senta no mesmo plato e ainda custa
+2.299 de 11.266 pernas como `unavailable`; o N por timeframe escolhido no
+discovery (D1 -> 10) degrada no holdout (`qr40` 12% -> 8%).
+
+### 4.3 — Gate `failed_to_establish` — REJEITADO
+
+`research/choch_establishment.py`. 57,3% dos CHoCH produzem um BOS de
+continuacao (mediana 23 barras). A separacao causal entre ESTABLISHED e
+UNESTABLISHED e fraca: melhor AUC **0,63** (`distance_to_bos_atr`), o resto
+entre 0,36 e 0,61 com 30-100% de sobreposicao. A melhor das 169 regras
+(`mfe_atr <= 4.0 AND coherent_pivots <= 1`) vai de `qr40` 0% com n=24 no
+discovery para 25% com n=4 no holdout — e **exclui o proprio caso ZEC**
+(`mfe_atr` 4,54 > 4,0).
+
+### 4.4 — Trocar a referencia oficial de CHoCH — REJEITADO
+
+`research/choch_reference_audit.py`. Distancia ao extremo e idade da
+referencia **correlacionam** com o lag (rho 0,33-0,46, monotonico entre os
+grupos LOW/MIDDLE/HIGH) — a intuicao esta certa. O custo e que a mata: usar o
+ultimo pullback confirmado como referencia produz **5.163 flips extras**
+contra 1.743 que a maquina ja alcanca, e **so 19,3% deles confirmam**.
+
+O numero decisivo so apareceu depois de corrigir a amostra: medir a
+alternativa apenas nos candles onde um CHoCH real aconteceu **condiciona a
+amostra no desfecho** e mede o lead sem medir o custo. Com a varredura
+incondicional (`unconditional_pullback_breaks`), a leitura vai de "6,8% de
+falsos flips" para **74,8% das quebras sao extras**.
+
+No ZEC, nos dois CHoCH obrigatorios, o ultimo pullback confirmado **ERA** a
+referencia oficial — lead zero. Nao havia referencia local melhor.
+
+### 4.5 — Re-anchor mais agressivo (threshold / mode / displacement) — REJEITADO
+
+`research/stale_reanchor_audit.py`. Producao ja faz **16.274 tentativas** de
+re-anchor (3.321 movem). Nenhuma das 17 configuracoes existentes adianta o
+CHoCH bearish do ZEC, nem com o limiar D1 em 10 no lugar de 40. O melhor caso
+do painel (`mode=displacement`) melhora `move_completed` de 57,2% para 52,2%
+**dobrando a contagem de CHoCH**: +2.370 extras, metade sem confirmar, 23%
+marcados `✕`, e **679 CHoCH legitimos perdidos**.
+
+O que fecha o assunto e a falta de discriminacao: o re-anchor dispara em 37%
+das expansoes que reverteram e em **34%** das que continuaram.
+
+### 4.6 — Staleness contado desde o ultimo pullback confirmado — REJEITADO
+
+`research/pullback_age_reanchor.py`. A hipotese era que o contador atual
+(`current_index - last_advance_index`) falha porque **todo BOS o zera**, e que
+contar desde o ultimo `higher_low`/`lower_high` confirmado envelheceria a
+referencia corretamente numa expansao BOS -> BOS -> BOS.
+
+Painel de 702 combinacoes, 5.509 CHoCH, 90.106 pivos observados.
+
+O contador novo anda para o **outro lado**: mediana da diferenca **−18
+barras**, e ele e o menor em 74,1% dos pivos. Nos limiares de producao,
+dispara sozinho em 704/1247/1620/619 pivos (M15/H1/H4/D1) contra
+**6443/6054/9617/3508** em que so o atual dispara. Pullbacks estruturais sao
+mais frequentes que advances, entao a troca e um **freio**.
+
+Correlacao com o lag: `pivots_since_reference` 0,464 e `reference_age_bars`
+0,455 dominam; `bars_since_advance` 0,215; **`bars_since_pullback` 0,123** —
+pior que o contador que ele substituiria. E nao acrescenta sobre
+`reference_age`: dentro dos tercis dela, rho(B, lag) = 0,100 / −0,101 / 0,012.
+
+No stream, `pullback x1.00` troca eventos em vez de antecipa-los: **+723
+extras contra 753 CHoCH legitimos perdidos**, lag mediano 43 -> 42 (44 -> 46
+no holdout), lead mediano **0**, e 49,4% dos extras nunca confirmam (28,5%
+viram `✕`). Nos episodios de expansao longa sem pullback dispara em 31,7% dos
+que reverteram e 25,4% dos que continuaram — a mesma nao-discriminacao da 4.5.
+
+**O controle que decide:** `advance x0.50`/`x0.75` adiantam o gatilho **sem
+olhar pullback nenhum** e caem na mesma curva custo/beneficio (1.375 extras a
+49,5% ok / 28,8% `✕`, contra 1.053 extras a 49,5% / 26,5%), com mais
+antecipacao real (555 adiantados contra 137). A semantica nova nao compra
+qualidade; so desloca o ponto de operacao.
+
+**Ressalva de metodo:** `stale_after` e lido em dois lugares — o gatilho e o
+inicio da janela de selecao do nivel. Nao ha como mudar so o gatilho sem
+editar producao, entao a variante muda os dois ao mesmo tempo. E por isso que
+a conclusao se apoia no controle de lead casado, que sofre o mesmo
+encurtamento de janela, e nao na comparacao direta contra producao.
+
+### Dois metodos que ficam disponiveis
+
+- **Ler o estado interno do detector sem altera-lo:** `sys.settrace` no code
+  object de `detect` (ou de um closure nomeado como `reanchor_opposite`),
+  com assert no numero da linha para que a medicao **pare** em vez de sair
+  vazia se o detector for editado. Custo 0,34s contra 0,01s por chamada.
+- **Contrafactual de configuracao:** `_build_internal_detector` e o unico
+  ponto de construcao do detector interno; embrulha-lo num `contextmanager`
+  permite sobrescrever atributos privados (ou trocar `__class__` por um
+  subtipo de pesquisa) sem tocar em producao. `__init__` so guarda os
+  parametros, e `detect` os le de `self` em tempo de execucao, entao
+  sobrescrever a instancia equivale a construir com outros kwargs.

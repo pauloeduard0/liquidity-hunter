@@ -123,6 +123,7 @@ map; the docs keep the detail.
 | `psychology` | `docs/psychology_layer.md` | `RetailTrapAnalyzer`, `ManipulationCycleDetector`, `BehaviorDivergenceAnalyzer`, `LeverageLiquidationEstimator`, `OIRegimeAnalyzer`, `SupertrendBreakAnalyzer`, `MarketControlAnalyzer` |
 | `app` composition root | `docs/composition_root.md` | `DashboardData`, `load_dashboard_data` (buffered fetch, structural anchor, every composition pass and production flag), `NarrativeEngine`, `LiquidityHuntEngine`, `app/overview.py` |
 | `frontend/` | `docs/frontend.md` | `MainChart` panes and overlays, structure line rendering rules, POI/consolidation/hunt primitives, volume profile & VWAP drawing, Tide ribbon, KPI cards, `chartTime`/`format` utilities, dashboard types |
+| Limites da estrutura confirmada | `docs/confirmed_structure_limits.md` | Por que o `CHoCH` confirmado atrasa em expansoes sem pullback, o que fica proibido por isso, a separacao confirmed structure / leg activity / current market pressure, e o escopo da Etapa 5 |
 | Structure detector changelog | `docs/structure_decisions.md` | Every detector design decision, the measurement behind it, rejected alternatives, regression fixtures |
 | Status & roadmap | `docs/project_status.md` | What is implemented, the brief state of the structure pipeline, what is not yet implemented |
 
