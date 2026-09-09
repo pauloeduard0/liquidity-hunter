@@ -9,14 +9,15 @@ independente dela.**
 
 ## As tres perguntas, e quem responde cada uma
 
-O detector hoje responde duas. A terceira nao tem dono, e e o objeto da
-Etapa 5.
+O detector hoje responde duas. A terceira foi investigada na Etapa 5.0 e
+**rejeitada com os dados e as features atuais**: continua sem dono, e por
+enquanto e para continuar assim.
 
 | leitura | valores | significado | onde vive |
 |---|---|---|---|
 | **CONFIRMED STRUCTURE** | `bullish` / `bearish` | o ultimo bias estrutural **confirmado** (`final_trend`, movido por BOS/CHoCH) | `InternalStructureDetector` |
 | **LEG ACTIVITY** | `active` / `stale` | a perna confirmada continua **operacionalmente ativa**, ou parou e devolveu movimento | `StructuralStall` |
-| **CURRENT MARKET PRESSURE** | — | o preco/fluxo **agora** empurra a favor ou contra a estrutura confirmada | **ainda nao implementado** |
+| **CURRENT MARKET PRESSURE** | — | o preco/fluxo **agora** empurra a favor ou contra a estrutura confirmada | **medido e rejeitado** (Etapa 5.0) |
 
 As tres sao ortogonais, e a combinacao que hoje nao tem como ser expressa e
 exatamente a interessante:
@@ -28,7 +29,10 @@ current pressure    = bullish
 ```
 
 Isso nao e uma contradicao a ser resolvida forcando o CHoCH a virar mais
-cedo. E **informacao**, e ela precisa de uma camada propria.
+cedo. Continua sendo **informacao** — o que a Etapa 5.0 mostrou e que nao
+sabemos medi-la: a terceira linha da tabela permanece vazia porque nenhuma
+feature testada preencheu-a com qualidade acima do acaso, nao porque a
+pergunta tenha deixado de fazer sentido.
 
 ## O achado central
 
@@ -116,26 +120,60 @@ As tres semanticas nao se substituem:
 Um `CHOCH_FAILED` nao e uma perna parada, e uma perna parada nao e uma
 tentativa invalidada. Nenhum dos tres deve ser lido a partir do outro.
 
-## Etapa 5 — CURRENT MARKET PRESSURE / STRUCTURAL CONFLICT
+## Etapa 5.0 — CURRENT MARKET PRESSURE: medida e rejeitada
 
-*Proposta registrada. Nada disto foi implementado nem medido.*
+*Investigada. **Rejeitada.** Nada disto foi implementado.*
 
-**Objetivo futuro:** detectar de forma causal quando o comportamento atual do
-mercado entra em conflito com a estrutura confirmada.
+A pergunta era independente do CHoCH: *enquanto a estrutura confirmada aponta
+para um lado, o comportamento atual do mercado ja empurra para o outro?* A
+medicao esta em `research/current_market_pressure.py`, e os numeros em
+[`structure_decisions.md`](structure_decisions.md) (secao "2026-09-09 —
+Current market pressure: uma rejeicao").
 
-**A proxima etapa NAO tentara antecipar CHoCH.** Ela investigara uma camada
-**independente**, sem alterar `final_trend`, `CHoCH`, `BOS` nem protected
-levels.
+**O resultado.** Num painel de 72 simbolos x M15/H1/H4/D1, as chamadas de
+pressao ficaram **abaixo da taxa-base da propria direcao em 8 de 8 estratos**.
+Chamar aquela mesma direcao num candle aleatorio do mesmo timeframe bate a
+camada. Preco, EMA/VWAP e fluxo foram testados em camadas separadas; nenhuma
+familia acrescentou separacao util, o holdout nao salvou nenhuma regra, e nos
+episodios de conflito a estrutura antiga retomou ~2,5x mais vezes do que virou
+na direcao apontada.
 
-Possiveis inputs a pesquisar (lista de partida, nao decisao):
+**A ausencia de uma leitura "mais atual" no grafico e, portanto, uma limitacao
+aceita** — nao um item de backlog. Ela so deixa de ser aceita quando houver
+evidencia robusta, e a Etapa 5.0 e o registro de que a evidencia disponivel
+hoje nao chega la.
 
-- displacement recente;
-- retorno / give-back da perna;
-- posicao relativa a VWAP / EMA;
-- flow, volume delta e CVD — ja disponiveis em `indicators`;
-- sweeps;
-- microestrutura / local structure;
-- MTF.
+### O que fica proibido por esta rejeicao
 
-As regras de medicao do `CLAUDE.md` valem: controle casado em simbolo,
-timeframe **e direcao**; metricas scale-free; negativo e resultado.
+- **NAO criar `pressure_score`** nem enum de pressao em producao.
+- **NAO criar uma terceira camada** de leitura no dominio, na API, no
+  `dashboard_data` ou no frontend.
+- **NAO usar o achado de reversao a media como proxy de pressao.** Ele existe,
+  esta registrado, e mede outra coisa (ver abaixo).
+- **NAO usar o ZEC D1 como excecao** que autorize a camada. Ele continua sendo
+  caso demonstrativo de *structural confirmation lag*, e nada alem disso.
+- **NAO alterar SMC, Tide, schemas ou `StructuralStall`** por causa desta
+  investigacao.
+
+### O achado de reversao a media, e por que ele nao vale como pressao
+
+Todas as features principais sairam **levemente anti-preditivas** no curto
+prazo, de forma consistente nos quatro timeframes e com o placebo em 0,500. A
+leitura invertida — desvanecer o movimento recente em vez de segui-lo — bate a
+taxa-base por aproximadamente **+1,3 a +4,1 pontos**.
+
+Isso e um resultado, e fica registrado como tal. **Nao autoriza a camada**, e
+os motivos importam mais que o numero: e reversao a media de curto prazo, nao
+"pressao corrente"; o efeito e pequeno e medido em fechamentos, **sem nenhum
+modelo de custo**, na exata faixa em que a taxa de corretagem ja apagou
+achados anteriores deste repositorio; o efeito se dissolve no horizonte maior;
+e ele nao antecipa estrutura de forma util.
+
+### O que ficou nao estabelecido
+
+A interacao **`STALE` x pressao** nao foi validada de forma conclusiva, e nao
+deve ser citada em nenhuma direcao. A comparacao por candle nao foi
+normalizada pela taxa-base **dentro de cada estrato**, que e exatamente o
+controle que derrubou o resultado principal — entao nem "STALE melhora" nem
+"STALE piora" esta demonstrado. Fica em aberto, e nao justifica etapa propria
+neste momento.

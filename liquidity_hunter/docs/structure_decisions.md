@@ -3384,3 +3384,100 @@ encurtamento de janela, e nao na comparacao direta contra producao.
   subtipo de pesquisa) sem tocar em producao. `__init__` so guarda os
   parametros, e `detect` os le de `self` em tempo de execucao, entao
   sobrescrever a instancia equivale a construir com outros kwargs.
+
+## 2026-09-09 — Current market pressure: uma rejeicao
+
+**Hipotese.** Depois de a linha 4.1-4.6 fechar com "o CHoCH confirmado atrasa
+de proposito", a leitura que faltava nao seria um CHoCH mais cedo e sim uma
+**segunda dimensao**, medida no mesmo candle e independente da primeira:
+enquanto a estrutura confirmada aponta para um lado, o comportamento *atual*
+do mercado ja empurra para o outro. `confirmed = bearish / leg = stale /
+pressure = bullish` nao e contradicao; sao perguntas diferentes.
+
+**Medicao.** `research/current_market_pressure.py`. Painel de 72 simbolos x
+M15/H1/H4/D1 x 3 janelas = 702 combos, 189.732 candles amostrados (passo 4 —
+candles vizinhos sao quase o mesmo candle), 18 features assinadas em tres
+familias cumulativas (`A` preco, `B` +EMA9/VWAP, `C` +volume/delta/CVD), 26
+regras registradas antes de olhar qualquer numero, discovery 70% / holdout 30%
+**por timeframe**. Avaliacao separada em *pressure persistence* (o preco andou
+mesmo para o lado apontado?) e *structural outcome* (depois veio CHoCH, BOS de
+retomada, `CHOCH_FAILED` ou nada?) — uma regra escolhida pelo segundo alvo
+seria o CHoCH precoce que a Etapa 4 rejeitou seis vezes.
+
+**O controle que decide.** `persist` comparado com 50% nao quer dizer nada:
+num painel que caiu no periodo, uma chamada bullish erra sem que a camada
+tenha errado, e uma bearish acerta sem ter acertado nada — e as chamadas
+bearish superaram as bullish 2,5:1. A leitura correta e contra a **taxa-base
+da propria direcao** no mesmo timeframe.
+
+| tf | bullish | base | bearish | base (1-b) |
+|---|---|---|---|---|
+| M15 | 48,2% | 49,5% | 46,4% | 50,5% |
+| H1 | 45,0% | 47,1% | 50,1% | 52,9% |
+| H4 | 44,0% | 45,9% | 50,0% | 54,1% |
+| D1 | 45,1% | 47,4% | 51,1% | 52,6% |
+
+**Abaixo da taxa-base em 8/8 estratos**, de −1,3 a −4,1 pontos. Sem a coluna
+`base` o H4 bearish (50,0%) pareceria neutro e e o pior do painel.
+
+**Univariado.** Todas as 18 features entre AUC 0,459 e 0,517, com o placebo de
+bloco embaralhado em ~0,500 (o controle funciona). A melhor separacao do
+painel inteiro sao 4,1 pontos (`close_vs_vwap_atr` e `eff_20` no H4, 0,459).
+Por familia: `A` e `B` empatam em 0,459; `C` e a que **menos** separa
+(`delta_share_10` em 0,483/0,492/0,496/0,505), e seu unico valor acima de
+0,500 tem sinal oposto ao resto do painel. **EMA/VWAP e fluxo nao
+acrescentam**: `close_vs_ema9_atr` e `ema9_slope_atr` saem com AUC identico
+ate a terceira casa em tres timeframes — sao o retorno recente reescrito.
+
+**Regras.** Nenhuma das 26 passa. Apertar nao compra qualidade: `ret>=0.5` a
+77% de cobertura da persist_10 47,7%; `ret>=2.0 & eff>=0.7` a 6,3% da 48,9%.
+`false conflict` da melhor regra: 3,3% / 8,6% / 17,8% / 29,7% em ≤5/10/20/40 —
+e nas regras apertadas cai por **abstencao**, nao por acerto. O `pressure_score`
+combinado nao bateu a regra de duas condicoes e foi descartado, como a propria
+proposta previa.
+
+**Desfecho estrutural** (59.985 episodios): o primeiro advance em 80 velas e
+**BOS retomando a estrutura antiga em 43,9%** contra **CHoCH na direcao da
+pressao em 17,5%** — a estrutura original volta ~2,5x mais do que vira. A
+camada nao estava antecipando reversao estrutural.
+
+**Holdout.** Nao salvou nada: net40 mediano de +0,04 para −0,00 ATR e
+persist_10 caindo em 3 dos 4 timeframes. **Nenhum limiar promovido.**
+
+**Casos.** *ZEC D1* nao justificou a camada: o primeiro sinal bullish da perna
+bearish vem 51 velas antes do CHoCH oficial, e o ultimo bloco contiguo vem 6
+velas antes, quando **26,0% dos 27,5%** de movimento ja tinham acontecido —
+cedo demais para significar algo, ou tarde demais para servir. O ZEC continua
+caso demonstrativo de *structural confirmation lag*. *BTC H1* na borda viva
+saiu `BALANCED` (37 de 40 candles), o que confirma que a camada nao forcava
+oposicao ao trend — mas um sanity check nao supera o resultado populacional.
+
+**Nao estabelecido:** a interacao `STALE` x pressao. A comparacao por candle
+nao foi normalizada pela taxa-base dentro de cada estrato, entao nem "melhora"
+nem "piora" esta demonstrado. Nao citar em nenhuma direcao.
+
+**Achado separado, que NAO autoriza a camada:** todas as features saem
+levemente **anti-preditivas** no curto prazo, e a leitura invertida bate a
+taxa-base por +1,3 a +4,1 pontos em 8/8 estratos. E reversao a media de curto
+prazo, efeito pequeno, medido em fechamentos **sem modelo de custo**, que se
+dissolve no horizonte maior e nao antecipa estrutura. Nao virar feature de
+producao nem proxy de "pressao".
+
+**Consequencia arquitetural.** Nao criar a terceira camada agora. A ausencia
+de uma leitura "mais atual" no grafico e uma **limitacao aceita** enquanto nao
+houver evidencia robusta. Ver
+[`confirmed_structure_limits.md`](confirmed_structure_limits.md).
+
+### Tres armadilhas que esta etapa pagou para descobrir
+
+- **Comparar `persist` com 50%.** O controle certo e a taxa-base da direcao
+  chamada, no mesmo timeframe. Sem ela, dois estratos deste painel teriam sido
+  lidos com o sinal trocado.
+- **Ordenar tuplas `(indice, evento)` sem `key=`.** Dois advances no mesmo
+  candle fazem o desempate cair no `MarketStructure`, que nao tem ordem. Nao
+  falha alto: derruba a **janela inteira**, e a janela perdida some do painel
+  sem aparecer em metrica nenhuma. Custou ~15% dos combos, e nao ao acaso.
+- **Aproximar o estado da perna.** `detect_structural_stall` usa ATR
+  **expandido congelado no advance** e o `price_level` do proprio BOS como
+  denominador — nao um ATR rolante nem o fechamento corrente. Trocar qualquer
+  um dos termos por uma aproximacao razoavel move o estado em serie real.
