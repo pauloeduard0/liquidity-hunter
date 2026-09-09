@@ -14,6 +14,7 @@ from statistics import fmean
 from liquidity_hunter.app.block_reclaim import detect_block_reclaims
 from liquidity_hunter.app.liquidity_grabs import build_liquidity_grabs
 from liquidity_hunter.app.sweep_context import build_sweep_contexts
+from liquidity_hunter.config import get_settings
 from liquidity_hunter.core.domain import (
     BlockReclaim,
     Candle,
@@ -35,6 +36,7 @@ from liquidity_hunter.core.domain import (
     OIAnalysis,
     OpenInterestPoint,
     POIZoneStatus,
+    StructuralStall,
     StructureConfluence,
     StructureEvent,
     StructureScope,
@@ -88,6 +90,7 @@ from liquidity_hunter.liquidity.detectors._common import (
     find_close_break_index,
     resolve_break_origin_timestamp,
 )
+from liquidity_hunter.liquidity.structural_stall import detect_structural_stall
 from liquidity_hunter.psychology import (
     BehaviorDivergenceAnalyzer,
     LeverageLiquidationEstimator,
@@ -919,6 +922,38 @@ _BOS_PULLBACK_SEED_CHOCH_ORIGIN = True
 # gap's own [2, 3] plateau is kept.
 _HUNT_PROXIMITY_ATR = 2.0
 
+# Structural stall (`liquidity.structural_stall.detect_structural_stall`): the
+# standing leg, reported as no longer advancing. Purely descriptive -- it is
+# computed at the very end of composition, from the already-final event stream,
+# and nothing downstream reads it: no detector, no trend, no emitted event, no
+# line. With the flag off the field is `None` and the function is never called,
+# so the snapshot is byte-identical to before.
+#
+# On by default since 2026-09-08. The parameters are the validated ones
+# (`research/structural_stall_validation.py`: 90 windows, 1678 legs; N=50/K=6
+# sits mid-plateau, `quick_resume_20` = 0% across the whole region, and the
+# BTCUSDT H1 2026-08-25 leg reports stale 97 candles before the counter-CHoCH),
+# and the state ships *unfiltered* -- three separate studies failed to find a
+# filter worth adding on top of it:
+#
+# - the expansion gate (Etapa 2.5) cannot be made causal without also admitting
+#   the mid-run legs, which resume 100% of the time -- it raised the resumption
+#   rate from 45% to 62% instead of lowering it (`research/expansion_gate.py`);
+# - no structural feature separates a terminal BOS from an intermediate one
+#   (`research/expansion_end.py`: 27 features, best AUC 0.526), and waiting is
+#   already contained in the N=50 condition;
+# - no participation feature separates the stalls either
+#   (`research/stall_participation.py`: best AUC 0.582, +6pp in holdout).
+#
+# What those studies did establish is that the unfiltered state is the
+# well-behaved one: only 2% of stalls see a same-direction BOS within 20
+# candles. So the reading stands alone, exactly as described, and the flag
+# remains as the switch to turn it off (`LIQUIDITY_HUNTER_STRUCTURAL_STALL=0`,
+# or that line in `.env`) -- the project's existing `config.Settings`
+# mechanism, read once at import. Tests monkeypatch this constant rather than
+# the environment.
+_STRUCTURAL_STALL_ENABLED = get_settings().structural_stall
+
 # Candles the volume profile is built from, counted back from the live edge.
 # The profile answers "where is the market trading *now*", so it is deliberately
 # a recent-lookback reading rather than one over the whole visible series: a
@@ -1071,6 +1106,12 @@ class DashboardData:
     # and side (see `app.liquidity_grabs`). The full stream: which few belong
     # on a chart is presentation.
     liquidity_grabs: list[LiquidityGrab] = field(default_factory=list)
+    # The standing structural leg, observed as no longer advancing (see
+    # `liquidity.structural_stall`). `None` when the leg is still active, when
+    # the machine already closed it (a CHoCH ended the leg), or when
+    # `_STRUCTURAL_STALL_ENABLED` is off. Descriptive only: it is not a
+    # reversal, carries no forecast, and nothing in the pipeline reads it.
+    structural_stall: StructuralStall | None = None
     # The structural anchor this run detected from (`_structural_anchor_index`).
     # Not presentation -- it exists so a caller that wants stable history can
     # feed it back as the next call's `anchor_hint`.
@@ -3119,6 +3160,16 @@ def load_dashboard_data(
     liquidity_hunt_history = hunt_engine.build_history(data)
     liquidity_continuation_history = hunt_engine.build_continuation_history(data)
     structure_confluence = StructureConfluenceEngine().build(data)
+    # Last of all, and read by nothing: the standing leg's stall state, over
+    # the *final* event stream (post composition passes) and the same visible
+    # candles the chart draws. Computed here so it can never feed back into a
+    # detector, a pass, or a synthesizer -- every one of them ran above, from a
+    # `data` that has no such field.
+    structural_stall = (
+        detect_structural_stall(data.candles, data.internal_structure_events)
+        if _STRUCTURAL_STALL_ENABLED
+        else None
+    )
     return replace(
         data,
         narrative=narrative,
@@ -3126,6 +3177,7 @@ def load_dashboard_data(
         liquidity_hunt_history=liquidity_hunt_history,
         liquidity_continuation_history=liquidity_continuation_history,
         structure_confluence=structure_confluence,
+        structural_stall=structural_stall,
     )
 
 

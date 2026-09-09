@@ -12,8 +12,13 @@ import type {
 import type { CanvasRenderingTarget2D } from 'fancy-canvas'
 
 /** Which glyph a divergence type draws. Shape carries the *type*; fill is
- *  reserved for confluence, so the two channels never compete. */
-export type DivergenceGlyph = 'triangle' | 'diamond' | 'square'
+ *  reserved for confluence, so the two channels never compete.
+ *
+ *  `circle` is not a divergence shape: it is the neutral one, used by the
+ *  structural-stall mark (see `utils/stallMarker.ts`), which borrows this
+ *  primitive's geometry — a whisker off the wick ending in a small hollow
+ *  glyph — and nothing else of its meaning. */
+export type DivergenceGlyph = 'triangle' | 'diamond' | 'square' | 'circle'
 
 export interface DivergenceMark {
   /** Candle the divergence is anchored to. */
@@ -31,7 +36,18 @@ export interface DivergenceMark {
    * agrees with this divergence. Drawn filled, at full alpha, with a ✦ badge.
    */
   strong?: boolean
+  /**
+   * Two hex alpha bytes overriding `QUIET_ALPHA` for this mark's glyph and
+   * whisker. Divergences leave it unset and keep the near-opaque default; the
+   * stall mark sets it, because it is a background state rather than an event
+   * and must not compete with the structure lines.
+   */
+  alpha?: string
 }
+
+/** A glyph mark, named for what it is rather than for divergences — the stall
+ *  mark uses this alias so its call site does not read as a divergence. */
+export type GlyphMark = DivergenceMark
 
 interface ResolvedMark {
   cx: number | null
@@ -40,6 +56,7 @@ interface ResolvedMark {
   glyph: DivergenceGlyph
   color: string
   strong: boolean
+  alpha: string | null
 }
 
 /**
@@ -70,6 +87,11 @@ function glyphPath(
 ): void {
   context.beginPath()
   switch (glyph) {
+    case 'circle':
+      // Neutral by construction: no apex, no corner, nothing pointing
+      // anywhere. `dir` is unused -- the shape reads the same either way.
+      context.arc(cx, cy, r, 0, Math.PI * 2)
+      break
     case 'triangle':
       // Apex points away from price, so the mark leans in the direction the
       // reading is about.
@@ -103,7 +125,7 @@ class DivergenceMarksRenderer implements IPrimitivePaneRenderer {
       for (const mark of this._marks) {
         if (mark.cx === null || mark.y === null) continue
         const dir = mark.side === 'above' ? -1 : 1
-        const color = mark.strong ? mark.color : mark.color + QUIET_ALPHA
+        const color = mark.strong ? mark.color : mark.color + (mark.alpha ?? QUIET_ALPHA)
         const cy = mark.y + dir * (WHISKER_PX + GLYPH_RADIUS)
 
         context.lineJoin = 'round'
@@ -111,7 +133,7 @@ class DivergenceMarksRenderer implements IPrimitivePaneRenderer {
 
         // The whisker: without it, a lone glyph floats between candles once
         // the chart is zoomed out, and which bar it belongs to is a guess.
-        context.strokeStyle = mark.color + (mark.strong ? 'b3' : '8c')
+        context.strokeStyle = mark.color + (mark.alpha ?? (mark.strong ? 'b3' : '8c'))
         context.lineWidth = 1
         context.beginPath()
         context.moveTo(mark.cx, mark.y)
@@ -168,6 +190,7 @@ class DivergenceMarksPaneView implements IPrimitivePaneView {
       glyph: mark.glyph,
       color: mark.color,
       strong: mark.strong ?? false,
+      alpha: mark.alpha ?? null,
     }))
     return new DivergenceMarksRenderer(resolved)
   }
@@ -215,3 +238,9 @@ export class DivergenceMarksPrimitive implements ISeriesPrimitive<Time> {
     return this._paneViews
   }
 }
+
+/** The same primitive under a neutral name, for the marks that are not
+ *  divergences (the structural stall). Attach a *separate instance*: the marks
+ *  list is replaced wholesale on every refresh, so sharing one instance would
+ *  make each layer erase the other. */
+export { DivergenceMarksPrimitive as GlyphMarksPrimitive }

@@ -1,1 +1,5 @@
 .spread_cache/
+
+# Baselines de medicao: regeneraveis pelo `--json` de cada script, e
+# grandes demais (0,4-4,7 MB cada) para viverem no historico.
+*_baseline.json

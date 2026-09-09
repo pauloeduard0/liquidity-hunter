@@ -241,6 +241,34 @@ export type ConfluenceFactor =
   | 'volume_delta'
   | 'liquidity_sweep'
 
+/**
+ * The standing structural leg stopped advancing and gave enough back to no
+ * longer read as active (`liquidity/structural_stall.py`).
+ *
+ * It is **not** a reversal, a new trend, a CHoCH, a range, or a cancellation
+ * of the BOS that opened the leg — the leg's protected level and every drawn
+ * line stand untouched. `null` while the leg is still advancing, while the
+ * machine has already closed it, or while the backend's
+ * `_STRUCTURAL_STALL_ENABLED` is switched off
+ * (`LIQUIDITY_HUNTER_STRUCTURAL_STALL=0`); on by default since 2026-09-08.
+ *
+ * Only ever the **standing** stall: the payload carries no history, so a stall
+ * disappears the moment a new advance opens a new leg.
+ */
+export interface StructuralStall {
+  /** The candle on which the stall condition first held — where it is drawn. */
+  stale_since: string
+  /** Direction of the leg that went quiet. Not a forecast. */
+  direction: MarketDirection
+  last_advance_timestamp: string
+  last_advance_price: number
+  bars_since_advance: number
+  retracement_atr: number
+  frozen_atr_pct: number
+  leg_extreme_price: number
+  leg_extreme_timestamp: string
+}
+
 export interface StructureConfluence {
   symbol: string
   timeframe: TimeFrame
@@ -707,6 +735,7 @@ export interface DashboardData {
   block_reclaims: BlockReclaim[]
   sweep_contexts: SweepContext[]
   structure_confluence: StructureConfluence[]
+  structural_stall: StructuralStall | null
 }
 
 /** One row of the universe-wide block-reclaim screener. */

@@ -21,5 +21,9 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  /* Tests run on node's own runner (`npm test`), not through the bundle, so
+     they are the one place using node globals and `.ts` specifiers. Keeping
+     them out of the app build is what lets them exist with no @types/node. */
+  "exclude": ["src/**/*.test.ts"]
 }

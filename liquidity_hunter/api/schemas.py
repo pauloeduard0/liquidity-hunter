@@ -25,6 +25,7 @@ from liquidity_hunter.core.domain import (
     MarketNarrative,
     MarketStructure,
     OIAnalysis,
+    StructuralStall,
     StructureConfluence,
     SupertrendBreak,
     SupertrendPoint,
@@ -80,3 +81,6 @@ class DashboardDataResponse(BaseModel):
     block_reclaims: list[BlockReclaim] = []
     sweep_contexts: list[SweepContext] = []
     structure_confluence: list[StructureConfluence] = []
+    # `null` while the standing leg is still advancing -- and always `null`
+    # while `_STRUCTURAL_STALL_ENABLED` is off. Descriptive, never a forecast.
+    structural_stall: StructuralStall | None = None

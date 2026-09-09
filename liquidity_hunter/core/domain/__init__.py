@@ -83,6 +83,7 @@ from liquidity_hunter.core.domain.screener import (
     BlockReclaimScanEntry,
     BlockReclaimScreen,
 )
+from liquidity_hunter.core.domain.structural_stall import StructuralStall
 from liquidity_hunter.core.domain.structure_confluence import StructureConfluence
 from liquidity_hunter.core.domain.supertrend import SupertrendBreak, SupertrendPoint
 from liquidity_hunter.core.domain.sweep_context import SweepContext
@@ -150,6 +151,7 @@ __all__ = [
     "RetailBias",
     "RetailPositioning",
     "ScreenerStatus",
+    "StructuralStall",
     "StructureConfluence",
     "StructureEvent",
     "StructureScope",

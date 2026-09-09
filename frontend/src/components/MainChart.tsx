@@ -22,7 +22,7 @@ import {
 
 import { LineLabelsPrimitive, type LineLabel } from '../charting/LineLabelsPrimitive'
 import { HuntWindowPrimitive, type HuntWindow } from '../charting/HuntWindowPrimitive'
-import { DivergenceMarksPrimitive, type DivergenceMark } from '../charting/DivergenceMarksPrimitive'
+import { DivergenceMarksPrimitive, GlyphMarksPrimitive, type DivergenceMark } from '../charting/DivergenceMarksPrimitive'
 import { POIBoxesPrimitive, type POIBox } from '../charting/POIBoxesPrimitive'
 import { HeatmapStripPrimitive, type HeatmapBand } from '../charting/HeatmapStripPrimitive'
 import {
@@ -32,6 +32,7 @@ import {
 } from '../charting/VolumeProfilePrimitive'
 import { EqlZonesPrimitive, type EqlZoneInput } from '../charting/EqlZonesPrimitive'
 import { RibbonPrimitive } from '../charting/RibbonPrimitive'
+import { buildStallMarks } from '../utils/stallMarker'
 import { buildPhase, buildRibbon, structureTrendByCandle } from '../utils/tideRibbon'
 import type { DefendedMark } from '../utils/defendedLevels'
 import { buildDefenceLevels, buildDefendedMarks } from '../utils/defendedLevels'
@@ -1137,6 +1138,9 @@ export function MainChart({
   const phaseRailSeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const divergenceMarksPrimitiveRef = useRef<DivergenceMarksPrimitive | null>(null)
+  // Its own instance: `setMarks` replaces the whole list, so sharing the
+  // divergence primitive would make each layer erase the other on every refresh.
+  const stallMarkPrimitiveRef = useRef<GlyphMarksPrimitive | null>(null)
   const hasFittedRef = useRef(false)
   const isSyncingRef = useRef(false)
   // Read by the ResizeObserver (created once) so it recomputes pane heights
@@ -1384,6 +1388,10 @@ export function MainChart({
     series.attachPrimitive(divergenceMarksPrimitive)
     divergenceMarksPrimitiveRef.current = divergenceMarksPrimitive
 
+    const stallMarkPrimitive = new GlyphMarksPrimitive()
+    series.attachPrimitive(stallMarkPrimitive)
+    stallMarkPrimitiveRef.current = stallMarkPrimitive
+
     const divergenceMarkers = createSeriesMarkers(series)
     divergenceMarkersRef.current = divergenceMarkers
 
@@ -1495,6 +1503,7 @@ export function MainChart({
       volumeProfilePrimitiveRef.current = null
       divergenceMarkersRef.current = null
       divergenceMarksPrimitiveRef.current = null
+      stallMarkPrimitiveRef.current = null
       hasFittedRef.current = false
     }
   }, [])
@@ -2632,6 +2641,16 @@ export function MainChart({
             data.candles,
           )
         : [],
+    )
+
+    // Structural stall: one small hollow circle on `stale_since`, saying that
+    // the standing leg stopped reading as active. It adds a glyph and nothing
+    // else -- no line is truncated, no line is dimmed, no label is added, and
+    // no event enters `internal_structure_events`. The payload carries only the
+    // *standing* stall, so the mark vanishes as soon as a new advance opens a
+    // new leg; there is no stall history on the chart by design.
+    stallMarkPrimitiveRef.current?.setMarks(
+      showSmc ? buildStallMarks(data.structural_stall, data.candles, STRUCTURE_DIRECTION_COLORS) : [],
     )
 
     // Liquidity heatmap strip
