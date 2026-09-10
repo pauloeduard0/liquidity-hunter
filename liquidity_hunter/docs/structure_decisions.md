@@ -3714,3 +3714,162 @@ o proprio rompimento e com o deslocamento que o segue**.
   (`failed + reversed`) e reportado **ao lado**, nunca no lugar.
 - O alvo literal `CHOCH_FAILED` e raro no BOS (0-5%), entao a leitura do BOS
   vem do alvo secundario. Fica declarado, e nao escondido numa agregacao.
+
+## 2026-09-09 — Etapa 7: VWAP como entrada, pullback depth, e um lookahead
+
+*Etapas 7.0 e 7.1. Investigadas. **Ambas rejeitadas.** Nada foi para producao.*
+Medicao em `research/smc_vwap_entry_quality.py` (populacao e simulacao) e
+`research/smc_pullback_depth.py` (a reavaliacao causal); 702 combos, 72 simbolos
+x M15/H1/H4/D1 x 3 janelas, **15.662 trades simulados** (8.292 `bos_retest`,
+5.991 `choch_retest`, 1.379 `sweep_retest`).
+
+Depois de tres rejeicoes que perguntavam a VWAP alguma coisa sobre estrutura, a
+Etapa 7.0 inverteu os papeis: *SMC decide direcao e nivel; a VWAP decidiria
+**location** -- valor, extensao, qualidade do reteste, timing.* A 7.1 nasceu de
+um achado incidental da 7.0, e terminou invalidando-o.
+
+### A populacao (valida, e reutilizada pelas duas etapas)
+
+Tres familias, todas definidas **sem VWAP**, com alvo kR / stop 1R, stop
+creditado no empate dentro do candle, e custo = round trip de taxa convertido
+para R (`custo / r_pct`, a conta de `research/vwap_exit_grid.py`; o spread nao
+e estimavel a partir de candles, ver `research/spread_cost.py`).
+
+| familia | evento | entrada | stop |
+|---|---|---|---|
+| `bos_retest` | `BREAK_OF_STRUCTURE` | 1o fechamento que volta ao nivel rompido e o defende | extremo do reteste |
+| `choch_retest` | `CHANGE_OF_CHARACTER` | idem, no nivel do CHoCH | idem |
+| `sweep_retest` | `LiquidityGrab` REJECTED alinhado a estrutura | fechamento da rejeicao | extremo varrido |
+
+Uma constatacao de leitura que vale registrar: **`price_level` de um BOS e o
+extremo novo que a perna alcancou, nao o nivel rompido** -- esse e o
+`reference_price_level`. Com o campo errado o scanner devolve zero setups, sem
+erro nenhum.
+
+O baseline e negativo depois de custo nas tres familias (`bos_retest` -0,339R,
+PF 0,62; `choch_retest` -0,182R, PF 0,78; `sweep_retest` -0,518R, PF 0,45), o
+que faz de toda comparacao desta etapa uma comparacao entre graus de prejuizo.
+
+### 7.0 -- a VWAP nao melhora entry/retest quality
+
+**Esta conclusao esta preservada e nao foi afetada pela correcao abaixo**: as
+features de VWAP ja eram causais e ja tinham teste de truncamento desde a
+primeira versao.
+
+Ablacao sobre `bos_retest`, R liquido por trade: SMC puro **-0,339**; + VWAP
+distance -0,407; + VWAP phase -0,396; + VWAP slope -0,357; + VWAP first touch
+-0,371; + VWAP + EMA9 -0,417; + EMA9 -0,328. **Sete dos oito recortes pioram.**
+
+- **Proximidade da VWAP piora**, ao contrario da hipotese: em 15m, perto
+  (<=0,5σ) -0,861 contra esticado (>1σ) -0,566; em 1h, -0,502 contra -0,297.
+- **`±1σ`, `slope` e `first touch`** ficam todos abaixo do baseline; o revisita
+  estrutural bate o primeiro teste em 3 dos 4 timeframes.
+- **EMA9 acrescenta quase nada** (+0,011R).
+- **`VWAP rejection` era custo.** Unico recorte que sobe: bruto -0,015 contra
+  -0,057 (**+0,042R de ganho real**), liquido -0,138 contra -0,339
+  (**+0,201R**). Os outros ~0,159R vem do termo de custo, porque o recorte
+  seleciona stops mais largos (`r_atr` 1,08 contra 0,74) e um stop largo paga
+  menos taxa por unidade de risco. E, no painel, `reclaim na entrada` e
+  `VWAP entre entry e stop` sao numericamente **identicos** -- a mesma condicao
+  escrita de duas formas, nao duas evidencias.
+
+**Nenhum filtro de VWAP deve ser promovido.** A melhora aparente do baseline em
+timeframe maior (15m -0,621 -> 4h -0,138) tambem e custo: o custo medio por R
+cai de 0,58 para 0,12.
+
+### A correcao causal, e o achado que ela retira
+
+A 7.0 reportou um achado incidental: `pullback_atr` seria a unica feature do
+painel com separacao real (AUC 0,68-0,73) e o corte pela mediana seria o unico
+subconjunto liquido positivo em H4/D1. **Isso era lookahead.**
+
+O extremo da perna era lido sobre os `RETEST_WINDOW` candles seguintes ao
+evento -- **incluindo candles posteriores a entrada**. Como
+`pullback_atr = (extremo - entrada) / unidade`, a feature sabia quanto o preco
+ainda ia andar depois de entrar. Corrigido: o extremo vai de `index` ate o
+candle de entrada, e nada alem.
+
+| leitura | com vazamento | causal |
+|---|---|---|
+| AUC `pullback_atr` 15m / 1h / 4h / 1d | 0,681 / 0,686 / 0,682 / 0,734 | **0,481 / 0,495 / 0,488 / 0,532** |
+| corte pela mediana, H4 | +0,236R (PF 1,38) | **-0,178R** |
+| corte pela mediana, D1 | +0,229R (PF 1,38) | **-0,149R** |
+
+> **Nao existe mais achado positivo de `pullback_atr` na Etapa 7.0.** O que
+> havia era uma feature que enxergava o futuro.
+
+Dois testes guardam a fronteira em `research/test_smc_vwap_entry_quality.py`, e
+os dois falham com a implementacao antiga:
+`test_nenhuma_feature_de_CONTEXTO_SMC_muda_quando_o_futuro_e_cortado`
+(truncamento, o mesmo formato que a familia VWAP ja tinha) e
+`test_a_profundidade_do_pullback_nao_le_candle_posterior_a_entrada` (caso
+construido, com um topo enorme depois do reteste).
+
+### 7.1 -- pullback depth reavaliado, e rejeitado
+
+Com o extremo causal, e sobre a **mesma** populacao (importada, nao recopiada):
+
+- **`pullback_atr`**: AUC 0,442-0,495. Quintis do `bos_retest` com hit2
+  31,3% / 32,4% / 31,8% / 29,1% / 31,5% -- chapado. Monotonia liquida 0,25.
+- **`retrace_pct`**: AUC 0,459-0,478, monotonia liquida **0,00**, e o sinal
+  aponta ao contrario (Q5 -0,735R contra Q1 -0,143R). Registre-se a identidade
+  que evita contar a mesma aposta duas vezes:
+  `retrace_pct = 100 x pullback_atr / impulse_atr`, ou seja "pullback dividido
+  pelo impulso" **nao e uma feature nova**.
+- **`pullback_over_leg`** e o unico residuo: AUC 0,586. Mas so existe no
+  `bos_retest` (o CHoCH nao publica `origin_price_level`), **nao e uma rampa** --
+  Q1-Q4 dao -0,281 / -0,570 / -0,539 / -0,368 e so o Q5 vira (+0,154) -- e o
+  melhor candidato do discovery fica **negativo**: bruto +0,273R, liquido
+  **-0,073R**, PF liquido 0,91.
+
+**Nenhum limiar foi escolhido**, porque nenhum dos 15 candidatos (3 features x 5
+quantis, todos lidos so no discovery) tem expectativa liquida positiva com
+PF > 1. O criterio da 7.0 -- escolher pelo delta por dia -- foi abandonado:
+numa populacao de expectativa negativa **qualquer** filtro que corte trades
+melhora a conta por dia por subtracao, e "perder menos por dia" nao e edge.
+
+**O holdout nao foi usado para selecionar.** Registre-se por transparencia que
+o melhor candidato retrospectivo aparece positivo la (+0,116R, PF 1,17, n=366)
+-- e que aceita-lo seria escolher pelo holdout, depois de ele ter sido negativo
+no discovery.
+
+**Custo e largura de stop nao explicam tudo.** Ao contrario do achado de VWAP,
+o custo medio e plano entre os baldes de `pullback_over_leg` (0,185 a 0,334R), e
+dentro de cada **decil** de `r_atr` o delta profundo-raso e positivo nos dez
+estratos (+0,195 a +0,925; agregado +0,530 bruto / +0,542 liquido). Ou seja:
+**ha estrutura estatistica residual, e nao ha edge operacional validado.**
+(Limite declarado: estratificar uma variavel continua nunca absorve o
+confundidor inteiro.)
+
+**Nao ha mecanismo consistente entre familias**, que e o que derruba a hipotese:
+no BOS a profundidade e chapada, no **CHoCH a relacao e invertida** -- pullbacks
+rasos sao melhores, monotonicamente (4h: Q1 +0,159, Q2 +0,197 -> Q5 -0,262) -- e
+no sweep nao ha nada (AUC 0,495). Nenhum timeframe mostra filtro positivo
+robusto; os H4/D1 positivos da 7.0 desapareceram com a correcao. Long e short
+sao simetricos e proximos de zero (+0,032 / -0,033); 39 simbolos positivos
+contra 32 negativos, mediana +0,047R; e os quatro blocos temporais dao
++0,188 / +0,203 / -0,354 / -0,074 -- sem estabilidade no tempo.
+
+### Conclusao arquitetural
+
+**Nao integrar em producao, com base nestas etapas:** `vwap_distance`,
+`vwap_phase`, `vwap_slope`, `first_touch`, `vwap_rejection`, `pullback_atr`,
+`retrace_pct`, `pullback_over_leg`. Nem como filtro de entrada, nem como
+timing, nem como qualificador de setup.
+
+### As duas licoes de metodo
+
+Elas valem mais que os numeros acima, e sao a razao de esta secao existir.
+
+> **A. Teste de causalidade tem de cobrir TODAS as familias de feature, nao so
+> a que esta sendo investigada.** Na 7.0 a familia VWAP tinha teste de
+> truncamento porque era o objeto da etapa; o contexto SMC nao tinha, porque
+> era "so um controle". O vazamento nasceu ali. Desde entao o truncamento e
+> por familia, e nao por etapa.
+
+> **B. Um achado incidental merece MAIS suspeita, nao menos.** O efeito mais
+> forte do painel da 7.0 apareceu exatamente na feature sem teste de
+> causalidade, e apareceu justamente porque ninguem estava procurando por ele
+> -- o que deveria ter sido o motivo para desconfiar, e nao para se
+> entusiasmar. Um subproduto chega sem a disciplina que a investigacao
+> principal recebeu, e e preciso aplica-la a ele antes de reportar.

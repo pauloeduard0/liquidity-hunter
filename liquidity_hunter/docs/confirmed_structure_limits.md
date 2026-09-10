@@ -233,6 +233,12 @@ acceptance como qualificador de evento: uma rejeicao").
 
 **Fica proibido** usar VWAP/Tide como qualificador estrutural de BOS ou CHoCH,
 como preditor de `CHOCH_FAILED`, ou como fonte de *structural conflict* /
-*current pressure*. O que a Etapa 6.0 **nao** testou, e por isso continua em
-aberto, e a VWAP como *location* — onde e quando entrar depois que a estrutura
-ja existe. Essa e outra pergunta, e nao autoriza nenhuma das proibicoes acima.
+*current pressure*. O que a Etapa 6.0 **nao** testou e a VWAP como *location*
+— onde e quando entrar depois que a estrutura ja existe. Essa e outra
+pergunta, e foi medida em seguida: a **Etapa 7.0 tambem a rejeitou** (nenhum
+recorte de VWAP melhora entry/retest quality; o unico que parecia melhorar
+selecionava stops mais largos e pagava menos custo por R), e a **Etapa 7.1
+rejeitou a profundidade do pullback** que aparecera como achado incidental
+dela — aquele efeito era lookahead. Os numeros e as duas licoes de metodo
+estao em [`structure_decisions.md`](structure_decisions.md) (secao "2026-09-09
+— Etapa 7: VWAP como entrada, pullback depth, e um lookahead").
