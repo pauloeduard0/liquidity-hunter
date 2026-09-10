@@ -72,3 +72,4 @@ deep_btc_eth.json
 # Reproduziveis por frontend/research/captureFixtures.sh; grandes (~1,1MB cada).
 frontend/research/fixtures/
 frontend/research/piso_audit_baseline.json
+frontend/research/piso_families_baseline.json
