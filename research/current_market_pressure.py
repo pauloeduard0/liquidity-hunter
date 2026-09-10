@@ -764,6 +764,40 @@ def first_resume(
     return best
 
 
+def episode_bounds(
+    row: Sequence[int],
+    start: int,
+    limit: int,
+    *,
+    gap: int = EPISODE_GAP,
+) -> int:
+    """O ultimo candle do episodio aberto em `start`, tolerando `gap` de buraco.
+
+    Extraida do laco que vivia dentro de `collect_combo` sem nenhuma mudanca
+    de regra: o episodio segue enquanto a mesma direcao reaparece, e uma
+    chamada da direcao OPOSTA o encerra na hora (nao e buraco, e desmentido).
+
+    O `gap + 1` e a correcao do off-by-one. O que se compara com `gap` aqui e
+    `cursor - last`, que e a DISTANCIA entre o ultimo candle aceso e o
+    candidato -- e a distancia atraves de um buraco de N candles desligados
+    vale N + 1. Com a condicao ingenua, `EPISODE_GAP = 3` saía do laco no
+    exato candle que religava a oposicao depois de tres desligados, partindo
+    em dois um episodio que a tolerancia declarada mandava manter inteiro.
+    Le-se assim: o que nao pode passar de `gap` e o tamanho do buraco,
+    `cursor - last - 1`.
+    """
+    direction = row[start]
+    last = start
+    cursor = start
+    while cursor < limit and cursor - last <= gap + 1:
+        if row[cursor] == direction:
+            last = cursor
+        elif row[cursor] == -direction:
+            break
+        cursor += 1
+    return last
+
+
 @dataclass
 class CaseRow:
     """Uma linha dos casos obrigatorios da secao 10."""
@@ -852,14 +886,7 @@ def collect_combo(
                 index += 1
                 continue
             start = index
-            last = index
-            cursor = index
-            while cursor < len(candles) - horizon and cursor - last <= EPISODE_GAP:
-                if row[cursor] == direction:
-                    last = cursor
-                elif row[cursor] == -direction:
-                    break
-                cursor += 1
+            last = episode_bounds(row, index, len(candles) - horizon)
             trend = trends[start]
             assert trend is not None
             raw = future_targets(candles, atr, start)

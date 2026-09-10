@@ -3431,18 +3431,29 @@ ate a terceira casa em tres timeframes — sao o retorno recente reescrito.
 
 **Regras.** Nenhuma das 26 passa. Apertar nao compra qualidade: `ret>=0.5` a
 77% de cobertura da persist_10 47,7%; `ret>=2.0 & eff>=0.7` a 6,3% da 48,9%.
-`false conflict` da melhor regra: 3,3% / 8,6% / 17,8% / 29,7% em ≤5/10/20/40 —
+`false conflict` da melhor regra: 3,4% / 8,8% / 18,1% / 29,9% em ≤5/10/20/40 —
 e nas regras apertadas cai por **abstencao**, nao por acerto. O `pressure_score`
 combinado nao bateu a regra de duas condicoes e foi descartado, como a propria
 proposta previa.
 
-**Desfecho estrutural** (59.985 episodios): o primeiro advance em 80 velas e
-**BOS retomando a estrutura antiga em 43,9%** contra **CHoCH na direcao da
-pressao em 17,5%** — a estrutura original volta ~2,5x mais do que vira. A
+**Desfecho estrutural** (54.643 episodios): o primeiro advance em 80 velas e
+**BOS retomando a estrutura antiga em 43,8%** contra **CHoCH na direcao da
+pressao em 17,7%** — a estrutura original volta ~2,5x mais do que vira. A
 camada nao estava antecipando reversao estrutural.
 
-**Holdout.** Nao salvou nada: net40 mediano de +0,04 para −0,00 ATR e
+**Holdout.** Nao salvou nada: net40 mediano de +0,05 para −0,00 ATR e
 persist_10 caindo em 3 dos 4 timeframes. **Nenhum limiar promovido.**
+
+> **Reprocessada em 2026-09-09**, apos a correcao de um off-by-one na
+> tolerancia de buraco do agrupamento em episodios (`EPISODE_GAP = 3` tolerava
+> dois candles desligados, nao tres). **Conclusao preservada.** O erro so
+> mexia em como candles vizinhos eram agrupados, nunca no que cada candle
+> lia: taxa-base, persistencia, cobertura, AUC univariada, regra escolhida,
+> ZEC e BTC saem **identicos**. Os episodios caem de 59.985 para 54.643
+> (−8,9%) e a duracao mediana sobe de 5 para 7 velas, porque episodios que
+> eram picotados em dois passaram a contar como um; as taxas por episodio
+> acima se movem menos de meio ponto. Os numeros desta secao ja sao os
+> reprocessados.
 
 **Casos.** *ZEC D1* nao justificou a camada: o primeiro sinal bullish da perna
 bearish vem 51 velas antes do CHoCH oficial, e o ultimo bloco contiguo vem 6
@@ -3481,3 +3492,126 @@ houver evidencia robusta. Ver
   **expandido congelado no advance** e o `price_level` do proprio BOS como
   denominador — nao um ATR rolante nem o fechamento corrente. Trocar qualquer
   um dos termos por uma aproximacao razoavel move o estado em serie real.
+
+## 2026-09-09 — Tide como sinal de transicao estrutural: uma rejeicao
+
+*Etapa 5.1. Investigada. **Rejeitada.** Nada foi para producao.* Medicao em
+`research/tide_structural_transition.py`; 702 combos, 178.995 candles (stride
+4), 61.039 episodios, 32 estados testados.
+
+A pergunta: *algum componente interno do Tide carrega sinal causal que o SMC
+confirmado nao tem sozinho?*
+
+### A resposta veio antes da medicao, e esta no codigo
+
+**A cor do Tide E a estrutura confirmada.** O Tide nao existe no backend: e
+composto no cliente, em `frontend/src/utils/tideRibbon.ts`, e o seu matiz vem
+de `structureTrendByCandle`, que replaya o mesmo stream nao-provisional
+(`BOS`/`CHoCH` → `direction`, `CHOCH_FAILED` → invertido) e segura o estado ate
+o proximo evento. E deliberado — o docstring do arquivo diz para que serve:
+*"so the ribbon can never disagree with the labels drawn over it"*.
+
+> `confirmed structure = bullish` com `Tide = bearish` **nao pode ocorrer**.
+> Nao e um resultado empirico: e uma identidade de codigo. Um "flip antecipado
+> do Tide" nao pode preceder um CHoCH porque o flip do Tide **e** o CHoCH.
+
+`test_a_cor_do_tide_e_o_final_trend_e_nao_uma_segunda_leitura` verifica isso em
+BTC H1 real, reimplementando o `trendAfter` do TypeScript e comparando candle a
+candle. Isso esvazia, como enunciadas, as perguntas sobre "Tide oposto a
+estrutura": elas foram reinterpretadas sobre os canais que sobram.
+
+### O que o Tide e, de fato
+
+| canal | implementacao real |
+|---|---|
+| **envelope** | VWAP ±1σ ponderada por volume; ancora **por timeframe** (`_VWAP_ANCHOR_PERIOD`): sessao ate H1, semanal em H4, mensal em D1. Quebra a cada virada de periodo |
+| **matiz** | `structureTrendByCandle` = `final_trend` replayado |
+| **saturacao** | `\|control_score\|` ÷ p90 da janela; fallback sem OI = agressao taker |
+| **bordas** | `controller`, creditado so nos quadrantes de OI subindo |
+
+E portanto **uma visualizacao composta** — estrutura + posicao no envelope +
+conviction/controller — e nao um detector estrutural independente.
+
+**Lookahead na normalizacao.** `convictionScale` toma o p90 da janela visivel
+**inteira**, futuro incluso: a saturacao de um candle depende de candles
+posteriores. Para uma leitura retrospectiva no grafico isso e inofensivo e nao
+esta sendo tratado como bug da UI — mas **impede usar `convictionScale` como
+feature causal** sem reimplementacao. A Etapa 5.1 renormalizou de forma
+expandida, e `test_nenhuma_feature_do_tide_muda_quando_o_futuro_e_cortado`
+guarda essa fronteira.
+
+**Cobertura de OI.** `control_score` exige open interest, e a Binance retem
+~30 dias: 99% de cobertura em 15m, ~60% em 1h, **15% em 4h**, e **zero** num
+painel historico. O canal OI-confirmado — e com ele `controller` e a nocao de
+*funded* — **nao e mensuravel historicamente**, por falta de dado e nao por
+escolha. Sobra o fallback que o proprio frontend usa: a agressao taker.
+
+### O resultado causal
+
+Os unicos canais direcionais que **nao** sao a estrutura: `phase` (posicao no
+envelope), `aggression`, `mid_slope_atr`, `width`. Em bruto, `mid_slope_atr`
+(AUC 0,659-0,720) e `phase` (0,601-0,723) parecem fortes — mas o controle
+price-only `ret_atr_10` sozinho da 0,635-0,654 e **em H1 bate o `phase`**.
+
+O controle que decide nao e a AUC lado a lado, e sim casar o estrato tambem
+pelo **quintil de retorno recente**: o Tide ainda separa dentro de candles que
+ja recuaram o mesmo tanto?
+
+| estado | CHoCH@40 bruto → casado por preco |
+|---|---|
+| `phase>=3` 15m | +6,9pp → **+3,0pp** |
+| `phase>=3` 1h | +7,1pp → **+1,9pp** |
+| `phase>=3` 4h | +4,9pp → **+0,9pp** |
+| `phase>=3` 1d | +9,6pp → **+4,1pp** |
+| `aggression>=3` (todos os TFs) | +1,2 a +3,3pp → **−0,3 a +1,4pp** |
+
+**A agressao morre no controle.** O `phase` perde 60-100% do lift. E o resto
+some no holdout — do residuo **ja casado por preco**, nenhum estado replica no
+mesmo timeframe: 15m CHoCH +5,7 → **+1,4pp**; 4h **−1,2 → +4,9** (troca de
+sinal entre amostras); 1d +1,4 → +17,2 com n pequeno; `STALE` em D1 sai
+**negativo no discovery** (−3,3pp). Onde o discovery e forte o holdout decai;
+onde o holdout e forte o discovery era zero ou negativo. E a assinatura de
+ruido, nao de sinal.
+
+`STALE` nao mostrou ganho robusto (+7,3 vs +6,2pp em 15m, +5,6 vs +5,3 em 1h).
+A persistencia (≥1/3/5/10) melhora monotonicamente — e melhora **junto com o
+controle**, porque seleciona candles mais estendidos.
+
+**Uma circularidade que vale registrar:** o alvo `STALE` e semanticamente
+parente de `phase`. `STALE` e "a perna devolveu ≥6 ATR" e `phase` oposto e "o
+preco esta do lado errado da VWAP"; a AUC de 0,72 em 15m mede parentesco, nao
+antecipacao. Por isso a decisao se apoiou no CHoCH casado por preco.
+
+### Falso conflito: os casos bonitos sao selecao visual
+
+| caso | avisos | falsos |
+|---|---|---|
+| ZEC D1 | 11 flips, 11 avisados, lead mediano 12 velas | 50 episodios, **39 falsos (78%)** |
+| BTC H4 | 11 de 11 avisados, lead mediano 7 | 36 episodios, **25 falsos (69%)** |
+| BTC H1 | — | 64 episodios, **58 falsos (91%)** |
+
+No painel, os episodios de oposicao terminam em retomada da estrutura original
+antes de qualquer CHoCH em **37-47%** das vezes. O ZEC avisa o CHoCH bearish de
+2026-06-04 em 29/05 (lead 6 velas) — com **66% do movimento ja feito**. O que
+se ve no grafico e o subconjunto que deu certo.
+
+*BTC H1 na borda viva* (2026-09-06 22:00): estrutura bullish, perna `active`,
+`phase` +1,8, agressao +1,0 — **sem conflito algum**. Nao ha deterioracao para
+o Tide sinalizar.
+
+### Conclusao arquitetural
+
+**O Tide permanece visualizacao contextual.** Nao deve ser usado para
+antecipar CHoCH, alterar `final_trend`, criar um estado de *structural
+conflict*, criar *pressure state* ou mexer em protected levels. Sua cor **e**
+a estrutura confirmada, por desenho. Envelope, `phase` e slope ajudam a
+leitura visual e nao justificam estado estrutural novo.
+
+### A armadilha que esta etapa pagou para descobrir
+
+Comparar AUCs lado a lado nao responde "acrescenta alem do preco?" quando as
+duas leituras sao parentes. `phase` 0,723 contra `ret_atr_10` 0,654 parece
+folga confortavel; casar o estrato pelo quintil de retorno mostra que quase
+tudo era a mesma leitura. `test_o_tide_perde_o_lift_quando_o_estrato_ja_casa_o_preco`
+constroi o caso onde um "estado" sem informacao nenhuma exibe +30pp contra o
+estrato simples e **zero** contra o casado.

@@ -50,6 +50,7 @@ from research.current_market_pressure import (
     auc,
     block_permutation,
     cut_by_timeframe,
+    episode_bounds,
     feature_matrix,
     first_resume,
     future_targets,
@@ -415,6 +416,38 @@ def test_o_false_conflict_so_conta_bos_da_estrutura_original():
 def test_o_gap_do_episodio_e_declarado():
     """Um unico candle indeciso nao pode picotar o episodio em dois."""
     assert 1 <= EPISODE_GAP <= 10
+
+
+def test_o_gap_declarado_e_o_gap_tolerado():
+    """`EPISODE_GAP = 3` tem de tolerar TRES candles desligados, nao dois.
+
+    O que se compara com a folga dentro do laco e `cursor - last`, a distancia
+    entre o ultimo candle aceso e o candidato -- e atraves de um buraco de N
+    desligados essa distancia vale N + 1. A versao ingenua (`<= gap`) saía do
+    laco no exato candle que religava o sinal depois de tres desligados, e
+    picotava em dois um episodio que a tolerancia declarada mandava manter
+    inteiro. Este teste falha com ela e passa com a corrigida.
+    """
+    def row(hole: int) -> list[int]:
+        return [1] + [0] * hole + [1] + [0] * 20
+
+    for hole in (0, 1, 2, 3):
+        assert episode_bounds(row(hole), 0, 30, gap=3) == hole + 1, hole
+    # Quatro desligados passam da folga: sao dois episodios, e o primeiro
+    # termina onde comecou.
+    assert episode_bounds(row(4), 0, 30, gap=3) == 0
+
+
+def test_a_direcao_oposta_encerra_o_episodio_sem_esperar_o_gap():
+    """Uma chamada contraria nao e um buraco -- e um desmentido."""
+    row = [1, 0, -1, 1, 1, 0, 0]
+    assert episode_bounds(row, 0, len(row), gap=3) == 0
+
+
+def test_o_episodio_respeita_o_limite_da_janela():
+    """O varredor nao pode passar do ultimo candle com alvo completo."""
+    row = [1] * 20
+    assert episode_bounds(row, 0, 5, gap=3) == 4
 
 
 # --------------------------------------------------------------------------

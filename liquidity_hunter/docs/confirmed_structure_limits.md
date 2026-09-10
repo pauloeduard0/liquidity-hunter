@@ -17,7 +17,7 @@ enquanto e para continuar assim.
 |---|---|---|---|
 | **CONFIRMED STRUCTURE** | `bullish` / `bearish` | o ultimo bias estrutural **confirmado** (`final_trend`, movido por BOS/CHoCH) | `InternalStructureDetector` |
 | **LEG ACTIVITY** | `active` / `stale` | a perna confirmada continua **operacionalmente ativa**, ou parou e devolveu movimento | `StructuralStall` |
-| **CURRENT MARKET PRESSURE** | — | o preco/fluxo **agora** empurra a favor ou contra a estrutura confirmada | **medido e rejeitado** (Etapa 5.0) |
+| **CURRENT MARKET PRESSURE** | — | o preco/fluxo **agora** empurra a favor ou contra a estrutura confirmada | **medido e rejeitado** (Etapas 5.0 e 5.1) |
 
 As tres sao ortogonais, e a combinacao que hoje nao tem como ser expressa e
 exatamente a interessante:
@@ -168,6 +168,38 @@ os motivos importam mais que o numero: e reversao a media de curto prazo, nao
 modelo de custo**, na exata faixa em que a taxa de corretagem ja apagou
 achados anteriores deste repositorio; o efeito se dissolve no horizonte maior;
 e ele nao antecipa estrutura de forma util.
+
+## Etapa 5.1 — o Tide nao e a terceira camada
+
+*Investigada. **Rejeitada.** Nada foi implementado.* A pergunta seguinte era se
+o **Tide** ja carregava, sem que se soubesse, a leitura que a Etapa 5.0 nao
+achou. Nao carrega — e o motivo principal e estrutural, nao estatistico:
+
+> **A cor do Tide E a estrutura confirmada.** O matiz da fita vem de
+> `structureTrendByCandle` (`frontend/src/utils/tideRibbon.ts`), que replaya o
+> mesmo stream nao-provisional que move o `final_trend`. `confirmed = bullish`
+> com `Tide = bearish` nao pode ocorrer: e uma identidade de codigo, e e
+> deliberada — a fita existe para nunca discordar dos rotulos desenhados sobre
+> ela.
+
+O Tide e uma **visualizacao composta** (envelope VWAP ±1σ + estrutura +
+conviction/controller), nao um detector independente. Os canais que de fato nao
+sao a estrutura — posicao no envelope, inclinacao da linha central, largura,
+agressao — foram medidos e **nao acrescentam sinal causal robusto alem do preco
+recente**: ao casar o estrato pelo retorno recente o lift cai 60-100%, a
+agressao vai a zero, e o residuo nao replica no holdout. Os numeros estao em
+[`structure_decisions.md`](structure_decisions.md) (secao "2026-09-09 — Tide
+como sinal de transicao estrutural: uma rejeicao").
+
+Dois limites do Tide que ficam registrados como propriedades conhecidas, e nao
+como bugs a corrigir: a saturacao e normalizada pelo p90 da janela **inteira**
+(lookahead — legitimo numa leitura retrospectiva, proibido como feature causal
+sem reimplementacao), e o `controller` depende de open interest, que a Binance
+retem ~30 dias (cobertura zero em painel historico).
+
+**O Tide permanece visualizacao contextual.** Nao antecipa CHoCH, nao altera
+`final_trend`, nao cria *structural conflict* nem *pressure state*, e nao mexe
+em protected levels.
 
 ### O que ficou nao estabelecido
 
