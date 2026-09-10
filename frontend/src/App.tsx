@@ -91,8 +91,8 @@ function LoadingSkeleton() {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       {/* KPI skeleton */}
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
-        {Array.from({ length: 6 }).map((_, i) => (
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-7">
+        {Array.from({ length: 7 }).map((_, i) => (
           <div key={i} className="skeleton h-[76px]" />
         ))}
       </div>
