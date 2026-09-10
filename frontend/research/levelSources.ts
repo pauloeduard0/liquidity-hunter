@@ -42,9 +42,30 @@ export type LevelSource =
  *  demand/support; `neutral` when the source carries no side. */
 export type LevelSide = 'above' | 'below' | 'neutral'
 
+/**
+ * What actually retires a level, which is **not** the same question across
+ * sources and is the whole subject of P7:
+ *
+ *   - `wick`      the first candle whose wick reached through it;
+ *   - `close`     the first candle whose close landed beyond it;
+ *   - `structure` a later structure event superseded its reference line;
+ *   - `never`     it has no death at all.
+ */
+export type DeathRule = 'wick' | 'close' | 'structure' | 'never'
+
 export interface SourcedLevel extends DefenceLevel {
   source: LevelSource
   side: LevelSide
+  deathRule: DeathRule
+  /**
+   * The *other* death this source records, where it records two. Only the
+   * equal-level pools do: `died` is `invalidated_at` (the wick that grabbed
+   * the resting orders) and this is `breached_at` (the close that spent the
+   * level). `LiquidityZone`'s own docstring says the first leaves the level
+   * "surviving as memory" and the second is when it "stopped being a pool" —
+   * the rule retires it on the first. Recorded, not acted on.
+   */
+  altDied: string | null
 }
 
 function causalLookup(times: string[], series: number[]): (at: string) => number {
@@ -86,9 +107,21 @@ export function sourcedDefenceLevels(
     died: string | null,
     source: LevelSource,
     side: LevelSide,
+    deathRule: DeathRule,
+    altDied: string | null,
   ) => {
     const tol = price * tolFracAt(born)
-    out.push({ low: price - tol, high: price + tol, family, born, died, source, side })
+    out.push({
+      low: price - tol,
+      high: price + tol,
+      family,
+      born,
+      died,
+      source,
+      side,
+      deathRule,
+      altDied,
+    })
   }
 
   for (const e of data.internal_structure_events) {
@@ -104,6 +137,8 @@ export function sourcedDefenceLevels(
       standingUntil(e),
       e.event === 'break_of_structure' ? 'bos' : 'choch',
       e.direction === 'bullish' ? 'above' : e.direction === 'bearish' ? 'below' : 'neutral',
+      'structure',
+      null,
     )
   }
 
@@ -117,6 +152,10 @@ export function sourcedDefenceLevels(
       source: 'poi',
       // A bullish order block is demand, sitting below price to be defended.
       side: z.direction === 'bullish' ? 'below' : z.direction === 'bearish' ? 'above' : 'neutral',
+      // `POIZone`: "Price trading back inside the zone does not retire it" —
+      // only a close beyond the far boundary does.
+      deathRule: 'close',
+      altDied: null,
     })
   }
 
@@ -131,6 +170,8 @@ export function sourcedDefenceLevels(
       died: z.invalidated_at,
       source: z.zone_type,
       side: z.zone_type === 'equal_highs' ? 'above' : 'below',
+      deathRule: 'wick',
+      altDied: z.breached_at ?? null,
     })
   }
   for (const b of data.liquidation_map?.bands ?? []) {
@@ -143,6 +184,11 @@ export function sourcedDefenceLevels(
       source: 'liquidation',
       // Sell-side liquidations are longs stopped out below price.
       side: b.side === 'sell_side' ? 'below' : b.side === 'buy_side' ? 'above' : 'neutral',
+      // `_liquidation_hit_time`: the low/high piercing the level consumes the
+      // pool. A touch is the whole event for a liquidation, so this one is not
+      // an early death — it is the death.
+      deathRule: 'wick',
+      altDied: null,
     })
   }
 
@@ -153,7 +199,10 @@ export function sourcedDefenceLevels(
       [vp.value_area_low, 'value_area'],
       [vp.value_area_high, 'value_area'],
     ] as [number | null, LevelSource][]) {
-      if (price) level(price, 'fair', vp.start_timestamp, null, source, 'neutral')
+      // The profile is one snapshot over the whole window and never dies, so
+      // it is both immortal and contaminated by hindsight. P7.11 keeps it out
+      // of every primary conclusion.
+      if (price) level(price, 'fair', vp.start_timestamp, null, source, 'neutral', 'never', null)
     }
   }
   return out
