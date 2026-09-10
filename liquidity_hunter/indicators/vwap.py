@@ -46,6 +46,8 @@ def _anchor_key(timestamp: datetime, anchor: VWAPAnchor) -> object:
         return timestamp.isocalendar()[:2]
     if anchor is VWAPAnchor.MONTH:
         return (timestamp.year, timestamp.month)
+    if anchor is VWAPAnchor.YEAR:
+        return timestamp.year
     return None
 
 
@@ -91,7 +93,7 @@ def vwap(
 
     `anchor` selects what the accumulation restarts on:
 
-    - ``SESSION``/``WEEK``/``MONTH`` — a fresh accumulation at each calendar
+    - ``SESSION``/``WEEK``/``MONTH``/``YEAR`` — a fresh accumulation at each calendar
       period (00:00 UTC boundaries), so the series holds several segments,
       delimited by each point's ``anchor_timestamp``.
     - ``EVENT`` — one accumulation starting at `anchor_timestamp` (required):

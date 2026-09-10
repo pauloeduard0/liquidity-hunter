@@ -34,6 +34,7 @@ _TIMEFRAME_WINDOW: dict[TimeFrame, int] = {
     TimeFrame.H4: 5,
     TimeFrame.D1: 5,
     TimeFrame.W1: 3,
+    TimeFrame.MN1: 3,
 }
 
 # When OI rises, it *confirms* the aggressor is opening fresh positions, so the

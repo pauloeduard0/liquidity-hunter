@@ -31,6 +31,7 @@ _SNAPSHOT_TTL_SECONDS: dict[TimeFrame, float] = {
     TimeFrame.H4: 300.0,
     TimeFrame.D1: 600.0,
     TimeFrame.W1: 1200.0,
+    TimeFrame.MN1: 2400.0,
 }
 _DEFAULT_SNAPSHOT_TTL_SECONDS = 60.0
 
@@ -44,7 +45,7 @@ _snapshot_cache: TTLCache[TimeframeStructureSnapshot] = TTLCache()
 
 @router.get("/api/overview", response_model=MarketOverview)
 def get_overview(symbol: str = "BTCUSDT") -> MarketOverview:
-    """Return the per-timeframe structural ladder (M5 → W1) for `symbol`.
+    """Return the per-timeframe structural ladder (M5 → MN1) for `symbol`.
 
     Snapshots are cached per (symbol, timeframe) with timeframe-proportional
     TTLs; the cross-timeframe assembly (each entry's hunt read against its

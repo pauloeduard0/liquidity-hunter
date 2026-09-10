@@ -165,15 +165,19 @@ _OHLCV_PERIOD: dict[TimeFrame, tuple[str, int]] = {
     TimeFrame.D1: ("day", 1),
 }
 
-#: M30 and W1 have no native period, so they are resampled from the source
+#: M30, W1 and MN1 have no native period, so they are resampled from the source
 #: resolution below (`(source timeframe, candles per bar)`). Merging N finished
 #: candles into one is exact -- open of the first, close of the last, extreme
-#: highs/lows, summed volume -- and keeps the whole M5..W1 ladder available for
+#: highs/lows, summed volume -- and keeps the whole M5..MN1 ladder available for
 #: on-chain pairs; the cost is that one upstream request yields N times fewer
-#: bars at these two resolutions.
+#: bars at these resolutions.
 _RESAMPLED_FROM: dict[TimeFrame, tuple[TimeFrame, int]] = {
     TimeFrame.M30: (TimeFrame.M15, 2),
     TimeFrame.W1: (TimeFrame.D1, 7),
+    # A calendar month is 28-31 days; the ratio only sizes the source request,
+    # while `_bucket_start` does the actual (calendar) bucketing, so the
+    # longest month is used to be sure the request covers `limit` bars.
+    TimeFrame.MN1: (TimeFrame.D1, 31),
 }
 
 #: Bar length in seconds, used to floor a timestamp onto its resampled bucket.
@@ -477,15 +481,12 @@ def _resample(candles: list[Candle], timeframe: TimeFrame) -> list[Candle]:
     The trailing bucket is kept even when incomplete: it is the forming candle,
     exactly what the native resolutions also return.
     """
-    bucket_seconds = _TIMEFRAME_SECONDS[timeframe]
-    offset = _WEEK_EPOCH_OFFSET_SECONDS if timeframe is TimeFrame.W1 else 0
     merged: list[Candle] = []
     bucket: list[Candle] = []
     bucket_start: int | None = None
 
     for candle in candles:
-        epoch = int(candle.timestamp.timestamp())
-        start = ((epoch - offset) // bucket_seconds) * bucket_seconds + offset
+        start = _bucket_start(candle.timestamp, timeframe)
         if bucket_start is not None and start != bucket_start:
             merged.append(_merge(bucket, timeframe, bucket_start))
             bucket = []
@@ -494,6 +495,24 @@ def _resample(candles: list[Candle], timeframe: TimeFrame) -> list[Candle]:
     if bucket and bucket_start is not None:
         merged.append(_merge(bucket, timeframe, bucket_start))
     return merged
+
+
+def _bucket_start(timestamp: datetime, timeframe: TimeFrame) -> int:
+    """Epoch second the coarser `timeframe`'s bucket holding `timestamp` opens.
+
+    Months are not a fixed number of seconds, so MN1 floors on the calendar
+    (1st, 00:00 UTC) instead of on an arithmetic grid.
+    """
+    if timeframe is TimeFrame.MN1:
+        return int(
+            timestamp.astimezone(UTC).replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            ).timestamp()
+        )
+    bucket_seconds = _TIMEFRAME_SECONDS[timeframe]
+    offset = _WEEK_EPOCH_OFFSET_SECONDS if timeframe is TimeFrame.W1 else 0
+    epoch = int(timestamp.timestamp())
+    return ((epoch - offset) // bucket_seconds) * bucket_seconds + offset
 
 
 def _merge(bucket: list[Candle], timeframe: TimeFrame, start: int) -> Candle:

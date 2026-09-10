@@ -39,6 +39,7 @@ _TIMEFRAME_MIN_ACCUMULATION: dict[TimeFrame, int] = {
     TimeFrame.H4: 3,
     TimeFrame.D1: 2,
     TimeFrame.W1: 2,
+    TimeFrame.MN1: 2,
 }
 
 _TIMEFRAME_PROXIMITY: dict[TimeFrame, float] = {
@@ -50,6 +51,7 @@ _TIMEFRAME_PROXIMITY: dict[TimeFrame, float] = {
     TimeFrame.H4: 0.025,
     TimeFrame.D1: 0.03,
     TimeFrame.W1: 0.03,
+    TimeFrame.MN1: 0.03,
 }
 
 _TIMEFRAME_MAX_EXPANSION: dict[TimeFrame, int] = {
@@ -61,6 +63,7 @@ _TIMEFRAME_MAX_EXPANSION: dict[TimeFrame, int] = {
     TimeFrame.H4: 50,
     TimeFrame.D1: 25,
     TimeFrame.W1: 12,
+    TimeFrame.MN1: 6,
 }
 
 

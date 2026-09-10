@@ -15,6 +15,12 @@ class TimeFrame(str, Enum):
     H4 = "4h"
     D1 = "1d"
     W1 = "1w"
+    # Binance's own wire value for the monthly kline is the capitalised "1M"
+    # (the minute is lowercase "1m"); the table below states the duration this
+    # one *nominally* covers -- calendar months are not a fixed length, and
+    # every consumer of `TIMEFRAME_PERIOD` uses it to size a window, not to
+    # date a boundary.
+    MN1 = "1M"
 
 
 #: How much tape one candle of each timeframe covers.
@@ -37,6 +43,7 @@ TIMEFRAME_PERIOD: dict["TimeFrame", timedelta] = {
     TimeFrame.H4: timedelta(hours=4),
     TimeFrame.D1: timedelta(days=1),
     TimeFrame.W1: timedelta(weeks=1),
+    TimeFrame.MN1: timedelta(days=30),
 }
 
 
@@ -378,7 +385,7 @@ class VWAPAnchor(str, Enum):
 
     A volume-weighted average price only means something relative to where it
     started accumulating: it reports what every participant since that point
-    paid, on average. ``SESSION``/``WEEK``/``MONTH`` are the conventional
+    paid, on average. ``SESSION``/``WEEK``/``MONTH``/``YEAR`` are the conventional
     calendar anchors (a fresh accumulation at each exchange period, 00:00 UTC
     in crypto); ``ROLLING`` is a fixed-length trailing window; ``EVENT``
     anchors the accumulation to an observation this project already makes — a
@@ -389,6 +396,7 @@ class VWAPAnchor(str, Enum):
     SESSION = "session"
     WEEK = "week"
     MONTH = "month"
+    YEAR = "year"
     ROLLING = "rolling"
     EVENT = "event"
 

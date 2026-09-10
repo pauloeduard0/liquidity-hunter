@@ -44,6 +44,7 @@ _TIMEFRAME_BUCKET_PCT: dict[TimeFrame, float] = {
     TimeFrame.H4: 0.005,
     TimeFrame.D1: 0.005,
     TimeFrame.W1: 0.005,
+    TimeFrame.MN1: 0.005,
 }
 _DEFAULT_BUCKET_PCT = 0.002
 

@@ -276,11 +276,11 @@ def test_load_dashboard_data_top_timeframe_has_no_higher_timeframe() -> None:
     data = load_dashboard_data(
         provider=_FakeProvider(candles),
         symbol="BTCUSDT",
-        timeframe=TimeFrame.W1,
+        timeframe=TimeFrame.MN1,
         futures_provider=_FAKE_FUTURES,
     )
 
-    # W1 has no higher timeframe: no anchor pair, and the direction degrades
+    # MN1 has no higher timeframe: no anchor pair, and the direction degrades
     # to the current series' own internal trend (flat here -> NEUTRAL).
     assert data.higher_timeframe is None
     assert data.higher_timeframe_direction is MarketDirection.NEUTRAL

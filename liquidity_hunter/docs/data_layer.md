@@ -56,9 +56,9 @@ Extracted from `CLAUDE.md` (2026-08-29) to keep that file under its size limit.
   default **`MARKET_CAP`**) scales the USD price by the token's supply — a
   constant factor, so every structural reading is identical to the USD chart
   and only the axis changes; `USD` and `QUOTE` (priced in the pool's quote
-  token) are the alternatives. M30 and W1 have no native GeckoTerminal period
+  token) are the alternatives. M30, W1 and MN1 have no native GeckoTerminal period
   and are **resampled** (`_RESAMPLED_FROM`) from M15 pairs / D1 weeks (Monday
-  00:00 UTC buckets), so the whole M5→W1 ladder works; one upstream request
+  00:00 UTC buckets), so the whole M5→MN1 ladder works; one upstream request
   then yields N times fewer bars there. `max_fetch_limit` is 1000.
   Two source-imposed gaps, both degrading gracefully rather than being faked:
   an on-chain OHLCV row has **no taker split**, so `taker_buy_volume` is half

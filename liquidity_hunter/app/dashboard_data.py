@@ -120,6 +120,7 @@ _INTERNAL_STRUCTURE_PARAMS: dict[TimeFrame, tuple[int, int]] = {
     TimeFrame.H4: (5, 2),
     TimeFrame.D1: (5, 2),
     TimeFrame.W1: (5, 2),
+    TimeFrame.MN1: (5, 2),
 }
 _DEFAULT_INTERNAL_PARAMS = (5, 2)
 
@@ -141,6 +142,7 @@ _STALE_REANCHOR_CANDLES: dict[TimeFrame, int] = {
     TimeFrame.H4: 60,
     TimeFrame.D1: 40,
     TimeFrame.W1: 26,
+    TimeFrame.MN1: 18,
 }
 _DEFAULT_STALE_REANCHOR_CANDLES = 60
 
@@ -284,6 +286,7 @@ _CONSOLIDATION_MAX_HEIGHT_ABS: dict[TimeFrame, float] = {
     TimeFrame.H4: 0.14,
     TimeFrame.D1: 0.40,
     TimeFrame.W1: 0.60,
+    TimeFrame.MN1: 0.80,
 }
 
 # Consolidation breakout staging (phase 2,
@@ -986,12 +989,16 @@ _VWAP_ANCHOR_PERIOD: dict[TimeFrame, VWAPAnchor] = {
     TimeFrame.H4: VWAPAnchor.WEEK,
     TimeFrame.D1: VWAPAnchor.MONTH,
     TimeFrame.W1: VWAPAnchor.MONTH,
+    # A month-anchored VWAP on monthly candles would be one candle per
+    # segment -- the same degeneracy the note above describes for D1/day.
+    TimeFrame.MN1: VWAPAnchor.YEAR,
 }
 _VWAP_DEFAULT_ANCHOR_PERIOD = VWAPAnchor.SESSION
 _VWAP_ANCHOR_LABELS: dict[VWAPAnchor, str] = {
     VWAPAnchor.SESSION: "Session",
     VWAPAnchor.WEEK: "Weekly",
     VWAPAnchor.MONTH: "Monthly",
+    VWAPAnchor.YEAR: "Yearly",
 }
 
 _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
@@ -1002,6 +1009,7 @@ _HIGHER_TIMEFRAME_MAP: dict[TimeFrame, TimeFrame] = {
     TimeFrame.H1: TimeFrame.H4,
     TimeFrame.H4: TimeFrame.D1,
     TimeFrame.D1: TimeFrame.W1,
+    TimeFrame.W1: TimeFrame.MN1,
 }
 
 # OI points fed to the leverage-liquidation estimator: its

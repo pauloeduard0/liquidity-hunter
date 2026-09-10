@@ -11,10 +11,10 @@ import type { TimeFrame } from '../types/dashboard'
 // handing them over, which is what `toChartTime` does — hence the name: the
 // returned value is a *chart* coordinate, no longer a true UTC timestamp.
 //
-// Daily and weekly candles are exempt. Their timestamp *is* the exchange day
+// Daily, weekly and monthly candles are exempt. Their timestamp *is* the exchange day
 // (00:00 UTC), so shifting would relabel the 14 Jul daily bar as "13 Jul
 // 21:00". Those timeframes keep exchange time, like every other platform.
-const EXCHANGE_TIME_TIMEFRAMES: ReadonlySet<TimeFrame> = new Set<TimeFrame>(['1d', '1w'])
+const EXCHANGE_TIME_TIMEFRAMES: ReadonlySet<TimeFrame> = new Set<TimeFrame>(['1d', '1w', '1M'])
 
 // The offset is module state rather than a per-call argument because *every*
 // chart time — candles, overlay series, canvas primitives, and the pure

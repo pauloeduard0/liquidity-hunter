@@ -33,6 +33,7 @@ _TIMEFRAME_WINDOW: dict[TimeFrame, int] = {
     TimeFrame.H4: 5,
     TimeFrame.D1: 5,
     TimeFrame.W1: 3,
+    TimeFrame.MN1: 3,
 }
 
 # Structure events worth qualifying with OI context. Descriptive pivot labels

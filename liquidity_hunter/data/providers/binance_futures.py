@@ -35,6 +35,7 @@ _FUTURES_PERIOD: dict[TimeFrame, str] = {
     TimeFrame.H4: "4h",
     TimeFrame.D1: "1d",
     TimeFrame.W1: "1d",
+    TimeFrame.MN1: "1d",
 }
 _DEFAULT_PERIOD = "1h"
 

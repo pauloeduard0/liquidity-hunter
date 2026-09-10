@@ -194,7 +194,7 @@ only on `app` and `core` (an alternative presentation layer to
   model directly — no mirror schema needed). Each timeframe's
   `TimeframeStructureSnapshot` is cached per `(symbol, timeframe)` with a
   **timeframe-proportional TTL** (`_SNAPSHOT_TTL_SECONDS`: M5=30s, M15=60s,
-  M30=90s, H1=120s, H4=300s, D1=600s, W1=1200s — a reading changes at most
+  M30=90s, H1=120s, H4=300s, D1=600s, W1=1200s, MN1=2400s — a reading changes at most
   once per candle), while the cross-timeframe assembly (`build_overview`)
   is recomputed per request. A cold overview costs one buffered-klines fetch
   per ladder timeframe (~2.5s); warm requests only refresh expired intraday

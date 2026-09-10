@@ -1,4 +1,4 @@
-"""Multi-timeframe structural overview: the M5 → W1 "state ladder".
+"""Multi-timeframe structural overview: the M5 → MN1 "state ladder".
 
 Builds a :class:`~liquidity_hunter.core.domain.MarketOverview` — one compact
 :class:`~liquidity_hunter.core.domain.TimeframeOverview` per timeframe, each
@@ -59,7 +59,7 @@ from liquidity_hunter.psychology import RetailBiasEstimate
 
 # The default ladder, fine -> coarse. Every timeframe's `_HIGHER_TIMEFRAME_MAP`
 # anchor is also in the set, so each entry's hunt reads its HTF trend from the
-# same snapshot batch (W1, the top, falls back to its own trend = "aligned").
+# same snapshot batch (MN1, the top, falls back to its own trend = "aligned").
 OVERVIEW_TIMEFRAMES: tuple[TimeFrame, ...] = (
     TimeFrame.M5,
     TimeFrame.M15,
@@ -68,6 +68,7 @@ OVERVIEW_TIMEFRAMES: tuple[TimeFrame, ...] = (
     TimeFrame.H4,
     TimeFrame.D1,
     TimeFrame.W1,
+    TimeFrame.MN1,
 )
 
 # Trend-relevant marks for the "last event" reading (the same set the hunt's

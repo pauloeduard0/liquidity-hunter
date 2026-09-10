@@ -16,6 +16,7 @@ const TF_LABELS: Record<string, string> = {
   '4h': '4H',
   '1d': '1D',
   '1w': '1W',
+  '1M': 'MN',
 }
 
 const TREND_STYLES: Record<MarketDirection, { icon: string; label: string; color: string }> = {

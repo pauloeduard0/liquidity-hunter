@@ -27,7 +27,7 @@ Extracted from `CLAUDE.md` (2026-08-29) to keep that file under its size limit.
   `None` when the window has no price range),
   `vwap` (`VWAPSeries | None` — the periodic VWAP over the visible window;
   the restart period is per timeframe (`_VWAP_ANCHOR_PERIOD`: the UTC day
-  intraday, `WEEK` on H4, `MONTH` on D1/W1 — measured 2026-07-27, a
+  intraday, `WEEK` on H4, `MONTH` on D1/W1, `YEAR` on MN1 (a month-anchored VWAP on monthly candles is one candle per segment) — measured 2026-07-27, a
   day-anchored H4 gives 6-candle segments and D1 exactly one, so the average
   would report the candle itself),
   `anchored_vwaps` (`list[VWAPSeries]` — VWAPs anchored to the events that drew
@@ -71,7 +71,7 @@ Extracted from `CLAUDE.md` (2026-08-29) to keep that file under its size limit.
   respectively, both filtered to the visible window. The internal detector's
   base `swing_lookback`/`persistence_candles` are resolved **per timeframe** from
   `_INTERNAL_STRUCTURE_PARAMS` (currently a uniform `(5, 2)` for every timeframe
-  M5→W1, matching `_DEFAULT_INTERNAL_PARAMS = (5, 2)` — fast flips, compensated
+  M5→MN1, matching `_DEFAULT_INTERNAL_PARAMS = (5, 2)` — fast flips, compensated
   by the confirmed-trend barrier below; the per-TF dict is kept so
   timeframes can diverge again without touching the wiring) — so the constructor
   defaults (`swing_lookback=2`/`persistence_candles=5`) apply only to a
@@ -318,14 +318,14 @@ Extracted from `CLAUDE.md` (2026-08-29) to keep that file under its size limit.
     excluded — provisional but not "forming"), and a `LiquidityHuntEngine`
     summary (phase, hunted side, captured/total) computed against the
     `_HIGHER_TIMEFRAME_MAP` anchor's trend **from the same snapshot batch**
-    (no duplicate HTF fetches; W1 or a missing anchor degrades to the entry's
+    (no duplicate HTF fetches; MN1 or a missing anchor degrades to the entry's
     own trend = "aligned", the `load_dashboard_data` fallback). The hunt runs
     on a slim `DashboardData` (EQL zones + events only; `liquidation_map` and
     `oi_analysis` deliberately `None` — the documented graceful degradation,
     so ladder hunt phases are structure+EQL-based; the full OI-qualified hunt
     stays on `/api/dashboard`).
   - **`load_overview(provider, symbol, timeframes, limit, confluence_filter)`**
-    composes both over the default ladder `OVERVIEW_TIMEFRAMES` (M5→W1).
+    composes both over the default ladder `OVERVIEW_TIMEFRAMES` (M5→MN1).
   Purely descriptive throughout: a state reading per timeframe, not a signal.
 
 `default_ohlcv_provider()` and `default_futures_provider()` are **memoized**

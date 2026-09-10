@@ -44,6 +44,10 @@ _TIMEFRAME_SECONDS: dict[TimeFrame, int] = {
     TimeFrame.H4: 14_400,
     TimeFrame.D1: 86_400,
     TimeFrame.W1: 7 * 86_400,
+    # A calendar month is 28-31 days; the shortest one is used because this
+    # number only sizes the *tail* re-fetch -- undershooting asks for a few
+    # extra candles of overlap, overshooting would leave a gap.
+    TimeFrame.MN1: 28 * 86_400,
 }
 
 #: Candles of overlap re-fetched beyond what the elapsed time strictly needs.

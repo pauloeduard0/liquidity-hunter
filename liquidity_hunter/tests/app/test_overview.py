@@ -102,9 +102,11 @@ def test_overview_higher_timeframe_anchors_follow_the_map() -> None:
     assert by_timeframe[TimeFrame.M5].higher_timeframe is TimeFrame.M15
     assert by_timeframe[TimeFrame.H1].higher_timeframe is TimeFrame.H4
     assert by_timeframe[TimeFrame.D1].higher_timeframe is TimeFrame.W1
-    # W1 is the top of the ladder: no anchor, own trend, reads "aligned".
-    assert by_timeframe[TimeFrame.W1].higher_timeframe is None
-    assert by_timeframe[TimeFrame.W1].higher_timeframe_direction is None
+    # W1 gained an anchor when MN1 joined the ladder -- the reason MN1 exists.
+    assert by_timeframe[TimeFrame.W1].higher_timeframe is TimeFrame.MN1
+    # MN1 is the top of the ladder: no anchor, own trend, reads "aligned".
+    assert by_timeframe[TimeFrame.MN1].higher_timeframe is None
+    assert by_timeframe[TimeFrame.MN1].higher_timeframe_direction is None
     assert by_timeframe[TimeFrame.M5].higher_timeframe_direction is MarketDirection.BULLISH
 
 

@@ -16,4 +16,5 @@ DEFAULT_TIMEFRAME_WEIGHTS: dict[TimeFrame, float] = {
     TimeFrame.H4: 0.80,
     TimeFrame.D1: 0.90,
     TimeFrame.W1: 1.00,
+    TimeFrame.MN1: 1.00,
 }

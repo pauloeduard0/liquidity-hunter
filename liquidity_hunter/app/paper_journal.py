@@ -328,6 +328,7 @@ _TIMEFRAME_DURATION: dict[TimeFrame, timedelta] = {
     TimeFrame.H4: timedelta(hours=4),
     TimeFrame.D1: timedelta(days=1),
     TimeFrame.W1: timedelta(weeks=1),
+    TimeFrame.MN1: timedelta(days=30),
 }
 
 

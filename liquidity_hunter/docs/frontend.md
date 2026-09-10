@@ -222,7 +222,7 @@ selector.
 
 - **`frontend/src/components/MultiTimeframePanel.tsx`** — the **Structure
   Ladder** sidebar panel (as of 2026-07-11, first panel in the sidebar): one
-  compact row per `TimeframeOverview` entry (M5 → W1) showing the timeframe
+  compact row per `TimeframeOverview` entry (M5 → MN1) showing the timeframe
   chip, trend (`▲ BULL` / `▼ BEAR` / `◆ FLAT`, directional colors), the last
   structural event with candles-ago (`BOS ▲ ·12c`), a dimmed forming chip for
   provisional marks (`BOS? ▼`), a slate `▭ RANGE ·Nc` chip when the

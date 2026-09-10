@@ -144,6 +144,7 @@ const AGGRESSION_WINDOW: Partial<Record<TimeFrame, number>> = {
   '4h': 5,
   '1d': 5,
   '1w': 3,
+  '1M': 3,
 }
 
 /**

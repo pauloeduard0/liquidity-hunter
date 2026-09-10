@@ -4,7 +4,7 @@ A :class:`MarketOverview` is a compact, per-timeframe reading of the standing
 market structure for one symbol — which way each timeframe's internal
 structure currently points, what the last structural event was, and how far
 the liquidity hunt on that timeframe has progressed. It is a descriptive
-"state ladder" (M5 → W1), not a signal: each entry states what is observed on
+"state ladder" (M5 → MN1), not a signal: each entry states what is observed on
 that timeframe, mirroring the trend/events the chart renders when the user
 opens it.
 """
