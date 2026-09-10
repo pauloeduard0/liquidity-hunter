@@ -67,3 +67,8 @@ candles.sqlite3
 
 # Export de dataset do deep_reclaim: reproduzivel por research/deep_reclaim.py.
 deep_btc_eth.json
+
+# Snapshots reais de /api/dashboard para o harness do PISO (P1).
+# Reproduziveis por frontend/research/captureFixtures.sh; grandes (~1,1MB cada).
+frontend/research/fixtures/
+frontend/research/piso_audit_baseline.json

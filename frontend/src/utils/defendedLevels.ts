@@ -118,6 +118,80 @@ export function meanTrueRangePct(candles: Candle[]): number {
 }
 
 /**
+ * The same unit, resolved per candle from that candle's own past.
+ *
+ * `meanTrueRangePct` averages the whole array, which is a problem here rather
+ * than a detail: it scales the excursion gate and the level tolerance, so a
+ * volatile week in September changes what the rule says about a candle in June.
+ * A mark measured at 1.02 ATR silently drops below the threshold when the
+ * window grows, which makes the historical reading unreproducible — the same
+ * window-wide `mean_tr_pct` failure already recorded elsewhere in this project.
+ *
+ * The causal answer keeps the formula and shortens the horizon: entry `i` is
+ * the running mean of `TR/close` over candles `0..i`, so
+ * `meanTrueRangePctSeries(candles)[i] === meanTrueRangePct(candles.slice(0, i+1))`
+ * exactly. A trailing window of fixed length was the other option and was not
+ * taken: it would introduce a lookback nobody has measured, while the running
+ * mean is the shipped formula with the future removed and nothing else changed.
+ * At the live edge the two coincide by construction, so the reading the user is
+ * actually looking at is unaffected.
+ *
+ * One pass, O(N) — the per-candle value is read out of the same accumulation
+ * that produces the final one, never recomputed over a slice.
+ */
+export function meanTrueRangePctSeries(candles: Candle[]): number[] {
+  const out = new Array<number>(candles.length)
+  let sum = 0
+  let n = 0
+  let prev: Candle | null = null
+  for (let i = 0; i < candles.length; i += 1) {
+    const c = candles[i]
+    const tr = prev
+      ? Math.max(c.high - c.low, Math.abs(c.high - prev.close), Math.abs(c.low - prev.close))
+      : c.high - c.low
+    if (c.close > 0) {
+      sum += tr / c.close
+      n += 1
+    }
+    out[i] = n > 0 ? sum / n : 0
+    prev = c
+  }
+  return out
+}
+
+/**
+ * How the volatility unit is resolved.
+ *
+ * `causalAtr: false` is the shipped behaviour and stays the default, so
+ * production output is unchanged byte for byte until someone decides otherwise.
+ * `true` switches both uses of the unit — the excursion gate and the level
+ * tolerance — to the per-candle causal value. Nothing else differs between the
+ * two modes: no threshold moves, no gate is added or dropped.
+ */
+export interface AtrOptions {
+  causalAtr?: boolean
+}
+
+/** Maps a timestamp to the causal unit standing at it: the value of the last
+ *  candle at or before it, clamped to the window at both ends. */
+function causalLookup(candles: Candle[], series: number[]): (at: string) => number {
+  const times = candles.map((c) => c.timestamp)
+  return (at: string) => {
+    if (times.length === 0) return 0
+    // Binary search for the last candle at or before `at`.
+    let lo = 0
+    let hi = times.length - 1
+    if (at < times[0]) return series[0]
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1
+      if (times[mid] <= at) lo = mid
+      else hi = mid - 1
+    }
+    return series[lo]
+  }
+}
+
+/**
  * Every price area a defence could be anchored to, tagged by family and by the
  * span over which it stood.
  *
@@ -129,11 +203,20 @@ export function meanTrueRangePct(candles: Candle[]): number {
 export function buildDefenceLevels(
   data: DashboardData,
   standingUntil: (event: MarketStructure) => string | null,
+  options: AtrOptions = {},
 ): DefenceLevel[] {
-  const tolFrac = LEVEL_TOLERANCE_ATR * meanTrueRangePct(data.candles)
+  // A level's half-width is stated in ATRs, so under the causal unit it is the
+  // volatility standing when the level was *born* — the width it had when it
+  // came into existence, rather than one recomputed from the whole window.
+  const causal = options.causalAtr
+    ? causalLookup(data.candles, meanTrueRangePctSeries(data.candles))
+    : null
+  const windowFrac = LEVEL_TOLERANCE_ATR * meanTrueRangePct(data.candles)
+  const tolFracAt = (born: string) =>
+    causal ? LEVEL_TOLERANCE_ATR * causal(born) : windowFrac
   const out: DefenceLevel[] = []
   const level = (price: number, family: LevelFamily, born: string, died: string | null) => {
-    const tol = price * tolFrac
+    const tol = price * tolFracAt(born)
     out.push({ low: price - tol, high: price + tol, family, born, died })
   }
 
@@ -161,7 +244,7 @@ export function buildDefenceLevels(
   //    when it is consumed
   for (const z of data.liquidity_zones) {
     if (z.zone_type !== 'equal_highs' && z.zone_type !== 'equal_lows') continue
-    const tol = z.price_low * tolFrac
+    const tol = z.price_low * tolFracAt(z.formed_at)
     out.push({
       low: z.price_low - tol,
       high: z.price_high + tol,
@@ -201,20 +284,72 @@ function vwapByTimestamp(points: VWAPPoint[]): Map<string, VWAPPoint> {
   return out
 }
 
-/** The candles where a level was tested at the envelope edge and held. */
-export function buildDefendedMarks(data: DashboardData, levels: DefenceLevel[]): DefendedMark[] {
+/** The gates, in the order the rule applies them. */
+export type DefenceGate = 'excursion' | 'wick_body' | 'families'
+
+/**
+ * One candle that reached the envelope edge, with every gate scored.
+ *
+ * This is the funnel record: it exists so rejections can be counted and
+ * near-misses classified without a second copy of the rule drifting away from
+ * the first. `buildDefendedMarks` is exactly the subset of these where
+ * `failed` is empty, which is asserted in the tests.
+ */
+export interface DefenceCandidate {
+  timestamp: string
+  side: 'top' | 'bottom'
+  price: number
+  edge: number
+  /** The volatility unit this candle was judged against, as a fraction of price. */
+  atrPct: number
+  excursionAtr: number
+  wickBodyRatio: number
+  families: LevelFamily[]
+  consumed: number
+  /** Every gate this candle failed, in rule order; empty means it is a mark. */
+  failed: DefenceGate[]
+  /** The first gate it failed, or null. */
+  firstFailed: DefenceGate | null
+  /**
+   * How far short it fell, in the gate's own unit, for the two continuous
+   * gates. Null where the gate passed.
+   */
+  excursionShortfall: number | null
+  wickBodyShortfall: number | null
+  familiesShortfall: number | null
+}
+
+/**
+ * Every candle that cleared an envelope edge and closed back inside, scored
+ * against all four gates.
+ *
+ * The single implementation of the rule. Both the production mark list and the
+ * diagnostic funnel are projections of this, so a change to a gate cannot
+ * silently apply to one and not the other. Unlike the shipped shape, gates are
+ * all evaluated rather than short-circuited: a candidate that misses the
+ * excursion still gets its wick ratio and family count, because "failed only
+ * this one gate" is the question the near-miss classes ask.
+ */
+function evaluateCandidates(
+  data: DashboardData,
+  levels: DefenceLevel[],
+  options: AtrOptions = {},
+): DefenceCandidate[] {
   const points = data.vwap?.points
   if (!points || points.length === 0) return []
 
   const vwap = vwapByTimestamp(points)
-  const trPct = meanTrueRangePct(data.candles)
-  if (trPct <= 0) return []
+  const series = options.causalAtr ? meanTrueRangePctSeries(data.candles) : null
+  const trPct = series ? 0 : meanTrueRangePct(data.candles)
+  if (!series && trPct <= 0) return []
 
-  const out: DefendedMark[] = []
-  for (const c of data.candles) {
+  const out: DefenceCandidate[] = []
+  for (let i = 0; i < data.candles.length; i += 1) {
+    const c = data.candles[i]
     const p = vwap.get(c.timestamp)
     if (!p || p.upper_1 === null || p.lower_1 === null) continue
-    const atr = trPct * c.close
+    const atrPct = series ? series[i] : trPct
+    const atr = atrPct * c.close
     if (atr <= 0) continue
 
     // Cleared the edge and closed back inside it. The two edges are checked
@@ -227,11 +362,9 @@ export function buildDefendedMarks(data: DashboardData, levels: DefenceLevel[]):
     const edge = top ? p.upper_1 : p.lower_1
     const price = top ? c.high : c.low
     const excursion = Math.abs(price - edge)
-    if (excursion < MIN_EXCURSION_ATR * atr) continue
 
     const body = Math.abs(c.close - c.open) || 1e-9
     const wick = top ? c.high - Math.max(c.open, c.close) : Math.min(c.open, c.close) - c.low
-    if (wick < MIN_WICK_BODY * body) continue
 
     // The range the wick swept: from the edge it cleared to the extreme it
     // reached. A level defended here had to sit inside that.
@@ -247,17 +380,65 @@ export function buildDefendedMarks(data: DashboardData, levels: DefenceLevel[]):
       // A pool retired *by this candle* is one the wick took on its way through.
       if (l.died === c.timestamp) consumed += 1
     }
-    if (families.size < MIN_FAMILIES) continue
+
+    const failed: DefenceGate[] = []
+    if (excursion < MIN_EXCURSION_ATR * atr) failed.push('excursion')
+    if (wick < MIN_WICK_BODY * body) failed.push('wick_body')
+    if (families.size < MIN_FAMILIES) failed.push('families')
 
     out.push({
       timestamp: c.timestamp,
       side: top ? 'top' : 'bottom',
       price,
       edge,
-      families: [...families].sort(),
+      atrPct,
       excursionAtr: excursion / atr,
+      wickBodyRatio: wick / body,
+      families: [...families].sort(),
       consumed,
+      failed,
+      firstFailed: failed[0] ?? null,
+      excursionShortfall: failed.includes('excursion')
+        ? MIN_EXCURSION_ATR - excursion / atr
+        : null,
+      wickBodyShortfall: failed.includes('wick_body') ? MIN_WICK_BODY - wick / body : null,
+      familiesShortfall: failed.includes('families') ? MIN_FAMILIES - families.size : null,
     })
   }
   return out
+}
+
+/** The candles where a level was tested at the envelope edge and held. */
+export function buildDefendedMarks(
+  data: DashboardData,
+  levels: DefenceLevel[],
+  options: AtrOptions = {},
+): DefendedMark[] {
+  return evaluateCandidates(data, levels, options)
+    .filter((cand) => cand.failed.length === 0)
+    .map((cand) => ({
+      timestamp: cand.timestamp,
+      side: cand.side,
+      price: cand.price,
+      edge: cand.edge,
+      families: cand.families,
+      excursionAtr: cand.excursionAtr,
+      consumed: cand.consumed,
+    }))
+}
+
+/**
+ * The funnel, for measurement only.
+ *
+ * Same traversal, same gates, nothing filtered — every candle that reached an
+ * edge, whether or not it became a mark. Nothing in the app calls this; it
+ * exists so `frontend/research/pisoAudit.ts` can count rejections per gate and
+ * classify near-misses against the code that actually ships.
+ */
+export function diagnoseDefendedMarks(
+  data: DashboardData,
+  levels: DefenceLevel[],
+  options: AtrOptions = {},
+): DefenceCandidate[] {
+  return evaluateCandidates(data, levels, options)
 }
