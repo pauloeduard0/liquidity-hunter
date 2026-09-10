@@ -2429,17 +2429,33 @@ export function MainChart({
     // evidence counted here is the evidence on screen. `structureLineEndTime`
     // answers in chart time; map it back to the ISO timestamp the level rule
     // compares against, and treat "runs to the edge" as still standing.
+    //
+    // `causalAtr` is what keeps the drawn history stable. The volatility unit
+    // scales the excursion gate and the level tolerance, and measured over the
+    // window as a whole it let a loud week rewrite what the rule said about a
+    // quiet one months earlier: 59 of 213 marks across 70 symbols moved when
+    // the horizon changed, and the shipped mode fails the truncation invariant
+    // outright. Per candle the unit is that candle's own past, so a mark stops
+    // depending on its future. It converges with the window-wide value at the
+    // live edge, so the reading at the right-hand side of the chart is the
+    // same one it always was.
     const defendedMarkers = showDefendedLevels
       ? buildDefendedMarkers(
           buildDefendedMarks(
             data,
-            buildDefenceLevels(data, (event) => {
-              const end = structureLineEndTime(event, scopeEvents, lastCandleTime)
-              if (end >= lastCandleTime) return null
-              return (
-                scopeEvents.find((other) => toChartTime(other.timestamp) === end)?.timestamp ?? null
-              )
-            }),
+            buildDefenceLevels(
+              data,
+              (event) => {
+                const end = structureLineEndTime(event, scopeEvents, lastCandleTime)
+                if (end >= lastCandleTime) return null
+                return (
+                  scopeEvents.find((other) => toChartTime(other.timestamp) === end)?.timestamp ??
+                  null
+                )
+              },
+              { causalAtr: true },
+            ),
+            { causalAtr: true },
           ),
         )
       : []
