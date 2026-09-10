@@ -37,6 +37,7 @@ from liquidity_hunter.core.domain.enums import (
     StructureEvent,
     SupertrendBreakQuality,
     VSAPattern,
+    timeframe_period,
 )
 from liquidity_hunter.core.domain.liquidity_hunt import (
     LiquidityHuntEpisode,
@@ -383,6 +384,9 @@ class LiquidityHuntEngine:
         segments = self._trend_segments(data.internal_structure_events)
         now = data.candles[-1].timestamp if data.candles else None
         merge_gap = self._grab_merge_gap(data.candles)
+        # Resolved once for the whole reconstruction, not per event: the higher
+        # timeframe of a snapshot does not change while it is being replayed.
+        htf_period = self._htf_period(data)
 
         episodes: list[LiquidityHuntEpisode] = []
         for idx, (direction, start, _event) in enumerate(segments):
@@ -393,8 +397,9 @@ class LiquidityHuntEngine:
                 continue
             if direction not in directional:
                 continue
-            # The HTF trend as it stood when *this* leg flipped, not now.
-            htf = self._htf_trend_at(htf_events, start, htf_scalar)
+            # The HTF trend as it stood when *this* leg flipped, not now, and
+            # only from HTF candles that had closed by then.
+            htf = self._htf_trend_at(htf_events, start, htf_scalar, htf_period)
             if htf not in directional:
                 continue
             if direction is htf:
@@ -606,6 +611,7 @@ class LiquidityHuntEngine:
             return []
         segments = self._trend_segments(data.internal_structure_events)
         merge_gap = self._grab_merge_gap(data.candles)
+        htf_period = self._htf_period(data)
 
         episodes: list[LiquidityHuntEpisode] = []
         # Aligned legs run *through* failed-CHoCH excursions, so a CHoCH that
@@ -613,7 +619,7 @@ class LiquidityHuntEngine:
         # continuation grab instead of falling into a vacuum between streams.
         # Each leg carries the HTF trend it was aligned with at its own flip.
         for start, end, htf in self._continuation_legs(
-            segments, htf_events, htf_scalar, now
+            segments, htf_events, htf_scalar, now, htf_period
         ):
             # The grab is the pullback sweep *against* the aligned leg that then
             # resumes with it: a bull leg's grab is a down-sweep of the lows, a
@@ -716,6 +722,7 @@ class LiquidityHuntEngine:
         htf_events: list[MarketStructure],
         htf_scalar: MarketDirection,
         now: datetime,
+        htf_period: timedelta | None = None,
     ) -> list[tuple[datetime, datetime, MarketDirection]]:
         """Aligned-trend legs, absorbing counter-trend excursions that *failed*.
 
@@ -740,7 +747,7 @@ class LiquidityHuntEngine:
         directional = (MarketDirection.BULLISH, MarketDirection.BEARISH)
         n = len(segments)
         for idx, (direction, start, _event) in enumerate(segments):
-            htf = self._htf_trend_at(htf_events, start, htf_scalar)
+            htf = self._htf_trend_at(htf_events, start, htf_scalar, htf_period)
             if htf in directional and direction is htf:
                 if leg_start is None:
                     leg_start = start
@@ -1023,6 +1030,20 @@ class LiquidityHuntEngine:
         return False
 
     @staticmethod
+    def _htf_period(data: DashboardData) -> timedelta | None:
+        """The higher timeframe's own candle length, for the causal HTF replay.
+
+        ``None`` on the top timeframe, where `higher_timeframe` is unset and the
+        HTF direction is the current series' own trend: there is no second
+        series whose candles could still be open, so there is nothing to fence.
+        """
+        return (
+            timeframe_period(data.higher_timeframe)
+            if data.higher_timeframe is not None
+            else None
+        )
+
+    @staticmethod
     def _grab_merge_gap(candles: list[Candle]) -> timedelta | None:
         """A few candles' worth of time — grabs within it are one sweep cluster."""
         if len(candles) < 2:
@@ -1078,6 +1099,7 @@ class LiquidityHuntEngine:
         htf_events: list[MarketStructure],
         at: datetime,
         fallback: MarketDirection,
+        htf_period: timedelta | None = None,
     ) -> MarketDirection:
         """The higher-timeframe standing trend as of ``at`` (a leg's flip).
 
@@ -1088,10 +1110,41 @@ class LiquidityHuntEngine:
         up to ``at``. Falls back to ``fallback`` (the current scalar) when the
         stream is empty (top timeframe) or has no event at/before ``at`` yet — so
         with no HTF events the behavior is identical to the old scalar model.
+
+        ``htf_period`` makes the replay **causal**. An event's timestamp is its
+        candle's *open* time, so an event on a 4h candle opening at 12:00 does
+        not exist until 16:00; without the period this method admits it at
+        13:00, which is a leg reading a higher timeframe that has not happened
+        yet. Passing the higher timeframe's own period restricts the replay to
+        events whose candle had **closed** by ``at`` — the fence is inclusive,
+        because a candle closes at the instant the next one opens.
+
+        Measured before it was changed (`research/hunt_htf_causality.py`, 72
+        symbols x M15/H1/H4 x 3 windows, 3141 legs): 21.8% of legs were reading
+        a still-forming HTF candle and 6.8% got the opposite HTF trend once the
+        close was required — 11.5% at M15, 2.5% at H4, monotonic in the
+        timeframe, as the mechanism predicts. The bias is one-directional: of
+        the episodes whose stream changed, every one moved *continuation ->
+        hunt* and none the other way, because a leg and the HTF event that
+        judges it are usually the same price move, and the open-time stamp makes
+        the higher timeframe look like it had already turned. So the lookahead
+        was not adding noise, it was erasing hunts. The corrected arm's forward
+        excursion is unchanged or marginally better at every horizon, which is
+        what makes this a correctness fix that costs nothing.
+
+        ``None`` reproduces the previous behaviour exactly, which is what the
+        live :meth:`build` still wants: a forming HTF candle is information
+        legitimately available *now*, so the live read may use it (it repaints,
+        which is a different and accepted problem). Only the historical
+        reconstruction, which classifies past instants, must not.
         """
-        trend, _ = cls._current_trend(
-            [e for e in htf_events if e.timestamp <= at]
-        )
+        replayed = [
+            e
+            for e in htf_events
+            if (e.timestamp <= at)
+            and (htf_period is None or e.timestamp + htf_period <= at)
+        ]
+        trend, _ = cls._current_trend(replayed)
         return trend if trend is not None else fallback
 
     # ------------------------------------------------------------------
