@@ -1,5 +1,6 @@
 """Enumerations shared across domain entities."""
 
+from datetime import timedelta
 from enum import Enum
 
 
@@ -14,6 +15,34 @@ class TimeFrame(str, Enum):
     H4 = "4h"
     D1 = "1d"
     W1 = "1w"
+
+
+#: How much tape one candle of each timeframe covers.
+#:
+#: Here, next to `TimeFrame` itself, because it is a property *of* the enum and
+#: several layers need it for unrelated reasons -- sizing a cache tail, dating
+#: when a trigger closed, deciding when a higher-timeframe event became
+#: knowable. It had already been written out three times in three layers before
+#: this became the shared one.
+#:
+#: Written out per member rather than derived from the enum's string value: the
+#: value is a venue's wire format, not a duration, and parsing "1w" into seven
+#: days is an inference this table states outright.
+TIMEFRAME_PERIOD: dict["TimeFrame", timedelta] = {
+    TimeFrame.M1: timedelta(minutes=1),
+    TimeFrame.M5: timedelta(minutes=5),
+    TimeFrame.M15: timedelta(minutes=15),
+    TimeFrame.M30: timedelta(minutes=30),
+    TimeFrame.H1: timedelta(hours=1),
+    TimeFrame.H4: timedelta(hours=4),
+    TimeFrame.D1: timedelta(days=1),
+    TimeFrame.W1: timedelta(weeks=1),
+}
+
+
+def timeframe_period(timeframe: TimeFrame) -> timedelta:
+    """How much tape one candle of ``timeframe`` covers."""
+    return TIMEFRAME_PERIOD[timeframe]
 
 
 class MarketDirection(str, Enum):

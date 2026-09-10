@@ -1424,3 +1424,237 @@ def test_history_stop_run_alongside_a_raid_still_needs_a_partner() -> None:
     )
 
     assert LiquidityHuntEngine().build_history(data) == []
+
+
+# ---------------------------------------------------------------------------
+# Causal HTF join: an HTF event exists only once its candle has closed
+#
+# `MarketStructure.timestamp` is the *open* time of the candle that produced the
+# event, so a 4h event stamped 12:00 is not knowable until 16:00. The historical
+# reconstruction classifies past instants and must respect that; the live
+# `build()` may not (a forming candle is legitimately available now).
+# Measured in `research/hunt_htf_causality.py` before the change: 21.8% of legs
+# read a still-forming HTF candle, 6.8% flipped HTF trend once the close was
+# required, and every episode that changed stream moved continuation -> hunt.
+# ---------------------------------------------------------------------------
+
+_H4 = timedelta(hours=4)
+
+
+def _htf_choch(i: int, direction: MarketDirection) -> MarketStructure:
+    return _event(i, StructureEvent.CHANGE_OF_CHARACTER, direction)
+
+
+def test_htf_event_on_a_forming_candle_is_not_visible_yet() -> None:
+    """A: the 4h event opening at t12 does not exist at t13."""
+    events = [_htf_choch(8, MarketDirection.BULLISH), _htf_choch(12, MarketDirection.BEARISH)]
+    at = T0 + H1 * 13
+    assert LiquidityHuntEngine._htf_trend_at(
+        events, at, MarketDirection.BULLISH, _H4
+    ) is MarketDirection.BULLISH
+
+
+def test_htf_event_becomes_visible_exactly_at_its_close() -> None:
+    """B: at t16 the candle opened at t12 has closed — the fence is inclusive.
+
+    A candle closes at the instant the next one opens, so `<=` is the correct
+    comparison. Choosing `<` would delay every HTF read by one tick for no
+    causal reason.
+    """
+    events = [_htf_choch(8, MarketDirection.BULLISH), _htf_choch(12, MarketDirection.BEARISH)]
+    assert LiquidityHuntEngine._htf_trend_at(
+        events, T0 + H1 * 16, MarketDirection.BULLISH, _H4
+    ) is MarketDirection.BEARISH
+    assert LiquidityHuntEngine._htf_trend_at(
+        events, T0 + H1 * 16 - timedelta(minutes=1), MarketDirection.BULLISH, _H4
+    ) is MarketDirection.BULLISH
+
+
+def test_causal_join_keeps_choch_failed_replay_semantics() -> None:
+    """C: a CHOCH_FAILED still reverts the trend — only its timing is fenced."""
+    events = [
+        _htf_choch(0, MarketDirection.BULLISH),
+        _htf_choch(4, MarketDirection.BEARISH),
+        _event(8, StructureEvent.CHOCH_FAILED, MarketDirection.BEARISH),
+    ]
+    # At t11 the failure's candle (t8..t12) is still open: the bearish CHoCH stands.
+    assert LiquidityHuntEngine._htf_trend_at(
+        events, T0 + H1 * 11, MarketDirection.BULLISH, _H4
+    ) is MarketDirection.BEARISH
+    # At t12 it has closed and reverts the bearish CHoCH.
+    assert LiquidityHuntEngine._htf_trend_at(
+        events, T0 + H1 * 12, MarketDirection.BEARISH, _H4
+    ) is MarketDirection.BULLISH
+
+
+def test_causal_join_still_ignores_provisional_events() -> None:
+    """D: a live-edge mark is skipped whether or not its candle has closed."""
+    events = [
+        _htf_choch(0, MarketDirection.BULLISH),
+        _event(4, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH, provisional=True),
+    ]
+    assert LiquidityHuntEngine._htf_trend_at(
+        events, T0 + H1 * 40, MarketDirection.BEARISH, _H4
+    ) is MarketDirection.BULLISH
+
+
+def test_no_htf_period_reproduces_the_previous_behaviour() -> None:
+    """E: omitting the period is the legacy read, event for event.
+
+    This is what keeps the live `build()` (which passes nothing) and the top
+    timeframe (no higher timeframe at all) byte-identical to before.
+    """
+    events = [_htf_choch(8, MarketDirection.BULLISH), _htf_choch(12, MarketDirection.BEARISH)]
+    for i in range(0, 20):
+        at = T0 + H1 * i
+        legacy = LiquidityHuntEngine._htf_trend_at(events, at, MarketDirection.NEUTRAL)
+        expected, _ = LiquidityHuntEngine._current_trend(
+            [e for e in events if e.timestamp <= at]
+        )
+        assert legacy is (expected or MarketDirection.NEUTRAL)
+
+
+def _causal_history_fixture(higher_timeframe: TimeFrame | None) -> DashboardData:
+    """A bearish leg whose hunt/continuation classification hinges on the join.
+
+    The HTF turns bearish on a candle opening at t4 (closing at t8). The LTF leg
+    flips bearish at t5 — inside that still-open HTF candle. Reading the open
+    candle makes the leg look *aligned* (a continuation); reading only closed
+    candles leaves the HTF bullish at t5, which makes the leg counter-trend (a
+    hunt). This is the panel's one-directional bias in miniature.
+    """
+    return _minimal_data(
+        timeframe=TimeFrame.H1,
+        higher_timeframe=higher_timeframe,
+        higher_timeframe_direction=MarketDirection.BEARISH,
+        higher_timeframe_events=[
+            _htf_choch(0, MarketDirection.BULLISH),
+            _htf_choch(4, MarketDirection.BEARISH),
+        ],
+        internal_structure_events=[
+            _event(5, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+            _event(8, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BULLISH),
+            _event(20, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+        ],
+        volume_spread_signals=[_vsa(8, VSAPattern.UP_THRUST, MarketDirection.BEARISH)],
+        candles=_candles(24),
+    )
+
+
+def test_history_reads_the_htf_causally() -> None:
+    """F: with the higher timeframe known, the leg is judged on closed candles.
+
+    Without it (`higher_timeframe=None`, the top-timeframe case) the old read
+    stands and the leg is swallowed as an aligned continuation.
+    """
+    legacy = LiquidityHuntEngine().build_history(_causal_history_fixture(None))
+    assert legacy == []
+
+    causal = LiquidityHuntEngine().build_history(
+        _causal_history_fixture(TimeFrame.H4)
+    )
+    assert len(causal) == 1
+    assert causal[0].hunted_side == RetailPositioning.SHORT
+
+
+def test_continuation_history_reads_the_htf_causally_too() -> None:
+    """G: the mirror classification uses the same fence, so nothing is claimed twice.
+
+    `build_history` and `build_continuation_history` must agree leg by leg; a
+    leg the causal read moves into the hunt stream has to leave the
+    continuation stream in the same move.
+    """
+    data = _causal_history_fixture(TimeFrame.H4)
+    engine = LiquidityHuntEngine()
+    hunts = engine.build_history(data)
+    conts = engine.build_continuation_history(data)
+    hunted_grabs = {e.end_timestamp for e in hunts}
+    assert hunted_grabs
+    assert hunted_grabs.isdisjoint({e.end_timestamp for e in conts})
+
+
+def test_live_build_is_unchanged_by_the_causal_join() -> None:
+    """H: the live state reads the HTF scalar and never the fenced replay.
+
+    A forming HTF candle is information legitimately available *now*, so the
+    live phase must not be delayed by the correction. Declaring the higher
+    timeframe changes the history, and must leave `build()` identical.
+    """
+    without = LiquidityHuntEngine().build(_causal_history_fixture(None))
+    with_tf = LiquidityHuntEngine().build(_causal_history_fixture(TimeFrame.H4))
+    assert without.phase == with_tf.phase
+    assert without.hunted_side == with_tf.hunted_side
+    assert without.correction_direction == with_tf.correction_direction
+    assert without.targets_total == with_tf.targets_total
+
+
+def test_history_classification_survives_truncating_the_htf_stream() -> None:
+    """The property the whole correction exists for.
+
+    Classifying a leg with the full HTF stream must equal classifying it with
+    the stream truncated at that leg — no HTF event from the future may change
+    a past classification. Under the legacy read this fails, because an event
+    whose candle was still open at the leg is admitted by the full stream.
+    """
+    events = [
+        _htf_choch(0, MarketDirection.BULLISH),
+        _htf_choch(4, MarketDirection.BEARISH),
+        _htf_choch(30, MarketDirection.BULLISH),
+    ]
+    at = T0 + H1 * 5
+    knowable = [e for e in events if e.timestamp + _H4 <= at]
+
+    causal_full = LiquidityHuntEngine._htf_trend_at(
+        events, at, MarketDirection.NEUTRAL, _H4
+    )
+    causal_truncated = LiquidityHuntEngine._htf_trend_at(
+        knowable, at, MarketDirection.NEUTRAL, _H4
+    )
+    assert causal_full is causal_truncated is MarketDirection.BULLISH
+
+    # The legacy read does not have the property: the full stream sees the t4
+    # event four hours before its candle closed.
+    legacy_full = LiquidityHuntEngine._htf_trend_at(events, at, MarketDirection.NEUTRAL)
+    legacy_truncated = LiquidityHuntEngine._htf_trend_at(
+        knowable, at, MarketDirection.NEUTRAL
+    )
+    # The two reads disagree -- BEARISH with the full stream, BULLISH with the
+    # honest one -- which is the defect stated as a property.
+    assert legacy_full is MarketDirection.BEARISH
+    assert legacy_truncated is MarketDirection.BULLISH
+
+
+def test_btcusdt_m15_2026_09_05_case() -> None:
+    """The case the research named, at its real timestamps.
+
+    BTCUSDT M15, leg flipping 2026-09-05 16:15. The M30 CHoCH that judges it
+    opens at 16:00 and closes at 16:30, so at 16:15 it does not exist: the leg
+    must be read against the previous HTF trend. The legacy join saw it 15
+    minutes early and read the leg as aligned.
+    """
+    m30 = timedelta(minutes=30)
+    flip = datetime(2026, 9, 5, 16, 15, tzinfo=UTC)
+    events = [
+        MarketStructure(
+            symbol="BTCUSDT", timeframe=TimeFrame.M30,
+            event=StructureEvent.CHANGE_OF_CHARACTER, direction=MarketDirection.BEARISH,
+            price_level=100.0, timestamp=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),
+            scope=StructureScope.INTERNAL,
+        ),
+        MarketStructure(
+            symbol="BTCUSDT", timeframe=TimeFrame.M30,
+            event=StructureEvent.CHANGE_OF_CHARACTER, direction=MarketDirection.BULLISH,
+            price_level=100.0, timestamp=datetime(2026, 9, 5, 16, 0, tzinfo=UTC),
+            scope=StructureScope.INTERNAL,
+        ),
+    ]
+    assert LiquidityHuntEngine._htf_trend_at(
+        events, flip, MarketDirection.NEUTRAL, m30
+    ) is MarketDirection.BEARISH
+    assert LiquidityHuntEngine._htf_trend_at(
+        events, datetime(2026, 9, 5, 16, 30, tzinfo=UTC), MarketDirection.NEUTRAL, m30
+    ) is MarketDirection.BULLISH
+    # ...which is exactly what the legacy join got wrong at 16:15.
+    assert LiquidityHuntEngine._htf_trend_at(
+        events, flip, MarketDirection.NEUTRAL
+    ) is MarketDirection.BULLISH

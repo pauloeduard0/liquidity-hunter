@@ -3873,3 +3873,146 @@ Elas valem mais que os numeros acima, e sao a razao de esta secao existir.
 > -- o que deveria ter sido o motivo para desconfiar, e nao para se
 > entusiasmar. Um subproduto chega sem a disciplina que a investigacao
 > principal recebeu, e e preciso aplica-la a ele antes de reportar.
+
+## 2026-09-10 — HUNT: um lookahead corrigido, e um score diagnosticado
+
+*Etapas H1, H2.0, H2.1 e H2.2. **Uma unica alteracao de producao**: o join HTF
+do historico virou causal (`d936fab`, `7c3866b`, `11d5f3d`). Todo o resto e
+diagnostico: nenhuma mudanca de peso, limiar, pool ou gate foi promovida.*
+
+Medicao em `research/hunt_htf_causality.py` (H1),
+`research/hunt_score_redundancy.py` (H2.0), `research/hunt_score_variants.py`
+(H2.1) e `research/hunt_continuation_multisource_validation.py` (H2.2). Painel
+comum: 72 simbolos x M15/H1/H4 x 3 janelas, sem OI (`NoFuturesProvider` --
+tres requisicoes por simbolo em 72 simbolos ja renderam um ban, ver
+`project_binance_ban_request_budget`).
+
+### H1 — o historico lia uma vela que ainda nao tinha fechado
+
+`Candle.timestamp` e o **open time** do kline (`binance._to_candle`, `row[0]`).
+Um evento da HTF so passa a existir quando aquela vela fecha, mas
+`_htf_trend_at` filtrava com `event.timestamp <= at` — admitindo um evento cujo
+candle ainda estava aberto em `at`. Uma perna M15 que flipava as 13:00 enxergava
+o BOS de um candle H4 aberto as 12:00 e fechado as 16:00.
+
+Isso nao e um rotulo errado: a HTF decide `hunted_side`, decide
+`capture_direction` e decide se a perna e *hunt* (contra-tendencia) ou
+*continuation* (alinhada).
+
+Sobre 3141 pernas:
+
+| | |
+|---|---|
+| pernas lendo candle HTF em formacao | **21,8%** |
+| pernas cuja tendencia HTF **inverte** ao exigir o fechamento | **6,8%** (M15 11,5% · H1 6,8% · H4 2,5%) |
+| episodios que mudam de identidade | **16,8%** (612 de 3648) |
+| lead artificial | mediana 2,00h / 2,0 candles LTF; max 24,00h / 6,0 |
+
+O viés é **unidirecional**: das 612 mudancas, **toda** foi `continuation ->
+hunt` e nenhuma o contrario. A perna LTF e o evento HTF que a julga sao
+geralmente o mesmo movimento de preco, e o carimbo de abertura faz a HTF parecer
+ja virada. **O lookahead nao adicionava ruido — apagava cacas.**
+
+Corrigido em `_htf_trend_at` com `htf_period`: o replay so admite eventos cujo
+candle **fechou** (`e.timestamp + htf_period <= at`), fence inclusiva porque uma
+vela fecha no instante em que a proxima abre. `None` reproduz o comportamento
+antigo, que e o que o **`build()` vivo continua usando** e deliberadamente: ao
+vivo a vela em formacao e informacao legitimamente disponivel agora. O repaint
+que isso implica foi medido a parte — 0 de 42 pares num instante.
+
+A excursao futura do braco corrigido e **igual ou marginalmente melhor** em
+todos os horizontes: e uma correcao de correcao que nao custa nada. E a pergunta
+certa nunca foi "qual da mais lucro", foi "o resultado historico muda quando se
+remove o futuro" — muda em 16,8% dos episodios.
+
+### H2.0 — o score soma evidencia repetida?
+
+9089 clusters de captura, lidos **de dentro da producao** (instrumentando
+`_capture_grabs`, com equivalencia verificada episodio a episodio).
+
+- **`raid` x `zone` e dupla contagem real**: phi **0,65**, 70% no mesmo candle,
+  91% em <=1. E a mesma vela atravessando o mesmo pool — a `zone` registra que o
+  pool foi levado, o `raid` registra a vela que o levou. Somam 6 pontos por um
+  evento, em **31,1%** dos clusters aprovados do hunt.
+- **`realignment` x `sweep` sao mutuamente exclusivos** (phi **-0,62**), nao
+  redundantes. `raid` x `sweep` (-0,27), `sweep` x `zone` (-0,23) e `vsa` x
+  `delta` (-0,21) tambem nao.
+- **`oi_flush` e `oi_covering` compartilham a mesma chave** `"oi_flush"` em
+  `_collect_capture_signals` e colapsam com `max`: nao sao duas fontes, sao uma.
+  E 84% dos eventos de OI caem no candle exato de um `sweep`/`realignment` ja
+  pontuado — o OI, como esta cablado, **qualifica** um evento ja contado em vez
+  de acrescentar um.
+- **Score maior e mais informativo** — hunt 46,4% -> 63,4%; continuation 48,8%
+  -> 68,4% — **mas o limiar 7 nao marca corte nenhum**: score exatamente 7 mede
+  **46,6% contra um controle de 50,6%**, abaixo do aleatorio, enquanto o que ele
+  rejeita mede 50,3%. A descontinuidade esta em 10.
+- **HUNT e continuation respondem de forma oposta as mesmas fontes**: valor
+  incremental de `sweep` -21,7pp no hunt e **+16,8pp** na continuation;
+  `supertrend` -16,3 e +15,1; `zone` +7,4 e -22,8. Sao dois motores usando a
+  mesma tabela de pesos.
+- **A continuation aceita um VSA forte sozinho** porque `_WEIGHT_VSA_STRONG` = 4
+  e `_CONTINUATION_CAPTURE_THRESHOLD` = 4 — 17% dos grabs aceitos, medindo 41,6%
+  contra um controle de 50,8%.
+- O stream **hunt nao replica** fora da amostra de busca (search 53,4% / ctl
+  49,2%; holdout 46,7% / ctl **50,5%**); o **continuation replica** (58,7/52,5 e
+  57,5/50,7).
+
+### H2.1 — tres correcoes minimas, uma variavel por vez
+
+2253 episodios unicos, deduplicados entre janelas, com holdout **temporal**
+(70% mais antigo de cada serie contra os 30% mais recentes; a fronteira sai da
+*serie*, entao e identica em todos os bracos). Controle da maquinaria: uma
+variante `V0` sem regra alterada, que reproduz a producao episodio a episodio.
+
+| | regra | discovery | holdout temporal | veredito |
+|---|---|---|---|---|
+| **V1** | `raid`+`zone` contam uma vez | -0,3pp | +0,1pp | **falha** |
+| **V2** | continuation exige >=2 fontes | +2,5pp | **+4,6pp** | passa |
+| **V3** | limiar do hunt 7 -> 10 | +6,8pp | +3,9pp | **falha** |
+
+- **V1 falha tambem no mecanismo**: os 46 episodios que ela remove medem
+  **melhor** que a media (51,2%), e os episodios *com* o par medem 53,1% contra
+  47,7% dos sem. O par e redundante como evidencia e **nao** esta associado a
+  resultado pior.
+- **V3 acerta ao cortar e erra ao prometer**: a faixa 7-9 e ruim e replica
+  (holdout 41,8% / ctl 49,8%), mas a faixa `>=10` **nao replica** (discovery
+  57,6/49,2; holdout 49,0/**50,5**). O que sobra depois do corte continua
+  indistinguivel do aleatorio, com 61% dos episodios removidos.
+
+### H2.2 — V2 nao confirmada
+
+Nao existe fita mais recente que a da H2.1 (aquele painel alcanca a borda viva),
+entao a confirmacao correu nos dois eixos que **eram** ineditos: os mesmos 72
+simbolos em janelas **anteriores** aos ultimos 800 candles (painel T, 1694
+episodios), e **40 simbolos nunca medidos** no span recente (painel S, 509).
+
+| | painel T (janelas anteriores) | painel S (simbolos ineditos) |
+|---|---|---|
+| baseline -> V2 (h=20) | 60,5% -> 60,8% (**+0,3pp**) | 58,9% -> **61,5%** (+2,6pp) |
+| removidos (fonte unica) | **59,4%** contra controle 53,7% | 47,9% contra controle 48,7% |
+| por timeframe | H1 **-1,2pp** | +0,6 / +4,4 / +2,2 |
+| por simbolo | 44% melhoram, 50% pioram, mediana **-0,1pp** | 56% / 23%, mediana +2,1pp |
+| coverage | 83,8% | 81,3% |
+
+Em T os episodios que o gate remove **batem o proprio controle em +5,7pp** — nao
+sao lixo. Duas amostras out-of-sample discordam, e a que discorda usa os mesmos
+simbolos em que a regra foi descoberta. **V2 fica registrada como nao
+confirmada**, e nada foi promovido.
+
+Nota de leitura: 100% dos episodios removidos, nos dois paineis, eram `vsa`
+sozinho — "single-source" e "VSA forte solitario" sao o mesmo conjunto por
+construcao do score, porque nenhuma outra fonte alcanca 4 desacompanhada.
+
+### Diagnosticado != corrigido
+
+**`raid` + `zone` continua contando duas vezes em producao**, de proposito. A
+dupla contagem e real e esta medida; remove-la **nao melhorou o resultado**, e
+uma correcao que piora ou empata nao entra so por ser conceitualmente mais
+limpa. O mesmo vale para o limiar 7 sem corte valido, para o `oi_flush` que
+colapsa duas participacoes numa chave, e para a continuation que aceita um VSA
+solitario: estao descritos aqui e **nao** estao corrigidos.
+
+O que muda essa decisao e evidencia nova, nao um argumento novo. Para V2
+especificamente, o teste que falta e o unico que nao podia ser feito no dia:
+re-rodar `research/hunt_continuation_multisource_validation.py` quando existir
+fita realmente mais recente que a de 2026-09-10.
