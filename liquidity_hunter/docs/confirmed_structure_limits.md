@@ -209,3 +209,30 @@ normalizada pela taxa-base **dentro de cada estrato**, que e exatamente o
 controle que derrubou o resultado principal — entao nem "STALE melhora" nem
 "STALE piora" esta demonstrado. Fica em aberto, e nao justifica etapa propria
 neste momento.
+
+## Etapa 6.0 — VWAP acceptance tambem nao qualifica o evento
+
+*Investigada. **Rejeitada.** Nada foi implementado.* Depois de perguntar se o
+Tide **antecipa** a transicao (nao antecipa), a pergunta seguinte foi menor e
+posterior: dado um BOS/CHoCH **ja confirmado**, a aceitacao relativa a VWAP nos
+candles seguintes qualifica o evento como forte ou fragil? Nao qualifica, e o
+motivo principal e mecanico:
+
+> **O evento ja nasce do lado certo da VWAP.** Um BOS/CHoCH acontece *por* um
+> rompimento na direcao do evento, entao `side_of_vwap` no candle do evento e
+> praticamente constante (AUC 0,489-0,504; coerente em 84 de 84 nos casos
+> obrigatorios). A pergunta "aconteceu do lado certo da VWAP?" ja vem
+> respondida pelo proprio evento.
+
+A aceitacao curta satura (mediana 1,00 nos **dois** desfechos em N=3 e N=5), e
+a separacao que aparece em N=20 e batida pelo deslocamento puro pos-evento em
+todo timeframe. Casando o estrato pelo deslocamento o residual cai ~71%, e no
+holdout ele inverte de sinal. Os numeros estao em
+[`structure_decisions.md`](structure_decisions.md) (secao "2026-09-09 — VWAP
+acceptance como qualificador de evento: uma rejeicao").
+
+**Fica proibido** usar VWAP/Tide como qualificador estrutural de BOS ou CHoCH,
+como preditor de `CHOCH_FAILED`, ou como fonte de *structural conflict* /
+*current pressure*. O que a Etapa 6.0 **nao** testou, e por isso continua em
+aberto, e a VWAP como *location* — onde e quando entrar depois que a estrutura
+ja existe. Essa e outra pergunta, e nao autoriza nenhuma das proibicoes acima.

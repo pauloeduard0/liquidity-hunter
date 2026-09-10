@@ -3615,3 +3615,102 @@ folga confortavel; casar o estrato pelo quintil de retorno mostra que quase
 tudo era a mesma leitura. `test_o_tide_perde_o_lift_quando_o_estrato_ja_casa_o_preco`
 constroi o caso onde um "estado" sem informacao nenhuma exibe +30pp contra o
 estrato simples e **zero** contra o casado.
+
+## 2026-09-09 — VWAP acceptance como qualificador de evento: uma rejeicao
+
+*Etapa 6.0. Investigada. **Rejeitada.** Nada foi para producao.* Medicao em
+`research/smc_vwap_acceptance.py`; 702 combos, 72 simbolos x M15/H1/H4/D1 x 3
+janelas, **15.373 eventos nao-provisionais** (6.010 CHoCH, 9.363 BOS).
+
+A pergunta era deliberadamente menor que as duas anteriores, e e essa reducao
+que a tornava respondivel: **o evento ja aconteceu.** Dado um BOS ou um CHoCH
+confirmado, o comportamento do preco em relacao a VWAP nos candles SEGUINTES
+separa os eventos que a maquina depois invalidou dos que ela depois confirmou?
+Nao se antecipa nada aqui — seria qualidade de evento, nao direcao nova.
+
+### O motivo principal e mecanico, e aparece antes da estatistica
+
+**`side_of_vwap` no candle do evento e praticamente constante.** AUC
+0,489-0,504 nos quatro timeframes, e nos 84 CHoCH dos casos obrigatorios ele e
+coerente em **84 de 84**. A razao nao e sutil: um BOS/CHoCH acontece *por* um
+rompimento na direcao do evento, e romper para cima e fechar acima da VWAP
+corrente.
+
+> Um CHoCH bullish normalmente ja **nasce** acima da VWAP, e um bearish abaixo.
+> Perguntar "o evento aconteceu do lado certo da VWAP?" nao acrescenta
+> informacao nova: a resposta ja esta contida no proprio evento.
+
+### Aceitacao curta satura
+
+`same_side_3` e `same_side_5` tem **mediana 1,00 nos dois desfechos** — tanto
+nos eventos que continuaram quanto nos que falharam — em todos os timeframes
+(e ate N=10 em 15m e 4h). AUC 0,477-0,537. A aceitacao curta nao separa nada
+porque nao ha o que separar: quase todo evento e "aceito" nos primeiros
+candles.
+
+### Janelas longas: o que separa e o deslocamento, nao a VWAP
+
+Em N=20 aparece separacao bruta — `same_side_20` chega a 0,563 (15m), 0,614
+(1h), 0,613 (4h), 0,695 (1d) contra `CHOCH_FAILED`. Mas o controle a derruba:
+
+| leitura | 15m | 1h | 4h | 1d |
+|---|---|---|---|---|
+| `same_side_20` (VWAP) | 0,563 | 0,614 | 0,613 | 0,695 |
+| **`disp_20`** (deslocamento puro) | **0,717** | **0,662** | **0,680** | **0,747** |
+
+`disp_20` nao le a VWAP: e so `(close_{e+20} - close_e) / ATR`. Ele bate as
+features de VWAP em praticamente todo corte. Casando o estrato tambem pelo
+quintil de deslocamento, o residual da regra escolhida cai de **-11,8pp para
+-3,4pp** (~71% do efeito era momentum), e **no holdout inverte o sinal**:
++1,7pp no alvo principal (n=176) e +0,1pp no secundario.
+
+> O que parecia "VWAP acceptance" era principalmente **momentum/displacement
+> pos-evento**.
+
+### `CHOCH_FAILED`: o reclaim rapido nao prediz
+
+`reclaim_5` da AUC 0,458-0,499 — abaixo de 0,50, ou seja levemente na direcao
+contraria a hipotese. O contraexemplo esta no caso obrigatorio:
+
+*BTC H1, CHoCH bearish de 2026-09-01 16:00* (close 77.559,4). Abriu com
+aceitacao **maxima**: `side +1`, `phase +75,3` (1,5σ do lado certo), slope da
+VWAP alinhado, `same_side` = **1,00 em N=1, 3 e 5**, **sem nenhum reclaim**. A
+primeira rachadura so aparece em N=10 (`same_side` 0,889). O `CHOCH_FAILED`
+veio **44 candles depois**. Uma regra de VWAP acceptance teria carimbado como
+forte exatamente o evento que depois falhou.
+
+### Os casos visuais nao generalizam
+
+*ZEC D1*: nove CHoCH, **sete com `same_side_5 = 1,00`** — e esses sete se
+dividem em 3 `continued` e 4 `reversed`. *ETH H1*: dos 13 CHoCH, 10 tem
+`same_side_5 = 1,00`, e entre eles ha `continued`, `failed` (02/08, falhou em 8
+velas com aceitacao perfeita) e `reversed`. *ETH H4*: dois dos tres `failed`
+tem `same_side_5 = 1,00`. Bons e ruins aparecem como *accepted*.
+
+### Conclusao arquitetural
+
+**VWAP/Tide continua util como contexto visual, e nao deve ser integrado
+como** qualificador estrutural de BOS, qualificador estrutural de CHoCH,
+preditor de `CHOCH_FAILED`, alterador de `final_trend`, *structural conflict*
+ou *current pressure*.
+
+SMC e VWAP tem relacao — mas a relacao testada nesta etapa e **redundante com
+o proprio rompimento e com o deslocamento que o segue**.
+
+### Notas de metodo que valem para a proxima etapa
+
+- **Aceitacao e alvo vivem os dois no futuro do evento.** Todo evento cujo
+  desfecho se resolve dentro da janela de aceitacao foi excluido daquele
+  horizonte (`None`, nao zero): sem isso a feature estaria lendo o proprio
+  alvo. E por isso que o `n` **cai** quando N cresce; um painel que crescesse
+  com N estaria medindo o passado com o futuro.
+- **A fita quebra em cada virada de ancora**, e em H1 com ancora de sessao
+  quase toda janela de 20 candles atravessa uma. Exigir a janela inteira
+  legivel apagaria o timeframe; a decisao declarada foi pular os candles sem
+  fita e descartar a janela so abaixo de `MIN_READABLE = 0,6`.
+- **`reversed` e `open` nunca entraram no denominador do alvo principal.**
+  Nenhum dos dois e "o evento se sustentou", e enfia-los em qualquer lado do
+  par e o jeito mais facil de fabricar separacao. O alvo secundario
+  (`failed + reversed`) e reportado **ao lado**, nunca no lugar.
+- O alvo literal `CHOCH_FAILED` e raro no BOS (0-5%), entao a leitura do BOS
+  vem do alvo secundario. Fica declarado, e nao escondido numa agregacao.
