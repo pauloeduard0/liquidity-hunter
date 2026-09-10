@@ -32,7 +32,13 @@ import {
 } from '../charting/VolumeProfilePrimitive'
 import { EqlZonesPrimitive, type EqlZoneInput } from '../charting/EqlZonesPrimitive'
 import { RibbonPrimitive } from '../charting/RibbonPrimitive'
-import { legStateAt } from '../utils/legState'
+import { deriveLegState, legStateAt } from '../utils/legState'
+import {
+  buildStructurePriority,
+  currentHighlightStyle,
+  isVisuallyWeak,
+  structureEventColor,
+} from '../utils/structureRelevance'
 import { buildStallMarks } from '../utils/stallMarker'
 import { buildPhase, buildRibbon, structureTrendByCandle } from '../utils/tideRibbon'
 import type { DefendedMark } from '../utils/defendedLevels'
@@ -2264,6 +2270,15 @@ export function MainChart({
       confluenceByEvent.set(key, { count: conf.factors.length, partial: conf.provisional })
     }
 
+    // Visual relevance of each drawn event against the state right now
+    // (`utils/structureRelevance.ts` -- presentation only, not a replay).
+    // Built once per apply: the draw loop then costs one map lookup per event.
+    const structurePriorityOf = buildStructurePriority(scopeEvents)
+    // The *standing* leg's state, not a per-candle read: the break that opened
+    // the stalled leg necessarily predates `stale_since`, so a per-candle
+    // lookup would answer `active` for the one element the stall is about.
+    const standingLegState = deriveLegState(data.structural_stall)
+
     for (const event of structureEvents) {
       // A CHoCH that later failed is represented solely by its `CHoCH ✕`
       // marker (which spans the same origin->failure lifetime). Drawing the
@@ -2386,8 +2401,20 @@ export function MainChart({
             other.direction === event.direction &&
             other.timestamp === event.reference_timestamp,
         )
-      const dimmed = weakChoch || provisionalBos || provisionalChoch
-      const lineColor = dimmed ? `${baseColor}99` : baseColor
+      // `isVisuallyWeak` is the same predicate spelled out here (weak CHoCH
+      // reference, or a provisional live-edge mark); it lives in the helper so
+      // the alpha and the dash pattern can never drift apart.
+      const dimmed = isVisuallyWeak(event)
+      // Two axes, and they meet nowhere. `lineColor` is the event's own
+      // historical appearance -- a pure function of the event, so a BOS looks
+      // today exactly as it looked when it printed, however many events have
+      // printed since. `highlight` is the present, and it buys exactly one
+      // thing: stroke width on the element that describes the condition now.
+      // The stall lands only there, so a leg going quiet costs the current
+      // reference a pixel and rewrites nothing behind it.
+      const priority = structurePriorityOf(event, { endTime, lastCandleTime })
+      const lineColor = structureEventColor(baseColor, event)
+      const highlight = currentHighlightStyle(priority, standingLegState)
       // A provisional mark against a weak reference (emit_provisional_choch_weak)
       // is both forming and weak: `?` (the stronger caveat -- it may repaint
       // entirely) leads, with `*` appended (`CHoCH?* ▲`).
@@ -2412,7 +2439,7 @@ export function MainChart({
         const structureSeries = chart.addSeries(LineSeries, {
         ...OVERLAY_SCALE_EXEMPT,
           color: lineColor,
-          lineWidth: isSweep ? 2 : 1,
+          lineWidth: isSweep ? 2 : highlight.lineWidth,
           lineStyle: isSweep
             ? LineStyle.Dotted
             : dimmed

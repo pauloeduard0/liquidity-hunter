@@ -6,6 +6,8 @@ import type {
 } from '../types/dashboard'
 import type { MarketDirection, RetailPositioning } from '../types/dashboard'
 import { formatPrice } from '../utils/format'
+import { deriveLegState } from '../utils/legState'
+import { structureTrendByCandle } from '../utils/tideRibbon'
 
 const DIRECTION_CONFIG: Record<MarketDirection, { color: string; icon: string }> = {
   bullish: { color: '#26a69a', icon: '▲' },
@@ -156,6 +158,41 @@ function controlCardProps(control: MarketControlState | null): Omit<KpiCardProps
   }
 }
 
+// "What does confirmed structure say, and is the leg it says it with still
+// advancing?" -- the two readings the pane used to paint with one channel,
+// stated in words so the chart does not have to be decoded.
+//
+// Both halves already exist and neither is recomputed here: the bias is the
+// same forward replay of the internal-structure stream the Tide ribbon takes
+// its hue from (`structureTrendByCandle`), and the leg state is the projection
+// of `structural_stall` (`deriveLegState`). Nothing is added on top -- no
+// strength, no confidence, no probability, no pressure, and no third state.
+// `--` appears only when the visible window carries no confirmed event yet, and
+// says exactly that; it is not a neutral or transitional reading.
+function structureCardProps(data: DashboardData): Omit<KpiCardProps, 'label'> {
+  const trend = structureTrendByCandle(data).get(
+    data.candles[data.candles.length - 1]?.timestamp ?? '',
+  )
+  const stall = data.structural_stall ?? null
+  const legState = deriveLegState(stall)
+  const stale = legState === 'stale'
+  if (trend !== 'bullish' && trend !== 'bearish') {
+    return { value: '\u25c6 \u2014', sub: 'no confirmed structure in window' }
+  }
+  const cfg = DIRECTION_CONFIG[trend]
+  return {
+    value: `${cfg.icon} ${trend.charAt(0).toUpperCase()}${trend.slice(1)}`,
+    accent: cfg.color,
+    badge: stale
+      ? { text: '\u25cb STALE', color: '#8a8f9c' }
+      : { text: '\u2713 ACTIVE', color: cfg.color },
+    sub: stale ? 'leg stalled \u2014 not a reversal' : 'leg advancing',
+    title: stale
+      ? 'Confirmed structure is unchanged; the standing leg stopped advancing.'
+      : 'Confirmed structure, with the standing leg still advancing.',
+  }
+}
+
 interface KpiCardProps {
   label: string
   value: string
@@ -269,7 +306,8 @@ export function KpiRow({ data }: KpiRowProps) {
   // liquidity sits, which way the higher timeframe leans, who is behind the
   // move (OI) — and the hunt card concludes it.
   return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-7">
+      <KpiCard label="Structure" {...structureCardProps(data)} />
       <KpiCard
         label="Retail Bias"
         value={`${bias.dominant_side.toUpperCase()} ${bias.confidence.toFixed(0)}%`}
