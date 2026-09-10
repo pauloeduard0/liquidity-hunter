@@ -60,6 +60,53 @@ def rsi(values: Sequence[float], period: int = DEFAULT_PERIOD) -> list[float | N
     return out
 
 
+DEFAULT_MA_PERIOD = 14
+
+
+def rsi_ma(
+    values: Sequence[float],
+    period: int = DEFAULT_PERIOD,
+    ma_period: int = DEFAULT_MA_PERIOD,
+) -> list[float | None]:
+    """The RSI's own moving average -- TradingView's `Smoothing: SMA / 14`.
+
+    The yellow line in the RSI pane, and a different reading from the RSI
+    itself: a simple mean over the last `ma_period` RSI values. Where the raw
+    RSI answers "is momentum stretched right now", its mean answers "which
+    side has momentum been on", which is why a level like 50 means something
+    on the average that it does not mean on the spiky line beneath it.
+
+    The window is over defined RSI values only: positions before the RSI has
+    warmed up are `None` rather than seeded with a partial mean, so a value
+    here always rests on `ma_period` real observations.
+
+    Descriptive only. A series, not an instruction.
+    """
+    if ma_period < 1:
+        raise ValueError("ma_period must be >= 1")
+    base = rsi(values, period)
+    out: list[float | None] = [None] * len(base)
+    window: list[float] = []
+    for i, value in enumerate(base):
+        if value is None:
+            continue
+        window.append(value)
+        if len(window) > ma_period:
+            window.pop(0)
+        if len(window) == ma_period:
+            out[i] = sum(window) / ma_period
+    return out
+
+
+def rsi_ma_series(
+    candles: Sequence[Candle],
+    period: int = DEFAULT_PERIOD,
+    ma_period: int = DEFAULT_MA_PERIOD,
+) -> list[float | None]:
+    """`rsi_ma` over the closes of `candles`, aligned 1:1."""
+    return rsi_ma([c.close for c in candles], period, ma_period)
+
+
 def rsi_series(
     candles: Sequence[Candle], period: int = DEFAULT_PERIOD
 ) -> list[float | None]:

@@ -61,3 +61,9 @@ paper_journal.jsonl
 research/.datasets/
 research/.klines_cache/
 research/.equity_cache/
+
+# Cache SQLite de candles (regenerado sob demanda pelo CachingOHLCVProvider).
+candles.sqlite3
+
+# Export de dataset do deep_reclaim: reproduzivel por research/deep_reclaim.py.
+deep_btc_eth.json

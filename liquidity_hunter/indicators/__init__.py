@@ -13,7 +13,7 @@ from liquidity_hunter.indicators.footprint_poc import (
     footprint_poc,
     footprint_poc_series,
 )
-from liquidity_hunter.indicators.rsi import rsi, rsi_series
+from liquidity_hunter.indicators.rsi import rsi, rsi_ma, rsi_ma_series, rsi_series
 from liquidity_hunter.indicators.supertrend import (
     DEFAULT_MULTIPLIER,
     DEFAULT_PERIODS,
@@ -56,6 +56,8 @@ __all__ = [
     "footprint_poc_series",
     "infer_tick_size",
     "rsi",
+    "rsi_ma",
+    "rsi_ma_series",
     "rsi_series",
     "supertrend",
     "true_range_series",
