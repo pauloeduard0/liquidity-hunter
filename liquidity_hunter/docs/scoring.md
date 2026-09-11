@@ -64,18 +64,47 @@ distance_score = clamp(100 * (1 - distance_pct / max_distance_pct), 0, 100)
 
 ### 2. Touch score
 
-A proxy for "number of touches" / structural significance, taken directly
-from `zone.strength` (already in `[0, 1]`, set by the detectors):
+`zone.strength` (already in `[0, 1]`, set by the detectors), rescaled:
 
 ```
 touch_score = zone.strength * 100
 ```
 
-- For `EqualHighDetector` / `EqualLowDetector`, `strength` increases with
-  the number of swing points grouped into the zone (more touches → higher
-  strength → higher `touch_score`).
-- For `SwingHighDetector` / `SwingLowDetector`, `strength` reflects the
-  prominence of the swing relative to the candle range.
+The field name is historical: **`strength` stopped being a touch count when
+the equal-level detector was re-measured on 2026-08-18**. Touch counting was
+dropped because it saturated at 1.0 for any group of three or more touches.
+Each detector now sets `strength` from a quantity of its own:
+
+- `EqualHighDetector` / `EqualLowDetector` (`_EqualLevelDetector._area_strength`
+  in `liquidity/detectors/equal_levels.py`): the **volume traded inside the
+  pool's own price band** over its construction window (its first touch to its
+  last touch), counting only candles whose range overlaps the band, in units of
+  the series' mean candle volume:
+
+  ```
+  strength = min(1, area_volume / (mean_volume * _VOLUME_SATURATION))
+  ```
+
+  with `_VOLUME_SATURATION = 118.0`, the measured p75 of live pools.
+
+- `SwingHighDetector` / `SwingLowDetector` (`_SwingPointDetector.detect` in
+  `liquidity/detectors/swing_points.py`): the pivot's **prominence** — its
+  distance to the most extreme of its `lookback` neighbours on either side —
+  as a fraction of the range spanned by the whole loaded series
+  (`price_range` in `liquidity/detectors/_common.py`):
+
+  ```
+  strength = clamp(prominence / price_range(candles), 0, 1)
+  ```
+
+  Note that the denominator is a property of the loaded window, not of the
+  pivot: the same swing scores differently depending on how many candles were
+  requested.
+
+The two are **different quantities that share a `[0, 1]` range**, not two
+readings of one unit: a volume ratio and a price-fraction of a window. The
+engine adds both into the same `touch_score` channel, so an equal-level zone
+and a swing point are compared on a scale they do not share.
 
 ### 3. Timeframe score
 
@@ -99,6 +128,14 @@ increasing from `1m` to `1w`:
 | `4h`      | 0.80   |
 | `1d`      | 0.90   |
 | `1w`      | 1.00   |
+
+`zone.timeframe` is the timeframe of the candles the detector ran on, so this
+component only varies when a single `score()` call mixes zones from several
+timeframes. **In the dashboard it never does**: `load_dashboard_data` builds
+every zone from one series (`app/dashboard_data.py`), so within a chart
+`timeframe_score` is the same constant for every candidate and contributes
+nothing to their ordering — it shifts all of their scores by the same amount.
+It still affects the absolute value of `score`, which the API exposes.
 
 Both the per-component weights and `timeframe_weights` are configurable via
 the `LiquidityScoringEngine` constructor.
@@ -127,5 +164,7 @@ timeframe_score = 0.80 * 100  (4h)          = 80.0
 score = 20.0 * 0.4 + 10.0 * 0.4 + 80.0 * 0.2 = 28.0
 ```
 
-The equal-low zone, being closer to price and more frequently touched,
-ranks first.
+The equal-low zone ranks first: it is closer to price, and the volume that
+changed hands inside its band gives it the higher `touch_score`. Both zones
+in this example are scored by a single `score()` call spanning two timeframes,
+so `timeframe_score` differs between them; inside one chart it would not.
