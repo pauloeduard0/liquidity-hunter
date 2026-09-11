@@ -751,7 +751,7 @@ def main() -> None:
             try:
                 data = load_dashboard_data(
                     provider=provider, symbol=s, timeframe=tf, limit=args.candles,
-                    compute_narrative=False, futures_provider=NoFuturesProvider(),
+                    futures_provider=NoFuturesProvider(),
                 )
                 e, c = extract(data)
                 evs.extend(e)

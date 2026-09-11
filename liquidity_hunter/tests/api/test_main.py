@@ -107,28 +107,9 @@ def test_dashboard_returns_snapshot(client: TestClient) -> None:
     assert liquidation_map["dominant_leveraged_side"] == "neutral"
     assert isinstance(liquidation_map["bands"], list)
     assert isinstance(body["consolidation_ranges"], list)
-    # Narrative/anomaly synthesis is off by default (the multi-timeframe
-    # overview panel took over its sidebar slot); see the opt-in test below.
-    assert "narrative" in body
-    assert body["narrative"] is None
-
-
-def test_dashboard_narrative_is_opt_in(client: TestClient) -> None:
-    response = client.get(
-        "/api/dashboard",
-        params={"symbol": "BTCUSDT", "timeframe": "1h", "narrative": "true"},
-    )
-
-    assert response.status_code == 200
-    narrative = response.json()["narrative"]
-    assert narrative is not None
-    assert narrative["symbol"] == "BTCUSDT"
-    assert narrative["timeframe"] == "1h"
-    assert isinstance(narrative["summary"], str)
-    assert isinstance(narrative["timeline"], list)
-    assert isinstance(narrative["anomalies"], list)
-    assert narrative["confluence_count"] >= 0
-    assert narrative["confluence_total"] >= 0
+    # The narrative/anomaly synthesis was removed (2026-09-11); the field is
+    # gone from the payload, not merely null.
+    assert "narrative" not in body
 
 
 def test_overview_returns_ladder(client: TestClient) -> None:

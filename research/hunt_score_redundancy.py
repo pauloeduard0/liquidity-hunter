@@ -737,8 +737,7 @@ def run_panel(
                         symbol=symbol,
                         timeframe=tf,
                         limit=VISIBLE_LIMIT,
-                        compute_narrative=False,
-                        futures_provider=None if with_oi else NoFuturesProvider(),
+                                        futures_provider=None if with_oi else NoFuturesProvider(),
                     )
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"{symbol} {tf_name} w{w}: {type(exc).__name__}: {exc}")
@@ -986,7 +985,7 @@ def case_report(symbol: str, tf_name: str) -> None:
     tf = TFS[tf_name]
     data = load_dashboard_data(
         symbol=symbol, timeframe=tf, limit=VISIBLE_LIMIT,
-        compute_narrative=False, futures_provider=NoFuturesProvider(),
+        futures_provider=NoFuturesProvider(),
     )
     rows = collect_clusters(data, symbol, tf_name, "live")
     print(f"\n=== {symbol} {tf_name}: {len(rows)} clusters "

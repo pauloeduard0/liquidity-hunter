@@ -387,7 +387,7 @@ def scan(
         try:
             data = load_dashboard_data(
                 provider=provider, symbol=symbol, timeframe=timeframe, limit=limit,
-                futures_provider=futures, compute_narrative=False,
+                futures_provider=futures,
             )
         except (DataProviderError, ValidationError) as exc:
             detail = str(exc).splitlines()

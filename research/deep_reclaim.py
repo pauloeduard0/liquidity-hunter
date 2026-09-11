@@ -314,7 +314,7 @@ def run(symbols, timeframe, limit, out, *, gap, require_ema9, min_vwap,
         try:
             data = load_dashboard_data(
                 provider=provider, symbol=symbol, timeframe=timeframe, limit=limit,
-                futures_provider=futures, compute_narrative=False,
+                futures_provider=futures,
             )
         except (DataProviderError, ValidationError) as exc:
             first = str(exc).splitlines()

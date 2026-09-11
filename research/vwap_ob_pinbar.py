@@ -1055,7 +1055,6 @@ def run_combo(
         timeframe=timeframe,
         limit=limit,
         futures_provider=futures_provider,
-        compute_narrative=False,
     )
     candles = data.candles
     # `_VWAP_ANCHOR_PERIOD` wires WEEK at H4 and MONTH on the dailies, so the

@@ -64,7 +64,6 @@ def load(candles: list[Candle]) -> dd.DashboardData:
         provider=_FakeProvider(candles),
         symbol="BTCUSDT",
         futures_provider=_FAKE_FUTURES,
-        compute_narrative=False,
     )
 
 

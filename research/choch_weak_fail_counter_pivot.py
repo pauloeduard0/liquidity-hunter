@@ -111,7 +111,7 @@ def _measure(ev: Ev, candles: Sequence[Candle], horizons: Sequence[int]) -> Ev:
 def _load(symbol: str, timeframe: TimeFrame, limit: int, flag: bool):  # type: ignore[no-untyped-def]
     setattr(dd, FLAG, flag)
     return dd.load_dashboard_data(
-        symbol=symbol, timeframe=timeframe, limit=limit, compute_narrative=False
+        symbol=symbol, timeframe=timeframe, limit=limit
     )
 
 

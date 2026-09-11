@@ -11,7 +11,6 @@ from liquidity_hunter.core.domain.candle import Candle
 from liquidity_hunter.core.domain.consolidation import ConsolidationRange
 from liquidity_hunter.core.domain.enums import (
     TIMEFRAME_PERIOD,
-    AnomalySeverity,
     BiasSource,
     ConfluenceFactor,
     ConsolidationStatus,
@@ -27,7 +26,6 @@ from liquidity_hunter.core.domain.enums import (
     ManipulationPhase,
     MarketControlSide,
     MarketDirection,
-    NarrativeEventType,
     OIParticipation,
     OIRegime,
     PaperOutcome,
@@ -67,11 +65,6 @@ from liquidity_hunter.core.domain.market_control import (
     MarketControlState,
 )
 from liquidity_hunter.core.domain.market_structure import MarketStructure
-from liquidity_hunter.core.domain.narrative import (
-    MarketNarrative,
-    NarrativeAnomaly,
-    NarrativeEvent,
-)
 from liquidity_hunter.core.domain.oi_analysis import (
     OIAnalysis,
     OIQualifiedEvent,
@@ -100,7 +93,6 @@ __all__ = [
     "BlockReclaim",
     "BlockReclaimScanEntry",
     "BlockReclaimScreen",
-    "AnomalySeverity",
     "BehaviorDivergence",
     "BiasSource",
     "Candle",
@@ -133,12 +125,8 @@ __all__ = [
     "MarketControlSide",
     "MarketControlState",
     "MarketDirection",
-    "MarketNarrative",
     "MarketOverview",
     "MarketStructure",
-    "NarrativeAnomaly",
-    "NarrativeEvent",
-    "NarrativeEventType",
     "OIAnalysis",
     "OIParticipation",
     "OIQualifiedEvent",

@@ -150,7 +150,7 @@ def main() -> None:
         for tf in TIMEFRAMES:
             try:
                 data = load_dashboard_data(
-                    symbol=symbol, timeframe=tf, limit=LIMIT, compute_narrative=False
+                    symbol=symbol, timeframe=tf, limit=LIMIT
                 )
                 run = _run_internal_structure(provider, symbol, tf, LIMIT, False)
             except Exception as exc:  # noqa: BLE001 - varredura, um par ausente nao para a corrida

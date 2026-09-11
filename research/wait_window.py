@@ -71,7 +71,7 @@ def collect(symbols: Sequence[str], timeframe: TimeFrame, limit: int) -> list[di
         try:
             data = load_dashboard_data(
                 provider=provider, symbol=symbol, timeframe=timeframe, limit=limit,
-                futures_provider=futures, compute_narrative=False,
+                futures_provider=futures,
             )
         except (DataProviderError, ValidationError) as exc:
             print(f"  ! {symbol} pulado: {type(exc).__name__}", flush=True)

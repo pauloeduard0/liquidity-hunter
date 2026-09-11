@@ -38,17 +38,13 @@ def get_dashboard(
     # fully fed (it covers `_STRUCTURAL_ANCHOR_REGION`).
     limit: Annotated[int, Query(gt=0, le=1200)] = 1200,
     swing_lookback: Annotated[int, Query(gt=0)] = DEFAULT_SWING_LOOKBACK,
-    # Narrative/anomaly synthesis is off by default while the multi-timeframe
-    # overview takes over the sidebar slot; pass `narrative=true` to re-enable
-    # (the frontend NarrativePanel renders whenever the field is non-null).
-    narrative: bool = False,
 ) -> DashboardDataResponse:
     """Return a `DashboardData` snapshot for `symbol`/`timeframe` as JSON.
 
     Results are cached in-memory per parameter combination for
     `cache.DEFAULT_TTL_SECONDS` seconds to avoid redundant Binance requests.
     """
-    cache_key = (symbol, timeframe, limit, swing_lookback, narrative)
+    cache_key = (symbol, timeframe, limit, swing_lookback)
 
     def load() -> DashboardData:
         # Hold the structural anchor still across refreshes, so a poll cannot
@@ -60,7 +56,6 @@ def get_dashboard(
             timeframe=timeframe,
             limit=limit,
             swing_lookback=swing_lookback,
-            compute_narrative=narrative,
             anchor_hint=anchor_store.get(symbol, timeframe),
         )
         anchor_store.remember(symbol, timeframe, snapshot.structural_anchor)

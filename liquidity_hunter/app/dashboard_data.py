@@ -31,7 +31,6 @@ from liquidity_hunter.core.domain import (
     ManipulationCycle,
     MarketControlState,
     MarketDirection,
-    MarketNarrative,
     MarketStructure,
     OIAnalysis,
     OpenInterestPoint,
@@ -297,7 +296,7 @@ _CONSOLIDATION_MAX_HEIGHT_ABS: dict[TimeFrame, float] = {
 # range resolved by a sustained boundary break stages one additive event at
 # the breakout candle: a BOS when the break continues the segment's standing
 # trend, a `provisional=True` CHoCH when it reverses it (the additive
-# contract: the state-machine trend never flipped, so hunt/narrative replay
+# contract: the state-machine trend never flipped, so the hunt replay
 # skip it while the chart shows the dimmed mark). Deduped when a real
 # same-direction BOS/CHoCH sits within `_CONSOLIDATION_STAGE_DEDUP_CANDLES`
 # of the breakout -- the state machine caught the break itself (e.g. BTC H1
@@ -1083,7 +1082,6 @@ class DashboardData:
     anchored_vwaps: list[VWAPSeries] = field(default_factory=list)
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
-    narrative: MarketNarrative | None = None
     oi_analysis: OIAnalysis | None = None
     # Who is in control right now, from CVD aggression × open interest. `None`
     # for spot-only symbols (no OI). See `MarketControlAnalyzer`.
@@ -2810,14 +2808,9 @@ def load_dashboard_data(
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
     confluence_filter: bool = False,
     futures_provider: FuturesDataProvider | None = None,
-    compute_narrative: bool = True,
     anchor_hint: datetime | None = None,
 ) -> DashboardData:
     """Fetch candles and assemble liquidity, ranking, and retail bias data.
-
-    ``compute_narrative=False`` skips the `NarrativeEngine` synthesis entirely
-    (``narrative=None`` in the snapshot) -- a lighter profile for consumers
-    that do not render the narrative/anomaly panel.
 
     ``anchor_hint`` is the structural anchor a previous call for this
     symbol/timeframe used; passing it back holds the detection slice still
@@ -3157,12 +3150,10 @@ def load_dashboard_data(
     )
 
     from liquidity_hunter.app.liquidity_hunt import LiquidityHuntEngine
-    from liquidity_hunter.app.narrative import NarrativeEngine
     from liquidity_hunter.app.structure_confluence import StructureConfluenceEngine
 
     # These synthesizers read the fully assembled snapshot (they cross-reference
     # outputs from every layer), so they run last, at the composition point.
-    narrative = NarrativeEngine().build(data) if compute_narrative else None
     hunt_engine = LiquidityHuntEngine(proximity_atr=_HUNT_PROXIMITY_ATR)
     liquidity_hunt = hunt_engine.build(data)
     liquidity_hunt_history = hunt_engine.build_history(data)
@@ -3180,7 +3171,6 @@ def load_dashboard_data(
     )
     return replace(
         data,
-        narrative=narrative,
         liquidity_hunt=liquidity_hunt,
         liquidity_hunt_history=liquidity_hunt_history,
         liquidity_continuation_history=liquidity_continuation_history,

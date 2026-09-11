@@ -12,7 +12,7 @@ Extracted from `CLAUDE.md` (2026-08-29) to keep that file under its size limit.
   `behavior_divergences` (`list[BehaviorDivergence]`),
   `liquidity_heatmap` (`LiquidityHeatmap | None`),
   `liquidation_map` (`LeverageLiquidationMap | None`),
-  `narrative` (`MarketNarrative | None`), `oi_analysis`
+  `oi_analysis`
   (`OIAnalysis | None`), `market_control` (`MarketControlState | None` — who
   controls the tape from CVD×OI, `None` for spot; see `MarketControlAnalyzer`),
   `supertrend_breaks` (`list[SupertrendBreak]` — each Supertrend flip
@@ -204,38 +204,13 @@ Extracted from `CLAUDE.md` (2026-08-29) to keep that file under its size limit.
   whole snapshot. Tests must inject a fake `futures_provider` to avoid
   network.
 
-  Finally, `NarrativeEngine().build(data)` synthesizes all outputs into a
-  `MarketNarrative` (timeline, anomalies, phase-dependent summary,
-  confluence count), and `LiquidityHuntEngine().build(data)` synthesizes the
-  `LiquidityHuntState`. Both run last via `dataclasses.replace` since they
-  depend on the fully assembled `DashboardData`.
-
-- **`app/narrative.py`** — `NarrativeEngine`: composition-level synthesizer
-  that builds a `MarketNarrative` from a completed `DashboardData`. Lives in
-  `app/` (not `psychology/`) because it depends on outputs from every layer.
-  `build(data) -> MarketNarrative` produces:
-  - **Timeline**: chronological `list[NarrativeEvent]` mapped from structure
-    events (major + internal BOS/CHoCH/SWEEP), manipulation cycle phases
-    (consolidation/sweep/expansion), and behavior divergences. Deduplicated
-    by `(timestamp, event_type)`, keeping the higher-priority source
-    (`manipulation_cycle` > `behavior_divergence` > `market_structure`).
-  - **Anomalies**: `list[NarrativeAnomaly]` detecting pattern contradictions:
-    expansion + exhaustion (HIGH), accumulation + distribution (MEDIUM),
-    concentrated liquidity on one side (MEDIUM/HIGH), unconfirmed CHoCH
-    (MEDIUM), BOS without sustained VD (MEDIUM).
-  - **Phase**: the `ManipulationPhase` of the latest active cycle, or `None`.
-  - **Summary**: phase-dependent institutional tone incorporating retail bias,
-    HTF alignment, and VD context. Phases: neutral, accumulation
-    ("smart money absorbing supply"), manipulation ("stops swept, cascading
-    liquidation, retail trapped"), expansion ("impulsive move, sustained VD"),
-    failed ("expansion failed to materialize, cycle invalidated").
-  - **Confluence**: `(count, total)` — how many detection layers agree on
-    direction (structure, manipulation cycle, behavior divergence, HTF).
+  Finally, `LiquidityHuntEngine().build(data)` synthesizes the
+  `LiquidityHuntState`. It runs last via `dataclasses.replace` since it
+  depends on the fully assembled `DashboardData`.
 
 - **`app/liquidity_hunt.py`** — `LiquidityHuntEngine`: composition-level
   synthesizer that builds a `LiquidityHuntState` from a completed
-  `DashboardData` (like `NarrativeEngine`, it lives in `app/` because it
-  cross-references structure, liquidity, and psychology outputs).
+  `DashboardData` (it lives in `app/` because it cross-references structure, liquidity, and psychology outputs).
   `build(data) -> LiquidityHuntState`:
   - **Current-TF trend**: replays `internal_structure_events`
     (non-provisional BOS/CHoCH set the trend, `CHOCH_FAILED` reverts it;
@@ -350,15 +325,12 @@ back as `DashboardData.structural_anchor` /
 `api.anchors` — with no hint every one of these is byte-identical to the
 stateless pipeline, so a replay or a fixture reproduces exactly.
 
-`load_dashboard_data` also accepts **`compute_narrative`** (default `True`;
-`False` skips the `NarrativeEngine` synthesis entirely, `narrative=None`) and
-its buffered-fetch + internal-detection front half now lives in
+`load_dashboard_data`'s buffered-fetch + internal-detection front half now lives in
 `_run_internal_structure` (returning an `InternalStructureRun`), shared with
 the overview and the HTF-trend run so all three stay byte-identical;
 `default_ohlcv_provider()` builds the production fallback provider chain.
 
-`DashboardData`, `LiquidityHuntEngine`, `NarrativeEngine`,
-`ScoredLiquidityZone`, `TimeframeStructureSnapshot`, `OVERVIEW_TIMEFRAMES`,
+`DashboardData`, `LiquidityHuntEngine`, `ScoredLiquidityZone`, `TimeframeStructureSnapshot`, `OVERVIEW_TIMEFRAMES`,
 `build_overview`, `load_overview`, and `load_timeframe_structure` are
 re-exported from `liquidity_hunter.app`.
 

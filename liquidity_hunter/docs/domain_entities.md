@@ -59,7 +59,7 @@ and `validate_assignment=True`. New entities should follow this pattern.
   may also be `provisional=True`: the additive **fast-fizzle marker**
   (`choch_fizzle_reclaim_candles`) that disregards a *standing* CHoCH whose
   reversal fizzled without flipping the state-machine trend — `provisional` here
-  keeps it out of the `LiquidityHuntEngine`/`NarrativeEngine` replay while the
+  keeps it out of the `LiquidityHuntEngine` replay while the
   frontend still terminates the stale line; see the `InternalStructureDetector`
   notes.
 - **`POIZone`** — an institutional order/breaker/mitigation block zone,
@@ -190,16 +190,6 @@ and `validate_assignment=True`. New entities should follow this pattern.
   closed candles; `oi_unwinding` is descriptive evidence, not a gate) —
   conservative by design (and never reached with zero mapped pools: absence of
   pools is not evidence of capture).
-- **`MarketNarrative`** — synthesized institutional narrative for a
-  symbol/timeframe snapshot, defined in `core/domain/narrative.py`. Fields:
-  `symbol`, `timeframe`, `timestamp`, `phase` (`ManipulationPhase | None`),
-  `timeline` (`list[NarrativeEvent]`), `anomalies` (`list[NarrativeAnomaly]`),
-  `summary`, `confluence_count`, `confluence_total`.
-- **`NarrativeEvent`** — a single event in the narrative timeline. Fields:
-  `timestamp`, `event_type` (`NarrativeEventType`), `direction`, `description`,
-  `source_layer`.
-- **`NarrativeAnomaly`** — a pattern contradiction. Fields: `timestamp`,
-  `expected`, `observed`, `description`, `severity` (`AnomalySeverity`).
 - **`TimeframeOverview`** / **`MarketOverview`** — the multi-timeframe
   structural ladder, defined in `core/domain/overview.py` (built by
   `app.overview`, see below). `TimeframeOverview` is one timeframe's standing
@@ -222,7 +212,7 @@ Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `POIZoneStatus`, `POIZoneKind`, `ConsolidationStatus`, `ManipulationPhase`,
 `ManipulationCycleStatus`,
 `DivergenceType`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`,
-`NarrativeEventType`, `AnomalySeverity`, `VolumeNode`, `VWAPAnchor`) live in
+`VolumeNode`, `VWAPAnchor`) live in
 `core/domain/enums.py`. Extend behavior by adding enum members rather than
 branching logic elsewhere (Open/Closed principle).
 

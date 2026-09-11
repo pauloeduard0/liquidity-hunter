@@ -114,7 +114,7 @@ def run_combo(
     rng: random.Random,
 ) -> list[Ev]:
     data = load_dashboard_data(
-        symbol=symbol, timeframe=timeframe, limit=limit, compute_narrative=False
+        symbol=symbol, timeframe=timeframe, limit=limit
     )
     candles = data.candles
     if len(candles) < 120:

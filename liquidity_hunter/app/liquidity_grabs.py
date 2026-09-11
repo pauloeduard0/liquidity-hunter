@@ -1,6 +1,6 @@
 """Build the unified stream of liquidity grabs from the mapped pools.
 
-Composition-level, like `NarrativeEngine` and `LiquidityHuntEngine`: it
+Composition-level, like `LiquidityHuntEngine`: it
 reads outputs of two different layers (`liquidity` for equal-level pools,
 `liquidity` again for order blocks) and speaks about them in one vocabulary.
 

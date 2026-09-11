@@ -375,7 +375,7 @@ def stage_breakout_events(
       replay (it re-asserts the direction the replay already holds);
     - breaking **against** it: a `CHANGE_OF_CHARACTER` with
       `provisional=True` -- the additive contract: the state machine's trend
-      never flipped, so replay consumers (hunt/narrative) must skip it while
+      never flipped, so replay consumers (the hunt) must skip it while
       the chart still shows the dimmed reversal mark.
 
     Purely additive and deduplicated: a range resolved *by* a structure

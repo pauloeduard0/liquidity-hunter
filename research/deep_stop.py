@@ -149,7 +149,7 @@ def run(symbols: Sequence[str], timeframe: TimeFrame, limit: int, out_path: str)
         try:
             data = load_dashboard_data(
                 provider=provider, symbol=symbol, timeframe=timeframe,
-                limit=limit, futures_provider=futures, compute_narrative=False,
+                limit=limit, futures_provider=futures,
             )
         except DataProviderError as exc:
             print(f"  ! {symbol}: {exc}", flush=True)

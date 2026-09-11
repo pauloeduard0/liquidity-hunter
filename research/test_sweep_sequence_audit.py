@@ -242,7 +242,7 @@ _needs_cache = pytest.mark.skipif(
 def rows() -> list[Row]:
     data = load_dashboard_data(
         provider=_PROVIDER, symbol="BTCUSDT", timeframe=TimeFrame.H1, limit=1200,
-        compute_narrative=False, futures_provider=NoFuturesProvider(),
+        futures_provider=NoFuturesProvider(),
     )
     return extract(data)
 

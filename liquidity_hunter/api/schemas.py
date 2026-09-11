@@ -22,7 +22,6 @@ from liquidity_hunter.core.domain import (
     ManipulationCycle,
     MarketControlState,
     MarketDirection,
-    MarketNarrative,
     MarketStructure,
     OIAnalysis,
     StructuralStall,
@@ -68,7 +67,6 @@ class DashboardDataResponse(BaseModel):
     anchored_vwaps: list[VWAPSeries] = []
     liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
-    narrative: MarketNarrative | None = None
     oi_analysis: OIAnalysis | None = None
     market_control: MarketControlState | None = None
     liquidity_hunt: LiquidityHuntState | None = None

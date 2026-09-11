@@ -525,7 +525,7 @@ def measure(provider: Any, symbol: str, tf: TimeFrame, limit: int,
             panel: Panel) -> None:
     data = load_dashboard_data(
         provider=provider, symbol=symbol, timeframe=tf, limit=limit,
-        compute_narrative=False, futures_provider=NoFuturesProvider(),
+        futures_provider=NoFuturesProvider(),
     )
     if not data.candles:
         return

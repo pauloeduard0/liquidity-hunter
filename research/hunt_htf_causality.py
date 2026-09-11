@@ -556,7 +556,7 @@ def run_panel(
                 try:
                     data = load_dashboard_data(
                         provider=provider, symbol=symbol, timeframe=tf,
-                        limit=VISIBLE_LIMIT, compute_narrative=False,
+                        limit=VISIBLE_LIMIT,
                         futures_provider=NoFuturesProvider(),
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -721,7 +721,7 @@ def live_repaint(symbols: tuple[str, ...], tf_names: tuple[str, ...]) -> None:
             for tag, drop in (("com_forming", frozenset()), ("sem_forming", frozenset({htf}))):
                 data = load_dashboard_data(
                     provider=WindowProvider(series, drop=drop), symbol=symbol,
-                    timeframe=tf, limit=VISIBLE_LIMIT, compute_narrative=False,
+                    timeframe=tf, limit=VISIBLE_LIMIT,
                     futures_provider=NoFuturesProvider(),
                 )
                 reads[tag] = (
@@ -751,7 +751,7 @@ def case_timeline(symbol: str, tf_name: str, limit: int = 12) -> None:
     period = HTF_PERIOD[htf]
     data = load_dashboard_data(
         symbol=symbol, timeframe=tf, limit=VISIBLE_LIMIT,
-        compute_narrative=False, futures_provider=NoFuturesProvider(),
+        futures_provider=NoFuturesProvider(),
     )
     legacy = LegacyHuntEngine()
     print(f"\n=== {symbol} {tf_name} (HTF {htf.value}, periodo {period}) ===")

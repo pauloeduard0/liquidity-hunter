@@ -185,8 +185,7 @@ def collect(
                         symbol=symbol,
                         timeframe=tf,
                         limit=VISIBLE_LIMIT,
-                        compute_narrative=False,
-                        futures_provider=NoFuturesProvider(),
+                                        futures_provider=NoFuturesProvider(),
                     )
                 except Exception as exc:  # noqa: BLE001
                     errors.append(
@@ -238,7 +237,7 @@ def live_impact(symbols: tuple[str, ...], tf_names: tuple[str, ...]) -> dict[str
                 data = load_dashboard_data(
                     provider=WindowProvider(series),
                     symbol=symbol, timeframe=tf, limit=VISIBLE_LIMIT,
-                    compute_narrative=False, futures_provider=NoFuturesProvider(),
+                    futures_provider=NoFuturesProvider(),
                 )
             except Exception:  # noqa: BLE001
                 continue
@@ -439,7 +438,7 @@ def case_report(symbol: str, tf_name: str) -> None:
     series = fetch_deep(prov, symbol, tf, _HIGHER_TIMEFRAME_MAP[tf])
     data = load_dashboard_data(
         provider=WindowProvider(series), symbol=symbol, timeframe=tf,
-        limit=VISIBLE_LIMIT, compute_narrative=False, futures_provider=NoFuturesProvider(),
+        limit=VISIBLE_LIMIT, futures_provider=NoFuturesProvider(),
     )
     rng = random.Random(1)
     base = engine_episodes(V0(), data, symbol, tf_name)

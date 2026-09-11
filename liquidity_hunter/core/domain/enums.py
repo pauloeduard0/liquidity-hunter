@@ -304,28 +304,6 @@ class SupertrendBreakQuality(str, Enum):
     STOP_RUN = "stop_run"  # broke the band, took stops, price came back inside
 
 
-class NarrativeEventType(str, Enum):
-    """Classification of a narrative timeline event."""
-
-    CONSOLIDATION = "consolidation"
-    DISTRIBUTION = "distribution"
-    ACCUMULATION = "accumulation"
-    SWEEP = "sweep"
-    EXPANSION = "expansion"
-    EXHAUSTION = "exhaustion"
-    ABSORPTION = "absorption"
-    STRUCTURE_BREAK = "structure_break"
-    ZONE_MITIGATION = "zone_mitigation"
-
-
-class AnomalySeverity(str, Enum):
-    """Severity of a narrative anomaly (pattern contradiction)."""
-
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-
 class ConfluenceFactor(str, Enum):
     """An independent observation that confirms a structural break.
 

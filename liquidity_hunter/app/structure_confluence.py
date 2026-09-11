@@ -9,7 +9,7 @@ reads as a strong structure; one standing alone reads as weak.
 
 Lives in ``app/`` because it is a composition-level synthesizer depending on
 outputs from several layers (structure, liquidity, psychology), like
-:class:`~liquidity_hunter.app.narrative.NarrativeEngine`. Purely descriptive:
+:class:`~liquidity_hunter.app.liquidity_hunt.LiquidityHuntEngine`. Purely descriptive:
 it counts how many reads confluence on the structure, never what to do.
 """
 

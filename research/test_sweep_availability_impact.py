@@ -266,7 +266,7 @@ def test_every_sweep_on_a_real_series_is_dated_before_it_is_knowable(cached):
     provider, symbol = cached
     data = load_dashboard_data(
         provider=provider, symbol=symbol, timeframe=TimeFrame.H1, limit=600,
-        compute_narrative=False, futures_provider=NoFuturesProvider(),
+        futures_provider=NoFuturesProvider(),
     )
     idx = {c.timestamp: i for i, c in enumerate(data.candles)}
     known = known_at_map(data.candles, data.internal_structure_events, TimeFrame.H1)

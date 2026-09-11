@@ -129,7 +129,7 @@ def panel():
         if provider.has(symbol, TimeFrame.H1):
             data = load_dashboard_data(
                 provider=provider, symbol=symbol, timeframe=TimeFrame.H1,
-                limit=1200, compute_narrative=False,
+                limit=1200,
                 futures_provider=NoFuturesProvider(),
             )
             return extract(data)

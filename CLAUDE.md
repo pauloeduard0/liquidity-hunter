@@ -116,12 +116,12 @@ map; the docs keep the detail.
 
 | Layer / area | Doc | What it covers |
 |---|---|---|
-| `core/domain` | `docs/domain_entities.md` | Every `DomainModel` entity and its fields (`Candle`, `LiquidityZone`, `MarketStructure` incl. `provisional`/`reference_structural`, `POIZone`, `ConsolidationRange`, `ManipulationCycle`, `BehaviorDivergence`, `VolumeProfile`, `VWAPSeries`, futures/liquidation/OI/hunt/narrative/overview models) and the shared enums |
+| `core/domain` | `docs/domain_entities.md` | Every `DomainModel` entity and its fields (`Candle`, `LiquidityZone`, `MarketStructure` incl. `provisional`/`reference_structural`, `POIZone`, `ConsolidationRange`, `ManipulationCycle`, `BehaviorDivergence`, `VolumeProfile`, `VWAPSeries`, futures/liquidation/OI/hunt/overview models) and the shared enums |
 | `data` | `docs/data_layer.md` | `OHLCVProvider`/`FuturesDataProvider` ports, the Binance spot/futures and GeckoTerminal providers, routing + fallback + `CachingOHLCVProvider`, `SQLiteCandleStore`, `series_key`, rate-limit/cache mechanics |
 | `indicators` | `docs/indicators_layer.md` | `volume_delta`/CVD, `supertrend`, `volume_profile`, `vwap` |
 | `liquidity` | `docs/liquidity_layer.md` | Swing/equal-level detectors, `SwingStructureDetector`, `InternalStructureDetector` (BOS staircase, CHoCH promotion, `CHOCH_FAILED`), `POIDetector`, consolidation detection, `_common` helpers |
 | `psychology` | `docs/psychology_layer.md` | `RetailTrapAnalyzer`, `ManipulationCycleDetector`, `BehaviorDivergenceAnalyzer`, `LeverageLiquidationEstimator`, `OIRegimeAnalyzer`, `SupertrendBreakAnalyzer`, `MarketControlAnalyzer` |
-| `app` composition root | `docs/composition_root.md` | `DashboardData`, `load_dashboard_data` (buffered fetch, structural anchor, every composition pass and production flag), `NarrativeEngine`, `LiquidityHuntEngine`, `app/overview.py` |
+| `app` composition root | `docs/composition_root.md` | `DashboardData`, `load_dashboard_data` (buffered fetch, structural anchor, every composition pass and production flag), `LiquidityHuntEngine`, `app/overview.py` |
 | `frontend/` | `docs/frontend.md` | `MainChart` panes and overlays, structure line rendering rules, POI/consolidation/hunt primitives, volume profile & VWAP drawing, Tide ribbon, KPI cards, `chartTime`/`format` utilities, dashboard types |
 | Limites da estrutura confirmada | `docs/confirmed_structure_limits.md` | Por que o `CHoCH` confirmado atrasa em expansoes sem pullback, o que fica proibido por isso, a separacao confirmed structure / leg activity / current market pressure, e o escopo da Etapa 5 |
 | Structure detector changelog | `docs/structure_decisions.md` | Every detector design decision, the measurement behind it, rejected alternatives, regression fixtures |
@@ -184,11 +184,9 @@ only on `app` and `core` (an alternative presentation layer to
   cached per parameter combination via `api/cache.TTLCache`, with a 10s TTL
   (shorter than `cache.DEFAULT_TTL_SECONDS = 300`, since the frontend polls
   this endpoint to keep the dashboard near-live) to avoid redundant Binance
-  requests. The `narrative` query param (default **`false`**, as of
-  2026-07-11) gates the narrative/anomaly synthesis: off by default while the
-  multi-TF overview occupies the sidebar slot (`narrative=null` in the
-  response, so the frontend `NarrativePanel` auto-hides); `narrative=true`
-  re-enables it. The library-level `compute_narrative` default stays `True`.
+  requests. The narrative/anomaly synthesis that used to hang off this route
+  (`narrative` query param) was **removed on 2026-09-11** together with its
+  engine, domain models and frontend panel.
 - **`api/routes/overview.py`** — `GET /api/overview` (query param `symbol`)
   returns a `core.domain.MarketOverview` (the domain model is the response
   model directly — no mirror schema needed). Each timeframe's
@@ -223,7 +221,7 @@ only on `app` and `core` (an alternative presentation layer to
   `RetailBiasEstimate`, `POIZone`, `ManipulationCycle`) are
   already `DomainModel`s and serialize as-is. `poi_zones`,
   `manipulation_cycles`, `behavior_divergences`,
-  `liquidity_heatmap`, `liquidation_map`, `narrative`, `oi_analysis`,
+  `liquidity_heatmap`, `liquidation_map`, `oi_analysis`,
   `liquidity_hunt`, `higher_timeframe`, `volume_profile`, `vwap`,
   `anchored_vwaps`, and `consolidation_ranges` fields are included.
 

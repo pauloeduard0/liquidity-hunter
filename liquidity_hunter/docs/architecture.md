@@ -34,7 +34,7 @@ liquidity  psychology │
 | `liquidity`  | Detection/modeling of `LiquidityZone`, `MarketStructure`, and `POIZone`        | `core`, `data`, `indicators`          |
 | `psychology` | Retail bias, manipulation cycles, behavior divergences, leverage liquidation map, OI regime | `core`, `data`               |
 | `scoring`    | Composite, descriptive scoring of liquidity zones                               | `core`, `liquidity`, `psychology`     |
-| `app`        | Composition root (`load_dashboard_data`), cross-layer synthesis (`NarrativeEngine`, `LiquidityHuntEngine`), multi-timeframe overview (`app/overview.py`) | all of the above |
+| `app`        | Composition root (`load_dashboard_data`), cross-layer synthesis (`LiquidityHuntEngine`), multi-timeframe overview (`app/overview.py`) | all of the above |
 | `api`        | Presentation of `app` output as JSON over HTTP (FastAPI)                        | `app`, `core`                         |
 | `config`     | Application settings (environment-driven)                                      | nothing                               |
 
@@ -72,7 +72,6 @@ rather than decisions:
   joint price × open-interest observations.
 - **`LiquidityHuntState`** / **`LiquidityHuntTarget`** — who is the
   resting liquidity of the current move and whether it was captured.
-- **`MarketNarrative`** — a synthesized event timeline with anomalies.
 - **`TimeframeOverview`** / **`MarketOverview`** — the multi-timeframe
   structural ladder.
 

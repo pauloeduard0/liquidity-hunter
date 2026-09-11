@@ -234,10 +234,7 @@ selector.
   the chart-only divergence — global panels stay on the selected timeframe).
   `App.tsx` polls `GET /api/overview` every `OVERVIEW_REFRESH_INTERVAL_MS =
   30s` per symbol (transient failures keep the last ladder rather than
-  tearing the dashboard down). The `NarrativePanel` (which exists and renders
-  whenever `data.narrative` is non-null) auto-hides now that `/api/dashboard`
-  defaults `narrative=false` — re-enabling the query param brings it back
-  with zero frontend changes.
+  tearing the dashboard down).
 
 - **`frontend/src/charting/POIBoxesPrimitive.ts`** — `POIBoxesPrimitive`
   implements `ISeriesPrimitive` and draws filled canvas rectangles for each
@@ -396,8 +393,7 @@ selector.
   `ManipulationCycle`, `ManipulationPhase`,
   `ManipulationCycleStatus`, `BehaviorDivergence`, `DivergenceType`,
   `LiquidityHeatmap`, `HeatmapBucket`, `LeverageLiquidationMap`,
-  `LiquidationBand`, `MarketNarrative`, `NarrativeEvent`, `NarrativeAnomaly`,
-  `NarrativeEventType`, `AnomalySeverity`, `OIAnalysis`, `OIRegimeReading`,
+  `LiquidationBand`, `OIAnalysis`, `OIRegimeReading`,
   `OIQualifiedEvent`, `OIRegime`, `OIParticipation`, `LiquidityHuntState`,
   `LiquidityHuntTarget`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`,
   `ConsolidationRange`, `ConsolidationStatus`, `VolumeProfile`,

@@ -386,7 +386,7 @@ def run_panel(
                     data = load_dashboard_data(
                         provider=WindowProvider(series, cut=series[tf][-1 - back].timestamp),
                         symbol=symbol, timeframe=tf, limit=VISIBLE_LIMIT,
-                        compute_narrative=False, futures_provider=NoFuturesProvider(),
+                        futures_provider=NoFuturesProvider(),
                     )
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"{symbol} {tf_name} w{w}: {type(exc).__name__}: {exc}")
@@ -601,7 +601,7 @@ def case_report(symbol: str, tf_name: str) -> None:
     tf = TFS[tf_name]
     data = load_dashboard_data(
         symbol=symbol, timeframe=tf, limit=VISIBLE_LIMIT,
-        compute_narrative=False, futures_provider=NoFuturesProvider(),
+        futures_provider=NoFuturesProvider(),
     )
     rng = random.Random(1)
     out = analyse_window(data, symbol, tf_name, "live", rng)
