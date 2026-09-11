@@ -32,3 +32,9 @@ default, até que todas as condições sejam verificadas em um novo período. Es
 documento não autoriza alteração de produção.
 
 Continuidade e custos de restauração: [resultado E3.4](EQ_LEVELS_E3_4_RESULTS.md).
+
+O E3.5 mediu o grafo Python retido nos 211 charts: mediana final de 4,51 MiB
+por chart, com crescimento também na projeção sem logs. Não mediu RSS/pico do
+serviço e não há orçamento de memória definido; a condição 6 continua aberta.
+O [parecer E3.5](EQ_LEVELS_E3_5_RESULTS.md) recomenda não investir na integração
+agora, dada a ausência de ganho robusto e o trabalho operacional restante.

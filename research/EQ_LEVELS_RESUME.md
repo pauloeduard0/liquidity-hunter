@@ -79,7 +79,7 @@ processo. O próximo passo operacional é medir memória e crescimento do estado
 com o histórico; persistência tolerante a interrupções e rollback seguem
 pendentes. O candidato continua `shadow-only`, sem ganho robusto no holdout.
 
-## Pausa acordada após o E3.4
+## Pausa acordada após o E3.4 (retomada no E3.5 abaixo)
 
 O estudo fica pausado neste checkpoint por solicitação do usuário. Na retomada,
 medir memória e crescimento do estado com o histórico e então avaliar se
@@ -87,3 +87,25 @@ compensa investir na integração, considerando a ausência de ganho robusto no
 holdout. Persistência tolerante a interrupções e rollback operacional continuam
 pendentes caso se decida avançar. Não há decisão de promover o candidato: o
 estado permanece `shadow-only`.
+
+## Continuação concluída — E3.5 e parecer de integração
+
+A medição cobriu 211 charts e 844 amostras, todas reconciliadas com o baseline.
+O grafo Python retido tem mediana final de 4,51 MiB por chart; a projeção sem
+logs ainda cresce 4,18x do primeiro quarto ao final. Isso não mede RSS ou
+custo incremental de N e não satisfaz um orçamento operacional ainda indefinido.
+
+O [parecer E3.5](EQ_LEVELS_E3_5_RESULTS.md) recomenda não investir na integração
+neste momento: o holdout não demonstra ganho robusto e ainda seria necessário
+resolver retenção, persistência e rollback. Manter o detector atual e o
+candidato em `shadow-only`. Reabrir somente diante de benefício concreto de
+produto ou nova evidência de qualidade independente; definir carga/orçamento
+antes da próxima rodada operacional. Nenhuma integração foi iniciada.
+
+## Conclusão acordada
+
+Rodada encerrada por decisão do usuário: manter o EQ atual e não investir na
+integração do candidato nesta etapa. As condições operacionais restantes ficam
+como referência para uma eventual reabertura, não como tarefas em andamento.
+Essa decisão não afirma perfeição ou vantagem operacional do detector atual;
+registra que o estudo não demonstrou benefício suficiente para substituí-lo.
