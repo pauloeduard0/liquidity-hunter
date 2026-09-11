@@ -43,7 +43,7 @@ import { buildStallMarks } from '../utils/stallMarker'
 import { buildPhase, buildRibbon, structureTrendByCandle } from '../utils/tideRibbon'
 import type { DefendedMark } from '../utils/defendedLevels'
 import { buildDefenceLevels, buildDefendedMarks } from '../utils/defendedLevels'
-import type { BehaviorDivergence, BlockReclaim, DashboardData, LiquidityGrab, LiquiditySide, LiquidityZone, LiquidityZoneType, ManipulationCycle, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
+import type { BehaviorDivergence, BlockReclaim, DashboardData, LiquidityGrab, LiquiditySide, LiquidityZone, LiquidityZoneType, ManipulationCycle, MarketControlPoint, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -185,6 +185,10 @@ const CONTROL_SELLERS_COLOR = '#ef5350'
 const CONTROL_BALANCED_COLOR = '#4a5163'
 // Exit-flow fill: same hue, ~30% alpha.
 const CONTROL_UNWIND_ALPHA = '4d'
+// CVD-only bars (no OI history that far back): the aggression half alone, so
+// they take the neutral hue at the unwind alpha -- present enough to show the
+// aggression, muted enough that nobody reads a side into them.
+const CONTROL_CVD_ONLY_COLOR = `${CONTROL_BALANCED_COLOR}${CONTROL_UNWIND_ALPHA}`
 const CONTROL_REGIME_COLORS: Record<string, string> = {
   long_buildup: CONTROL_BUYERS_COLOR,
   short_buildup: CONTROL_SELLERS_COLOR,
@@ -192,6 +196,13 @@ const CONTROL_REGIME_COLORS: Record<string, string> = {
   long_liquidation: `${CONTROL_SELLERS_COLOR}${CONTROL_UNWIND_ALPHA}`,
   flat: CONTROL_BALANCED_COLOR,
 }
+
+// One control bar's colour: the quadrant hue, or the neutral CVD-only hue on a
+// candle the OI history does not cover.
+const controlBarColor = (p: MarketControlPoint): string =>
+  p.oi_backed === false
+    ? CONTROL_CVD_ONLY_COLOR
+    : (CONTROL_REGIME_COLORS[p.regime] ?? CONTROL_BALANCED_COLOR)
 
 // The phase line takes the candles' own two colours, switching at the zero
 // baseline: above the VWAP it is the up-candle grey-white, below it the
@@ -1557,7 +1568,7 @@ export function MainChart({
             ? {
                 time,
                 value: p.control_score,
-                color: CONTROL_REGIME_COLORS[p.regime] ?? CONTROL_BALANCED_COLOR,
+                color: controlBarColor(p),
               }
             : { time }
         }),
@@ -2750,14 +2761,26 @@ export function MainChart({
       })
     }
 
+    // Every pane must receive the forming candle, *with or without* a reading
+    // for it. Bar indices are what the logical-range sync speaks: the moment a
+    // pane skips a bar the others got, the same logical range lands on a
+    // different window there — the panes drift apart, the crosshair splits, and
+    // a pane can scroll off its own data entirely. The control reading is the
+    // one that goes missing in practice (its OI history covers ~30 days, and
+    // the live point can lag the candle), so it writes a whitespace `{ time }`
+    // when there is nothing to plot rather than leaving the bar out.
     const controlSeries = controlSeriesRef.current
     const controlPoint = data.market_control?.series?.find((p) => p.timestamp === last.timestamp)
-    if (controlSeries && controlPoint) {
-      controlSeries.update({
-        time,
-        value: controlPoint.control_score,
-        color: CONTROL_REGIME_COLORS[controlPoint.regime] ?? CONTROL_BALANCED_COLOR,
-      })
+    if (controlSeries) {
+      controlSeries.update(
+        controlPoint
+          ? {
+              time,
+              value: controlPoint.control_score,
+              color: controlBarColor(controlPoint),
+            }
+          : { time },
+      )
     }
 
     // The phase reading moves with the live close, so the tail update has to
@@ -2768,9 +2791,13 @@ export function MainChart({
     const phaseSeries = showRibbon ? phaseSeriesRef.current : null
     if (phaseSeries) {
       const phaseLast = buildPhase(data).at(-1)
-      if (phaseLast && phaseLast.timestamp === last.timestamp) {
-        phaseSeries.update({ time, value: phaseLast.value })
-      }
+      // Same rule as the control histogram: the bar is written either way, so
+      // this pane never falls a bar behind the main chart.
+      phaseSeries.update(
+        phaseLast && phaseLast.timestamp === last.timestamp
+          ? { time, value: phaseLast.value }
+          : { time },
+      )
     }
 
     const rsiSeries = rsiSeriesRef.current

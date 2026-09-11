@@ -186,3 +186,37 @@ def test_oi_gap_beyond_one_period_falls_back_to_at_or_before() -> None:
 
     assert state is not None
     assert state.regime is OIRegime.LONG_BUILDUP
+
+
+# ------------------------------------------------------------------
+# CVD-only fallback where the OI history does not reach
+# ------------------------------------------------------------------
+
+
+def test_series_covers_candles_before_the_oi_history_starts() -> None:
+    """Uncovered windows degrade to CVD-only instead of being dropped."""
+    candles = _candles([0.8] * 10)
+    # OI only for the last 5 candles: windows ending at 4..5 are uncovered.
+    oi = _oi(candles[5:], [1000 + 10 * i for i in range(5)])
+    state = _analyzer().analyze(candles, oi)
+
+    assert state is not None
+    # One point per candle from index 4 on -- none skipped.
+    assert [p.timestamp for p in state.series] == [c.timestamp for c in candles[4:]]
+
+    cvd_only = [p for p in state.series if not p.oi_backed]
+    assert cvd_only, "the uncovered windows should still produce points"
+    # Aggression only: never a quadrant call, never a credited side.
+    assert all(p.regime is OIRegime.FLAT for p in cvd_only)
+    assert all(p.controller is MarketControlSide.BALANCED for p in cvd_only)
+    # Still signed with the aggression, so the oscillator is readable.
+    assert all(p.control_score > 0 for p in cvd_only)
+    # The covered tail keeps the full reading.
+    assert state.series[-1].oi_backed
+    assert state.series[-1].controller is MarketControlSide.BUYERS
+
+
+def test_snapshot_still_requires_oi_coverage() -> None:
+    """The headline "who is in control" claim is never CVD-only."""
+    candles = _candles([0.8] * 8)
+    assert _analyzer().analyze(candles, []) is None

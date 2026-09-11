@@ -28,12 +28,22 @@ class MarketControlPoint(DomainModel):
     *buy aggression on shorts covering* (``SHORT_COVERING``), which both credit
     differently but read identically on ``controller`` alone. Kept lightweight:
     the full context lives on the snapshot :class:`MarketControlState`.
+
+    ``oi_backed`` is ``False`` on a candle the open-interest history does not
+    cover (Binance retains ~30 days of it, so most of a chart's history has
+    none). Such a point is the *aggression half only* — CVD, damped by the same
+    factor a flat-OI reading gets — and carries ``FLAT``/``BALANCED``, because
+    without OI no side can be credited as conviction-backed. It exists so the
+    oscillator is a continuous series over the whole chart instead of a stub at
+    the live edge; consumers that need the full CVD×OI reading must filter on
+    this flag rather than treat the point as a quadrant call.
     """
 
     timestamp: datetime
     control_score: float = Field(ge=-100.0, le=100.0)
     controller: MarketControlSide
     regime: OIRegime
+    oi_backed: bool = True
 
 
 class MarketControlState(DomainModel):

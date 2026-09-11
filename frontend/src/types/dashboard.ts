@@ -88,6 +88,11 @@ export interface MarketControlPoint {
    *  (`short_covering`) — both read `balanced`/`buyers` ambiguously on
    *  `controller` alone. Drives the oscillator's solid-vs-hollow fill. */
   regime: OIRegime
+  /** `false` where the OI history does not reach (it retains ~30 days, the
+   *  chart shows more): the point is CVD aggression only, always
+   *  `flat`/`balanced`, drawn in a neutral hue so it is never read as a
+   *  quadrant call. */
+  oi_backed?: boolean
 }
 
 /** Who is in control of the tape right now, from CVD aggression × open interest

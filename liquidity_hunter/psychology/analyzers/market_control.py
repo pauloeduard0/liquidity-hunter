@@ -56,6 +56,7 @@ class _Reading:
     regime: OIRegime
     control_score: float
     controller: MarketControlSide
+    oi_backed: bool = True
 
 
 class MarketControlAnalyzer:
@@ -105,9 +106,18 @@ class MarketControlAnalyzer:
 
         # Rolling reading per candle (for the chart oscillator) plus the final
         # snapshot. Each end index evaluates the trailing `window`.
+        # The OI history covers only its provider's retention (~30 days on
+        # Binance), while the chart shows far more candles. Dropping the
+        # uncovered ones left the oscillator as a stub at the live edge, so
+        # those windows fall back to the aggression half alone (`_evaluate`
+        # with `allow_cvd_only`): a CVD-only point, damped like a flat-OI
+        # reading and flagged `oi_backed=False`. It never credits a side — that
+        # claim needs the OI — it only keeps the series continuous.
         series: list[MarketControlPoint] = []
         for end in range(window - 1, len(candles)):
-            reading = self._evaluate(candles[end - window + 1 : end + 1], oi_points, oi_ts)
+            reading = self._evaluate(
+                candles[end - window + 1 : end + 1], oi_points, oi_ts, allow_cvd_only=True
+            )
             if reading is None:
                 continue
             series.append(
@@ -116,6 +126,7 @@ class MarketControlAnalyzer:
                     control_score=reading.control_score,
                     controller=reading.controller,
                     regime=reading.regime,
+                    oi_backed=reading.oi_backed,
                 )
             )
 
@@ -150,11 +161,20 @@ class MarketControlAnalyzer:
         w_candles: list[Candle],
         oi_points: list[OpenInterestPoint],
         oi_ts: list[datetime],
+        allow_cvd_only: bool = False,
     ) -> "_Reading | None":
-        """The control reading for one trailing window, or ``None`` if uncovered."""
+        """The control reading for one trailing window, or ``None`` if uncovered.
+
+        With ``allow_cvd_only`` an uncovered window degrades to the aggression
+        half (OI change read as 0.0) instead of returning ``None``. The snapshot
+        never uses it: the headline "who is in control" claim stays OI-backed.
+        """
         oi_change = self._oi_change(w_candles, oi_points, oi_ts)
+        oi_backed = oi_change is not None
         if oi_change is None:
-            return None
+            if not allow_cvd_only:
+                return None
+            oi_change = 0.0
         # Aggression over the window: net taker delta, normalized by the total
         # volume traded so it is a comparable [-1, 1] ratio across symbols.
         cvd_change = sum(volume_delta(c) for c in w_candles)
@@ -165,7 +185,15 @@ class MarketControlAnalyzer:
         regime = self._regime_for(cvd_ratio, oi_change)
         control_score = self._control_score(cvd_ratio, oi_change)
         controller = self._controller_for(regime, control_score)
-        return _Reading(cvd_change, cvd_ratio, oi_change, regime, control_score, controller)
+        if not oi_backed:
+            # No OI means no quadrant and no credited side; `_regime_for` and
+            # `_controller_for` already return FLAT/BALANCED for a 0.0 change,
+            # but pin them so a future threshold change cannot invent a call.
+            regime = OIRegime.FLAT
+            controller = MarketControlSide.BALANCED
+        return _Reading(
+            cvd_change, cvd_ratio, oi_change, regime, control_score, controller, oi_backed
+        )
 
     # ------------------------------------------------------------------
 
