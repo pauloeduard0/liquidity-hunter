@@ -17,3 +17,15 @@ feature flag futura exigiria observabilidade própria e rollout reversível.
 
 Artefato: `research/eq_levels_e3_panel_baseline.json` (gitignored), gerado por
 `eq_levels_e3_shadow.py`.
+
+Na divisão em quatro blocos, a soma de snapshots divergentes por TF foi:
+
+| TF | bloco 0 | bloco 1 | bloco 2 | bloco 3 |
+| --- | ---: | ---: | ---: | ---: |
+| M15 | 1.031 | 1.865 | 2.679 | 2.706 |
+| H1 | 646 | 2.127 | 5.199 | 3.493 |
+| H4 | 1.075 | 2.385 | 3.123 | 3.652 |
+
+A divergência não existe apenas no último período; ela cresce e muda de
+concentração ao longo do histórico. Isso mantém o candidato no gate
+`shadow-only` e impede justificar a diferença como um acidente de uma janela.

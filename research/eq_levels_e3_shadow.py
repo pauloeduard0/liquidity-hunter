@@ -22,11 +22,21 @@ def shadow_metrics(run: Replay) -> dict:
         for snapshot in run.snapshots
         for side in ("EQH", "EQL")
     ]
+    block_counts = [0, 0, 0, 0]
+    block_totals = [0, 0, 0, 0]
+    n = len(run.snapshots)
+    for snapshot in run.snapshots:
+        block = min(3, snapshot["index"] * 4 // n)
+        value = sum(snapshot["sides"][side]["difference_R_N"] for side in ("EQH", "EQL"))
+        block_counts[block] += value > 0
+        block_totals[block] += value
     return {
         "candles": len(run.candles),
         "snapshots_with_R_N_difference": sum(value > 0 for value in differences),
         "max_R_N_difference": max(differences, default=0),
         "sum_R_N_difference": sum(differences),
+        "block_divergent_snapshots": block_counts,
+        "block_sum_R_N_difference": block_totals,
         "event_counts": dict(Counter(event["kind"] for event in run.events)),
         "published_versions": sum(event["kind"] == "publish" for event in run.events),
     }
