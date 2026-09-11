@@ -123,7 +123,8 @@ paginated, with `isBuyerMaker`) or a websocket tape, plus persistence — one
 hour of BTCUSDT is ~50,000 trades. That is a separate module with a separate
 data path, not a parameter of this one.
 
-**Order book / DOM.** Nothing here observes resting orders. `LiquidityHeatmap`
-and `LeverageLiquidationMap` *estimate* where resting liquidity sits from
-structure; the volume profile reports where volume *executed*. The two are
-drawn on opposite edges of the pane so they are never read as the same thing.
+**Order book / DOM.** Nothing here observes resting orders. `LeverageLiquidationMap`
+*estimates* where resting liquidity sits from structure; the volume profile
+reports where volume *executed*. The two are drawn on opposite edges of the
+pane so they are never read as the same thing. (A third estimate, the
+`LiquidityHeatmap` strip, was removed on 2026-09-11.)

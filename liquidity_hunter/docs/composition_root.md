@@ -8,9 +8,7 @@ Extracted from `CLAUDE.md` (2026-08-29) to keep that file under its size limit.
   `higher_timeframe_direction`, `liquidity_zones`, `ranked_zones`,
   `market_structure_events`, `internal_structure_events`, `retail_bias`,
   `poi_zones` (`list[POIZone]`),
-  `manipulation_cycles` (`list[ManipulationCycle]`),
   `behavior_divergences` (`list[BehaviorDivergence]`),
-  `liquidity_heatmap` (`LiquidityHeatmap | None`),
   `liquidation_map` (`LeverageLiquidationMap | None`),
   `oi_analysis`
   (`OIAnalysis | None`), `market_control` (`MarketControlState | None` — who
@@ -179,15 +177,10 @@ Extracted from `CLAUDE.md` (2026-08-29) to keep that file under its size limit.
   detection (`poi_zones` by `created_at`). `candles` (the visible window, the
   trailing `limit` of `buffered_candles`) is unaffected.
 
-  After all detectors run, `ManipulationCycleDetector().detect(candles,
-  all_structure, liquidity_zones, volume_delta_series(candles))`
-  populates `manipulation_cycles`.
-
-  `BehaviorDivergenceAnalyzer().analyze(candles, vd, liquidity_zones,
+  After all detectors run, `BehaviorDivergenceAnalyzer().analyze(candles, vd, liquidity_zones,
   all_structure)` populates `behavior_divergences`.
 
-  `LiquidityHeatmapEngine().build(...)` populates `liquidity_heatmap`. A
-  separate `futures_provider` arg (`FuturesDataProvider | None`, defaults to
+  A separate `futures_provider` arg (`FuturesDataProvider | None`, defaults to
   `BinanceFuturesDataProvider()`) fetches open interest / funding /
   long-short ratio **once** (`_fetch_futures_state`, OI requested with
   `limit=limit` so the paginated history spans the visible window, capped by

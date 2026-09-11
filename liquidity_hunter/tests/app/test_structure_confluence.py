@@ -82,7 +82,6 @@ def _data(**overrides: object) -> DashboardData:
         "internal_structure_events": [_bos()],
         "retail_bias": _bias(),
         "poi_zones": [],
-        "manipulation_cycles": [],
         "behavior_divergences": [],
         "volume_spread_signals": [],
     }

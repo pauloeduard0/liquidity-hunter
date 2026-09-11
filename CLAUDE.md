@@ -97,7 +97,7 @@ api ── depends on app, core (presentation layer)
 
 | Layer        | Responsibility                                                              | May depend on                     |
 |--------------|------------------------------------------------------------------------------|------------------------------------|
-| `core`       | Framework-agnostic domain entities (`Candle`, `LiquidityZone`, `MarketStructure`, `ManipulationCycle`, `RetailBias`) and shared enums | nothing |
+| `core`       | Framework-agnostic domain entities (`Candle`, `LiquidityZone`, `MarketStructure`, `RetailBias`) and shared enums | nothing |
 | `data`       | Market data acquisition, repositories, persistence adapters                 | `core`                              |
 | `indicators` | Stateless derived series computed from `Candle` data                        | `core`, `data`                      |
 | `liquidity`  | Detection/modeling of `LiquidityZone` and `MarketStructure`                  | `core`, `data`, `indicators`        |
@@ -116,11 +116,11 @@ map; the docs keep the detail.
 
 | Layer / area | Doc | What it covers |
 |---|---|---|
-| `core/domain` | `docs/domain_entities.md` | Every `DomainModel` entity and its fields (`Candle`, `LiquidityZone`, `MarketStructure` incl. `provisional`/`reference_structural`, `POIZone`, `ConsolidationRange`, `ManipulationCycle`, `BehaviorDivergence`, `VolumeProfile`, `VWAPSeries`, futures/liquidation/OI/hunt/overview models) and the shared enums |
+| `core/domain` | `docs/domain_entities.md` | Every `DomainModel` entity and its fields (`Candle`, `LiquidityZone`, `MarketStructure` incl. `provisional`/`reference_structural`, `POIZone`, `ConsolidationRange`, `BehaviorDivergence`, `VolumeProfile`, `VWAPSeries`, futures/liquidation/OI/hunt/overview models) and the shared enums |
 | `data` | `docs/data_layer.md` | `OHLCVProvider`/`FuturesDataProvider` ports, the Binance spot/futures and GeckoTerminal providers, routing + fallback + `CachingOHLCVProvider`, `SQLiteCandleStore`, `series_key`, rate-limit/cache mechanics |
 | `indicators` | `docs/indicators_layer.md` | `volume_delta`/CVD, `supertrend`, `volume_profile`, `vwap` |
 | `liquidity` | `docs/liquidity_layer.md` | Swing/equal-level detectors, `SwingStructureDetector`, `InternalStructureDetector` (BOS staircase, CHoCH promotion, `CHOCH_FAILED`), `POIDetector`, consolidation detection, `_common` helpers |
-| `psychology` | `docs/psychology_layer.md` | `RetailTrapAnalyzer`, `ManipulationCycleDetector`, `BehaviorDivergenceAnalyzer`, `LeverageLiquidationEstimator`, `OIRegimeAnalyzer`, `SupertrendBreakAnalyzer`, `MarketControlAnalyzer` |
+| `psychology` | `docs/psychology_layer.md` | `RetailTrapAnalyzer`, `BehaviorDivergenceAnalyzer`, `LeverageLiquidationEstimator`, `OIRegimeAnalyzer`, `SupertrendBreakAnalyzer`, `MarketControlAnalyzer` |
 | `app` composition root | `docs/composition_root.md` | `DashboardData`, `load_dashboard_data` (buffered fetch, structural anchor, every composition pass and production flag), `LiquidityHuntEngine`, `app/overview.py` |
 | `frontend/` | `docs/frontend.md` | `MainChart` panes and overlays, structure line rendering rules, POI/consolidation/hunt primitives, volume profile & VWAP drawing, Tide ribbon, KPI cards, `chartTime`/`format` utilities, dashboard types |
 | Limites da estrutura confirmada | `docs/confirmed_structure_limits.md` | Por que o `CHoCH` confirmado atrasa em expansoes sem pullback, o que fica proibido por isso, a separacao confirmed structure / leg activity / current market pressure, e o escopo da Etapa 5 |
@@ -218,10 +218,9 @@ only on `app` and `core` (an alternative presentation layer to
   (`from_attributes=True`) mirroring the `DashboardData` dataclass fields,
   used to serialize it to JSON; nested domain types (`Candle`,
   `LiquidityZone`, `MarketStructure`, `ScoredLiquidityZone`,
-  `RetailBiasEstimate`, `POIZone`, `ManipulationCycle`) are
+  `RetailBiasEstimate`, `POIZone`) are
   already `DomainModel`s and serialize as-is. `poi_zones`,
-  `manipulation_cycles`, `behavior_divergences`,
-  `liquidity_heatmap`, `liquidation_map`, `oi_analysis`,
+  `behavior_divergences`, `liquidation_map`, `oi_analysis`,
   `liquidity_hunt`, `higher_timeframe`, `volume_profile`, `vwap`,
   `anchored_vwaps`, and `consolidation_ranges` fields are included.
 

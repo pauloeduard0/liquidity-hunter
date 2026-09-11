@@ -32,7 +32,7 @@ liquidity  psychology │
 | `data`       | Market data acquisition: Binance spot + USDT-M perpetual futures via CCXT (`OHLCVProvider` / `FuturesDataProvider` ports, fallback chaining, retries, OI pagination) | `core` |
 | `indicators` | Stateless derived series computed from `Candle` data (volume delta)            | `core`, `data`                        |
 | `liquidity`  | Detection/modeling of `LiquidityZone`, `MarketStructure`, and `POIZone`        | `core`, `data`, `indicators`          |
-| `psychology` | Retail bias, manipulation cycles, behavior divergences, leverage liquidation map, OI regime | `core`, `data`               |
+| `psychology` | Retail bias, behavior divergences, leverage liquidation map, OI regime | `core`, `data`               |
 | `scoring`    | Composite, descriptive scoring of liquidity zones                               | `core`, `liquidity`, `psychology`     |
 | `app`        | Composition root (`load_dashboard_data`), cross-layer synthesis (`LiquidityHuntEngine`), multi-timeframe overview (`app/overview.py`) | all of the above |
 | `api`        | Presentation of `app` output as JSON over HTTP (FastAPI)                        | `app`, `core`                         |
@@ -59,8 +59,6 @@ rather than decisions:
   provisional/weak-reference metadata for live-edge rendering.
 - **`POIZone`** — an MSB-anchored order block / breaker block / mitigation
   block zone with an ACTIVE → INVALIDATED lifecycle.
-- **`ManipulationCycle`** — an accumulation → sweep → expansion
-  Wyckoff/SMC cycle.
 - **`BehaviorDivergence`** — a price vs. volume-delta divergence
   (distribution / accumulation / exhaustion / absorption).
 - **`RetailBias`** — a measured retail sentiment/positioning observation.

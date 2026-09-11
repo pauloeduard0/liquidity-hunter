@@ -7,7 +7,6 @@ descriptive observations (never signals):
 | Analyzer | Output | Reads |
 |----------|--------|-------|
 | `RetailTrapAnalyzer` | `RetailBiasEstimate` — what retail is likely thinking/doing | HTF trend, structure events, liquidity zones (detailed below) |
-| `ManipulationCycleDetector` | `ManipulationCycle` — accumulation → sweep → expansion Wyckoff/SMC cycles, retrospective and prospective | zones, sweeps, BOS, volume delta |
 | `BehaviorDivergenceAnalyzer` | `BehaviorDivergence` — institutional flow opposing visible price direction (distribution / accumulation / exhaustion / absorption) | volume delta, zone proximity, structure events |
 | `LeverageLiquidationEstimator` | `LeverageLiquidationMap` — projected force-liquidation bands per leverage tier (10x/25x/50x/100x) around real entry areas | open interest, funding, long/short ratio, zones, POI zones |
 | `OIRegimeAnalyzer` | `OIAnalysis` — the price × OI matrix (long/short buildup, covering, liquidation) plus per-event OI qualification (new money / covering / flush) | candles, OI history, structure events |

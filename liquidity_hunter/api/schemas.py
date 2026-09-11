@@ -15,11 +15,9 @@ from liquidity_hunter.core.domain import (
     ConsolidationRange,
     LeverageLiquidationMap,
     LiquidityGrab,
-    LiquidityHeatmap,
     LiquidityHuntEpisode,
     LiquidityHuntState,
     LiquidityZone,
-    ManipulationCycle,
     MarketControlState,
     MarketDirection,
     MarketStructure,
@@ -57,7 +55,6 @@ class DashboardDataResponse(BaseModel):
     internal_structure_events: list[MarketStructure]
     retail_bias: RetailBiasEstimate
     poi_zones: list[POIZone]
-    manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
     volume_spread_signals: list[VolumeSpreadSignal] = []
     supertrend: list[SupertrendPoint] = []
@@ -65,7 +62,6 @@ class DashboardDataResponse(BaseModel):
     volume_profile: VolumeProfile | None = None
     vwap: VWAPSeries | None = None
     anchored_vwaps: list[VWAPSeries] = []
-    liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     oi_analysis: OIAnalysis | None = None
     market_control: MarketControlState | None = None

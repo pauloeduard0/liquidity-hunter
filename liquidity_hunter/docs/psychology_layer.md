@@ -23,21 +23,14 @@ Extracted from `CLAUDE.md` (2026-08-29) to keep that file under its size limit.
 
 The full estimation logic (confidence formula and worked example) is
 documented in `liquidity_hunter/docs/psychology.md`.
-- **`psychology/analyzers/manipulation_cycle.py`** —
-  `ManipulationCycleDetector`: connects existing observations (liquidity
-  zones, `LIQUIDITY_SWEEP` events, BOS events, volume delta) into
-  three-phase Wyckoff/SMC manipulation cycles. Works in two
-  modes: **retrospective** (for each sweep event, looks backward for
-  accumulation near a liquidity zone and forward for an expansion BOS) and
-  **prospective** (scans active zones where price is currently consolidating,
-  reporting `IN_PROGRESS` `ACCUMULATION` cycles). Constructor parameters:
-  `proximity_pct` (default `0.015` = 1.5%), `min_accumulation_candles`
-  (default `None` → resolved per timeframe from
-  `_TIMEFRAME_MIN_ACCUMULATION`: M1=20, M5=15, M15=10, M30=7, H1=7, H4=3,
-  D1=2, W1=2), `max_expansion_candles` (default `30`). Zone deduplication:
-  nearby prospective zones are clustered per side within `proximity_pct`
-  (keeping the strongest), and zones already targeted by a sweep-based cycle
-  are excluded from prospective results via proximity matching.
+- **`psychology/analyzers/manipulation_cycle.py`** — **removido em
+  2026-09-11.** O `ManipulationCycleDetector` montava ciclos Wyckoff/SMC de
+  tres fases (acumulacao → sweep → expansao) a partir de constantes escolhidas
+  a mao por timeframe (`_TIMEFRAME_MIN_ACCUMULATION`, `_TIMEFRAME_PROXIMITY`,
+  `_TIMEFRAME_MAX_EXPANSION`) e **nunca teve medicao** contra um controle
+  casado em simbolo, timeframe e direcao. Saiu junto com seus dois
+  consumidores: a camada de narrativa e o canal `heat_manipulation` do
+  heatmap de liquidez (`scoring/heatmap.py`, removido no mesmo dia).
 
 - **`psychology/analyzers/behavior_divergence.py`** —
   `BehaviorDivergenceAnalyzer`: cross-references `volume_delta_series` with

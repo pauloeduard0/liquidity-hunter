@@ -179,22 +179,6 @@ class ConsolidationStatus(str, Enum):
     RESOLVED = "resolved"
 
 
-class ManipulationPhase(str, Enum):
-    """Current phase of an institutional manipulation cycle."""
-
-    ACCUMULATION = "accumulation"
-    MANIPULATION = "manipulation"
-    EXPANSION = "expansion"
-
-
-class ManipulationCycleStatus(str, Enum):
-    """Resolution status of a manipulation cycle."""
-
-    IN_PROGRESS = "in_progress"
-    CONFIRMED = "confirmed"
-    FAILED = "failed"
-
-
 class DivergenceType(str, Enum):
     """Classification of a price/volume-delta behavioral divergence."""
 

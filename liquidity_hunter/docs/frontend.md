@@ -19,13 +19,9 @@ selector.
   crosshairs. The main pane overlays top-ranked liquidity zone lines, draws
   BOS/CHoCH/SWEEP horizontal lines and labels (plus a grey `CHoCH ✕` line at
   the broken origin for `choch_failed` events), renders POI order block boxes
-  via `POIBoxesPrimitive`, and renders manipulation cycle accumulation boxes
-  via a second `POIBoxesPrimitive` instance (toggled via
-  `showManipulationBoxes` prop). Accumulation boxes are color-coded by
-  status: amber (`in_progress`), green (`confirmed`), gray (`failed`).
-  Limited to `MAX_MANIP_BOXES = 3` most relevant (in-progress first).
+  via `POIBoxesPrimitive`.
 
-  **Consolidation range boxes**: a third `POIBoxesPrimitive` instance draws
+  **Consolidation range boxes**: a second `POIBoxesPrimitive` instance draws
   each `data.consolidation_ranges` entry as a neutral slate `▭ RANGE` box
   (`CONSOLIDATION_BOX_STYLES`, live ranges slightly stronger than resolved
   ones, resolved boxes labeled with the breakout direction arrow); a live
@@ -211,14 +207,14 @@ selector.
   line already stops at the reclaim (the marker's line would trace the same
   segment twice).
 
-- **`frontend/src/components/ManipulationCyclesPanel.tsx`** —
-  `ManipulationCyclesPanel` sidebar component: renders manipulation cycle
-  cards sorted by relevance (in-progress first, then confirmed, then failed),
-  limited to `MAX_DISPLAY = 5`. Each card shows direction arrow, phase badge
-  (`ACC`/`MANIP`/`EXP`), status indicator (`LIVE` with pulse animation,
-  `CONFIRMED`, `FAILED`), target zone, consolidation candle count, sweep
-  info, expansion BOS info, and volume delta. Includes a `CHART ON`/`OFF`
-  toggle button that controls the `showManipulationBoxes` prop on `MainChart`.
+- **Ciclos de manipulacao, narrativa e heatmap saem do dashboard**
+  (2026-09-11). Foram removidos o `ManipulationCyclesPanel` e o
+  `NarrativePanel` da sidebar, as caixas de acumulacao no grafico, a faixa do
+  `HeatmapStripPrimitive` e o botao `▮ Heatmap` -- e, no backend, o detector,
+  o `NarrativeEngine` e o `LiquidityHeatmapEngine`. O ciclo montava tres fases
+  Wyckoff a partir de constantes escolhidas a mao por timeframe, sem nunca ter
+  sido medido contra um controle casado em direcao; a narrativa e o canal
+  `heat_manipulation` eram seus unicos consumidores.
 
 - **`frontend/src/components/MultiTimeframePanel.tsx`** — the **Structure
   Ladder** sidebar panel (as of 2026-07-11, first panel in the sidebar): one
@@ -251,8 +247,7 @@ selector.
   map's entry anchors). It applies no cap and no distance window — the
   detector's queue retirement leaves 0-5 zones per chart, so the chart draws
   exactly what survives rather than filtering the indicator a second time.
-  Also reused for manipulation cycle accumulation boxes (second instance) and
-  consolidation range boxes (third instance).
+  Also reused for consolidation range boxes (second instance).
 
 - **Leverage liquidation bands are no longer drawn** (removed 2026-08-19).
   `LiquidationBandsPrimitive` and the `⊟ Liq` toolbar button are gone. The
@@ -390,9 +385,7 @@ selector.
 - **`frontend/src/types/dashboard.ts`** — TypeScript types mirroring the API
   schema; includes `POIZone`, `MarketStructure` (with
   `reference_timestamp`, `reference_structural`, `provisional`),
-  `ManipulationCycle`, `ManipulationPhase`,
-  `ManipulationCycleStatus`, `BehaviorDivergence`, `DivergenceType`,
-  `LiquidityHeatmap`, `HeatmapBucket`, `LeverageLiquidationMap`,
+  `BehaviorDivergence`, `DivergenceType`, `LeverageLiquidationMap`,
   `LiquidationBand`, `OIAnalysis`, `OIRegimeReading`,
   `OIQualifiedEvent`, `OIRegime`, `OIParticipation`, `LiquidityHuntState`,
   `LiquidityHuntTarget`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`,
@@ -496,14 +489,12 @@ selector.
   adds nothing), keyed by `event_timestamp|event_type` from
   `oi_analysis.qualified_events`.
 - **`frontend/src/theme.ts`** — color constants for POI zones, structure
-  events, manipulation cycle boxes (`MANIPULATION_BOX_STYLES`), volume delta,
-  RSI, consolidation range boxes (`CONSOLIDATION_BOX_STYLES`, neutral slate),
-  the liquidity heatmap gradient, leverage-liquidation bands
+  events, volume delta, RSI, consolidation range boxes
+  (`CONSOLIDATION_BOX_STYLES`, neutral slate), leverage-liquidation bands
   (`LIQUIDATION_LEVERAGE_COLORS`, warm gradient by tier), and other chart
   elements.
 
-The KPI row, main chart (with volume delta and RSI sub-panes), and
-manipulation cycles sidebar panel are implemented. The liquidity targets,
-retail trap, and market structure sidebar panels are not yet implemented
-in the React frontend.
+The KPI row and the main chart (with volume delta and RSI sub-panes) are
+implemented. The liquidity targets, retail trap, and market structure sidebar
+panels are not yet implemented in the React frontend.
 

@@ -28,10 +28,12 @@ Consumidores medidos
 1. ``structure_confluence``  -- fator `LIQUIDITY_SWEEP`, peso 9,0 (prioridade)
 2. S7 -- direcao do sweep creditado, ja no stream causal
 3. ``LiquidityHuntEngine``   -- `_collect_capture_signals` e `_swept_since`
-4. ``ManipulationCycleDetector``
-5. ``OIRegimeAnalyzer``      -- `FLUSH` e exclusivo de sweep
-6. VWAP ancorada no ultimo sweep (`_build_anchored_vwaps`)
-7. narrative / UI            -- classificado, nao medido
+4. ``OIRegimeAnalyzer``      -- `FLUSH` e exclusivo de sweep
+5. VWAP ancorada no ultimo sweep (`_build_anchored_vwaps`)
+
+O consumidor 4 original, ``ManipulationCycleDetector``, saiu do codigo em
+2026-09-11 (camada aposentada por falta de medicao); o braco que o media foi
+removido daqui e a numeracao dos painies seguintes desceu de um.
 
 Nao se mede edge aqui. A pergunta e correcao causal e impacto funcional.
 
@@ -72,8 +74,7 @@ from liquidity_hunter.core.domain import (
     StructureEvent,
     TimeFrame,
 )
-from liquidity_hunter.indicators import anchored_vwap, volume_delta_series
-from liquidity_hunter.psychology import ManipulationCycleDetector
+from liquidity_hunter.indicators import anchored_vwap
 from research._offline import OfflineKlinesProvider, cached_symbols
 from research._paginated import NoFuturesProvider
 from research.sweep_causality import _find_extreme_index, lookback_of
@@ -393,40 +394,7 @@ def _diff_payload(a: Any, b: Any) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 4 — manipulation cycle
-# ---------------------------------------------------------------------------
-
-
-def manip_impact(data: DashboardData, known: dict[datetime, int]) -> dict:
-    idx = {c.timestamp: i for i, c in enumerate(data.candles)}
-    last = len(data.candles) - 1
-    vd = volume_delta_series(data.candles)
-    all_events = data.market_structure_events + data.internal_structure_events
-    det = ManipulationCycleDetector()
-
-    def run(events: list[MarketStructure]) -> list:
-        return det.detect(
-            candles=data.candles, structure_events=events,
-            liquidity_zones=data.liquidity_zones, volume_deltas=vd,
-        )
-
-    a = _dump(run(all_events))
-    b = _dump(run(gated_events(all_events, known, last)))
-    # O ciclo e disparado por um sweep: `sweep_timestamp` e a identidade, e e
-    # tambem a data que o ciclo herda. Quantos candles ela antecipa o known_at?
-    leads = [
-        known[ts] - idx[ts]
-        for c in a
-        if c.get("sweep_timestamp")
-        and (ts := datetime.fromisoformat(c["sweep_timestamp"])) in known
-        and ts in idx
-    ]
-    return {**_diff_payload(a, b),
-            "starts_on_sweep": len(leads), "lead_candles": leads}
-
-
-# ---------------------------------------------------------------------------
-# 5 — OI regime (FLUSH)
+# 4 — OI regime (FLUSH)
 # ---------------------------------------------------------------------------
 
 
@@ -454,7 +422,7 @@ def oi_impact(data: DashboardData, known: dict[datetime, int]) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 6 — VWAP ancorada no ultimo sweep
+# 5 — VWAP ancorada no ultimo sweep
 # ---------------------------------------------------------------------------
 
 
@@ -515,7 +483,6 @@ def vwap_impact(data: DashboardData, known: dict[datetime, int]) -> dict | None:
 class Panel:
     conf: list[ConfRow] = field(default_factory=list)
     hunt: list[dict] = field(default_factory=list)
-    manip: list[dict] = field(default_factory=list)
     oi: list[dict] = field(default_factory=list)
     vwap: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -533,7 +500,6 @@ def measure(provider: Any, symbol: str, tf: TimeFrame, limit: int,
     tag = {"symbol": symbol, "timeframe": tf.value}
     panel.conf.extend(confluence_rows(data, known))
     panel.hunt.append({**tag, **hunt_impact(data, known)})
-    panel.manip.append({**tag, **manip_impact(data, known)})
     panel.oi.append({**tag, **oi_impact(data, known)})
     v = vwap_impact(data, known)
     if v is not None:
@@ -667,33 +633,8 @@ def report(panel: Panel, out: list[str]) -> dict:
                 f"{k}({v})" for k, v in fields.most_common(8)))
         summary.setdefault("hunt", {})[stream] = dict(tot)
 
-    # --- 4. manipulation --------------------------------------------------
-    out.append(f"\n{'='*78}\nS1.1-4 — MANIPULATION CYCLE\n{'='*78}")
-    tot = Counter()
-    leads: list[int] = []
-    for row in panel.manip:
-        for k in ("n_legacy", "n_causal", "removed", "added", "changed",
-                  "starts_on_sweep"):
-            tot[k] += row.get(k, 0)
-        leads.extend(row["lead_candles"])
-    n = max(1, tot["n_legacy"])
-    out.append(f"\n  ciclos: legacy {tot['n_legacy']}  causal {tot['n_causal']}  "
-               f"removidos {tot['removed']}  adicionados {tot['added']}  "
-               f"alterados {tot['changed']} "
-               f"({(tot['removed']+tot['changed'])/n:.1%})")
-    if leads:
-        out.append(f"  ciclos que COMECAM num sweep: {tot['starts_on_sweep']}/"
-                   f"{tot['n_legacy']} ({tot['starts_on_sweep']/n:.1%}); o ciclo "
-                   f"e datado p50={statistics.median(leads):.0f} "
-                   f"p90={_p(leads,.9):.0f} max={max(leads)} candles antes de "
-                   f"poder ser conhecido")
-    summary["manip"] = dict(tot) | {
-        "lead_p50": statistics.median(leads) if leads else None,
-        "lead_p90": _p(leads, 0.9) if leads else None,
-    }
-
-    # --- 5. OI ------------------------------------------------------------
-    out.append(f"\n{'='*78}\nS1.1-5 — OI REGIME (FLUSH)\n{'='*78}")
+    # --- 4. OI ------------------------------------------------------------
+    out.append(f"\n{'='*78}\nS1.1-4 — OI REGIME (FLUSH)\n{'='*78}")
     lags = [x for row in panel.oi for x in row["lag_candles"]]
     out.append(f"\n  sweeps elegiveis a FLUSH: {len(lags)}  "
                f"(FLUSH so existe sobre LIQUIDITY_SWEEP)")
@@ -707,8 +648,8 @@ def report(panel: Panel, out: list[str]) -> dict:
                      "lag_p50": statistics.median(lags) if lags else None,
                      "lag_max": max(lags) if lags else None}
 
-    # --- 6. VWAP ----------------------------------------------------------
-    out.append(f"\n{'='*78}\nS1.1-6 — VWAP ANCORADA NO ULTIMO SWEEP\n{'='*78}")
+    # --- 5. VWAP ----------------------------------------------------------
+    out.append(f"\n{'='*78}\nS1.1-5 — VWAP ANCORADA NO ULTIMO SWEEP\n{'='*78}")
     v = panel.vwap
     if v:
         ch = [r for r in v if r["anchor_changed"]]
@@ -755,9 +696,6 @@ def report(panel: Panel, out: list[str]) -> dict:
         d = h.get(stream, {})
         ch = d.get("removed", 0) + d.get("changed", 0)
         table.append((f"hunt/{stream}", d.get("n_legacy", 0), None, None, None, ch))
-    m = summary.get("manip", {})
-    table.append(("manipulation_cycle", m.get("n_legacy", 0), None, None, None,
-                  m.get("removed", 0) + m.get("changed", 0)))
     o = summary.get("oi", {})
     table.append(("oi_regime/FLUSH", o.get("eligible", 0), o.get("eligible", 0),
                   o.get("eligible", 0), 0, 0))

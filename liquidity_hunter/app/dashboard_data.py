@@ -23,12 +23,10 @@ from liquidity_hunter.core.domain import (
     FundingRate,
     LeverageLiquidationMap,
     LiquidityGrab,
-    LiquidityHeatmap,
     LiquidityHuntEpisode,
     LiquidityHuntState,
     LiquidityZone,
     LongShortRatio,
-    ManipulationCycle,
     MarketControlState,
     MarketDirection,
     MarketStructure,
@@ -93,7 +91,6 @@ from liquidity_hunter.liquidity.structural_stall import detect_structural_stall
 from liquidity_hunter.psychology import (
     BehaviorDivergenceAnalyzer,
     LeverageLiquidationEstimator,
-    ManipulationCycleDetector,
     MarketControlAnalyzer,
     OIRegimeAnalyzer,
     RetailBiasEstimate,
@@ -102,7 +99,6 @@ from liquidity_hunter.psychology import (
     VolumeSpreadAnalyzer,
 )
 from liquidity_hunter.scoring import (
-    LiquidityHeatmapEngine,
     LiquidityScoringEngine,
     ScoredLiquidityZone,
 )
@@ -1059,7 +1055,6 @@ class DashboardData:
     internal_structure_events: list[MarketStructure]
     retail_bias: RetailBiasEstimate
     poi_zones: list[POIZone]
-    manipulation_cycles: list[ManipulationCycle]
     behavior_divergences: list[BehaviorDivergence]
     volume_spread_signals: list[VolumeSpreadSignal]
     # ATR-banded trailing trend readings over the visible window (Supertrend),
@@ -1080,7 +1075,6 @@ class DashboardData:
     # turned the current leg, the last liquidity sweep) — the break-even of the
     # population each event drew in. See `_build_anchored_vwaps`.
     anchored_vwaps: list[VWAPSeries] = field(default_factory=list)
-    liquidity_heatmap: LiquidityHeatmap | None = None
     liquidation_map: LeverageLiquidationMap | None = None
     oi_analysis: OIAnalysis | None = None
     # Who is in control right now, from CVD aggression × open interest. `None`
@@ -2975,13 +2969,6 @@ def load_dashboard_data(
 
     all_structure = market_structure_events + internal_structure_events
     vd = volume_delta_series(candles)
-    manipulation_cycles = ManipulationCycleDetector().detect(
-        candles=candles,
-        structure_events=all_structure,
-        liquidity_zones=liquidity_zones,
-        volume_deltas=vd,
-    )
-
     behavior_divergences = BehaviorDivergenceAnalyzer().analyze(
         candles=candles,
         volume_deltas=vd,
@@ -3028,17 +3015,6 @@ def load_dashboard_data(
         internal_structure_events,
         symbol=symbol,
         timeframe=timeframe,
-    )
-
-    liquidity_heatmap = LiquidityHeatmapEngine().build(
-        symbol=symbol,
-        timeframe=timeframe,
-        candles=candles,
-        current_price=current_price,
-        liquidity_zones=liquidity_zones,
-        poi_zones=poi_zones,
-        manipulation_cycles=manipulation_cycles,
-        retail_bias=retail_bias,
     )
 
     # One futures fetch feeds both the liquidation map and the OI analysis.
@@ -3107,7 +3083,6 @@ def load_dashboard_data(
         retail_bias=retail_bias,
         poi_zones=poi_zones,
         htf_poi_zones=htf_poi_zones,
-        manipulation_cycles=manipulation_cycles,
         behavior_divergences=behavior_divergences,
         volume_spread_signals=volume_spread_signals,
         supertrend=supertrend_points,
@@ -3115,7 +3090,6 @@ def load_dashboard_data(
         volume_profile=window_volume_profile,
         vwap=session_vwap,
         anchored_vwaps=anchored_vwaps,
-        liquidity_heatmap=liquidity_heatmap,
         liquidation_map=liquidation_map,
         oi_analysis=oi_analysis,
         market_control=market_control,

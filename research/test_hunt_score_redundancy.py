@@ -102,7 +102,6 @@ def _data(**kwargs: object) -> DashboardData:
         "internal_structure_events": [],
         "retail_bias": _bias(),
         "poi_zones": [],
-        "manipulation_cycles": [],
         "behavior_divergences": [],
         "volume_spread_signals": [],
     }

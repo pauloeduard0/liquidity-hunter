@@ -93,21 +93,6 @@ and `validate_assignment=True`. New entities should follow this pattern.
   = sustained closes beyond a boundary, or a structure advance ending the
   segment; a wick/unsustained poke beyond the box is a boundary sweep and
   stays outside it.
-- **`ManipulationCycle`** — an observed institutional manipulation cycle
-  (accumulation → sweep → expansion), defined in
-  `core/domain/manipulation_cycle.py`. Describes the three-phase Wyckoff/SMC
-  pattern where price consolidates near a liquidity zone (accumulation),
-  sweeps the zone to capture stops (manipulation), then moves impulsively in
-  the opposite direction (expansion). `direction` is the expansion direction:
-  a bullish cycle sweeps sell-side liquidity (lows) then expands upward.
-  Fields: `direction`, `phase` (`ManipulationPhase`: `ACCUMULATION`/
-  `MANIPULATION`/`EXPANSION`), `status` (`ManipulationCycleStatus`:
-  `IN_PROGRESS`/`CONFIRMED`/`FAILED`), target zone info
-  (`target_zone_price_low/high`, `target_zone_type`, `target_zone_side`),
-  accumulation context (`accumulation_start/end`, `consolidation_candles`,
-  `accumulation_avg_volume_delta`), sweep context (`sweep_timestamp`,
-  `sweep_extreme`, `sweep_volume_delta`), and expansion context
-  (`expansion_timestamp`, `expansion_price`, `expansion_volume_delta`).
 - **`BehaviorDivergence`** — an observed divergence between price movement
   and volume delta, defined in `core/domain/behavior_divergence.py`. Detects
   when institutional flow opposes visible price direction. Fields: `timestamp`,
@@ -209,8 +194,7 @@ and `validate_assignment=True`. New entities should follow this pattern.
 
 Shared enums (`TimeFrame`, `MarketDirection`, `LiquiditySide`,
 `LiquidityZoneType`, `StructureEvent`, `BiasSource`, `RetailPositioning`,
-`POIZoneStatus`, `POIZoneKind`, `ConsolidationStatus`, `ManipulationPhase`,
-`ManipulationCycleStatus`,
+`POIZoneStatus`, `POIZoneKind`, `ConsolidationStatus`,
 `DivergenceType`, `LiquidityHuntPhase`, `LiquidityHuntTargetKind`,
 `VolumeNode`, `VWAPAnchor`) live in
 `core/domain/enums.py`. Extend behavior by adding enum members rather than

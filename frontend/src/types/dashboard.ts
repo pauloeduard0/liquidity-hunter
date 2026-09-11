@@ -39,10 +39,6 @@ export type RetailPositioning = 'long' | 'short' | 'neutral'
 export type POIZoneStatus = 'active' | 'invalidated'
 export type POIZoneKind = 'order_block' | 'breaker_block' | 'mitigation_block'
 
-export type ManipulationPhase = 'accumulation' | 'manipulation' | 'expansion'
-
-export type ManipulationCycleStatus = 'in_progress' | 'confirmed' | 'failed'
-
 export type DivergenceType = 'distribution' | 'accumulation' | 'exhaustion' | 'absorption'
 
 export type VSAPattern =
@@ -52,19 +48,6 @@ export type VSAPattern =
   | 'buying_climax'
   | 'down_thrust'
   | 'up_thrust'
-
-export type NarrativeEventType =
-  | 'consolidation'
-  | 'distribution'
-  | 'accumulation'
-  | 'sweep'
-  | 'expansion'
-  | 'exhaustion'
-  | 'absorption'
-  | 'structure_break'
-  | 'zone_mitigation'
-
-export type AnomalySeverity = 'low' | 'medium' | 'high'
 
 export type OIRegime =
   | 'long_buildup'
@@ -198,28 +181,6 @@ export interface POIZone {
   invalidated_at: string | null
 }
 
-export interface ManipulationCycle {
-  symbol: string
-  timeframe: TimeFrame
-  direction: MarketDirection
-  phase: ManipulationPhase
-  status: ManipulationCycleStatus
-  target_zone_price_low: number
-  target_zone_price_high: number
-  target_zone_type: LiquidityZoneType
-  target_zone_side: LiquiditySide
-  accumulation_start: string
-  accumulation_end: string
-  consolidation_candles: number
-  accumulation_avg_volume_delta: number
-  sweep_timestamp: string | null
-  sweep_extreme: number | null
-  sweep_volume_delta: number | null
-  expansion_timestamp: string | null
-  expansion_price: number | null
-  expansion_volume_delta: number | null
-}
-
 export interface BehaviorDivergence {
   symbol: string
   timeframe: TimeFrame
@@ -302,24 +263,6 @@ export interface VolumeSpreadSignal {
   description: string
 }
 
-export interface HeatmapBucket {
-  price_low: number
-  price_high: number
-  heat: number
-  side: LiquiditySide
-  heat_zones: number
-  heat_poi: number
-  heat_manipulation: number
-}
-
-export interface LiquidityHeatmap {
-  symbol: string
-  timeframe: TimeFrame
-  current_price: number
-  bucket_pct: number
-  buckets: HeatmapBucket[]
-}
-
 export interface LiquidationBand {
   price_low: number
   price_high: number
@@ -341,34 +284,6 @@ export interface LeverageLiquidationMap {
   open_interest_change_pct: number
   long_short_ratio: number
   bands: LiquidationBand[]
-}
-
-export interface NarrativeEvent {
-  timestamp: string
-  event_type: NarrativeEventType
-  direction: MarketDirection
-  description: string
-  source_layer: string
-}
-
-export interface NarrativeAnomaly {
-  timestamp: string
-  expected: string
-  observed: string
-  description: string
-  severity: AnomalySeverity
-}
-
-export interface MarketNarrative {
-  symbol: string
-  timeframe: TimeFrame
-  timestamp: string
-  phase: ManipulationPhase | null
-  timeline: NarrativeEvent[]
-  anomalies: NarrativeAnomaly[]
-  summary: string
-  confluence_count: number
-  confluence_total: number
 }
 
 export interface OIRegimeReading {
@@ -719,7 +634,6 @@ export interface DashboardData {
   internal_structure_events: MarketStructure[]
   retail_bias: RetailBiasEstimate
   poi_zones: POIZone[]
-  manipulation_cycles: ManipulationCycle[]
   behavior_divergences: BehaviorDivergence[]
   volume_spread_signals: VolumeSpreadSignal[]
   supertrend: SupertrendPoint[]
@@ -727,9 +641,7 @@ export interface DashboardData {
   volume_profile: VolumeProfile | null
   vwap: VWAPSeries | null
   anchored_vwaps: VWAPSeries[]
-  liquidity_heatmap: LiquidityHeatmap | null
   liquidation_map: LeverageLiquidationMap | null
-  narrative: MarketNarrative | null
   oi_analysis: OIAnalysis | null
   market_control: MarketControlState | null
   liquidity_hunt: LiquidityHuntState | null

@@ -298,7 +298,6 @@ def _slim_dashboard_data(
             explanation="Not estimated for the multi-timeframe overview.",
         ),
         poi_zones=[],
-        manipulation_cycles=[],
         behavior_divergences=[],
         volume_spread_signals=[],
     )
