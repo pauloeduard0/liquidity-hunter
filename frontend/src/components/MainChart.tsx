@@ -469,6 +469,18 @@ function seriesPriceFormat(ref: number): DeepPartial<PriceFormat> {
   return { type: 'price', ...priceFormatFor(ref) }
 }
 
+// Same clamp as `lineFrom`, for a *label* anchor. A label is centered between
+// `time` and `timeEnd`, so an anchor before the first candle drags the text
+// into the empty area left of the data (the "CHoCH lost in the limbo" bug):
+// the line it belongs to is clamped to `candles[0]`, but the label still
+// resolved x from the off-chart reference timestamp, which the time scale
+// extrapolates into blank space. Anchors that predate the window are normal --
+// the detector runs on a buffered series that starts before the visible one --
+// so the label is pulled to the window edge rather than dropped.
+function clampTime(time: UTCTimestamp, minTime: UTCTimestamp): UTCTimestamp {
+  return time < minTime ? minTime : time
+}
+
 function lineFrom(
   startTime: UTCTimestamp,
   lastCandleTime: UTCTimestamp,
@@ -1890,8 +1902,8 @@ export function MainChart({
         // A block is only ever spent: the box breaks on a *close* beyond it,
         // so there is no handed-back reading for it and the mark is always ✕.
         labels.push({
-          time: from,
-          timeEnd: at,
+          time: clampTime(from, firstCandleTime),
+          timeEnd: clampTime(at, firstCandleTime),
           price: blockLevel,
           color,
           text: zone === null ? title : 'OB · ✕',
@@ -1935,7 +1947,7 @@ export function MainChart({
       // crowd the read.
       const isEql = zone.zone_type === 'equal_lows'
       labels.push({
-        time: startTime,
+        time: clampTime(startTime, firstCandleTime),
         timeEnd: endTime,
         price: isEql ? zone.price_low : zone.price_high,
         color,
@@ -2044,7 +2056,7 @@ export function MainChart({
         sweptSeries.setData(lineFrom(startTime, endTime, price, firstCandleTime))
         overlaySeriesRef.current.push(sweptSeries)
         labels.push({
-          time: startTime,
+          time: clampTime(startTime, firstCandleTime),
           price,
           color: color + '66',
           text: `${label} (swept)`,
@@ -2329,8 +2341,8 @@ export function MainChart({
           ? event.direction === 'bullish'
           : event.direction === 'bearish'
       labels.push({
-        time: fizzleMarker ? startTime : lineStartTime,
-        timeEnd: fizzleMarker ? startTime : endTime,
+        time: clampTime(fizzleMarker ? startTime : lineStartTime, firstCandleTime),
+        timeEnd: clampTime(fizzleMarker ? startTime : endTime, firstCandleTime),
         price: linePrice,
         color: lineColor,
         below: labelBelow,
