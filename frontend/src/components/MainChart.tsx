@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
 import {
-  BaselineSeries,
   CandlestickSeries,
   ColorType,
   HistogramSeries,
@@ -40,7 +39,7 @@ import {
   structureEventColor,
 } from '../utils/structureRelevance'
 import { buildStallMarks } from '../utils/stallMarker'
-import { buildPhase, buildRibbon, structureTrendByCandle } from '../utils/tideRibbon'
+import { buildRibbon, structureTrendByCandle } from '../utils/tideRibbon'
 import type { DefendedMark } from '../utils/defendedLevels'
 import { buildDefenceLevels, buildDefendedMarks } from '../utils/defendedLevels'
 import type { BehaviorDivergence, BlockReclaim, DashboardData, LiquidityGrab, LiquiditySide, LiquidityZone, LiquidityZoneType, ManipulationCycle, MarketControlPoint, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
@@ -167,9 +166,11 @@ const OI_PARTICIPATION_SUFFIX: Record<OIParticipation, string> = {
 const DELTA_CHART_RATIO = 0.16
 const RSI_CHART_RATIO = 0.16
 const CONTROL_CHART_RATIO = 0.14
-// The Tide phase line has its own pane, opened by the ribbon toggle.
-const PHASE_CHART_RATIO = 0.14
 const MIN_TOTAL_HEIGHT = 500
+// How many frames a pane resize is guarded against range feedback. One frame is
+// not enough: a pane reopened from zero width settles its time scale on the
+// library's paint frame, one or two frames after the `applyOptions` call.
+const RESIZE_SETTLE_FRAMES = 3
 const PRICE_SCALE_MIN_WIDTH = 110
 
 // Colors for the control oscillator (CVD × OI). Two channels on one bar:
@@ -204,46 +205,22 @@ const controlBarColor = (p: MarketControlPoint): string =>
     ? CONTROL_CVD_ONLY_COLOR
     : (CONTROL_REGIME_COLORS[p.regime] ?? CONTROL_BALANCED_COLOR)
 
-// The phase line takes the candles' own two colours, switching at the zero
-// baseline: above the VWAP it is the up-candle grey-white, below it the
-// down-candle red. The baseline is the population's break-even, so the colour
-// says the same thing the candle body says -- who is currently holding the
-// profit -- without the reader having to learn a third palette. (It was gold
-// on both sides while it shared the control pane, where it had to stay
-// readable against teal and red bars; on its own pane that constraint is gone.)
-const PHASE_ABOVE_COLOR = CANDLE_UP_COLOR
-const PHASE_BELOW_COLOR = CANDLE_DOWN_COLOR
-// The fill between the line and the zero baseline, in the same two hues, faint
-// on purpose: it tints the side without competing with the line itself.
-const PHASE_ABOVE_FILL = 'rgba(149, 152, 161, 0.28)'
-const PHASE_BELOW_FILL = 'rgba(218, 77, 77, 0.28)'
-const PHASE_FILL_FADE = 'rgba(0, 0, 0, 0)'
-// The +/-1 sigma rails, dim enough to read as a scale rather than as a level.
-const PHASE_RAIL_COLOR = 'rgba(224, 179, 65, 0.28)'
-
 // Split the available height across the panes. The volume-delta + RSI panes are
 // one group (`showIndicators`); the control histogram toggles *independently*
-// (`showControl`), and so does the Tide phase line (`showPhase`, driven by the
-// ribbon toggle). Each hidden pane collapses to 0 and the main candlestick
+// (`showControl`). Each hidden pane collapses to 0 and the main candlestick
 // pane absorbs the freed height, so opening only one pane shows only it.
-function paneHeights(
-  totalHeight: number,
-  showIndicators: boolean,
-  showControl: boolean,
-  showPhase: boolean,
-) {
+function paneHeights(totalHeight: number, showIndicators: boolean, showControl: boolean) {
   const deltaHeight = showIndicators ? Math.round(totalHeight * DELTA_CHART_RATIO) : 0
   const rsiHeight = showIndicators ? Math.round(totalHeight * RSI_CHART_RATIO) : 0
   const controlHeight = showControl ? Math.round(totalHeight * CONTROL_CHART_RATIO) : 0
-  const phaseHeight = showPhase ? Math.round(totalHeight * PHASE_CHART_RATIO) : 0
-  const mainHeight = totalHeight - deltaHeight - rsiHeight - controlHeight - phaseHeight
-  return { mainHeight, deltaHeight, controlHeight, phaseHeight, rsiHeight }
+  const mainHeight = totalHeight - deltaHeight - rsiHeight - controlHeight
+  return { mainHeight, deltaHeight, controlHeight, rsiHeight }
 }
 
 // Which pane carries the visible time axis. RSI carries it whenever the
 // indicator group is open (the long-standing, well-tested path — labels fall
 // back to it). Otherwise the *main* pane keeps its own axis, even when the
-// control/phase panes are open below it: neither carries the axis,
+// control pane is open below it: it does not carry the axis,
 // so the BOS/CHoCH label primitive always resolves time->x from a live,
 // perfectly-synced scale (the main's own when visible, else RSI) and never from
 // the control pane — which was desyncing labels on a timeframe switch.
@@ -251,7 +228,6 @@ function axisVisibility(showIndicators: boolean) {
   return {
     main: !showIndicators,
     control: false,
-    phase: false,
     rsi: showIndicators,
   }
 }
@@ -941,12 +917,10 @@ export function MainChart({
   const mainContainerRef = useRef<HTMLDivElement>(null)
   const deltaContainerRef = useRef<HTMLDivElement>(null)
   const controlContainerRef = useRef<HTMLDivElement>(null)
-  const phaseContainerRef = useRef<HTMLDivElement>(null)
   const rsiContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const deltaChartRef = useRef<IChartApi | null>(null)
   const controlChartRef = useRef<IChartApi | null>(null)
-  const phaseChartRef = useRef<IChartApi | null>(null)
   const rsiChartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
@@ -965,8 +939,6 @@ export function MainChart({
   const volumeProfilePrimitiveRef = useRef<VolumeProfilePrimitive | null>(null)
   const eqlZonesPrimitiveRef = useRef<EqlZonesPrimitive | null>(null)
   const ribbonPrimitiveRef = useRef<RibbonPrimitive | null>(null)
-  const phaseSeriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
-  const phaseRailSeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const divergenceMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const divergenceMarksPrimitiveRef = useRef<DivergenceMarksPrimitive | null>(null)
   // Its own instance: `setMarks` replaces the whole list, so sharing the
@@ -978,11 +950,6 @@ export function MainChart({
   // against the current minimize state. Kept in sync by the effect below.
   const showIndicatorsRef = useRef(showIndicators)
   const showControlRef = useRef(showControlOscillator)
-  const showPhaseRef = useRef(false)
-  // The phase pane opens with the Tide toggle, but only when there is a VWAP
-  // to measure against: on a symbol the API sends no VWAP for (on-chain pairs),
-  // the ribbon is empty too, and an empty pane is worse than no pane.
-  const phasePaneOpen = showRibbon && (data.vwap?.points.length ?? 0) > 0
 
   // The redraw effect keys off `drawSig`, not `data`, so it reads the latest
   // snapshot through this ref (fresher than the render that last changed the
@@ -999,23 +966,16 @@ export function MainChart({
     const mainContainer = mainContainerRef.current
     const deltaContainer = deltaContainerRef.current
     const controlContainer = controlContainerRef.current
-    const phaseContainer = phaseContainerRef.current
     const rsiContainer = rsiContainerRef.current
-    if (
-      !wrapper || !mainContainer || !deltaContainer || !controlContainer ||
-      !phaseContainer || !rsiContainer
-    )
-      return
+    if (!wrapper || !mainContainer || !deltaContainer || !controlContainer || !rsiContainer) return
 
     const totalHeight = Math.max(wrapper.clientHeight, MIN_TOTAL_HEIGHT)
     const indicatorsOpen = showIndicatorsRef.current
     const controlOpen = showControlRef.current
-    const phaseOpen = showPhaseRef.current
-    const { mainHeight, deltaHeight, controlHeight, phaseHeight, rsiHeight } = paneHeights(
+    const { mainHeight, deltaHeight, controlHeight, rsiHeight } = paneHeights(
       totalHeight,
       indicatorsOpen,
       controlOpen,
-      phaseOpen,
     )
     const av = axisVisibility(indicatorsOpen)
 
@@ -1063,15 +1023,6 @@ export function MainChart({
     })
     controlChartRef.current = controlChart
 
-    const phaseChart = createChart(phaseContainer, {
-      ...chartOptions,
-      width: phaseContainer.clientWidth,
-      height: phaseHeight,
-      timeScale: { ...chartOptions.timeScale, visible: av.phase },
-      rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, minimumWidth: PRICE_SCALE_MIN_WIDTH },
-    })
-    phaseChartRef.current = phaseChart
-
     const rsiChart = createChart(rsiContainer, {
       ...chartOptions,
       width: rsiContainer.clientWidth,
@@ -1117,52 +1068,6 @@ export function MainChart({
       base: 0,
     })
     controlSeriesRef.current = controlSeries
-
-    // The phase line has a pane of its own, opened by the Tide toggle: sharing
-    // the control pane's axis forced two different units (a conviction score
-    // and a position inside the envelope) onto one autoscale, and tied the
-    // line's visibility to a toggle it has nothing to do with. Read side by
-    // side instead: the control bars are how hard a side is pushing, the phase
-    // line is how far price has been carried inside its own envelope -- a
-    // stretched line over short grey bars is an extension nobody is funding.
-    // Baseline at zero -- the VWAP itself, the population's break-even. Line
-    // and fill both switch there, into the candles' own up/down colours. That
-    // is not a restatement of the ribbon's hue: the ribbon says what the
-    // structure is doing, this says whether the crowd that entered since the
-    // anchor is holding a profit or a loss.
-    const phaseSeries = phaseChart.addSeries(BaselineSeries, {
-      baseValue: { type: 'price', price: 0 },
-      lineWidth: 2,
-      topLineColor: PHASE_ABOVE_COLOR,
-      bottomLineColor: PHASE_BELOW_COLOR,
-      topFillColor1: PHASE_ABOVE_FILL,
-      topFillColor2: PHASE_FILL_FADE,
-      bottomFillColor1: PHASE_FILL_FADE,
-      bottomFillColor2: PHASE_BELOW_FILL,
-      priceLineVisible: false,
-      lastValueVisible: true,
-      crosshairMarkerVisible: true,
-    })
-    phaseSeriesRef.current = phaseSeries
-
-    // The +/-1 sigma rails. Without them the line's level is unreadable -- a
-    // reading of 40 and one of 90 look the same on an autoscaled pane, yet one
-    // is price inside the envelope and the other is price outside it, which is
-    // the whole distinction the phase measures. They are a *scale*, not an
-    // overbought line: measured across six combos, |phase| exceeds 50 on about
-    // half of all candles (49-55%), because sigma is accumulated over a whole
-    // session while price walks away from the anchor. The tail worth noticing
-    // is |phase| > 100, at 9-13%.
-    phaseRailSeriesRef.current = [0, 1].map(() =>
-      phaseChart.addSeries(LineSeries, {
-        color: PHASE_RAIL_COLOR,
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        lastValueVisible: false,
-        priceLineVisible: false,
-        crosshairMarkerVisible: false,
-      }),
-    )
 
     const rsiSeries = rsiChart.addSeries(LineSeries, {
       color: RSI_LINE_COLOR,
@@ -1255,12 +1160,11 @@ export function MainChart({
     // because it sits before the control pane in the loop, stops the control
     // pane from ever receiving the update (the "control only follows zoom when
     // vol/rsi is also on" bug). So a hidden pane neither sends nor receives.
-    const charts = [chart, deltaChart, controlChart, phaseChart, rsiChart]
+    const charts = [chart, deltaChart, controlChart, rsiChart]
     const isPaneActive = (c: IChartApi) =>
       c === chart ||
       (showIndicatorsRef.current && (c === deltaChart || c === rsiChart)) ||
-      (showControlRef.current && c === controlChart) ||
-      (showPhaseRef.current && c === phaseChart)
+      (showControlRef.current && c === controlChart)
     for (const src of charts) {
       src.timeScale().subscribeVisibleLogicalRangeChange((range) => {
         if (isSyncingRef.current || !range || !isPaneActive(src)) return
@@ -1283,7 +1187,6 @@ export function MainChart({
       { chart, series },
       { chart: deltaChart, series: deltaSeries },
       { chart: controlChart, series: controlSeries },
-      { chart: phaseChart, series: phaseSeries },
       { chart: rsiChart, series: rsiSeries },
     ]
     for (const src of crosshairPanes) {
@@ -1318,13 +1221,11 @@ export function MainChart({
         mainHeight: mh,
         deltaHeight: dh,
         controlHeight: ch,
-        phaseHeight: ph,
         rsiHeight: rh,
-      } = paneHeights(h, showIndicatorsRef.current, showControlRef.current, showPhaseRef.current)
+      } = paneHeights(h, showIndicatorsRef.current, showControlRef.current)
       chart.applyOptions({ width: mainContainer.clientWidth, height: mh })
       deltaChart.applyOptions({ width: deltaContainer.clientWidth, height: dh })
       controlChart.applyOptions({ width: controlContainer.clientWidth, height: ch })
-      phaseChart.applyOptions({ width: phaseContainer.clientWidth, height: ph })
       rsiChart.applyOptions({ width: rsiContainer.clientWidth, height: rh })
     })
     ro.observe(wrapper)
@@ -1339,19 +1240,15 @@ export function MainChart({
       chart.remove()
       deltaChart.remove()
       controlChart.remove()
-      phaseChart.remove()
       rsiChart.remove()
       chartRef.current = null
       deltaChartRef.current = null
       controlChartRef.current = null
-      phaseChartRef.current = null
       rsiChartRef.current = null
       seriesRef.current = null
       volumeSeriesRef.current = null
       deltaSeriesRef.current = null
       controlSeriesRef.current = null
-      phaseSeriesRef.current = null
-      phaseRailSeriesRef.current = []
       rsiSeriesRef.current = null
       overlaySeriesRef.current = []
       rsiOverlaySeriesRef.current = []
@@ -1399,28 +1296,24 @@ export function MainChart({
     const chart = chartRef.current
     const deltaChart = deltaChartRef.current
     const controlChart = controlChartRef.current
-    const phaseChart = phaseChartRef.current
     const rsiChart = rsiChartRef.current
     const mainContainer = mainContainerRef.current
     const deltaContainer = deltaContainerRef.current
     const controlContainer = controlContainerRef.current
-    const phaseContainer = phaseContainerRef.current
     const rsiContainer = rsiContainerRef.current
     showIndicatorsRef.current = showIndicators
     showControlRef.current = showControlOscillator
-    showPhaseRef.current = phasePaneOpen
     if (
-      !wrapper || !chart || !deltaChart || !controlChart || !phaseChart || !rsiChart ||
-      !mainContainer || !deltaContainer || !controlContainer || !phaseContainer || !rsiContainer
+      !wrapper || !chart || !deltaChart || !controlChart || !rsiChart ||
+      !mainContainer || !deltaContainer || !controlContainer || !rsiContainer
     )
       return
 
     const h = Math.max(wrapper.clientHeight, MIN_TOTAL_HEIGHT)
-    const { mainHeight, deltaHeight, controlHeight, phaseHeight, rsiHeight } = paneHeights(
+    const { mainHeight, deltaHeight, controlHeight, rsiHeight } = paneHeights(
       h,
       showIndicators,
       showControlOscillator,
-      phasePaneOpen,
     )
     const av = axisVisibility(showIndicators)
 
@@ -1430,6 +1323,16 @@ export function MainChart({
     // range -- and resizing from zero width can echo that bad range back onto
     // the main chart. Suppress the sync feedback across the resize, then drive
     // every reopened pane from the main chart's current range.
+    //
+    // The range is read *before* the resize: once the panes start changing size
+    // the main chart's own range is no longer trustworthy -- a pane coming back
+    // from zero width settles its (degenerate) range on the library's paint
+    // frame, and that echo used to land on the main chart, taking the user's
+    // zoom with it. Reopening a pane over a chart with the volume profile on
+    // made it visible: the window shifted back over the strip reserved for the
+    // profile (see `vpReservedRef`), so the histogram painted on top of the
+    // newest candles and the price scale zoomed out to frame everything at once.
+    const range = chart.timeScale().getVisibleLogicalRange()
     isSyncingRef.current = true
     chart.applyOptions({
       width: mainContainer.clientWidth,
@@ -1442,19 +1345,17 @@ export function MainChart({
       height: controlHeight,
       timeScale: { visible: av.control },
     })
-    phaseChart.applyOptions({
-      width: phaseContainer.clientWidth,
-      height: phaseHeight,
-      timeScale: { visible: av.phase },
-    })
     rsiChart.applyOptions({
       width: rsiContainer.clientWidth,
       height: rsiHeight,
       timeScale: { visible: av.rsi },
     })
 
-    const range = chart.timeScale().getVisibleLogicalRange()
-    if (range) {
+    // Put the main chart back on its pre-resize range and drive every visible
+    // pane from it.
+    const applyRange = () => {
+      if (!range) return
+      chart.timeScale().setVisibleLogicalRange(range)
       if (showIndicators) {
         deltaChart.timeScale().setVisibleLogicalRange(range)
         rsiChart.timeScale().setVisibleLogicalRange(range)
@@ -1462,16 +1363,26 @@ export function MainChart({
       if (showControlOscillator) {
         controlChart.timeScale().setVisibleLogicalRange(range)
       }
-      if (phasePaneOpen) {
-        phaseChart.timeScale().setVisibleLogicalRange(range)
-      }
     }
-    // Release the guard after this frame's layout (and any resize-triggered
-    // range echo) settles.
-    requestAnimationFrame(() => {
+    applyRange()
+
+    // A resize-driven range change is delivered on the library's own paint
+    // frame, which can land *after* a single rAF -- so re-assert the range for a
+    // few frames instead of releasing the guard on the first one, and only then
+    // let the panes talk to each other again.
+    let framesLeft = RESIZE_SETTLE_FRAMES
+    let rafId = 0
+    const settle = () => {
+      applyRange()
+      if (--framesLeft > 0) rafId = requestAnimationFrame(settle)
+      else isSyncingRef.current = false
+    }
+    rafId = requestAnimationFrame(settle)
+    return () => {
+      cancelAnimationFrame(rafId)
       isSyncingRef.current = false
-    })
-  }, [showIndicators, showControlOscillator, phasePaneOpen])
+    }
+  }, [showIndicators, showControlOscillator])
 
   useEffect(() => {
     const data = dataRef.current
@@ -1981,43 +1892,6 @@ export function MainChart({
           }))
         : [],
     )
-
-    // Phase oscillator, on its own pane. Whitespace entries keep bar
-    // indices aligned with the other panes (same rule as the control histogram
-    // and RSI) -- the VWAP has no envelope for the first candles of a session.
-    const phaseSeries = phaseSeriesRef.current
-    if (phaseSeries) {
-      const phaseByTs = new Map(buildPhase(data).map((p) => [p.timestamp, p]))
-      phaseSeries.setData(
-        data.candles.map((candle) => {
-          const time = toChartTime(candle.timestamp)
-          const p = showRibbon ? phaseByTs.get(candle.timestamp) : undefined
-          return p ? { time, value: p.value } : { time }
-        }),
-      )
-
-      const [railUpper, railLower] = phaseRailSeriesRef.current
-      if (railUpper && railLower && data.candles.length >= 2) {
-        const firstTime = toChartTime(data.candles[0].timestamp)
-        const lastTime = toChartTime(data.candles[data.candles.length - 1].timestamp)
-        railUpper.setData(
-          showRibbon
-            ? [
-                { time: firstTime, value: 50 },
-                { time: lastTime, value: 50 },
-              ]
-            : [],
-        )
-        railLower.setData(
-          showRibbon
-            ? [
-                { time: firstTime, value: -50 },
-                { time: lastTime, value: -50 },
-              ]
-            : [],
-        )
-      }
-    }
 
     // Swept (mitigated) zones
     if (showSweptZones && data.timeframe !== '5m') {
@@ -2723,7 +2597,6 @@ export function MainChart({
       chart.timeScale().setVisibleLogicalRange(range)
       deltaChart.timeScale().setVisibleLogicalRange(range)
       controlChartRef.current?.timeScale().setVisibleLogicalRange(range)
-      phaseChartRef.current?.timeScale().setVisibleLogicalRange(range)
       rsiChart.timeScale().setVisibleLogicalRange(range)
       hasFittedRef.current = true
     }
@@ -2795,23 +2668,6 @@ export function MainChart({
       )
     }
 
-    // The phase reading moves with the live close, so the tail update has to
-    // recompute it rather than just carry the last value forward. Gated on
-    // `showRibbon` like the full redraw: without the gate this poll wrote a
-    // point into the otherwise-empty phase series, leaving a lone gold stub
-    // and its last-value label behind with the ribbon off.
-    const phaseSeries = showRibbon ? phaseSeriesRef.current : null
-    if (phaseSeries) {
-      const phaseLast = buildPhase(data).at(-1)
-      // Same rule as the control histogram: the bar is written either way, so
-      // this pane never falls a bar behind the main chart.
-      phaseSeries.update(
-        phaseLast && phaseLast.timestamp === last.timestamp
-          ? { time, value: phaseLast.value }
-          : { time },
-      )
-    }
-
     const rsiSeries = rsiSeriesRef.current
     if (rsiSeries) {
       const rsiValues = computeRSI(
@@ -2841,12 +2697,6 @@ export function MainChart({
           Control (CVD×OI)
         </span>
         <div ref={controlContainerRef} className="w-full" />
-      </div>
-      <div className={`relative w-full border-t border-[#1e222d] ${phasePaneOpen ? '' : 'hidden'}`}>
-        <span className="pointer-events-none absolute left-2 top-1 z-10 text-xs text-[#8a8f9c]">
-          Tide Phase (VWAP ±1σ)
-        </span>
-        <div ref={phaseContainerRef} className="w-full" />
       </div>
       <div className={`relative w-full border-t border-[#1e222d] ${showIndicators ? '' : 'hidden'}`}>
         <span className="pointer-events-none absolute left-2 top-1 z-10 text-xs text-[#8a8f9c]">

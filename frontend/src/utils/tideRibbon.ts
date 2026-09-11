@@ -52,13 +52,6 @@ export interface RibbonBand {
   conviction: number
 }
 
-export interface PhasePoint {
-  timestamp: string
-  /** Position inside the envelope: 0 = VWAP, ±50 = ±1σ, clamped at ±100. */
-  value: number
-  trend: TideTrend
-}
-
 /** The events that move the structural state machine, mirroring the backend's
  *  own replay rule: provisional marks never mutate the standing trend, pivot
  *  labels and sweeps describe a wick rather than a state, and a failed CHoCH
@@ -237,62 +230,6 @@ export function buildRibbon(data: DashboardData): RibbonBand[] {
       trend: trends.get(candle.timestamp) ?? 'neutral',
       controller: c?.controller ?? 'balanced',
       conviction,
-    })
-  }
-  return out
-}
-
-/**
- * The clamp. Measured across BTC 15m/4h and SOL 1h: |phase| exceeds 100 on
- * 9-13% of candles — pinning one bar in eight at the rail would throw away
- * resolution exactly where the move is interesting — while |phase| > 150 is
- * 0.9-2.6%, a genuine tail. So the rail sits at 150 (±3σ) and ±50/±100 stay
- * the meaningful gradations.
- */
-const PHASE_CLAMP = 150
-
-/**
- * Minimum envelope width, as a fraction of the VWAP itself.
- *
- * A fresh accumulation has near-zero dispersion, so the first candles after an
- * anchor divide by a σ of ~0 and produce readings in the millions (measured:
- * 4.3e6 on BTC 15m). One such point is enough to wreck the pane's autoscale
- * and flatten every real reading into a hairline. Below this width the
- * envelope is not yet a measurement and the candle is skipped.
- */
-const MIN_SPAN_FRAC = 1e-4
-
-/**
- * The phase oscillator: where price sits inside its own envelope.
- *
- * 0 is the VWAP itself (the population's break-even), ±50 the ±1σ edges, ±100
- * the clamp at ±2σ. Drawn as a line over the control histogram, so the *gap*
- * between the two is legible: price stretched to +80 while the control bars
- * are short and grey is an extension nobody is funding.
- */
-export function buildPhase(data: DashboardData): PhasePoint[] {
-  const points = data.vwap?.points
-  if (!points || points.length === 0) return []
-
-  const vwap = vwapByTimestamp(points)
-  const trends = structureTrendByCandle(data)
-
-  const out: PhasePoint[] = []
-  for (const candle of data.candles) {
-    const p = vwap.get(candle.timestamp)
-    if (!p || p.upper_1 === null || p.lower_1 === null) continue
-    // Distance is measured against the band on the side price actually sits,
-    // because the two are not symmetric: a volume-weighted deviation computed
-    // over a skewed accumulation puts the mean off-centre.
-    const above = candle.close >= p.value
-    const edge = above ? p.upper_1 : p.lower_1
-    const span = Math.abs(edge - p.value)
-    if (span <= Math.abs(p.value) * MIN_SPAN_FRAC) continue
-    const raw = ((candle.close - p.value) / span) * 50
-    out.push({
-      timestamp: candle.timestamp,
-      value: Math.max(-PHASE_CLAMP, Math.min(PHASE_CLAMP, raw)),
-      trend: trends.get(candle.timestamp) ?? 'neutral',
     })
   }
   return out

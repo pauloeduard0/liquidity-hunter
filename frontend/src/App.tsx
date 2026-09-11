@@ -689,7 +689,7 @@ function App() {
                           ? 'bg-[#e0b34122] text-[#e0b341]'
                           : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
                       }`}
-                      title="Tide — VWAP envelope coloured by SMC structure, desaturated when no fresh money backs the move, opening its own phase pane (position inside the envelope)"
+                      title="Tide — VWAP envelope coloured by SMC structure, desaturated when no fresh money backs the move"
                     >
                       ◈ Tide
                     </button>
