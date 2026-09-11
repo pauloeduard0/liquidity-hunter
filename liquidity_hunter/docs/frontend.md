@@ -418,8 +418,26 @@ selector.
   left-to-right as a story ending in the hunt "conclusion" card — the
   **Price card was removed** (price remains visible in the chart toolbar
   OHLC). The grid is `md:grid-cols-6` (`LoadingSkeleton` matches): Retail
-  Bias, Dominant Liquidity, HTF Trend, OI Regime, **Who's in Control**,
-  **Liquidity Hunt**. The **Who's in Control** card (`controlCardProps`, from
+  Bias, **Liquidity References**, HTF Trend, OI Regime, **Who's in Control**,
+  **Liquidity Hunt**.
+
+- **Liquidity References card** (frontend, as of 2026-09-11): replaces the
+  former "Dominant Liquidity" card, which showed the top of
+  `ranked_zones` — the composite winner. `utils/liquidityReferences` builds it
+  from `data.liquidity_zones` and `data.candles` and reads **no score at all**:
+  each family reports its own nearest active level (`EQH`/`EQL` and
+  `Swing H`/`Swing L`), as `LABEL d.d ATR ↑|↓`, EQ on the value line and swing
+  on the sub-line. Distance is `meanTrueRangePct(candles) * current_price`, the
+  same causal ATR `defendedLevels` uses. Ordering inside a family is distance
+  only; `strength` breaks an *exact* distance tie and nothing else, then a
+  stable `(formed_at, band)` fallback. A family with no active level leaves its
+  slot empty rather than borrowing from the other; with neither, the card shows
+  `—`. The arrow is spatial position, never a direction call. There is
+  deliberately **no winner between the families**: six measured rounds
+  (`research/DOMINANT_LIQUIDITY_D0..D6`) found no basis for ranking one level
+  over another once distance is controlled, so the card stopped claiming one.
+  The scoring engine and its components still exist and still ship over the
+  API — this card just stopped reading them, and `MainChart` is unchanged. The **Who's in Control** card (`controlCardProps`, from
   `data.market_control`) is the CVD×OI read: `buyers` → `▲ Buyers` (green,
   badge `⊕ NEW LONGS`), `sellers` → `▼ Sellers` (red, `⊕ NEW SHORTS`),
   `balanced` → `▲ Shorts covering` / `▼ Longs exiting` (amber, badge

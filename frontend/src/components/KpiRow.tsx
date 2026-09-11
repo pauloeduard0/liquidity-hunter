@@ -5,8 +5,8 @@ import type {
   OIRegime,
 } from '../types/dashboard'
 import type { MarketDirection, RetailPositioning } from '../types/dashboard'
-import { formatPrice } from '../utils/format'
 import { deriveLegState } from '../utils/legState'
+import { formatReference, liquidityReferences } from '../utils/liquidityReferences'
 import { structureTrendByCandle } from '../utils/tideRibbon'
 
 const DIRECTION_CONFIG: Record<MarketDirection, { color: string; icon: string }> = {
@@ -272,15 +272,18 @@ export function KpiRow({ data }: KpiRowProps) {
       ? { text: '✓ ALIGNED', color: '#26a69a' }
       : undefined
 
-  const dominantLiquidity = data.ranked_zones.length
-    ? formatPrice(
-        (data.ranked_zones[0].zone.price_high + data.ranked_zones[0].zone.price_low) / 2,
-      )
-    : '—'
-
-  const topZoneType = data.ranked_zones.length
-    ? data.ranked_zones[0].zone.zone_type.replace(/_/g, ' ')
-    : undefined
+  // Liquidity references: each family's nearest level, named and measured in
+  // ATR. Not a ranking -- the composite that used to elect one "dominant" level
+  // was measured for six rounds and never earned the word (see
+  // `utils/liquidityReferences`), so neither family outranks the other here.
+  const references = liquidityReferences(
+    data.liquidity_zones,
+    data.candles,
+    data.current_price,
+  )
+  const referenceLines = [references.eq, references.swing]
+    .filter((reference) => reference !== null)
+    .map(formatReference)
 
   // OI Regime: the joint price x open-interest reading. Buildup regimes
   // (new money) get a confluence badge against the HTF trend; unwinding
@@ -316,10 +319,11 @@ export function KpiRow({ data }: KpiRowProps) {
         sub={bias.confidence >= 70 ? 'High conviction' : bias.confidence >= 40 ? 'Moderate' : 'Low conviction'}
       />
       <KpiCard
-        label="Dominant Liquidity"
-        value={dominantLiquidity}
+        label="Liquidity References"
+        value={referenceLines[0] ?? '—'}
         accent="#ab63fa"
-        sub={topZoneType}
+        sub={referenceLines[1] ?? (referenceLines.length ? 'no second reference' : undefined)}
+        title="Nearest equal-level and swing references, in ATR. Position only, not a direction call."
       />
       <KpiCard
         label={htfAnchor ? `HTF Trend · ${htfAnchor}` : 'HTF Trend'}
