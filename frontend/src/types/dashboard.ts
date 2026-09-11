@@ -743,27 +743,3 @@ export interface DashboardData {
   structural_stall: StructuralStall | null
 }
 
-/** One row of the universe-wide block-reclaim screener. */
-export type ScreenerStatus = 'armed' | 'fired'
-
-export interface BlockReclaimScanEntry {
-  symbol: string
-  timeframe: TimeFrame
-  status: ScreenerStatus
-  direction: MarketDirection
-  timestamp: string
-  candles_ago: number
-  current_price: number
-  block_price_low: number
-  block_price_high: number
-  r_atr: number | null
-  reclaim: BlockReclaim | null
-}
-
-export interface BlockReclaimScreen {
-  generated_at: string
-  timeframes: TimeFrame[]
-  symbols_scanned: number
-  symbols_failed: string[]
-  entries: BlockReclaimScanEntry[]
-}
