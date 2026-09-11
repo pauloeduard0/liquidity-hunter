@@ -336,9 +336,16 @@ selector.
   leaves only ~15% of a 1200-candle H4 window covered (measured 2026-07-30;
   within covered candles conviction is a uniform 0.26-0.34 median on every
   timeframe, so the greyness is missing data, not a dead channel).
-  `buildPhase` feeds a **phase line** drawn over the control histogram on the
-  existing control pane — the "two overlaid" geometry, where the *gap* between
-  a stretched line and short grey bars is an extension nobody is funding.
+  `buildPhase` feeds a **phase line** on its own pane, `Tide Phase (VWAP ±1σ)`,
+  below the control pane (`PHASE_CHART_RATIO`, opened by the ribbon toggle).
+  It used to ride *over* the control histogram on that pane's axis; it was
+  split out because the two carry different units on one autoscale and the line
+  was gated on a toggle it has nothing to do with. Read side by side, the gap
+  is the same reading: a stretched line over short grey bars is an extension
+  nobody is funding.
+  Line and fill switch colour at the baseline, into the candles' own up/down
+  colours (grey-white above the VWAP, red below) — the baseline is the
+  population's break-even, so the colour says what the candle body says.
   0 = VWAP, ±50 = ±1σ, measured against the band on the side price actually
   sits (a volume-weighted deviation over a skewed accumulation is not centred).
   Clamped at **±150**: |phase| > 100 happens on 9-13% of candles (pinning one
@@ -347,8 +354,10 @@ selector.
   a fresh anchor divides by σ≈0 and produced readings of 4.3e6 on BTC 15m, one
   of which flattens the pane's autoscale.
   Toggled by the `◈ Tide` toolbar button in `App.tsx` (`showRibbon`, default
-  **off**); turning it on also opens the control pane, since half the reading
-  lives there. Purely descriptive — a measurement of this project's own
+  **off**), which opens the ribbon and its phase pane together; the control
+  pane is independent (`⚖ Control`). The phase pane stays closed when the API
+  sends no VWAP for the symbol (on-chain pairs) — the ribbon is empty there
+  too, and an empty pane is worse than no pane. Purely descriptive — a measurement of this project's own
   sweep/raid events across 16 symbols × 3 timeframes found no entry trigger
   worth encoding (`research/raid_reversal.py`), so Tide describes state and
   never signals.

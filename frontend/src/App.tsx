@@ -683,22 +683,13 @@ function App() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        // The ribbon and the phase line are one reading split
-                        // across two panes, so turning it on opens the pane the
-                        // oscillator lives in -- otherwise half of it is
-                        // invisible and the toggle looks broken.
-                        setRibbonVisible((v) => {
-                          if (!v && controlAvailable) setControlOscVisible(true)
-                          return !v
-                        })
-                      }}
+                      onClick={() => setRibbonVisible((v) => !v)}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         ribbonVisible
                           ? 'bg-[#e0b34122] text-[#e0b341]'
                           : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
                       }`}
-                      title="Tide — VWAP envelope coloured by SMC structure, desaturated when no fresh money backs the move, with the phase line over the control bars"
+                      title="Tide — VWAP envelope coloured by SMC structure, desaturated when no fresh money backs the move, opening its own phase pane (position inside the envelope)"
                     >
                       ◈ Tide
                     </button>
