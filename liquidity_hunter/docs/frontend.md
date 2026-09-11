@@ -274,8 +274,13 @@ selector.
   `VolumeProfilePrimitive` draws `data.volume_profile` as a thin-line histogram
   on the **right** of the main pane, growing leftward from an anchor near the
   price scale (`VP_RIGHT_MARGIN`) — the layout of the classic TradingView
-  volume-profile studies. Default colouring mirrors the reference study: grey
-  outside the value area, blue inside it, red at the POC, with POC/VAH/VAL lines
+  volume-profile studies. Default colouring is **one hue for the whole layer** —
+  the VWAP's steel blue, separated by weight rather than by hue: faint outside
+  the value area, solid inside it, near-white at the POC. (It used to be
+  grey/accent-blue/red; the accent blue made the layer that should sit furthest
+  back the heaviest ink on screen, and the POC red sat a hair from the down
+  candle's own red.) POC/VAH/VAL lines are quieter than the bands they point at
+  — the value-area edges dashed (`VP_VA_LINE_DASH`), the POC solid —
   running back over the lookback (from the profile's `start_timestamp`) and
   stopping `VP_VA_LINE_GAP` short of the band they point at. Colors in
   `theme.ts` (`VP_*`).

@@ -20,9 +20,12 @@ import {
   VP_MAX_LENGTH_BARS,
   VP_MIN_BAND_PX,
   VP_POC_COLOR,
+  VP_POC_LINE_COLOR,
   VP_POC_LINE_WIDTH,
   VP_RIGHT_MARGIN,
   VP_VA_COLOR,
+  VP_VA_LINE_COLOR,
+  VP_VA_LINE_DASH,
   VP_VA_LINE_GAP,
   VP_VA_LINE_WIDTH,
 } from '../theme'
@@ -64,9 +67,11 @@ interface ResolvedBar {
  *
  * Two colouring modes:
  *
- * - `value-area` (default) reproduces the reference study: grey outside the
- *   value area, blue inside it, red at the POC, with POC/VAH/VAL lines running
- *   back across the lookback to meet their own band.
+ * - `value-area` (default) reproduces the reference study: one steel-blue hue
+ *   throughout, separated by weight — faint outside the value area, solid
+ *   inside it, near-white at the POC — with POC/VAH/VAL lines running back
+ *   across the lookback to meet their own band (the value-area edges dashed,
+ *   the POC solid).
  * - `delta` colours each band by which side was the aggressor there. That split
  *   is inferred per candle rather than observed per trade (see
  *   `VolumeProfile.delta_estimated`), so it is a deliberate second read behind
@@ -281,10 +286,10 @@ class VolumeProfileRenderer implements IPrimitivePaneRenderer {
       // first candle is scrolled off, they simply start at the pane edge.
       const left = startX === null ? 0 : Math.max(startX, 0)
 
-      for (const [level, color, width] of [
-        [vah, VP_VA_COLOR, VP_VA_LINE_WIDTH],
-        [val, VP_VA_COLOR, VP_VA_LINE_WIDTH],
-        [poc, VP_POC_COLOR, VP_POC_LINE_WIDTH],
+      for (const [level, color, width, dash] of [
+        [vah, VP_VA_LINE_COLOR, VP_VA_LINE_WIDTH, VP_VA_LINE_DASH],
+        [val, VP_VA_LINE_COLOR, VP_VA_LINE_WIDTH, VP_VA_LINE_DASH],
+        [poc, VP_POC_LINE_COLOR, VP_POC_LINE_WIDTH, []],
       ] as const) {
         if (level.y === null) continue
         // Stop just short of the band the line points at, so the two read as
@@ -293,10 +298,12 @@ class VolumeProfileRenderer implements IPrimitivePaneRenderer {
         if (right <= left) continue
         context.strokeStyle = color
         context.lineWidth = width
+        context.setLineDash(dash as number[])
         context.beginPath()
         context.moveTo(left, level.y + 0.5)
         context.lineTo(right, level.y + 0.5)
         context.stroke()
+        context.setLineDash([])
       }
     })
   }

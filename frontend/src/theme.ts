@@ -251,14 +251,37 @@ export const VP_RIGHT_MARGIN = 12
 export const VP_LEVEL_GAP = 1
 /** Adjacent bands merge until each renders at least this tall, in px. */
 export const VP_MIN_BAND_PX = 2.5
+/**
+ * **One hue for the whole layer**, the discipline already applied to the pools
+ * and to VSA. The profile is background context — where price spent its time —
+ * so it has no business carrying two saturated accents. It takes the VWAP's
+ * steel blue (`VWAP_COLOR`), the cool family that already owns "average price
+ * paid", and separates its three readings by *lightness and alpha* instead of
+ * by hue: faint outside the value area, solid inside it, near-white at the POC.
+ *
+ * The pair it replaces fought the chart on both ends — the full accent blue
+ * (`#2962ff`) was the heaviest ink on screen for the layer that should sit
+ * furthest back, and the POC red (`#f23645`) sat a hair from the down candle's
+ * own red (`#da4d4d`), so the single most important line in the study read as
+ * a stray wick.
+ */
 /** Bands outside the value area. */
-export const VP_LEVEL_LINE_COLOR = 'rgba(150, 158, 178, 0.45)'
+export const VP_LEVEL_LINE_COLOR = 'rgba(143, 176, 201, 0.18)'
 /** Bands inside the value area. */
-export const VP_VA_COLOR = '#2962ff'
+export const VP_VA_COLOR = 'rgba(143, 176, 201, 0.55)'
 /** Point of control: the band that traded most, and its line. */
-export const VP_POC_COLOR = '#f23645'
+export const VP_POC_COLOR = 'rgba(233, 244, 252, 1)'
+/** The value-area edges are quieter than the bands they point at — they only
+ *  carry the band back across the lookback. The POC line is the exception: it
+ *  is the one price in the study, and a faint one dissolved into the range and
+ *  consolidation boxes it crosses, so it keeps the band's full white. */
+export const VP_POC_LINE_COLOR = 'rgba(233, 244, 252, 0.95)'
+export const VP_VA_LINE_COLOR = 'rgba(143, 176, 201, 0.30)'
 export const VP_POC_LINE_WIDTH = 1
 export const VP_VA_LINE_WIDTH = 1
+/** Value-area edges are dashed, the POC solid — so the three lines are told
+ *  apart without a second colour. */
+export const VP_VA_LINE_DASH = [3, 4]
 /** Gap between a level line's end and the band it points at, in px. */
 export const VP_VA_LINE_GAP = 10
 /** Delta mode (modifier-click): bands coloured by the aggressor side. */
