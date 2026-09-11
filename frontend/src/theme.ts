@@ -81,13 +81,6 @@ export const POI_BOX_STYLES: Record<string, { border: string; fill: string }> = 
   bearish: { border: '#8a94a666', fill: '#8a94a610' },
 }
 
-/** Manipulation cycle accumulation box colors by status. */
-export const MANIPULATION_BOX_STYLES: Record<string, { border: string; fill: string }> = {
-  in_progress: { border: '#ffb74d', fill: '#ffb74d1a' },
-  confirmed: { border: '#26a69a', fill: '#26a69a1a' },
-  failed: { border: '#8a8f9c', fill: '#8a8f9c12' },
-}
-
 /** Consolidation (lateral range) box: neutral slate — a structural pause, not
  *  a directional zone. Live ranges render slightly stronger than resolved ones. */
 export const CONSOLIDATION_BOX_STYLES: Record<string, { border: string; fill: string }> = {
@@ -149,31 +142,6 @@ export const VSA_STYLES: Record<
   no_supply: { label: 'NoSupply', color: `${VSA_BASE_COLOR}73`, position: 'belowBar' },
   no_demand: { label: 'NoDemand', color: `${VSA_BASE_COLOR}73`, position: 'aboveBar' },
 }
-
-/**
- * Liquidity heatmap gradient stops, cold -> hot, used by the lateral strip on
- * the main chart. Each entry maps a normalized heat threshold (0-1) to an RGB
- * triple; the strip interpolates between adjacent stops per bucket.
- */
-export const HEATMAP_GRADIENT: ReadonlyArray<{ stop: number; rgb: [number, number, number] }> = [
-  { stop: 0.0, rgb: [41, 98, 255] },   // cold — blue (low concentration)
-  { stop: 0.45, rgb: [171, 99, 250] }, // purple
-  { stop: 0.7, rgb: [255, 183, 77] },  // amber
-  { stop: 1.0, rgb: [239, 83, 80] },   // hot — red (stop magnet)
-]
-
-/** Max alpha (0-1) applied to the hottest heatmap band; cold bands fade out. */
-export const HEATMAP_MAX_ALPHA = 0.6
-
-/**
- * Max horizontal projection (px) of a heatmap bar into the chart, reached by
- * the hottest bucket. Bar length scales with normalized heat, so hot levels
- * reach further left like a volume profile.
- */
-export const HEATMAP_MAX_WIDTH = 104
-
-/** Min bar length (px) for any non-zero bucket, so faint levels stay visible. */
-export const HEATMAP_MIN_WIDTH = 6
 
 /**
  * Leverage-liquidation band colors, warmer for higher leverage (more fragile

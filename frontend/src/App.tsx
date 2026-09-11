@@ -6,9 +6,7 @@ import { KpiRow } from './components/KpiRow'
 import { Logo } from './components/Logo'
 import { MainChart } from './components/MainChart'
 import type { VwapMode } from './components/MainChart'
-import { ManipulationCyclesPanel } from './components/ManipulationCyclesPanel'
 import { MultiTimeframePanel } from './components/MultiTimeframePanel'
-import { NarrativePanel } from './components/NarrativePanel'
 import type { DashboardData, MarketOverview, TimeFrame } from './types/dashboard'
 import { isChartBusy } from './utils/chartActivity'
 import { chartTimezoneLabel } from './utils/chartTime'
@@ -146,13 +144,11 @@ function App() {
   const [chartData, setChartData] = useState<DashboardData | null>(null)
   const [overview, setOverview] = useState<MarketOverview | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [manipChartVisible, setManipChartVisible] = useState(false)
   const [divChartVisible, setDivChartVisible] = useState(true)
   // VSA has three states cycled by clicking: 'recent' (only the last N candles,
   // the default — recent context without clutter), 'full' (whole history), and
   // 'off'. Order: recent -> full -> off -> recent.
   const [vsaMode, setVsaMode] = useState<'off' | 'recent' | 'full'>('recent')
-  const [heatmapVisible, setHeatmapVisible] = useState(false)
   const [sweptZonesVisible, setSweptZonesVisible] = useState(false)
   const [huntWindowVisible, setHuntWindowVisible] = useState(false)
   const [continuationWindowVisible, setContinuationWindowVisible] = useState(false)
@@ -507,18 +503,6 @@ function App() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setHeatmapVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        heatmapVisible
-                          ? 'bg-[#ef535022] text-[#ef5350]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle liquidity heatmap strip"
-                    >
-                      ▮ Heatmap
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => setSweptZonesVisible((v) => !v)}
                       className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
                         sweptZonesVisible
@@ -747,7 +731,7 @@ function App() {
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showManipulationBoxes={manipChartVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showHeatmap={heatmapVisible} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showSmc={smcVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} showBlockReclaims={blockReclaimVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible && controlAvailable} showRibbon={ribbonVisible} showDefendedLevels={defendedVisible} />
+                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showSmc={smcVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} showBlockReclaims={blockReclaimVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible && controlAvailable} showRibbon={ribbonVisible} showDefendedLevels={defendedVisible} />
                 </div>
               </div>
 
@@ -767,14 +751,6 @@ function App() {
                         onSelectTimeframe={switchChartTimeframe}
                       />
                     )}
-                    {data.narrative && (
-                      <NarrativePanel narrative={data.narrative} />
-                    )}
-                    <ManipulationCyclesPanel
-                      cycles={data.manipulation_cycles}
-                      chartVisible={manipChartVisible}
-                      onToggleChart={() => setManipChartVisible((v) => !v)}
-                    />
                     {data.behavior_divergences.length > 0 && (
                       <BehaviorDivergencePanel
                         divergences={data.behavior_divergences}

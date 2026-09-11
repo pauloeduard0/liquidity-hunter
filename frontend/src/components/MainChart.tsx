@@ -23,7 +23,6 @@ import { LineLabelsPrimitive, type LineLabel } from '../charting/LineLabelsPrimi
 import { HuntWindowPrimitive, type HuntWindow } from '../charting/HuntWindowPrimitive'
 import { DivergenceMarksPrimitive, GlyphMarksPrimitive, type DivergenceMark } from '../charting/DivergenceMarksPrimitive'
 import { POIBoxesPrimitive, type POIBox } from '../charting/POIBoxesPrimitive'
-import { HeatmapStripPrimitive, type HeatmapBand } from '../charting/HeatmapStripPrimitive'
 import {
   VolumeProfilePrimitive,
   type VolumeProfileBar,
@@ -42,7 +41,7 @@ import { buildStallMarks } from '../utils/stallMarker'
 import { buildRibbon, structureTrendByCandle } from '../utils/tideRibbon'
 import type { DefendedMark } from '../utils/defendedLevels'
 import { buildDefenceLevels, buildDefendedMarks } from '../utils/defendedLevels'
-import type { BehaviorDivergence, BlockReclaim, DashboardData, LiquidityGrab, LiquiditySide, LiquidityZone, LiquidityZoneType, ManipulationCycle, MarketControlPoint, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
+import type { BehaviorDivergence, BlockReclaim, DashboardData, LiquidityGrab, LiquiditySide, LiquidityZone, LiquidityZoneType, MarketControlPoint, OIParticipation, POIZone, SupertrendBreak, SupertrendPoint, VolumeSpreadSignal, VWAPSeries } from '../types/dashboard'
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
@@ -52,7 +51,6 @@ import {
   FONT_COLOR,
   DIVERGENCE_STYLES,
   DIVERGENCE_BASE_COLOR,
-  MANIPULATION_BOX_STYLES,
   POI_BOX_STYLES,
   RSI_DIV_BEARISH_COLOR,
   RSI_DIV_BULLISH_COLOR,
@@ -790,73 +788,11 @@ function buildVsaMarkers(signals: VolumeSpreadSignal[]): SeriesMarker<Time>[] {
     })
 }
 
-const MAX_MANIP_BOXES = 3
-const ZONE_PRICE_BUFFER_PCT = 0.003
-
-function buildManipulationBoxes(
-  cycles: ManipulationCycle[],
-  lastCandleTime: UTCTimestamp,
-): POIBox[] {
-  const boxes: POIBox[] = []
-
-  const statusOrder: Record<string, number> = { in_progress: 0, confirmed: 1, failed: 2 }
-  const sorted = [...cycles].sort((a, b) => {
-    const sa = statusOrder[a.status] ?? 2
-    const sb = statusOrder[b.status] ?? 2
-    if (sa !== sb) return sa - sb
-    return new Date(b.accumulation_start).getTime() - new Date(a.accumulation_start).getTime()
-  }).slice(0, MAX_MANIP_BOXES)
-
-  for (const cycle of sorted) {
-    const style = MANIPULATION_BOX_STYLES[cycle.status] ?? MANIPULATION_BOX_STYLES.failed
-
-    const zoneMid = (cycle.target_zone_price_high + cycle.target_zone_price_low) / 2
-    const buffer = zoneMid * ZONE_PRICE_BUFFER_PCT
-    const priceLow =
-      cycle.target_zone_price_low === cycle.target_zone_price_high
-        ? cycle.target_zone_price_low - buffer
-        : cycle.target_zone_price_low
-    const priceHigh =
-      cycle.target_zone_price_low === cycle.target_zone_price_high
-        ? cycle.target_zone_price_high + buffer
-        : cycle.target_zone_price_high
-
-    const x0 = toChartTime(cycle.accumulation_start)
-    const x1 = cycle.sweep_timestamp
-      ? toChartTime(cycle.sweep_timestamp)
-      : cycle.phase === 'accumulation'
-        ? ((lastCandleTime + 9_999_999) as UTCTimestamp)
-        : toChartTime(cycle.accumulation_end)
-
-    const dirIcon = cycle.direction === 'bullish' ? '▲' : '▼'
-    const phaseLabel =
-      cycle.phase === 'accumulation'
-        ? 'ACC'
-        : cycle.phase === 'manipulation'
-          ? 'MANIP'
-          : 'CONF'
-
-    boxes.push({
-      x0,
-      x1,
-      priceLow,
-      priceHigh,
-      borderColor: style.border,
-      fillColor: style.fill,
-      label: `${phaseLabel} ${dirIcon}`,
-    })
-  }
-
-  return boxes
-}
-
 interface MainChartProps {
   data: DashboardData
   showConsolidationRanges?: boolean
-  showManipulationBoxes?: boolean
   showDivergenceMarkers?: boolean
   vsaMode?: 'off' | 'recent' | 'full'
-  showHeatmap?: boolean
   showSweptZones?: boolean
   showOrderBlocks?: boolean
   showSweeps?: boolean
@@ -883,10 +819,8 @@ interface MainChartProps {
 export function MainChart({
   data,
   showConsolidationRanges = true,
-  showManipulationBoxes = true,
   showDivergenceMarkers = true,
   vsaMode = 'recent',
-  showHeatmap = true,
   showSweptZones = true,
   showOrderBlocks = true,
   showSweeps = true,
@@ -933,9 +867,7 @@ export function MainChart({
   const labelsPrimitiveRef = useRef<LineLabelsPrimitive | null>(null)
   const huntWindowPrimitiveRef = useRef<HuntWindowPrimitive | null>(null)
   const poiBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
-  const manipBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
   const rangeBoxesPrimitiveRef = useRef<POIBoxesPrimitive | null>(null)
-  const heatmapPrimitiveRef = useRef<HeatmapStripPrimitive | null>(null)
   const volumeProfilePrimitiveRef = useRef<VolumeProfilePrimitive | null>(null)
   const eqlZonesPrimitiveRef = useRef<EqlZonesPrimitive | null>(null)
   const ribbonPrimitiveRef = useRef<RibbonPrimitive | null>(null)
@@ -1119,17 +1051,9 @@ export function MainChart({
     series.attachPrimitive(poiBoxesPrimitive)
     poiBoxesPrimitiveRef.current = poiBoxesPrimitive
 
-    const manipBoxesPrimitive = new POIBoxesPrimitive()
-    series.attachPrimitive(manipBoxesPrimitive)
-    manipBoxesPrimitiveRef.current = manipBoxesPrimitive
-
     const rangeBoxesPrimitive = new POIBoxesPrimitive()
     series.attachPrimitive(rangeBoxesPrimitive)
     rangeBoxesPrimitiveRef.current = rangeBoxesPrimitive
-
-    const heatmapPrimitive = new HeatmapStripPrimitive()
-    series.attachPrimitive(heatmapPrimitive)
-    heatmapPrimitiveRef.current = heatmapPrimitive
 
     const volumeProfilePrimitive = new VolumeProfilePrimitive()
     series.attachPrimitive(volumeProfilePrimitive)
@@ -1255,9 +1179,7 @@ export function MainChart({
       rsiDivSeriesRef.current = []
       labelsPrimitiveRef.current = null
       poiBoxesPrimitiveRef.current = null
-      manipBoxesPrimitiveRef.current = null
       rangeBoxesPrimitiveRef.current = null
-      heatmapPrimitiveRef.current = null
       volumeProfilePrimitiveRef.current = null
       divergenceMarkersRef.current = null
       divergenceMarksPrimitiveRef.current = null
@@ -1597,7 +1519,7 @@ export function MainChart({
     const eqlZones: EqlZoneInput[] = []
     // Only equal-level pools are drawn; standalone swing highs/lows are single
     // pivots (weaker resting liquidity) that just clutter the chart — they still
-    // feed scoring/heatmap etc. on the backend, only the render drops them.
+    // feed the scoring on the backend, only the render drops them.
     const eqPrice = data.candles[data.candles.length - 1].close
     const standing = showEqlZones
       ? data.ranked_zones.filter(
@@ -2246,12 +2168,6 @@ export function MainChart({
       poiBoxesPrimitiveRef.current?.setBoxes(poiBoxes)
     }
 
-    // Manipulation cycle accumulation boxes
-    const manipBoxes = showManipulationBoxes
-      ? buildManipulationBoxes(data.manipulation_cycles ?? [], lastCandleTime)
-      : []
-    manipBoxesPrimitiveRef.current?.setBoxes(manipBoxes)
-
     // Consolidation (lateral range) boxes: the stretches where the structure
     // detector was correctly silent, made explicit. A live (unresolved) range
     // extends to the right edge via the far-future sentinel clamp.
@@ -2445,17 +2361,6 @@ export function MainChart({
       showSmc ? buildStallMarks(data.structural_stall, data.candles, STRUCTURE_DIRECTION_COLORS) : [],
     )
 
-    // Liquidity heatmap strip
-    const heatmapBands: HeatmapBand[] =
-      showHeatmap && data.liquidity_heatmap
-        ? data.liquidity_heatmap.buckets.map((bucket) => ({
-            priceLow: bucket.price_low,
-            priceHigh: bucket.price_high,
-            heat: bucket.heat,
-          }))
-        : []
-    heatmapPrimitiveRef.current?.setBands(heatmapBands)
-
     // Volume-at-price over the visible window (POC / value area / HVN-LVN).
     const profile = showVolumeProfile ? data.volume_profile : null
     const volumeProfileBars: VolumeProfileBar[] = profile
@@ -2585,7 +2490,6 @@ export function MainChart({
     labelsPrimitiveRef.current?.setCandles(labelCandles)
     // Box labels (OB/MB, accumulation, range) dodge candles the same way.
     poiBoxesPrimitiveRef.current?.setCandles(labelCandles)
-    manipBoxesPrimitiveRef.current?.setCandles(labelCandles)
     rangeBoxesPrimitiveRef.current?.setCandles(labelCandles)
 
     if (!hasFittedRef.current) {
@@ -2601,7 +2505,7 @@ export function MainChart({
       hasFittedRef.current = true
     }
 
-  }, [drawSig, showConsolidationRanges, showManipulationBoxes, showDivergenceMarkers, vsaMode, showHeatmap, showSweptZones, showOrderBlocks, showSweeps, showSmc, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, showBlockReclaims, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode, showRibbon, showDefendedLevels])
+  }, [drawSig, showConsolidationRanges, showDivergenceMarkers, vsaMode, showSweptZones, showOrderBlocks, showSweeps, showSmc, showEqlZones, showHuntWindow, showContinuationWindow, showVolume, showRsiDivergence, showSupertrend, showBlockReclaims, vwapMode, showAnchoredVwap, showVolumeProfile, volumeProfileMode, showRibbon, showDefendedLevels])
 
   // Incremental live-price update: the forming candle, and the fixed-reference
   // series derived from it, refreshed in place on every poll. This runs on the
