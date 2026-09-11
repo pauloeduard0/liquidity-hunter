@@ -60,6 +60,47 @@ _SOURCE_PRIORITY: dict[str, int] = {
 }
 
 
+def _sweep_phrase(ms: MarketStructure, close: float | None) -> str:
+    """The geometry half of a sweep's description, read off one candle.
+
+    A `LIQUIDITY_SWEEP` is the *residual* category of the structure detector: a
+    counter-trend pivot that broke the trailing reference and then failed the
+    CHoCH persistence check (the breaking candle plus `persistence_candles`
+    must all close beyond it). That test spans several candles, so the candle
+    the event is dated on may well have *closed* past the level -- measured, it
+    does in 44% of confirmed sweeps, by a median of 0.27 ATR and up to 11 ATR
+    (`research/SWEEP_S2_RECLAIM.md`). Calling every one of those "wick pierced"
+    was simply false.
+
+    What stays true either way is "failed to hold" -- that is the detector's
+    actual claim, and 94.8% of the close-through ones do trade back through the
+    level within 20 candles. So only the first half of the sentence varies.
+
+    This describes the candle and nothing else. A close beyond the level is
+    *not* a breakout, a confirmed break, a BOS or a breach: the detector has
+    already ruled that out by emitting a sweep.
+
+    `close` is `None` when the event's candle is not in the visible window;
+    the reference may be absent too. Either way the caller falls back to the
+    wording this function has always produced, which is never wrong about the
+    part that matters.
+    """
+    level = ms.reference_price_level
+    ref = f"{level:,.2f}" if level else "—"
+    # `direction` is the side the wick reached: a bullish sweep took highs (so
+    # the level it broke was resistance above), a bearish one took lows.
+    bullish = ms.direction == MarketDirection.BULLISH
+    side = "resistance" if bullish else "support"
+    if level is None or close is None:
+        return f"wick pierced {ref} {side} but failed to hold"
+    if close == level:
+        return f"pierced {ref} {side} and closed on it"
+    beyond = close > level if bullish else close < level
+    if beyond:
+        return f"closed beyond {ref} {side} but failed to hold"
+    return f"wick pierced {ref} {side} but failed to hold"
+
+
 class NarrativeEngine:
     """Builds a :class:`MarketNarrative` from a completed :class:`DashboardData`."""
 
@@ -88,9 +129,18 @@ class NarrativeEngine:
 
     def _build_timeline(self, data: DashboardData) -> list[NarrativeEvent]:
         events: list[NarrativeEvent] = []
-        events.extend(self._events_from_structure(data.market_structure_events, "market_structure"))
+        # Only the sweep branch reads it, and only to describe the candle the
+        # event is dated on -- see `_sweep_phrase`.
+        closes = {candle.timestamp: candle.close for candle in data.candles}
         events.extend(
-            self._events_from_structure(data.internal_structure_events, "internal_structure")
+            self._events_from_structure(
+                data.market_structure_events, "market_structure", closes
+            )
+        )
+        events.extend(
+            self._events_from_structure(
+                data.internal_structure_events, "internal_structure", closes
+            )
         )
         events.extend(self._events_from_manipulation_cycles(data.manipulation_cycles))
         events.extend(self._events_from_behavior_divergences(data))
@@ -120,6 +170,7 @@ class NarrativeEngine:
         self,
         structure_events: list[MarketStructure],
         source_layer: str,
+        closes: dict[datetime, float] | None = None,
     ) -> list[NarrativeEvent]:
         events: list[NarrativeEvent] = []
         scope_label = "" if source_layer == "market_structure" else " (internal)"
@@ -157,11 +208,10 @@ class NarrativeEngine:
                     )
                 )
             elif ms.event == StructureEvent.LIQUIDITY_SWEEP:
-                ref = f"{ms.reference_price_level:,.2f}" if ms.reference_price_level else "—"
-                side = "support" if ms.direction == MarketDirection.BEARISH else "resistance"
+                close = None if closes is None else closes.get(ms.timestamp)
                 desc = (
                     f"Sweep {ms.direction.value}{scope_label} — "
-                    f"wick pierced {ref} {side} but failed to hold"
+                    f"{_sweep_phrase(ms, close)}"
                 )
                 events.append(
                     NarrativeEvent(

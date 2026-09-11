@@ -1226,3 +1226,142 @@ def test_no_bos_vd_anomaly_without_exhaustion() -> None:
         if "institutional conviction" in a.description.lower()
     ]
     assert len(vd_anomalies) == 0
+
+
+# ── Sweep geometry in the timeline text ─────────────────────────────
+#
+# `LIQUIDITY_SWEEP` is the structure detector's *residual* category: a
+# counter-trend pivot whose break failed the CHoCH persistence check. That
+# check spans several candles, so the candle the event is dated on may well
+# have closed past the level -- measured at 44% of confirmed sweeps
+# (`research/SWEEP_S2_RECLAIM.md`). The narrative used to call all of them
+# "wick pierced". Only the geometry half of the sentence varies; "failed to
+# hold" is the detector's actual claim and stays.
+
+
+def _sweep_at(i: int, *, direction: MarketDirection, level: float) -> MarketStructure:
+    return MarketStructure(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=T0 + H1 * i,
+        event=StructureEvent.LIQUIDITY_SWEEP,
+        direction=direction,
+        price_level=level + (1.0 if direction == MarketDirection.BULLISH else -1.0),
+        reference_price_level=level,
+        scope=StructureScope.MAJOR,
+    )
+
+
+def _sweep_description(
+    *, direction: MarketDirection, level: float, close: float
+) -> str:
+    """The timeline text for one sweep whose candle closed at `close`."""
+    i = 3
+    sweep = _sweep_at(i, direction=direction, level=level)
+    candles = [_candle(0), _candle(i, price=close)]
+    data = _minimal_data(candles=candles, market_structure_events=[sweep])
+    timeline = NarrativeEngine().build(data).timeline
+    sweeps = [e for e in timeline if e.event_type == NarrativeEventType.SWEEP]
+    assert len(sweeps) == 1
+    return sweeps[0].description
+
+
+def test_bullish_sweep_that_closed_back_below_reads_as_a_wick() -> None:
+    desc = _sweep_description(
+        direction=MarketDirection.BULLISH, level=100.0, close=99.0
+    )
+    assert "wick pierced 100.00 resistance but failed to hold" in desc
+
+
+def test_bearish_sweep_that_closed_back_above_reads_as_a_wick() -> None:
+    desc = _sweep_description(
+        direction=MarketDirection.BEARISH, level=100.0, close=101.0
+    )
+    assert "wick pierced 100.00 support but failed to hold" in desc
+
+
+def test_bullish_sweep_that_closed_above_the_level_does_not_say_wick() -> None:
+    desc = _sweep_description(
+        direction=MarketDirection.BULLISH, level=100.0, close=105.0
+    )
+    assert "closed beyond 100.00 resistance but failed to hold" in desc
+    assert "wick" not in desc
+
+
+def test_bearish_sweep_that_closed_below_the_level_does_not_say_wick() -> None:
+    desc = _sweep_description(
+        direction=MarketDirection.BEARISH, level=100.0, close=95.0
+    )
+    assert "closed beyond 100.00 support but failed to hold" in desc
+    assert "wick" not in desc
+
+
+def test_a_close_exactly_on_the_level_claims_neither_side() -> None:
+    for direction in (MarketDirection.BULLISH, MarketDirection.BEARISH):
+        desc = _sweep_description(direction=direction, level=100.0, close=100.0)
+        assert "closed on it" in desc
+        assert "wick" not in desc
+        assert "beyond" not in desc
+
+
+def test_a_close_through_is_never_called_a_break() -> None:
+    """The detector already ruled out a confirmed reversal by emitting a sweep."""
+    desc = _sweep_description(
+        direction=MarketDirection.BULLISH, level=100.0, close=105.0
+    )
+    lowered = desc.lower()
+    for word in ("breakout", "confirmed", "bos", "choch", "breach"):
+        assert word not in lowered
+    assert desc.startswith("Sweep bullish")
+
+
+def test_a_sweep_whose_candle_is_outside_the_window_keeps_the_old_wording() -> None:
+    """Fallback: no candle to read, so no geometric claim is invented."""
+    sweep = _sweep_at(12, direction=MarketDirection.BEARISH, level=100.0)
+    data = _minimal_data(candles=[_candle(0)], market_structure_events=[sweep])
+    timeline = NarrativeEngine().build(data).timeline
+    sweeps = [e for e in timeline if e.event_type == NarrativeEventType.SWEEP]
+    assert len(sweeps) == 1
+    assert "wick pierced 100.00 support but failed to hold" in sweeps[0].description
+
+
+def test_a_sweep_without_a_reference_level_keeps_the_old_wording() -> None:
+    sweep = MarketStructure(
+        symbol="BTCUSDT",
+        timeframe=TimeFrame.H1,
+        timestamp=T0 + H1 * 3,
+        event=StructureEvent.LIQUIDITY_SWEEP,
+        direction=MarketDirection.BULLISH,
+        price_level=101.0,
+        scope=StructureScope.MAJOR,
+    )
+    data = _minimal_data(
+        candles=[_candle(0), _candle(3, price=105.0)],
+        market_structure_events=[sweep],
+    )
+    timeline = NarrativeEngine().build(data).timeline
+    sweeps = [e for e in timeline if e.event_type == NarrativeEventType.SWEEP]
+    assert len(sweeps) == 1
+    assert "wick pierced — resistance but failed to hold" in sweeps[0].description
+
+
+def test_the_sweep_event_itself_is_unchanged_by_the_wording() -> None:
+    """Only the text varies: type, timestamp and direction are untouched."""
+    level, i = 100.0, 3
+    sweep = _sweep_at(i, direction=MarketDirection.BULLISH, level=level)
+    built = []
+    for close in (99.0, 105.0):
+        data = _minimal_data(
+            candles=[_candle(0), _candle(i, price=close)],
+            market_structure_events=[sweep],
+        )
+        timeline = NarrativeEngine().build(data).timeline
+        built.append([e for e in timeline if e.event_type == NarrativeEventType.SWEEP])
+
+    assert len(built[0]) == len(built[1]) == 1
+    a, b = built[0][0], built[1][0]
+    assert a.timestamp == b.timestamp == sweep.timestamp
+    assert a.direction == b.direction == MarketDirection.BULLISH
+    assert a.event_type == b.event_type == NarrativeEventType.SWEEP
+    assert a.source_layer == b.source_layer
+    assert a.description != b.description
