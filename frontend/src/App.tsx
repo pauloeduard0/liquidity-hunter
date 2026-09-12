@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 
 import { fetchDashboardData, fetchOverview } from './api/dashboard'
 import { BehaviorDivergencePanel } from './components/BehaviorDivergencePanel'
+import { IndicatorMenu } from './components/IndicatorMenu'
+import type { IndicatorGroup } from './components/IndicatorMenu'
 import { KpiRow } from './components/KpiRow'
 import { Logo } from './components/Logo'
 import { MainChart } from './components/MainChart'
@@ -281,6 +283,251 @@ function App() {
     return () => clearInterval(interval)
   }, [])
 
+  // Every switchable chart layer, in one list. Grouped by what the layer
+  // reads (structure / flow / bands) rather than by when it was added, and
+  // each carries the colour it is drawn in so the row matches the pane.
+  const indicatorGroups: IndicatorGroup[] = [
+    {
+      label: 'Estrutura',
+      items: [
+        {
+          id: 'smc',
+          label: 'SMC staircase',
+          glyph: '⌗',
+          color: '#2EE6B8',
+          active: smcVisible,
+          onToggle: () => setSmcVisible((v) => !v),
+          title: 'BOS / CHoCH / CHoCH ✕ lines and labels',
+        },
+        {
+          id: 'ob',
+          label: 'Order blocks',
+          glyph: '▦',
+          color: '#2979ff',
+          active: obVisible,
+          onToggle: () => setObVisible((v) => !v),
+          title: 'Order block (POI) zones',
+        },
+        {
+          id: 'eql',
+          label: 'Liquidity targets',
+          glyph: '═',
+          color: '#26a69a',
+          active: eqlVisible,
+          onToggle: () => setEqlVisible((v) => !v),
+          title: 'Target zone lines (EQH/EQL, OB, FVG, swings)',
+        },
+        {
+          id: 'sweep',
+          label: 'Sweeps',
+          glyph: '⌇',
+          color: '#ab47bc',
+          active: sweepVisible,
+          onToggle: () => setSweepVisible((v) => !v),
+          title: 'Liquidity sweep (SWEEP + RTO) markers',
+        },
+        {
+          id: 'swept',
+          label: 'Swept zones',
+          glyph: '⊟',
+          color: '#ff9800',
+          active: sweptZonesVisible,
+          onToggle: () => setSweptZonesVisible((v) => !v),
+          title: 'Swept EQH/EQL zones',
+        },
+        {
+          id: 'range',
+          label: 'Consolidation',
+          glyph: '▭',
+          color: '#90a4ae',
+          active: rangeBoxesVisible,
+          onToggle: () => setRangeBoxesVisible((v) => !v),
+          title: 'Consolidation (lateral range) boxes',
+        },
+        {
+          id: 'hunt',
+          label: 'Hunt window',
+          glyph: '⚡',
+          color: '#ffb300',
+          active: huntWindowVisible,
+          onToggle: () => setHuntWindowVisible((v) => !v),
+          title: 'Liquidity-hunt window shading (counter-trend flip → capture)',
+        },
+        {
+          id: 'cont',
+          label: 'Continuation grabs',
+          glyph: '↗',
+          color: '#42a5f5',
+          active: continuationWindowVisible,
+          onToggle: () => setContinuationWindowVisible((v) => !v),
+          title: 'Aligned trend-continuation liquidity grabs (pullback swept internal liquidity, then resumed)',
+        },
+        {
+          id: 'piso',
+          label: 'Piso (defended)',
+          glyph: '⛨',
+          color: '#ffca28',
+          // The mark is measured against the Tide envelope, so turning it on
+          // brings up the band it refers to -- otherwise the wick's reference
+          // is invisible.
+          active: defendedVisible,
+          onToggle: () =>
+            setDefendedVisible((v) => {
+              if (!v) setRibbonVisible(true)
+              return !v
+            }),
+          title:
+            'Nível testado na borda da fita e defendido: o pavio limpou ±1σ dentro de zonas de 2+ famílias e o candle fechou de volta. O número é quantas famílias concordaram.',
+        },
+      ],
+    },
+    {
+      label: 'Volume e fluxo',
+      items: [
+        {
+          id: 'vol',
+          label: 'Volume bars',
+          glyph: '▬',
+          color: '#26c6da',
+          active: volumeVisible,
+          onToggle: () => setVolumeVisible((v) => !v),
+          title: 'Raw volume bars (base of the main pane)',
+        },
+        {
+          id: 'vp',
+          label: 'Volume profile',
+          glyph: '▤',
+          color: '#5b8dff',
+          active: volumeProfileVisible,
+          onToggle: () => setVolumeProfileVisible((v) => !v),
+          badge: volumeProfileDelta ? 'Δ' : undefined,
+          title: 'Volume-at-price (POC red, value area blue)',
+          secondary: {
+            glyph: 'Δ',
+            title: 'Colour the bands by aggressor side (estimated per candle)',
+            active: volumeProfileDelta,
+            onToggle: () => setVolumeProfileDelta((v) => !v),
+          },
+        },
+        {
+          id: 'vsa',
+          label: 'VSA signals',
+          glyph: '≈',
+          color: '#e040fb',
+          active: vsaMode !== 'off',
+          // Three states, cycled by the row: recent -> full history -> off.
+          onToggle: () =>
+            setVsaMode((m) => (m === 'recent' ? 'full' : m === 'full' ? 'off' : 'recent')),
+          badge: vsaMode === 'recent' ? 'recent' : vsaMode === 'full' ? 'full' : undefined,
+          title: 'Volume-spread signals — click to cycle: recent (last candles) → full history → off',
+        },
+        {
+          id: 'control',
+          label: 'Control oscillator',
+          glyph: '⚑',
+          color: '#26a69a',
+          active: controlOscVisible,
+          onToggle: () => setControlOscVisible((v) => !v),
+          disabled: !controlAvailable,
+          title: controlAvailable
+            ? 'CVD aggression × OI — who is in control, and how strongly'
+            : 'Sem open interest nesta fonte (par on-chain ou spot) — não há leitura de controle para desenhar',
+        },
+        {
+          id: 'panes',
+          label: 'Vol delta / RSI panes',
+          glyph: '⊞',
+          color: '#42a5f5',
+          active: indicatorsVisible,
+          onToggle: () => setIndicatorsVisible((v) => !v),
+          title: 'Volume delta / RSI indicator panes',
+        },
+        {
+          id: 'rsidiv',
+          label: 'RSI divergence',
+          glyph: '∿',
+          color: '#ab47bc',
+          active: rsiDivVisible,
+          onToggle: () => setRsiDivVisible((v) => !v),
+          title: 'RSI divergence trendlines mirrored onto the price structure',
+        },
+      ],
+    },
+    {
+      label: 'Médias e bandas',
+      items: [
+        {
+          id: 'vwap',
+          label: 'VWAP',
+          glyph: '⌀',
+          color: '#e0a13a',
+          active: vwapMode !== 'off' || anchoredVwapVisible,
+          onToggle: () => setVwapMode((m) => VWAP_MODE_CYCLE[m]),
+          badge: `${vwapMode === 'bands' ? 'σ' : vwapMode === 'line' ? 'line' : ''}${
+            anchoredVwapVisible ? ' ⚓' : ''
+          }`.trim() || undefined,
+          title: 'Cycle the periodic VWAP — off → line (the average price paid since the anchor) → line + ±1σ/±2σ bands',
+          secondary: {
+            glyph: '⚓',
+            title: 'Anchored VWAPs from the last CHoCH and sweep (that crowd’s break-even)',
+            active: anchoredVwapVisible,
+            onToggle: () => setAnchoredVwapVisible((v) => !v),
+          },
+        },
+        {
+          id: 'tide',
+          label: 'Tide ribbon',
+          glyph: '◈',
+          color: '#e0b341',
+          active: ribbonVisible,
+          onToggle: () => setRibbonVisible((v) => !v),
+          title: 'VWAP envelope coloured by SMC structure, desaturated when no fresh money backs the move',
+        },
+        {
+          id: 'st',
+          label: 'Supertrend',
+          glyph: '⌁',
+          color: '#26a69a',
+          active: supertrendVisible,
+          onToggle: () => setSupertrendVisible((v) => !v),
+          title: 'ATR-trailing trend envelope, flip markers on the turn',
+        },
+        {
+          id: 'obvwap',
+          label: 'OB · VWAP reclaims',
+          glyph: '⟡',
+          color: '#d8a949',
+          active: blockReclaimVisible,
+          onToggle: () => setBlockReclaimVisible((v) => !v),
+          title: 'A VWAP reclaim right after price tested an order block, drawn only where the two sit within about one ATR of each other. The label is that distance.',
+        },
+      ],
+    },
+  ]
+
+  const resetIndicators = () => {
+    setSmcVisible(false)
+    setObVisible(false)
+    setEqlVisible(false)
+    setSweepVisible(false)
+    setSweptZonesVisible(false)
+    setRangeBoxesVisible(false)
+    setHuntWindowVisible(false)
+    setContinuationWindowVisible(false)
+    setDefendedVisible(false)
+    setVolumeVisible(false)
+    setVolumeProfileVisible(false)
+    setVsaMode('off')
+    setControlOscVisible(false)
+    setIndicatorsVisible(false)
+    setRsiDivVisible(false)
+    setVwapMode('off')
+    setAnchoredVwapVisible(false)
+    setRibbonVisible(false)
+    setSupertrendVisible(false)
+    setBlockReclaimVisible(false)
+  }
+
   return (
     <div className="flex h-screen flex-col bg-[#0a0d14] text-[#d1d4dc]">
       {/* ── Header ───────────────────────────────────────────── */}
@@ -355,264 +602,10 @@ function App() {
                         </button>
                       ))}
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setObVisible((v) => !v)}
-                      className={`ml-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        obVisible
-                          ? 'bg-[#2979ff22] text-[#2979ff]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle order block (POI) zones"
-                    >
-                      ▦ OB
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSmcVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        smcVisible
-                          ? 'bg-[#2EE6B822] text-[#2EE6B8]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle the SMC structure staircase (BOS / CHoCH / CHoCH ✕ lines and labels)"
-                    >
-                      ⌗ SMC
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSweepVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        sweepVisible
-                          ? 'bg-[#ab47bc22] text-[#ab47bc]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle liquidity sweep (SWEEP + RTO) markers"
-                    >
-                      ⌇ Sweep
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEqlVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        eqlVisible
-                          ? 'bg-[#26a69a22] text-[#26a69a]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle liquidity target zone lines (EQH/EQL, OB, FVG, swings)"
-                    >
-                      ═ EQL
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setVolumeVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        volumeVisible
-                          ? 'bg-[#26c6da22] text-[#26c6da]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle raw volume bars (base of the main pane)"
-                    >
-                      ▬ Vol
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSweptZonesVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        sweptZonesVisible
-                          ? 'bg-[#ff980022] text-[#ff9800]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle swept EQH/EQL zones"
-                    >
-                      ⊟ Swept
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRangeBoxesVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        rangeBoxesVisible
-                          ? 'bg-[#90a4ae22] text-[#90a4ae]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle consolidation (lateral range) boxes"
-                    >
-                      ▭ Range
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setVsaMode((m) =>
-                          m === 'recent' ? 'full' : m === 'full' ? 'off' : 'recent',
-                        )
-                      }
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        vsaMode !== 'off'
-                          ? 'bg-[#e040fb22] text-[#e040fb]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="VSA volume-spread signals — click to cycle: recent (last candles) → full history → off"
-                    >
-                      ≈ VSA{vsaMode === 'recent' ? ' ·' : vsaMode === 'full' ? ' ⁝' : ''}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setHuntWindowVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        huntWindowVisible
-                          ? 'bg-[#ffb30022] text-[#ffb300]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle the liquidity-hunt window shading (counter-trend flip → capture)"
-                    >
-                      ⚡ Hunt
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setContinuationWindowVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        continuationWindowVisible
-                          ? 'bg-[#42a5f522] text-[#42a5f5]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle aligned trend-continuation liquidity grabs (pullback swept internal liquidity, then resumed)"
-                    >
-                      ↗ Cont
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRsiDivVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        rsiDivVisible
-                          ? 'bg-[#ab47bc22] text-[#ab47bc]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle RSI divergence trendlines mirrored onto the price structure"
-                    >
-                      ∿ RSI Div
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSupertrendVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        supertrendVisible
-                          ? 'bg-[#26a69a22] text-[#26a69a]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle the Supertrend band (ATR-trailing trend envelope, flip markers on the turn)"
-                    >
-                      ⌁ ST
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setBlockReclaimVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        blockReclaimVisible
-                          ? 'bg-[#d8a94922] text-[#d8a949]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle block reclaims: a VWAP reclaim right after price tested an order block, drawn only where the two sit within about one ATR of each other. The label is that distance."
-                    >
-                      ⟡ OB·VWAP
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        // Alt/Shift-click toggles the anchored VWAPs (what the
-                        // crowd from the last CHoCH/sweep paid); plain click
-                        // toggles the session line.
-                        if (e.altKey || e.shiftKey) setAnchoredVwapVisible((v) => !v)
-                        else setVwapMode((m) => VWAP_MODE_CYCLE[m])
-                      }}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        vwapMode !== 'off' || anchoredVwapVisible
-                          ? 'bg-[#e0a13a22] text-[#e0a13a]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Click: cycle the periodic VWAP — off → line (the average price paid since the anchor) → line + ±1σ/±2σ bands · Alt/Shift-click: anchored VWAPs from the last CHoCH and sweep (that crowd's break-even)"
-                    >
-                      ⌀ VWAP{vwapMode === 'bands' ? ' σ' : ''}{anchoredVwapVisible ? ' ⚓' : ''}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        // Alt/Shift-click swaps the bands to delta colouring;
-                        // plain click toggles visibility.
-                        if (e.altKey || e.shiftKey) setVolumeProfileDelta((v) => !v)
-                        else setVolumeProfileVisible((v) => !v)
-                      }}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        volumeProfileVisible
-                          ? 'bg-[#2962ff22] text-[#5b8dff]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Click: toggle volume-at-price (POC red, value area blue) · Alt/Shift-click: colour bands by aggressor side (estimated per candle)"
-                    >
-                      ▤ VP{volumeProfileDelta ? ' \u0394' : ''}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRibbonVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        ribbonVisible
-                          ? 'bg-[#e0b34122] text-[#e0b341]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Tide — VWAP envelope coloured by SMC structure, desaturated when no fresh money backs the move"
-                    >
-                      ◈ Tide
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // The mark is measured against the Tide envelope, so
-                        // turning it on brings up the band it refers to --
-                        // otherwise the wick's reference is invisible.
-                        setDefendedVisible((v) => {
-                          if (!v) setRibbonVisible(true)
-                          return !v
-                        })
-                      }}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        defendedVisible
-                          ? 'bg-[#ffca2822] text-[#ffca28]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Piso — nível testado na borda da fita e defendido: o pavio limpou ±1σ dentro de zonas de 2+ famílias e o candle fechou de volta. O número é quantas famílias concordaram."
-                    >
-                      ⛨ Piso
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!controlAvailable}
-                      onClick={() => setControlOscVisible((v) => !v)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        !controlAvailable
-                          ? 'cursor-not-allowed bg-[#1a1f2e] text-[#3a4051]'
-                          : controlOscVisible
-                            ? 'bg-[#26a69a22] text-[#26a69a]'
-                            : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title={
-                        controlAvailable
-                          ? 'Toggle the control oscillator pane (CVD aggression × OI — who is in control, and how strongly)'
-                          : 'Sem open interest nesta fonte (par on-chain ou spot) — não há leitura de controle para desenhar'
-                      }
-                    >
-                      ⚑ Control
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIndicatorsVisible((v) => !v)}
-                      className={`ml-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                        indicatorsVisible
-                          ? 'bg-[#42a5f522] text-[#42a5f5]'
-                          : 'bg-[#1a1f2e] text-[#5d6477] hover:text-[#9ca3b4]'
-                      }`}
-                      title="Toggle volume delta / RSI indicator panes"
-                    >
-                      {indicatorsVisible ? '▾' : '▸'} Vol/RSI
-                    </button>
+                    <IndicatorMenu
+                      groups={indicatorGroups}
+                      onReset={resetIndicators}
+                    />
                   </div>
                   <div className="flex items-center gap-2 text-[10px] text-[#3d4455]">
                     {(() => {

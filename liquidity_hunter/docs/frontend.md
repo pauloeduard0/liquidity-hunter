@@ -22,6 +22,23 @@ counts, clock) and `LoadingSkeleton`. The header carries only the logo:
   card's `overflow-hidden` was moved from the outer column down to the chart
   body (`rounded-b-lg`), so the toolbar no longer clips it.
 
+- **`frontend/src/components/IndicatorMenu.tsx`** — `IndicatorMenu`, the
+  `fx Indicators` dropdown holding **every** switchable chart layer, which
+  used to be ~18 chips crowding the toolbar. `App.tsx` declares the layers as
+  data (`indicatorGroups: IndicatorGroup[]`) in three groups — *Estrutura*,
+  *Volume e fluxo*, *Médias e bandas* — each item carrying the colour it is
+  drawn in on the chart, so a row reads in the hue the user then looks for in
+  the pane. The **on/off pattern is shared by all of them**: filled dot +
+  tinted row + bright label when on, hollow grey dot when off; the button
+  shows the active count. A layer's modifier-click extra is its own chip on
+  the row (`Δ` delta colouring on the volume profile, `⚓` anchored VWAPs),
+  a cycling layer keeps cycling from its row (VSA `recent → full → off`, VWAP
+  `off → line → bands`) and shows the state as a badge, and an unavailable
+  one is dimmed and unclickable (the control oscillator without OI).
+  Selecting does **not** close the panel; `Desligar tudo` (`resetIndicators`)
+  clears every layer. Elsewhere in this doc, "the `▭ Range` toolbar button"
+  and friends now mean that layer's row in this menu.
+
   The timeframe row beside it is the **only** timeframe selector and drives
   the global `timeframe` (`switchTimeframe`): the header's duplicate row is
   gone, and so is the former chart-only divergence (`chartTimeframe`,
