@@ -7,6 +7,7 @@ import { Logo } from './components/Logo'
 import { MainChart } from './components/MainChart'
 import type { VwapMode } from './components/MainChart'
 import { MultiTimeframePanel } from './components/MultiTimeframePanel'
+import { SymbolPicker } from './components/SymbolPicker'
 import type { DashboardData, MarketOverview, TimeFrame } from './types/dashboard'
 import { isChartBusy } from './utils/chartActivity'
 import { chartTimezoneLabel } from './utils/chartTime'
@@ -139,9 +140,7 @@ function StatusBar({ data, symbol }: { data: DashboardData | null; symbol: strin
 function App() {
   const [symbol, setSymbol] = useState<string>('BTCUSDT')
   const [timeframe, setTimeframe] = useState<TimeFrame>('1h')
-  const [chartTimeframe, setChartTimeframe] = useState<TimeFrame>('1h')
   const [data, setData] = useState<DashboardData | null>(null)
-  const [chartData, setChartData] = useState<DashboardData | null>(null)
   const [overview, setOverview] = useState<MarketOverview | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [divChartVisible, setDivChartVisible] = useState(true)
@@ -182,8 +181,6 @@ function App() {
   const [indicatorsVisible, setIndicatorsVisible] = useState(false)
   const [, setTick] = useState(0)
 
-  const chartDiverged = chartTimeframe !== timeframe
-
   // The rendered snapshot lags the selection while a first-visit combo loads;
   // dim the dashboard and show the loading pill instead of a skeleton.
   const dataStale = data !== null && (data.symbol !== symbol || data.timeframe !== timeframe)
@@ -193,7 +190,7 @@ function App() {
   // so `market_control` comes back null and the pane would render empty.
   // Gating on the field itself rather than on the symbol keeps it truthful for
   // every source: the pane is available exactly when there is a reading.
-  const controlAvailable = (chartData ?? data)?.market_control != null
+  const controlAvailable = data?.market_control != null
 
   // An on-chain symbol is charted by market cap, so every price on screen
   // switches to the abbreviated scale (7.17M / 500.00K). Set here, before the
@@ -206,31 +203,20 @@ function App() {
   // was already visited this session, the fetch effect renders it instantly
   // from `snapshotCache` while revalidating.
   const switchTimeframe = (tf: TimeFrame) => {
+    if (tf === timeframe) return
     const cached = snapshotCache.get(snapshotKey(symbol, tf))
     if (cached) setData(cached)
-    setChartData(null)
     setError(null)
     setTimeframe(tf)
-    setChartTimeframe(tf)
   }
 
   const switchSymbol = (sym: string) => {
     if (sym === symbol) return
     const cached = snapshotCache.get(snapshotKey(sym, timeframe))
     if (cached) setData(cached)
-    setChartData(null)
     setOverview(overviewCache.get(sym) ?? null)
     setError(null)
     setSymbol(sym)
-  }
-
-  const switchChartTimeframe = (tf: TimeFrame) => {
-    if (tf === chartTimeframe) return
-    // Synced back to the global timeframe: fall through to the live-polled
-    // `data` rather than pinning a cached snapshot the diverged-chart effect
-    // would never refresh.
-    setChartData(tf === timeframe ? null : (snapshotCache.get(snapshotKey(symbol, tf)) ?? null))
-    setChartTimeframe(tf)
   }
 
   // Fetch global data (sidebar panels + chart when synced)
@@ -263,33 +249,6 @@ function App() {
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [symbol, timeframe])
-
-  // Fetch chart-only data when chart timeframe diverges from global
-  useEffect(() => {
-    if (chartTimeframe === timeframe) return
-
-    let cancelled = false
-
-    const load = (force = false) => {
-      if (!force && shouldDeferPoll()) return
-      fetchDashboardData({ symbol, timeframe: chartTimeframe })
-        .then((result) => {
-          snapshotCache.set(snapshotKey(symbol, chartTimeframe), result)
-          if (!cancelled) setChartData(result)
-        })
-        .catch((err: unknown) => {
-          if (!cancelled) setError(err instanceof Error ? err.message : String(err))
-        })
-    }
-
-    load(true)
-    const interval = setInterval(load, REFRESH_INTERVAL_MS)
-
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-    }
-  }, [symbol, chartTimeframe, timeframe])
 
   // Fetch the multi-timeframe structure ladder (sidebar)
   useEffect(() => {
@@ -338,43 +297,7 @@ function App() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Symbol selector */}
-          <div className="mr-2 flex rounded-md border border-[#1a1f2e] bg-[#0f1319] p-0.5">
-            {SYMBOL_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => switchSymbol(opt.value)}
-                className="relative rounded-[5px] px-3 py-1.5 font-mono text-xs font-semibold tracking-wide transition-all duration-200"
-                style={{
-                  color: symbol === opt.value ? '#e1e4ec' : '#5d6477',
-                  backgroundColor: symbol === opt.value ? '#1a1f2e' : 'transparent',
-                  boxShadow: symbol === opt.value ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
-                }}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Timeframe selector */}
-          <div className="flex rounded-md border border-[#1a1f2e] bg-[#0f1319] p-0.5">
-            {TIMEFRAME_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => switchTimeframe(opt.value)}
-                className="relative rounded-[5px] px-3 py-1.5 text-[11px] font-bold tracking-wide transition-all duration-200"
-                style={{
-                  color: timeframe === opt.value ? '#e1e4ec' : '#5d6477',
-                  backgroundColor: timeframe === opt.value ? '#1a1f2e' : 'transparent',
-                  boxShadow: timeframe === opt.value ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
-                }}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        {/* Symbol and timeframe are both selected in the chart toolbar. */}
       </header>
 
       {/* ── Content ──────────────────────────────────────────── */}
@@ -406,41 +329,32 @@ function App() {
             <KpiRow data={data} />
             <div className="flex min-h-0 flex-1 gap-2">
               {/* Chart area */}
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[#1a1f2e] bg-[#0f1319]">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col rounded-lg border border-[#1a1f2e] bg-[#0f1319]">
                 {/* Chart toolbar */}
                 <div className="flex items-center justify-between border-b border-[#1a1f2e] px-3 py-1.5">
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-[11px] font-semibold text-[#9ca3b4]">
-                      {symbol}
-                    </span>
+                    <SymbolPicker
+                      options={SYMBOL_OPTIONS}
+                      value={symbol}
+                      onChange={switchSymbol}
+                    />
                     <span className="text-[10px] text-[#3d4455]">•</span>
                     <div className="flex items-center rounded border border-[#1a1f2e] bg-[#0a0d14] p-px">
                       {TIMEFRAME_OPTIONS.map((opt) => (
                         <button
                           key={opt.value}
-                          onClick={() => switchChartTimeframe(opt.value)}
-                          className="rounded-[3px] px-1.5 py-0.5 text-[9px] font-bold tracking-wide transition-all duration-150"
+                          onClick={() => switchTimeframe(opt.value)}
+                          className="rounded-[3px] px-2 py-0.5 text-[10px] font-bold tracking-wide transition-all duration-150"
                           style={{
-                            color: chartTimeframe === opt.value ? '#e1e4ec' : '#5d6477',
-                            backgroundColor: chartTimeframe === opt.value
-                              ? (chartDiverged ? '#2962ff30' : '#1a1f2e')
-                              : 'transparent',
-                            boxShadow: chartTimeframe === opt.value ? '0 1px 2px rgba(0,0,0,0.2)' : 'none',
+                            color: timeframe === opt.value ? '#e1e4ec' : '#5d6477',
+                            backgroundColor: timeframe === opt.value ? '#1a1f2e' : 'transparent',
+                            boxShadow: timeframe === opt.value ? '0 1px 2px rgba(0,0,0,0.2)' : 'none',
                           }}
                         >
                           {opt.label}
                         </button>
                       ))}
                     </div>
-                    {chartDiverged && (
-                      <button
-                        onClick={() => switchChartTimeframe(timeframe)}
-                        className="rounded px-1 py-0.5 text-[9px] font-medium text-[#2962ff] hover:bg-[#2962ff15] transition-colors"
-                        title="Sync chart back to global timeframe"
-                      >
-                        SYNC
-                      </button>
-                    )}
                     <button
                       type="button"
                       onClick={() => setObVisible((v) => !v)}
@@ -702,7 +616,7 @@ function App() {
                   </div>
                   <div className="flex items-center gap-2 text-[10px] text-[#3d4455]">
                     {(() => {
-                      const d = chartData ?? data
+                      const d = data
                       const tz = chartTimezoneLabel(d.timeframe)
                       const last = d.candles.at(-1)
                       return last ? (
@@ -726,12 +640,12 @@ function App() {
                     })()}
                   </div>
                 </div>
-                <div className="flex min-h-0 flex-1 flex-col p-1">
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-lg p-1">
                   {/* Keyed by the *snapshot's* identity, not the selection:
                       the mounted chart keeps rendering the previous snapshot
                       while a switch loads, and remounts only when the new
                       combo's data actually arrives. */}
-                  <MainChart key={`${(chartData ?? data).symbol}-${(chartData ?? data).timeframe}`} data={chartData ?? data} showConsolidationRanges={rangeBoxesVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showSmc={smcVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} showBlockReclaims={blockReclaimVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible && controlAvailable} showRibbon={ribbonVisible} showDefendedLevels={defendedVisible} />
+                  <MainChart key={`${data.symbol}-${data.timeframe}`} data={data} showConsolidationRanges={rangeBoxesVisible} showDivergenceMarkers={divChartVisible} vsaMode={vsaMode} showSweptZones={sweptZonesVisible} showOrderBlocks={obVisible} showSweeps={sweepVisible} showSmc={smcVisible} showEqlZones={eqlVisible} showIndicators={indicatorsVisible} showHuntWindow={huntWindowVisible} showContinuationWindow={continuationWindowVisible} showVolume={volumeVisible} showRsiDivergence={rsiDivVisible} showSupertrend={supertrendVisible} showBlockReclaims={blockReclaimVisible} vwapMode={vwapMode} showAnchoredVwap={anchoredVwapVisible} showVolumeProfile={volumeProfileVisible} volumeProfileMode={volumeProfileDelta ? 'delta' : 'value-area'} showControlOscillator={controlOscVisible && controlAvailable} showRibbon={ribbonVisible} showDefendedLevels={defendedVisible} />
                 </div>
               </div>
 
@@ -747,8 +661,8 @@ function App() {
                     {overview && (
                       <MultiTimeframePanel
                         overview={overview}
-                        activeTimeframe={chartTimeframe}
-                        onSelectTimeframe={switchChartTimeframe}
+                        activeTimeframe={timeframe}
+                        onSelectTimeframe={switchTimeframe}
                       />
                     )}
                     {data.behavior_divergences.length > 0 && (

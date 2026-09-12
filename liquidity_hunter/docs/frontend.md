@@ -10,8 +10,23 @@ the dashboard data.
 
 The React frontend has a professional TradingView-style dark UI with a
 `Logo` component, `StatusBar` (live connection indicator, candle/event
-counts, clock), `LoadingSkeleton`, and header with symbol badge + timeframe
-selector.
+counts, clock) and `LoadingSkeleton`. The header carries only the logo:
+**both** selections — symbol and timeframe — live in the chart toolbar.
+
+- **`frontend/src/components/SymbolPicker.tsx`** — `SymbolPicker`, the symbol
+  selector. It sits in the **chart toolbar** (left of the chart's timeframe
+  row), not in the header: a dropdown with a text filter over
+  `SYMBOL_OPTIONS`, closing on outside click, `Escape`, or selection (`Enter`
+  picks the first match). The old header row of one button per symbol did not
+  scale past a dozen pairs. Because the panel overflows the chart card, the
+  card's `overflow-hidden` was moved from the outer column down to the chart
+  body (`rounded-b-lg`), so the toolbar no longer clips it.
+
+  The timeframe row beside it is the **only** timeframe selector and drives
+  the global `timeframe` (`switchTimeframe`): the header's duplicate row is
+  gone, and so is the former chart-only divergence (`chartTimeframe`,
+  `chartData`, its second polling effect and the `SYNC` button) — chart, KPIs
+  and sidebar always read one snapshot.
 
 - **`frontend/src/components/MainChart.tsx`** — `MainChart` component:
   renders three synced Lightweight Charts panes (main candlestick, volume
@@ -226,8 +241,8 @@ selector.
   `consolidation_candles`), and a hunt-phase chip (`⚠` counter-trend /
   `⚡ x/y` hunting / `✓` captured). The `CollapsibleSection` header shows an
   alignment summary (`6▲ 1▼`); the full reading is each row's hover title.
-  **Clicking a row switches the chart timeframe** (`switchChartTimeframe`,
-  the chart-only divergence — global panels stay on the selected timeframe).
+  **Clicking a row switches the timeframe** (`switchTimeframe` — the whole
+  dashboard follows, since there is a single timeframe selection).
   `App.tsx` polls `GET /api/overview` every `OVERVIEW_REFRESH_INTERVAL_MS =
   30s` per symbol (transient failures keep the last ladder rather than
   tearing the dashboard down).
