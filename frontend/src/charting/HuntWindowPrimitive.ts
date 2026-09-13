@@ -49,6 +49,50 @@ interface ResolvedWindow {
 }
 
 const CONT_STRIP = 3
+/**
+ * Two windows of the same kind closer than this (in px) are one run: the
+ * arrow + label is drawn once, at the run's first band, instead of on every
+ * band. A leg that resolves through several grabs draws several contiguous
+ * `CONT`/`HUNT` bands, and repeating the badge on each one just adds noise.
+ */
+const RUN_GAP_PX = 12
+
+function windowKind(win: ResolvedWindow): string {
+  return `${win.label ?? ''}|${win.arrow ?? ''}|${win.pattern}|${win.color}|${win.live ? 1 : 0}`
+}
+
+/**
+ * Maps each window that owns its run's badge to the run's right edge in px
+ * (see RUN_GAP_PX), so the label fits against the whole run, not just the
+ * first band.
+ */
+function labelOwners(windows: ResolvedWindow[]): Map<ResolvedWindow, number> {
+  const owners = new Map<ResolvedWindow, number>()
+  const byKind = new Map<string, ResolvedWindow[]>()
+  for (const win of windows) {
+    if (win.x0 === null && win.x1 === null) continue
+    const kind = windowKind(win)
+    const list = byKind.get(kind)
+    if (list) list.push(win)
+    else byKind.set(kind, [win])
+  }
+  for (const list of byKind.values()) {
+    list.sort((a, b) => (a.x0 ?? -Infinity) - (b.x0 ?? -Infinity))
+    let owner: ResolvedWindow | null = null
+    let runEnd = -Infinity
+    for (const win of list) {
+      const start = win.x0 ?? -Infinity
+      if (owner === null || start > runEnd + RUN_GAP_PX) {
+        owner = win
+        runEnd = win.x1 ?? Infinity
+      } else {
+        runEnd = Math.max(runEnd, win.x1 ?? Infinity)
+      }
+      owners.set(owner, runEnd)
+    }
+  }
+  return owners
+}
 
 class HuntWindowRenderer implements IPrimitivePaneRenderer {
   private readonly _windows: ResolvedWindow[]
@@ -59,6 +103,7 @@ class HuntWindowRenderer implements IPrimitivePaneRenderer {
 
   draw(target: CanvasRenderingTarget2D): void {
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+      const owners = labelOwners(this._windows)
       for (const win of this._windows) {
         const left = Math.max(0, win.x0 ?? 0)
         const right = Math.min(mediaSize.width, win.x1 ?? mediaSize.width)
@@ -92,6 +137,11 @@ class HuntWindowRenderer implements IPrimitivePaneRenderer {
         context.stroke()
         context.setLineDash([])
 
+        // Badge (arrow + label) once per run of same-kind contiguous bands.
+        const runRight = owners.get(win)
+        if (runRight === undefined) continue
+        const labelRight = Math.min(mediaSize.width, runRight)
+
         const PADDING = win.pattern === 'hatched' ? 4 + CONT_STRIP : 4
         context.textBaseline = 'top'
         context.textAlign = 'left'
@@ -110,7 +160,7 @@ class HuntWindowRenderer implements IPrimitivePaneRenderer {
         if (win.label) {
           context.font = win.live ? 'bold 10px sans-serif' : '10px sans-serif'
           const width = context.measureText(win.label).width
-          if (cursor + width <= right - PADDING) {
+          if (cursor + width <= labelRight - PADDING) {
             context.fillText(win.label, cursor, PADDING)
           }
         }
