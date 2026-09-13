@@ -142,6 +142,24 @@ class VolumeSpreadAnalyzer:
     # Per-candle classification
     # ------------------------------------------------------------------
 
+    def classify_candle(
+        self,
+        candles: list[Candle],
+        volume_deltas: Sequence[float],
+        i: int,
+    ) -> VolumeSpreadSignal | None:
+        """Classify one candle in place, without the dedup pass.
+
+        Same anatomy and gates as :meth:`analyze` for candle ``i``; ``None``
+        when it is too early for the baseline or no pattern matches. Lets a
+        caller that has its own reason to look at a specific candle (a
+        structural pivot) ask the analyzer directly.
+        """
+        lookback = self._resolve_lookback(candles[0].timeframe)
+        if i < lookback or i >= len(candles):
+            return None
+        return self._classify(candles, volume_deltas, i, lookback)
+
     def _classify(
         self,
         candles: list[Candle],

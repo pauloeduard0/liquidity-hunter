@@ -44,6 +44,8 @@ from liquidity_hunter.core.domain.liquidity_hunt import (
     LiquidityHuntState,
     LiquidityHuntTarget,
 )
+from liquidity_hunter.indicators.volume_delta import volume_delta_series
+from liquidity_hunter.psychology.analyzers.volume_spread import VolumeSpreadAnalyzer
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -387,6 +389,7 @@ class LiquidityHuntEngine:
         # Resolved once for the whole reconstruction, not per event: the higher
         # timeframe of a snapshot does not change while it is being replayed.
         htf_period = self._htf_period(data)
+        segments = self._split_at_htf_flips(segments, htf_events, htf_period, now)
 
         episodes: list[LiquidityHuntEpisode] = []
         for idx, (direction, start, _event) in enumerate(segments):
@@ -460,7 +463,7 @@ class LiquidityHuntEngine:
                 data,
                 hunted_short,
                 capture_direction,
-                start,
+                self._scan_start(start, _event, data.candles),
                 end,
                 merge_gap,
                 require_vsa=True,
@@ -612,6 +615,7 @@ class LiquidityHuntEngine:
         segments = self._trend_segments(data.internal_structure_events)
         merge_gap = self._grab_merge_gap(data.candles)
         htf_period = self._htf_period(data)
+        segments = self._split_at_htf_flips(segments, htf_events, htf_period, now)
 
         episodes: list[LiquidityHuntEpisode] = []
         # Aligned legs run *through* failed-CHoCH excursions, so a CHoCH that
@@ -619,7 +623,7 @@ class LiquidityHuntEngine:
         # continuation grab instead of falling into a vacuum between streams.
         # Each leg carries the HTF trend it was aligned with at its own flip.
         for start, end, htf in self._continuation_legs(
-            segments, htf_events, htf_scalar, now, htf_period
+            segments, htf_events, htf_scalar, now, htf_period, data.candles
         ):
             # The grab is the pullback sweep *against* the aligned leg that then
             # resumes with it: a bull leg's grab is a down-sweep of the lows, a
@@ -653,6 +657,10 @@ class LiquidityHuntEngine:
                 # ETHUSDT 1h 7 -> 14 episodes). The continuation floor keeps its
                 # VSA/sweep signature.
                 allow_raid=False,
+                # ...read on the pullback pivots without the analyzer's
+                # extreme gate, which a trending leg's pivots never pass
+                # (see _pivot_vsa_signals).
+                pivot_vsa=True,
             )
             sub_start = start
             for grab_ts, score, sources in grabs:
@@ -682,7 +690,7 @@ class LiquidityHuntEngine:
     @staticmethod
     def _trend_segments(
         events: list[MarketStructure],
-    ) -> list[tuple[MarketDirection, datetime, StructureEvent]]:
+    ) -> list[tuple[MarketDirection, datetime, StructureEvent | None]]:
         """Segment the event replay into (trend, flip timestamp, flip event) legs.
 
         Same replay rules as :meth:`_current_trend` (BOS/CHoCH set the trend,
@@ -693,7 +701,7 @@ class LiquidityHuntEngine:
         excursion, absorbed into the surrounding aligned continuation leg) from
         one reverted by a fresh aligned BOS/CHoCH (a real reversal-and-back).
         """
-        segments: list[tuple[MarketDirection, datetime, StructureEvent]] = []
+        segments: list[tuple[MarketDirection, datetime, StructureEvent | None]] = []
         trend: MarketDirection | None = None
         for event in sorted(events, key=lambda e: e.timestamp):
             if event.provisional:
@@ -716,13 +724,76 @@ class LiquidityHuntEngine:
             trend = new_trend
         return segments
 
+    @classmethod
+    def _htf_flips(
+        cls,
+        htf_events: list[MarketStructure],
+        htf_period: timedelta | None,
+    ) -> list[tuple[datetime, MarketDirection]]:
+        """Every change of the higher-timeframe trend, as (known_at, trend).
+
+        Same replay as :meth:`_current_trend`; ``known_at`` is the instant the
+        flip became observable — the *close* of the HTF candle that produced
+        it (``timestamp + htf_period``), matching the causal fence of
+        :meth:`_htf_trend_at` so a leg sliced at ``known_at`` reads the new
+        trend from its first candle.
+        """
+        flips: list[tuple[datetime, MarketDirection]] = []
+        for trend, at, _event in cls._trend_segments(htf_events):
+            flips.append((at + htf_period if htf_period is not None else at, trend))
+        return flips
+
+    @classmethod
+    def _split_at_htf_flips(
+        cls,
+        segments: list[tuple[MarketDirection, datetime, StructureEvent | None]],
+        htf_events: list[MarketStructure],
+        htf_period: timedelta | None,
+        now: datetime | None,
+    ) -> list[tuple[MarketDirection, datetime, StructureEvent | None]]:
+        """Slice each structural leg wherever the higher timeframe flipped.
+
+        A leg is judged against the HTF trend *as of its own flip*
+        (:meth:`_htf_trend_at`), which is right for the moment it opened but
+        freezes that verdict for the leg's whole life. A leg that never
+        re-flips — a month-long H4 advance under a D1 that turned bullish
+        three weeks in — stayed "counter-trend" to the end, and every grab
+        after the HTF turn was labelled a hunt of entrants trapped against a
+        trend that no longer existed (ETHUSDT H4, 2026-07-02 -> 07-31: the D1
+        CHoCH of 07-18 never re-classified the leg). Slicing the leg at each
+        HTF flip lets the later slice be re-judged: the counter-trend part
+        stays a hunt, the aligned remainder becomes a continuation leg, and the
+        two streams keep their leg-by-leg agreement.
+
+        A slice boundary carries ``None`` as its flip event: it is not a
+        structural flip, so it neither closes a hunt as a realignment nor
+        counts as a ``CHOCH_FAILED`` reversion. The split is shared by
+        :meth:`build_history` and :meth:`build_continuation_history` so the
+        two streams still agree slice by slice. The live :meth:`build` is
+        untouched — it reads the current scalar.
+        """
+        flips = cls._htf_flips(htf_events, htf_period)
+        if not flips or not segments:
+            return list(segments)
+        out: list[tuple[MarketDirection, datetime, StructureEvent | None]] = []
+        for idx, (direction, start, event) in enumerate(segments):
+            end = segments[idx + 1][1] if idx + 1 < len(segments) else now
+            out.append((direction, start, event))
+            if end is None:
+                continue
+            for at, _trend in flips:
+                if start < at < end:
+                    out.append((direction, at, None))
+        return out
+
     def _continuation_legs(
         self,
-        segments: list[tuple[MarketDirection, datetime, StructureEvent]],
+        segments: list[tuple[MarketDirection, datetime, StructureEvent | None]],
         htf_events: list[MarketStructure],
         htf_scalar: MarketDirection,
         now: datetime,
         htf_period: timedelta | None = None,
+        candles: list[Candle] | None = None,
     ) -> list[tuple[datetime, datetime, MarketDirection]]:
         """Aligned-trend legs, absorbing counter-trend excursions that *failed*.
 
@@ -746,11 +817,12 @@ class LiquidityHuntEngine:
         leg_htf: MarketDirection | None = None
         directional = (MarketDirection.BULLISH, MarketDirection.BEARISH)
         n = len(segments)
+        candles = candles or []
         for idx, (direction, start, _event) in enumerate(segments):
             htf = self._htf_trend_at(htf_events, start, htf_scalar, htf_period)
             if htf in directional and direction is htf:
                 if leg_start is None:
-                    leg_start = start
+                    leg_start = self._scan_start(start, _event, candles)
                     leg_htf = htf
                 continue
             # Counter-trend excursion: absorbed only if the leg it flips back
@@ -766,6 +838,27 @@ class LiquidityHuntEngine:
             legs.append((leg_start, now, leg_htf))
         return legs
 
+    @classmethod
+    def _scan_start(
+        cls,
+        start: datetime,
+        opening_event: StructureEvent | None,
+        candles: list[Candle],
+    ) -> datetime:
+        """Where a slice starts collecting signals.
+
+        Slice ends are inclusive (the realignment break at ``end`` belongs to
+        the hunt it closes), so a slice opened by an HTF flip (``None``) must
+        start one candle *after* its boundary: the candle stamped at the flip
+        was already scanned by the slice before it, and the two streams — which
+        can share a capture direction across such a boundary — must never
+        both claim it. A structural opening keeps its own timestamp.
+        """
+        if opening_event is not None:
+            return start
+        spacing = cls._candle_spacing(candles)
+        return start + spacing if spacing is not None else start
+
     def _capture_grabs(
         self,
         data: DashboardData,
@@ -778,6 +871,7 @@ class LiquidityHuntEngine:
         require_vsa: bool = False,
         realignment_ts: datetime | None = None,
         allow_raid: bool = True,
+        pivot_vsa: bool = False,
     ) -> list[tuple[datetime, float, list[str]]]:
         """Weighted capture grabs inside ``[start, end]`` as (ts, score, sources).
 
@@ -809,7 +903,13 @@ class LiquidityHuntEngine:
         candles before it.
         """
         signals = self._collect_capture_signals(
-            data, hunted_short, capture_direction, start, end, allow_raid=allow_raid
+            data,
+            hunted_short,
+            capture_direction,
+            start,
+            end,
+            allow_raid=allow_raid,
+            pivot_vsa=pivot_vsa,
         )
         if realignment_ts is not None:
             # The confirmed break that flipped the leg back to the HTF trend is
@@ -889,9 +989,12 @@ class LiquidityHuntEngine:
         start: datetime,
         end: datetime,
         allow_raid: bool = True,
+        pivot_vsa: bool = False,
     ) -> list[tuple[datetime, float, str]]:
         """All weighted capture-side signals inside ``[start, end]``."""
         signals: list[tuple[datetime, float, str]] = []
+        if pivot_vsa:
+            signals.extend(self._pivot_vsa_signals(data, hunted_short, start, end))
         for event in data.internal_structure_events:
             if (
                 event.event is StructureEvent.LIQUIDITY_SWEEP
@@ -966,6 +1069,75 @@ class LiquidityHuntEngine:
                         (qualified.event_timestamp, _WEIGHT_OI_COVERING, "oi_flush")
                     )
         return signals
+
+    @staticmethod
+    def _pivot_vsa_signals(
+        data: DashboardData,
+        hunted_short: bool,
+        start: datetime,
+        end: datetime,
+    ) -> list[tuple[datetime, float, str]]:
+        """Grab-side VSA on the leg's pullback pivots, read without the extreme gate.
+
+        `VolumeSpreadAnalyzer` only emits a thrust/climax when the candle makes
+        the trailing 20-candle extreme on the side it reads from. Inside a
+        trending leg that is exactly what a pullback pivot never does: a bear
+        leg's pullback tops are `LOWER_HIGH`s, lower than the 20 before them,
+        so the up-thrust printed there is discarded — and the continuation
+        stream, whose only floor signatures are VSA and a Supertrend stop run,
+        goes blind precisely where the trend is cleanest (ETHUSDT H4 2026-05-13
+        -> 06-15: ten lower highs, one sweep, zero grabs). The structure
+        detector has already certified the pivot, so the context gate is
+        redundant there: this reads the pivot candle with the same analyzer
+        and the same anatomy thresholds, gate off, and emits it as an ordinary
+        `vsa` source (it collapses by `max` with any VSA production already
+        emitted on that candle, so nothing counts twice).
+
+        Measured (`research/hunt_pivot_thrust.py`, 72 symbols x M15/H1/H4 x 3
+        windows, h=20): 335 continuation grabs appear, 67.2% direction hit
+        rate against a matched control of 52.7% (discovery 69.9% / holdout
+        62.1%, every timeframe, both directions, all four temporal blocks),
+        with lower MAE than the existing grabs (1.50 vs 2.15 ATR); the whole
+        stream moves 57.6% -> 59.4%. The pivot label itself is only known
+        after its confirmation candles — the same property every
+        structure-stamped grab in this history stream already has.
+
+        The pivot read always weighs `_WEIGHT_VSA_STRONG`, whatever the
+        analyzer's confidence: at a structural pullback pivot the *location*
+        is the confirmation a weak thrust would otherwise need from a delta
+        partner. Measured separately (`research/hunt_pivot_thrust_ext.py`,
+        P3): the weak-confidence pivot thrusts this admits are 332 grabs at
+        72.0% against a 53.1% control (discovery 72.2% / holdout 71.6%, every
+        timeframe, all four blocks), with MAE 1.49 — the stream moves 59.4%
+        -> 61.3%. The sibling extension that also read the pullback's
+        extreme candle within 6 of the pivot (P2) failed its holdout (47.8%
+        vs 49.8%) and is not applied: the carimbed pivot is the candle.
+        """
+        candles = data.candles
+        if len(candles) < 3:
+            return []
+        pivot = StructureEvent.LOWER_HIGH if hunted_short else StructureEvent.HIGHER_LOW
+        stamps = [
+            e.timestamp
+            for e in data.internal_structure_events
+            if e.event is pivot and start <= e.timestamp <= end
+        ]
+        if not stamps:
+            return []
+        index = {c.timestamp: i for i, c in enumerate(candles)}
+        analyzer = VolumeSpreadAnalyzer(gate_extreme_lookback=0)
+        deltas = volume_delta_series(candles)
+        patterns = _VSA_SHORT_CAPTURE if hunted_short else _VSA_LONG_CAPTURE
+        out: list[tuple[datetime, float, str]] = []
+        for ts in stamps:
+            i = index.get(ts)
+            if i is None:
+                continue
+            sig = analyzer.classify_candle(candles, deltas, i)
+            if sig is None or sig.pattern not in patterns:
+                continue
+            out.append((ts, _WEIGHT_VSA_STRONG, "vsa"))
+        return out
 
     @staticmethod
     def _raid_signals(
@@ -1044,14 +1216,17 @@ class LiquidityHuntEngine:
         )
 
     @staticmethod
-    def _grab_merge_gap(candles: list[Candle]) -> timedelta | None:
-        """A few candles' worth of time — grabs within it are one sweep cluster."""
+    def _candle_spacing(candles: list[Candle]) -> timedelta | None:
         if len(candles) < 2:
             return None
         spacing = candles[-1].timestamp - candles[-2].timestamp
-        if spacing <= timedelta(0):
-            return None
-        return spacing * _GRAB_MERGE_CANDLES
+        return spacing if spacing > timedelta(0) else None
+
+    @classmethod
+    def _grab_merge_gap(cls, candles: list[Candle]) -> timedelta | None:
+        """A few candles' worth of time — grabs within it are one sweep cluster."""
+        spacing = cls._candle_spacing(candles)
+        return spacing * _GRAB_MERGE_CANDLES if spacing is not None else None
 
     # ------------------------------------------------------------------
     # Current-timeframe structural trend

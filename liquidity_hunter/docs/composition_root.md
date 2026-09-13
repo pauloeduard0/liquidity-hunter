@@ -228,6 +228,32 @@ Extracted from `CLAUDE.md` (2026-08-29) to keep that file under its size limit.
     "hunting 0/0" forever; with N=2 it reads an honest captured 3/3, and ETH
     1d gets a map at all). N=3 measured worse (pulled a ~3-ATR pool into SOL
     4h and regressed its conclusion).
+  - **History streams** (`build_history` / `build_continuation_history`,
+    surfaced as `liquidity_hunt_history` / `liquidity_continuation_history`):
+    the structural legs of the current TF are each judged against the HTF
+    trend **as of the leg's flip**, read causally from
+    `higher_timeframe_events` (`_htf_trend_at`, closed HTF candles only). A
+    counter-trend leg is scanned for capture-side grabs (hunt); an aligned
+    leg for pullback-side grabs (continuation). **Since 2026-09-13 a leg is
+    sliced at every HTF flip** (`_split_at_htf_flips`, boundary = the close
+    of the HTF candle that flipped): the slice before keeps its verdict, the
+    slice after is re-judged, so a month-long H4 advance under a D1 that
+    turned bullish three weeks in stops being a "hunt of longs" to the end
+    (ETHUSDT H4 2026-07). A slice boundary is not a structural event: it
+    closes no hunt as a realignment and the slice after it starts one candle
+    later, so a grab stamped on the flip candle is claimed by one stream only.
+    Measured in `research/hunt_htf_flip_split.py`; the live `build()` still
+    reads the current scalar. The continuation stream additionally reads the
+    leg's pullback pivots (`LOWER_HIGH` in a bear leg, `HIGHER_LOW` in a bull
+    leg) with the VSA analyzer's extreme gate off (`_pivot_vsa_signals`,
+    since 2026-09-13): a trending leg's pivots never make the 20-candle
+    extreme the gate demands, which left clean trends with no continuation
+    grabs at all. Measured in `research/hunt_pivot_thrust.py` (335 grabs
+    appear, 67.2% vs 52.7% control, holdout 62.1%). The pivot read always
+    weighs 4, whatever the analyzer's confidence (`research/
+    hunt_pivot_thrust_ext.py`, P3: 332 more grabs at 72.0% vs 53.1%, holdout
+    71.6%); reading the pullback's extreme candle next to the pivot (P2)
+    failed its holdout and is not applied.
   - **Evidence**: `last_flush_timestamp` = latest `OIQualifiedEvent` with
     `participation=FLUSH` in the capture direction since the flip;
     capture-side `LIQUIDITY_SWEEP` since the flip; `oi_unwinding` =

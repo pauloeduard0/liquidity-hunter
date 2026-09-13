@@ -4016,3 +4016,246 @@ O que muda essa decisao e evidencia nova, nao um argumento novo. Para V2
 especificamente, o teste que falta e o unico que nao podia ser feito no dia:
 re-rodar `research/hunt_continuation_multisource_validation.py` quando existir
 fita realmente mais recente que a de 2026-09-10.
+
+## 2026-09-13 — HUNT H5: a captura que *rompe* medida e REJEITADA
+
+*Nenhuma alteracao de producao. Medicao em
+`research/hunt_displacement_capture.py`, baseline
+`research/hunt_displacement_capture_baseline.json`, mesmo painel das etapas
+H1-H2 (72 simbolos x M15/H1/H4 x 3 janelas, sem OI).*
+
+**A pergunta.** No ETH H1 (28/08-12/09) o usuario apontou dois impulsos que
+limparam vendidos — 30/08 16:00 UTC (3,7 TR, corpo 86%, 5,6x o volume
+mediano) e 11/09 12-13:00 UTC (5,4 e 10,5 TR, fechando atraves de quatro
+pools EQH) — e o motor marcou a caca **antes** deles: as 12:00 (sweep + vsa
+no primeiro pavio, quatro candles antes) e as 09:00 (o cluster zone/raid/
+realignment ancora no primeiro carimbo de piso, o raid, tres candles antes).
+Lido o codigo: toda assinatura de piso do motor tem a forma "nivel tocado e
+devolvido" (`raid`, `vsa`, `supertrend`, `realignment`); o candle que
+*desloca* e fecha alem do pool so entra como `zone` (2) e nunca abre o gate.
+O `LIQUIDITY_SWEEP` e carimbado no primeiro pavio (`find_wick_break_index`),
+nao no candle de expansao.
+
+**A hipotese, fixada antes de rodar.** Sinal `displacement` (range >= 2,5 x
+mean TR, corpo >= 50%, close alem do extremo dos 12 anteriores, volume >= 2x
+a mediana dos 50 anteriores), assinatura de piso e **ancora** do grab. Dois
+bracos: D4 (pesa 4, precisa de parceiro) e D7 (pesa 7, sozinho fecha a
+caca). D0 (sinal desligado) reproduz a producao episodio a episodio
+(`research/test_hunt_displacement_capture.py`). Os dois casos do ETH caem no
+candle certo nas duas variantes.
+
+**O resultado (h=20, acerto = MFE > MAE apos o candle-ancora, controle casado
+em simbolo, tf e direcao).**
+
+| | n | acerto | controle | net (ATR) |
+|---|---|---|---|---|
+| baseline D0 | 992 | 53,7% | 48,9% | +0,21 |
+| D4 episodios que **surgem** | 145 | **33,8%** | 48,0% | −1,32 |
+| — discovery / holdout | 90 / 55 | 38,9% / 25,5% | 49,3% / 45,7% | |
+| D4 re-ancorados, **antes** | 46 | 71,7% | 47,9% | +1,15 |
+| D4 re-ancorados, **depois** | 45 | 51,1% | 48,3% | −0,60 |
+| D7 episodios que surgem | 202 | 40,1% | 48,3% | −1,01 |
+
+Falha nos dois criterios, nos dois bracos, em discovery **e** holdout, nos
+tres horizontes (10/20/40) e em 3 dos 4 blocos temporais. Por direcao, o
+pior e exatamente o caso do usuario: shorts cacados (captura para cima)
+surgem com 24,4% (D4) / 32,8% (D7) contra ~44% do controle.
+
+**O que isso diz.** O candle de deslocamento nao e onde a liquidez e
+capturada — e onde a captura *ja aconteceu*. Depois dele a fita reverte
+(MAE 3,4 ATR contra MFE 2,3 nos que surgem): e o short squeeze que o
+proprio usuario descreveu ("so depois que rolou um short squeeze pra
+cair"). Mover a ancora para ele troca um ponto anterior ao movimento por
+um ponto no fim dele. Ressalva honesta: os 71,7% dos "re-ancorados antes"
+sao um subconjunto escolhido por informacao futura (grabs *seguidos* de um
+deslocamento em ate 3 candles) e nao provam que a ancora atual tem edge;
+provam so que a nova nao tem.
+
+**Decisao.** `displacement` nao entra em producao, nem como sinal nem como
+ancora. A marca cedo e a leitura correta do motor; o impulso e a
+confirmacao visual dela, nao a caca. Se o grafico precisar mostrar essa
+relacao, e uma decisao de *desenho* (estender a janela `✓` ate o impulso
+sem mover a ancora medida), e nao de score — e ainda nao foi pedida.
+
+## 2026-09-13 — HUNT H6: o VSA sem gate nos candles de sweep, medido e REJEITADO
+
+*Nenhuma alteracao de producao. Medicao em `research/hunt_sweep_thrust.py`,
+baseline `research/hunt_sweep_thrust_baseline.json`, mesmo painel.*
+
+**A pergunta.** No ETH H4 (perna bullish 02/07 -> 31/07, contra um D1
+bearish no flip) o usuario viu cinco retracoes fortes e nenhuma captura ate
+31/07. Lido candle a candle, os motivos sao tres, e sao diferentes:
+
+| retracao (UTC) | o que o motor tinha | por que nao virou grab |
+|---|---|---|
+| 06/07 12:00 | `sweep` (3) | o candle e um DOWN_THRUST de anatomia (vol 4,0x, fecha na maxima), mas `VolumeSpreadAnalyzer` exige que ele seja a **minima dos 20 candles** — e a minima dos 20 era a origem da perna (1702, 03/07). Sem VSA, sem piso. |
+| 08/07 08:00 | `sweep` + `vsa` = 6 | um ponto abaixo do limiar 7 (delta nao confirmou) |
+| 13/07 16:00 | `sweep` (3) | a rejeicao veio nos candles seguintes, nao no do extremo; sem anatomia |
+| 16-17/07 | **nada** | o pullback (1912 -> 1802) nao varreu nenhuma referencia: nenhum evento, nenhum pool, VSA descartado pelo mesmo gate |
+| 23-24/07 | `sweep` + `zone` = 5 | o candle fechou **atraves** do pool EQL 1906-1909 (breach, nao raid); sem piso |
+
+O gate de extremo do VSA e estrutural: numa perna em alta, todo pullback faz
+uma minima mais alta que a origem, entao o thrust e descartado exatamente
+onde o HUNT precisa dele. A hipotese pre-registrada: nos candles do
+`LIQUIDITY_SWEEP` (e no que faz o extremo varrido) o mesmo analisador, com
+os mesmos limiares, **sem** o gate — a estrutura ja certificou o extremo. S0
+reproduz a producao (`research/test_hunt_sweep_thrust.py`); no ETH H4 o S1
+marca o 06/07 12:00 (o 16-17/07 continua invisivel: nao ha sweep para
+ancorar).
+
+**Resultado (h=20).** Surgem 51 episodios: acerto **42,9%** contra controle
+46,2% (discovery 44,2% vs 45,3%, holdout n=6). O conjunto cai de 53,7% para
+53,5%. Reprovado nos dois criterios. Por direcao, longs cacados 56,0% (n=25)
+e shorts 29,2% (n=24): recorte pequeno demais e escolhido depois do
+resultado — nao e evidencia (ver `feedback_removed_bucket_is_not_evidence`).
+
+**O que os dois negativos do dia dizem juntos (H5 e H6).** As duas tentativas
+de "mostrar mais capturas" produzem grabs que medem igual ou pior que o
+aleatorio. Isso e coerente com a H2.1: o cluster de score exatamente 7 ja
+mede 46,6% (abaixo do controle) e a descontinuidade real esta em 10. Somar
+fontes novas para chegar a 7 preenche o grafico com marcas que nao
+carregam informacao. O caminho que resta aberto nao e mais fonte, e menos:
+subir o limiar (V3, que passou em discovery e falhou em holdout por 49,0 vs
+50,3 — indeterminado, nao rejeitado) ou restringir o stream aos timeframes
+onde ele mede (H1 55,5%, H4 58,5%; M15 46,6% abaixo do controle).
+
+**Um problema de rotulo, nao de score, ficou registrado sem correcao.** A
+perna 02/07 -> 31/07 e julgada contra a HTF *no flip* (D1 bearish em 02/07,
+`project_hunt_htf_as_of_flip`), e fica um mes inteiro rotulada como
+contra-tendencia embora o D1 tenha virado bullish em 18/07 (CHoCH) sem que o
+H4 flipasse. As duas capturas de 31/07 e 01/08 sao rotuladas "longs cacados
+contra um D1 bearish" que nao existia mais. Dividir a perna no flip da HTF
+(o trecho posterior vira continuation) e uma correcao de rotulo mensuravel
+que **nao** foi feita hoje.
+
+## 2026-09-13 — HUNT H7: a perna e fatiada no flip da HTF (correcao de rotulo, EM PRODUCAO)
+
+*Alteracao de producao em `app/liquidity_hunt.py`:
+`_htf_flips`, `_split_at_htf_flips`, `_scan_start`; `build_history` e
+`build_continuation_history` passam pelas fatias. Medicao em
+`research/hunt_htf_flip_split.py`, baseline
+`research/hunt_htf_flip_split_baseline.json`. O `build()` vivo nao muda.*
+
+**O defeito.** A perna era julgada contra a HTF *no seu flip*
+(`project_hunt_htf_as_of_flip`, correto para o instante em que abriu) e
+carregava esse veredito ate o proximo flip da LTF. Uma perna que nunca
+re-flipa fica com o rotulo do dia em que nasceu: o H4 do ETH em alta de
+02/07 a 31/07 sob um D1 que virou bullish em 18/07 ficou um mes como "caca
+de longs contra um D1 bearish", e as capturas de 31/07 e 01/08 foram
+rotuladas contra uma tendencia que nao existia. No painel, **24,0% das
+pernas** tem pelo menos um flip da HTF dentro delas.
+
+**A regra.** Cada flip da HTF (no *fechamento* do candle que o produziu — a
+mesma cerca causal de `_htf_trend_at`) fatia a perna. A fatia anterior
+continua o que era; a posterior e re-julgada contra a HTF nova. A fronteira
+carrega `None` como evento: nao fecha caca como realignment nem conta como
+`CHOCH_FAILED`. Como as duas fatias podem compartilhar a direcao de captura
+(hunt de longs e continuation de uma perna bullish varrem os dois para
+baixo), a fatia anterior e inclusiva no fim e a posterior comeca um candle
+depois (`_scan_start`), e um grab carimbado no candle do flip pertence a um
+stream so (`test_signal_on_the_flip_candle_is_claimed_once`).
+
+**Medicao (h=20, controle casado em simbolo, tf e direcao).** 265 episodios
+migram de stream (262 hunt -> continuation, 3 o inverso) e trocam de lado
+cacado — ou seja, passam a ser medidos na direcao da continuacao.
+
+| | legado | novo |
+|---|---|---|
+| hunt | 54,3% (n=949, ctl 49,9%) | 54,0% (n=578, ctl 50,7%) |
+| — H1 / H4 | 55,2% / 60,2% | 51,9% / 63,7% |
+| continuation | 57,9% (n=1068, ctl 50,9%) | 57,4% (n=1494, ctl 51,1%) |
+| migrados, no stream novo | — | 49,4% (ctl 48,2%) |
+| — discovery / holdout | — | 56,8% (ctl 46,5%) / **38,0%** (ctl 50,7%, n=100) |
+
+Os tres criterios pre-registrados passam (migrados >= controle; nenhum
+stream piora). **Ressalva registrada:** o holdout dos migrados e negativo
+(38,0% contra 50,7%). A correcao e de rotulo — a fatia re-julgada e, pela
+definicao dos dois streams, uma perna alinhada — e a medicao sustenta que
+ela nao custa nada ao conjunto; ela **nao** e evidencia de que os grabs
+migrados tenham edge como continuation, e o hunt no H1 caiu 3,3pp com n
+menor (o H4 subiu 3,5pp). "Surgem" (224, 64,3%) e "somem" (169, 63,3%) sao
+em grande parte o mesmo grab re-ancorado (a continuation ancora no VSA, o
+hunt no primeiro sinal).
+
+**Nao feito.** O limiar 10 / restricao a H1-H4 (V3 da H2.1) continua sem
+holdout valido e nao foi promovido.
+
+## 2026-09-13 — HUNT H8: VSA sem gate nos pivôs de pullback da continuation (APROVADA, EM PRODUÇÃO)
+
+*Alteracao de producao: `LiquidityHuntEngine._pivot_vsa_signals`, ligada so
+na continuation (`pivot_vsa=True`); `VolumeSpreadAnalyzer.classify_candle`
+(publico, sem dedup). Medicao em `research/hunt_pivot_thrust.py`, baseline
+`research/hunt_pivot_thrust_baseline.json`.*
+
+**O vacuo.** ETH H4, perna bearish 13/05 -> 15/06 sob D1 bearish: dez
+`LOWER_HIGH`, um sweep bullish, zero grabs de continuation. A continuation
+so tem `vsa` e `supertrend` como piso (raid desligado, sem realignment), e o
+`VolumeSpreadAnalyzer` so emite up-thrust / buying climax se o candle faz a
+**maxima dos 20 anteriores** — que o topo de um pullback numa perna de baixa
+nunca faz. Quanto mais limpa a tendencia, mais vazio o stream. Sem o gate,
+o mesmo analisador classifica os pivos de 13/05, 14/05, 23/05 e 26/05
+(confianca 59-82).
+
+**A regra.** Na perna de continuation, o candle de cada pivo de pullback
+(`LOWER_HIGH` em perna bearish, `HIGHER_LOW` em bullish) e lido pelo mesmo
+analisador, mesmos limiares, `gate_extreme_lookback=0`; um padrao do lado do
+grab entra como `vsa` (3 / 4). O hunt nao le isso (a H6 mediu a ideia
+irma no hunt, ancorada em sweeps, e reprovou).
+
+**Resultado (h=20, controle casado).**
+
+| | n | acerto | controle | MFE/MAE |
+|---|---|---|---|---|
+| continuation antes | 1499 | 57,6% | 51,2% | 2,52 / 2,15 |
+| continuation depois | 1834 | **59,4%** | 51,4% | 2,58 / 2,03 |
+| episodios que surgem | 335 | **67,2%** | 52,7% | 2,89 / **1,50** |
+| — discovery / holdout | 219 / 116 | 69,9% / **62,1%** | 52,6% / 53,0% | |
+| — M15 / H1 / H4 | 103 / 111 / 121 | 71,8% / 64,0% / 66,1% | ~52-53% | |
+| — 4 blocos temporais | | 71,6 / 66,7 / 69,9 / 60,8% | 51-55% | |
+
+Passa nos dois cortes, nos tres horizontes, nos tres TFs, nas duas direcoes
+e nos quatro blocos; nada some. A ressalva de sempre: o rotulo de pivo so e
+conhecido depois dos candles de confirmacao — a mesma propriedade de todo
+grab carimbado por estrutura neste stream historico; o estado vivo nao usa.
+
+**Por que esta passou e a H6 nao.** Nao e o VSA sem gate em si: e *onde*
+ele e lido. A H6 o lia no candle do sweep (um extremo que *quebrou* uma
+referencia e voltou — ja saturado de outras fontes, e no hunt, cujo limiar
+7 exige parceiros); a H8 o le no pivo de pullback de uma perna alinhada
+(um extremo que *nao* quebrou nada — invisivel a toda outra fonte), no
+stream cujo limiar 4 aceita um VSA forte sozinho. A evidencia nova entra
+justamente no ponto cego, nao em cima de evidencia existente.
+
+## 2026-09-13 — HUNT H9: duas extensoes do VSA de pivo — P2 REJEITADA, P3 APROVADA (EM PRODUCAO)
+
+*Medicao em `research/hunt_pivot_thrust_ext.py`, baseline
+`research/hunt_pivot_thrust_ext_baseline.json`. Producao: `_pivot_vsa_signals`
+passa a pesar `_WEIGHT_VSA_STRONG` (4) sempre.*
+
+Depois da H8 a perna bearish do ETH H4 (13/05 -> 15/06) ganhou um grab
+(14/05) e seguiu vazia. O que sobrou, candle a candle: 23/05 e um buying
+climax de confianca 60 (peso 3, sem delta: falta um ponto); 26/05 e um
+up-thrust 82 no candle que *retestou* o pivo de 25/05, nao no carimbado;
+29/05, 31/05, 08/06 e 11/06 nao tem anatomia de thrust.
+
+Duas extensoes pre-registradas, uma variavel cada:
+
+| | surgem | acerto | controle | discovery / holdout | veredito |
+|---|---|---|---|---|---|
+| P2 — extremo em ±6 candles do pivo | 51 | 58,8% | 51,9% | 67,9% / **47,8%** (ctl 49,8%) | REPROVADA |
+| P3 — VSA de pivo pesa 4 mesmo fraco | 332 | **72,0%** | 53,1% | 72,2% / **71,6%** (ctl 51,5%) | APROVADA |
+
+P3 passa em tudo (tres horizontes, M15 75,0 / H1 69,5 / H4 72,3%, quatro
+blocos entre 69,5 e 75,4%), com MAE 1,49; o stream vai de 59,4% para
+61,3%. P2 falha o holdout e o conjunto nao melhora: o candle carimbado como
+pivo **e** o candle — o reteste ao lado nao carrega a mesma informacao. P23
+nao foi lida (uma parte reprovou).
+
+**Leitura.** No pivo de pullback, a *localizacao* e a confirmacao que um
+thrust fraco pediria ao delta. Isso nao reabre o "VSA fraco sozinho" da
+continuation em geral (H2.2, nao confirmada): vale so para o candle que a
+estrutura carimbou como pivo, lido sem o gate de extremo.
+
+**O que continua vazio, e por que.** Os pullbacks de 29/05 em diante nao
+imprimem thrust nem climax no candle do pivo: nao ha rejeicao para marcar.
+Um vazio assim e o motor dizendo "o pullback nao rejeitou", e nao um furo.

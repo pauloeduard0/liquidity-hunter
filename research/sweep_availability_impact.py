@@ -305,10 +305,10 @@ class CausalHuntEngine(LiquidityHuntEngine):
     def _collect_capture_signals(  # type: ignore[override]
         self, data: DashboardData, hunted_short: bool,
         capture_direction: MarketDirection, start: datetime, end: datetime,
-        allow_raid: bool = True,
+        allow_raid: bool = True, pivot_vsa: bool = False,
     ) -> list[tuple[datetime, float, str]]:
         signals = super()._collect_capture_signals(
-            data, hunted_short, capture_direction, start, end, allow_raid
+            data, hunted_short, capture_direction, start, end, allow_raid, pivot_vsa
         )
         end_idx = self._idx.get(end, self._last)
         return [

@@ -265,9 +265,16 @@ class AuditHuntEngine(LiquidityHuntEngine):
         require_vsa: bool = False,
         realignment_ts: datetime | None = None,
         allow_raid: bool = True,
+        pivot_vsa: bool = False,
     ) -> list[tuple[datetime, float, list[str]]]:
         signals = self._collect_capture_signals(
-            data, hunted_short, capture_direction, start, end, allow_raid=allow_raid
+            data,
+            hunted_short,
+            capture_direction,
+            start,
+            end,
+            allow_raid=allow_raid,
+            pivot_vsa=pivot_vsa,
         )
         if realignment_ts is not None:
             signals.append((realignment_ts, _WEIGHT_REALIGNMENT, "realignment"))
@@ -296,6 +303,7 @@ class AuditHuntEngine(LiquidityHuntEngine):
             require_vsa,
             realignment_ts,
             allow_raid,
+            pivot_vsa,
         )
 
 

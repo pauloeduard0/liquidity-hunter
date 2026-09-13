@@ -1,5 +1,6 @@
 """Tests for `liquidity_hunter.app.liquidity_hunt.LiquidityHuntEngine`."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from liquidity_hunter.app.dashboard_data import DashboardData
@@ -1657,3 +1658,171 @@ def test_btcusdt_m15_2026_09_05_case() -> None:
     assert LiquidityHuntEngine._htf_trend_at(
         events, flip, MarketDirection.NEUTRAL
     ) is MarketDirection.BULLISH
+
+
+# ---------------------------------------------------------------------------
+# Legs sliced at higher-timeframe flips (2026-09-13)
+# ---------------------------------------------------------------------------
+
+
+def _split_fixture() -> DashboardData:
+    """A bullish leg that opens counter-trend and becomes aligned mid-leg.
+
+    HTF bearish at t0; the LTF flips bullish at t6 (counter-trend, a hunt of
+    longs). The HTF turns bullish on a 4h candle opening at t8 (closed, hence
+    knowable, at t12) and the LTF never re-flips. A down-sweep with a selling
+    climax at t16 is a pullback *inside the now-aligned leg* — a continuation
+    grab of shorts — not a hunt of longs against a bearish HTF that is gone.
+    """
+    return _minimal_data(
+        timeframe=TimeFrame.H1,
+        higher_timeframe=TimeFrame.H4,
+        higher_timeframe_direction=MarketDirection.BULLISH,
+        higher_timeframe_events=[
+            _htf_choch(0, MarketDirection.BEARISH),
+            _htf_choch(8, MarketDirection.BULLISH),
+        ],
+        internal_structure_events=[
+            _event(6, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+            _event(16, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BEARISH),
+        ],
+        volume_spread_signals=[_vsa(16, VSAPattern.SELLING_CLIMAX, MarketDirection.BULLISH)],
+        candles=_candles(24),
+    )
+
+
+def test_leg_is_sliced_where_the_htf_flips() -> None:
+    engine = LiquidityHuntEngine()
+    segments = engine._trend_segments(_split_fixture().internal_structure_events)
+    sliced = engine._split_at_htf_flips(
+        segments, _split_fixture().higher_timeframe_events, _H4, T0 + H1 * 23
+    )
+    assert [(d, ts, e) for d, ts, e in sliced] == [
+        (MarketDirection.BULLISH, T0 + H1 * 6, StructureEvent.CHANGE_OF_CHARACTER),
+        (MarketDirection.BULLISH, T0 + H1 * 12, None),
+    ]
+
+
+def test_grab_after_the_htf_flip_is_a_continuation_not_a_hunt() -> None:
+    data = _split_fixture()
+    engine = LiquidityHuntEngine()
+    assert engine.build_history(data) == []
+    conts = engine.build_continuation_history(data)
+    assert len(conts) == 1
+    assert conts[0].hunted_side == RetailPositioning.SHORT
+    assert conts[0].end_timestamp == T0 + H1 * 16
+    # The aligned slice starts one candle after the flip became knowable.
+    assert conts[0].start_timestamp == T0 + H1 * 13
+
+
+def test_grab_before_the_htf_flip_stays_a_hunt() -> None:
+    data = _split_fixture()
+    data = replace(
+        data,
+        internal_structure_events=[
+            _event(6, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+            _event(10, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BEARISH),
+        ],
+        volume_spread_signals=[_vsa(10, VSAPattern.SELLING_CLIMAX, MarketDirection.BULLISH)],
+    )
+    engine = LiquidityHuntEngine()
+    hunts = engine.build_history(data)
+    assert [(e.hunted_side, e.end_timestamp) for e in hunts] == [
+        (RetailPositioning.LONG, T0 + H1 * 10)
+    ]
+    assert engine.build_continuation_history(data) == []
+
+
+def test_signal_on_the_flip_candle_is_claimed_once() -> None:
+    """The slice before the flip is end-inclusive; the slice after starts one
+    candle later, so a grab stamped exactly at the flip lands in one stream."""
+    data = _split_fixture()
+    data = replace(
+        data,
+        internal_structure_events=[
+            _event(6, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BULLISH),
+            _event(12, StructureEvent.LIQUIDITY_SWEEP, MarketDirection.BEARISH),
+        ],
+        volume_spread_signals=[_vsa(12, VSAPattern.SELLING_CLIMAX, MarketDirection.BULLISH)],
+    )
+    engine = LiquidityHuntEngine()
+    hunts = {e.end_timestamp for e in engine.build_history(data)}
+    conts = {e.end_timestamp for e in engine.build_continuation_history(data)}
+    assert (hunts | conts) == {T0 + H1 * 12}
+    assert hunts.isdisjoint(conts)
+
+
+# ---------------------------------------------------------------------------
+# Continuation: VSA on pullback pivots without the extreme gate (2026-09-13)
+# ---------------------------------------------------------------------------
+
+
+def _pivot_thrust_fixture() -> DashboardData:
+    """A bearish leg aligned with a bearish HTF whose pullback top is a
+    `LOWER_HIGH` with up-thrust anatomy — but NOT the 20-candle high, so the
+    analyzer's own gate would discard it."""
+    candles = _candles(40)
+    # Leg high at t2: the 20-candle ceiling the pivot at t20 stays under.
+    c2 = candles[2]
+    candles[2] = c2.model_copy(update={"high": c2.high + 8.0})
+    # Pullback top at t20: upper wick dominates, close low, volume 4x.
+    c20 = candles[20]
+    candles[20] = c20.model_copy(
+        update={
+            "high": c20.open + 3.0,
+            "low": c20.open - 0.1,
+            "close": c20.open + 0.2,
+            "volume": c20.volume * 4,
+            "taker_buy_volume": c20.volume * 1.5,
+        }
+    )
+    return _minimal_data(
+        timeframe=TimeFrame.H1,
+        higher_timeframe=TimeFrame.H4,
+        higher_timeframe_direction=MarketDirection.BEARISH,
+        higher_timeframe_events=[_htf_choch(0, MarketDirection.BEARISH)],
+        internal_structure_events=[
+            _event(6, StructureEvent.CHANGE_OF_CHARACTER, MarketDirection.BEARISH),
+            _event(20, StructureEvent.LOWER_HIGH, MarketDirection.BEARISH),
+        ],
+        candles=candles,
+    )
+
+
+def test_pullback_pivot_thrust_is_a_continuation_grab_without_the_gate() -> None:
+    data = _pivot_thrust_fixture()
+    engine = LiquidityHuntEngine()
+    # The production analyzer (gate on) does not see it: no VSA in the snapshot.
+    assert data.volume_spread_signals == []
+    conts = engine.build_continuation_history(data)
+    # A bearish continuation hunts the longs the pullback lured (the stream's
+    # own convention); the grab is the up-thrust at the pullback top.
+    assert [(e.hunted_side, e.end_timestamp) for e in conts] == [
+        (RetailPositioning.LONG, T0 + H1 * 20)
+    ]
+    assert "vsa" in conts[0].capture_sources
+    # The hunt stream is untouched by the pivot read.
+    assert engine.build_history(data) == []
+
+
+def test_pivot_without_thrust_anatomy_is_not_a_grab() -> None:
+    data = _pivot_thrust_fixture()
+    candles = list(data.candles)
+    candles[20] = _candle(20)  # a flat pivot candle
+    data = replace(data, candles=candles)
+    assert LiquidityHuntEngine().build_continuation_history(data) == []
+
+
+def test_pivot_thrust_is_not_read_for_the_hunt_stream() -> None:
+    """The gate-free read belongs to the continuation stream only."""
+    data = _pivot_thrust_fixture()
+    start, end = data.candles[0].timestamp, data.candles[-1].timestamp
+    engine = LiquidityHuntEngine()
+    with_pivot = engine._collect_capture_signals(
+        data, True, MarketDirection.BULLISH, start, end, pivot_vsa=True
+    )
+    without = engine._collect_capture_signals(data, True, MarketDirection.BULLISH, start, end)
+    # Weighs 4 whatever the analyzer's confidence: at a pullback pivot the
+    # location is the confirmation (research/hunt_pivot_thrust_ext.py, P3).
+    assert [s for s in with_pivot if s[2] == "vsa"] == [(T0 + H1 * 20, 4.0, "vsa")]
+    assert [s for s in without if s[2] == "vsa"] == []
