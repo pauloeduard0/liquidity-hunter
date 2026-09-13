@@ -62,6 +62,20 @@ export const STRUCTURE_DIRECTION_COLORS: Record<string, string> = {
   bearish: '#ce93d8',
 }
 
+/**
+ * Hunt / continuation window palette — one system for both regimes:
+ *   hue     = direction the move resolves in (bull teal / bear lilac, the
+ *             same pair as the BOS/CHoCH lines, so the bands tune with them);
+ *   texture = regime (hunt = solid fill, continuation = diagonal hatch);
+ *   amber   = live (the pending window of either regime, still open at the
+ *             right edge).
+ */
+export const HUNT_WINDOW_COLORS = {
+  bull: '#2EE6B8',
+  bear: '#ce93d8',
+  active: '#ff9800',
+} as const
+
 export const TREND_ICONS: Record<string, string> = {
   bullish: '▲',
   bearish: '▼',

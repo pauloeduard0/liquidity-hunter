@@ -74,6 +74,28 @@ class LiquidityHuntEpisode(DomainModel):
     description: str
 
 
+class LiquidityContinuationState(DomainModel):
+    """The live counterpart of the continuation history: the open aligned leg.
+
+    ``active`` when the current timeframe's standing trend is *aligned* with
+    the higher timeframe — the regime in which pullbacks sweep internal
+    liquidity and the trend resumes (the mirror of the counter-trend hunt).
+    ``start_timestamp`` is where the pending grab's window opens: the last
+    continuation grab already closed in this leg, or the leg's flip when none
+    has. ``hunted_side`` follows the continuation stream's convention (a bull
+    leg's pullback traps shorts). Descriptive only.
+    """
+
+    symbol: str
+    timeframe: TimeFrame
+    active: bool = False
+    direction: MarketDirection | None = None
+    hunted_side: RetailPositioning = RetailPositioning.NEUTRAL
+    start_timestamp: datetime | None = None
+    grabs_in_leg: int = Field(default=0, ge=0)
+    description: str
+
+
 class LiquidityHuntState(DomainModel):
     """Who is the resting liquidity right now, and how far its capture went.
 

@@ -21,6 +21,7 @@ import {
 
 import { LineLabelsPrimitive, type LineLabel } from '../charting/LineLabelsPrimitive'
 import { HuntWindowPrimitive, type HuntWindow } from '../charting/HuntWindowPrimitive'
+import { HUNT_WINDOW_COLORS } from '../theme'
 import { DivergenceMarksPrimitive, GlyphMarksPrimitive, type DivergenceMark } from '../charting/DivergenceMarksPrimitive'
 import { POIBoxesPrimitive, type POIBox } from '../charting/POIBoxesPrimitive'
 import {
@@ -2387,58 +2388,38 @@ export function MainChart({
     )
 
 
-    // Liquidity-hunt window: full-height shading from the counter-trend flip
-    // to the capture that concluded the hunt (right edge while still running).
-    // Amber while the counter-trend entrants are still being consumed, green
-    // once the mapped pools were captured and OI stopped unwinding.
+    // Hunt / continuation windows — one visual system for the two regimes
+    // (see HUNT_WINDOW_COLORS): the hue is the direction the move resolves in
+    // (bull teal / bear lilac, the BOS/CHoCH pair), the texture is the regime
+    // (hunt solid, continuation hatched), and amber marks the live pending
+    // window of either. Direction of a hunt = the side its capture runs
+    // toward (shorts hunted -> up); of a continuation = the leg itself.
     const hunt = data.liquidity_hunt
     const huntWindows: HuntWindow[] = []
     const history = data.liquidity_hunt_history ?? []
+    const dirColor = (up: boolean) => (up ? HUNT_WINDOW_COLORS.bull : HUNT_WINDOW_COLORS.bear)
     if (showHuntWindow) {
-      // Concluded hunts earlier in the window: dim green shaded bands with a ✓,
-      // each ending at the liquidity grab that closed it (short, near-term).
+      // Concluded hunts: each band ends at the grab that closed it.
       for (const episode of history) {
-        // Direction = a bold arrow to the raided side (shorts hunted → stops
-        // above → ▲); the label carries status only, so many overlapping bands
-        // stay legible without the long "shorts hunted" word repeating.
-        const arrow = episode.hunted_side === 'short' ? 'up' : 'down'
-        // Exhaustion grab (stops run on no new money at the grab candle — CVD×OI)
-        // is reversal-prone: purple with a ⚠; a genuine break stays green ✓. What
-        // closed the hunt (sources + score) stays in the hover title.
-        const exhaustion = episode.capture_quality === 'exhaustion_grab'
-        // A failed-reversal grab is the high-water mark of the whole move (a
-        // capture-direction CHoCH that ran the stops there and was invalidated),
-        // not one floor in a series — the leg's *principal* hunt. It gets its
-        // own rose tone and a stronger fill so it reads as the peak at a
-        // glance, ahead of the exhaustion/genuine distinction.
-        const color = episode.failed_reversal
-          ? '#ec407a'
-          : exhaustion
-            ? '#ab47bc'
-            : '#26a69a'
+        const up = episode.hunted_side === 'short'
+        const color = dirColor(up)
         huntWindows.push({
           x0: toChartTime(episode.start_timestamp),
           x1: toChartTime(episode.end_timestamp),
           color,
-          fillColor: color + (episode.failed_reversal ? '1f' : '0d'),
-          arrow,
-          // Arrow only — status stays encoded in the color (rose = peak,
-          // purple = exhaustion, green = genuine); full detail in the hover.
+          fillColor: color + '12',
+          arrow: up ? 'up' : 'down',
+          label: 'HUNT',
+          pattern: 'solid',
         })
       }
     }
     if (showHuntWindow && hunt && hunt.phase !== 'none' && hunt.counter_structure_timestamp) {
       const captured = hunt.phase === 'captured'
-      // An exhaustion-grab capture (stops run on no new money — CVD×OI) is
-      // reversal-prone: shade it purple with a distinct label instead of the
-      // green "cleared" of a genuine break.
-      const exhaustion = captured && hunt.capture_quality === 'exhaustion_grab'
-      const color = exhaustion ? '#ab47bc' : captured ? '#26a69a' : '#ff9800'
-      const arrow = hunt.hunted_side === 'short' ? 'up' : 'down'
-      // The live window is the *pending* grab only: start it at the last grab
-      // already captured in this leg (the latest history episode ending at or
-      // after the flip), not the original flip — so it stays near-term and
-      // doesn't overlap the green completed hunts.
+      const up = hunt.hunted_side === 'short'
+      // The live window is the *pending* grab only: it opens at the last grab
+      // already captured in this leg, not the original flip, so it stays
+      // near-term and never overlaps the concluded bands.
       const flip = hunt.counter_structure_timestamp
       const lastGrab = history
         .filter((e) => e.end_timestamp >= flip)
@@ -2446,6 +2427,7 @@ export function MainChart({
           (acc, e) => (acc === null || e.end_timestamp > acc ? e.end_timestamp : acc),
           null,
         )
+      const color = captured ? dirColor(up) : HUNT_WINDOW_COLORS.active
       huntWindows.push({
         x0: toChartTime(lastGrab ?? flip),
         x1:
@@ -2453,27 +2435,42 @@ export function MainChart({
             ? toChartTime(hunt.captured_at)
             : ((lastCandleTime + 9_999_999) as UTCTimestamp),
         color,
-        fillColor: color + '0d',
-        arrow,
-        // Arrow only — status stays in the color (amber = hunting, green =
-        // captured, purple = exhaustion capture); detail in the hover.
+        fillColor: color + (captured ? '12' : '14'),
+        arrow: up ? 'up' : 'down',
+        label: captured ? 'HUNT ✓' : 'HUNT ⚡',
+        pattern: 'solid',
+        live: !captured,
       })
     }
-    // Aligned trend-continuation grabs: a separate regime (a leg with the HTF
-    // that pulled back, swept internal liquidity, then resumed). Drawn in blue
-    // and toggled independently so it never blends with the counter-trend hunt.
     if (showContinuationWindow) {
       const continuation = data.liquidity_continuation_history ?? []
       for (const episode of continuation) {
-        const arrow = episode.correction_direction === 'bullish' ? '↗' : '↘'
-        const dirWord =
-          episode.correction_direction === 'bullish' ? 'bull' : 'bear'
+        const up = episode.correction_direction === 'bullish'
+        const color = dirColor(up)
         huntWindows.push({
           x0: toChartTime(episode.start_timestamp),
           x1: toChartTime(episode.end_timestamp),
-          color: '#42a5f5',
-          fillColor: '#42a5f50d',
-          label: `${arrow} ${dirWord} continuation`,
+          color,
+          fillColor: color + '0a',
+          arrow: up ? 'up' : 'down',
+          label: 'CONT',
+          pattern: 'hatched',
+        })
+      }
+      // The live aligned leg: its pending grab's window, amber and hatched,
+      // from the leg's last grab (or flip) to the right edge.
+      const live = data.liquidity_continuation
+      if (live && live.active && live.start_timestamp && live.direction) {
+        const color = HUNT_WINDOW_COLORS.active
+        huntWindows.push({
+          x0: toChartTime(live.start_timestamp),
+          x1: (lastCandleTime + 9_999_999) as UTCTimestamp,
+          color,
+          fillColor: color + '0d',
+          arrow: live.direction === 'bullish' ? 'up' : 'down',
+          label: 'CONT ⚡',
+          pattern: 'hatched',
+          live: true,
         })
       }
     }

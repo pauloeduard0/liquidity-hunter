@@ -348,6 +348,20 @@ export interface LiquidityHuntState {
   description: string
 }
 
+/** The live aligned leg — the mirror of `LiquidityHuntState`: active when the
+ *  standing trend agrees with the HTF. `start_timestamp` is where the pending
+ *  continuation grab's window opens (the leg's last grab, or its flip). */
+export interface LiquidityContinuationState {
+  symbol: string
+  timeframe: TimeFrame
+  active: boolean
+  direction: MarketDirection | null
+  hunted_side: RetailPositioning
+  start_timestamp: string | null
+  grabs_in_leg: number
+  description: string
+}
+
 /** A concluded counter-trend hunt from earlier in the window (history, not the
  *  live snapshot). The larger trend resumed at `end_timestamp`, consuming the
  *  counter-trend entrants that opened the leg at `start_timestamp`. */
@@ -647,6 +661,7 @@ export interface DashboardData {
   liquidity_hunt: LiquidityHuntState | null
   liquidity_hunt_history: LiquidityHuntEpisode[]
   liquidity_continuation_history: LiquidityHuntEpisode[]
+  liquidity_continuation: LiquidityContinuationState | null
   consolidation_ranges: ConsolidationRange[]
   liquidity_grabs: LiquidityGrab[]
   block_reclaims: BlockReclaim[]

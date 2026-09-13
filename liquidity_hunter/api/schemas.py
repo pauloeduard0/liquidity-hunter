@@ -14,6 +14,7 @@ from liquidity_hunter.core.domain import (
     Candle,
     ConsolidationRange,
     LeverageLiquidationMap,
+    LiquidityContinuationState,
     LiquidityGrab,
     LiquidityHuntEpisode,
     LiquidityHuntState,
@@ -70,6 +71,7 @@ class DashboardDataResponse(BaseModel):
     liquidity_continuation_history: list[LiquidityHuntEpisode] = Field(
         default_factory=list
     )
+    liquidity_continuation: LiquidityContinuationState | None = None
     consolidation_ranges: list[ConsolidationRange] = []
     liquidity_grabs: list[LiquidityGrab] = []
     block_reclaims: list[BlockReclaim] = []

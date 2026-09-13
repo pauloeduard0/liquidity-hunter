@@ -51,6 +51,7 @@ from liquidity_hunter.core.domain.liquidation import (
 )
 from liquidity_hunter.core.domain.liquidity_grab import LiquidityGrab
 from liquidity_hunter.core.domain.liquidity_hunt import (
+    LiquidityContinuationState,
     LiquidityHuntEpisode,
     LiquidityHuntState,
     LiquidityHuntTarget,
@@ -102,6 +103,7 @@ __all__ = [
     "LiquidationBand",
     "LiquidityGrab",
     "LiquidityGrabOutcome",
+    "LiquidityContinuationState",
     "LiquidityHuntEpisode",
     "LiquidityHuntPhase",
     "LiquidityHuntState",

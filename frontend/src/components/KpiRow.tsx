@@ -1,5 +1,6 @@
 import type {
   DashboardData,
+  LiquidityContinuationState,
   LiquidityHuntState,
   MarketControlState,
   OIRegime,
@@ -52,10 +53,24 @@ const fmtWhen = (iso: string) => {
 // than a contradiction of the 4H story.
 function huntCardProps(
   hunt: LiquidityHuntState | null,
+  continuation: LiquidityContinuationState | null,
   anchor: string | null,
 ): Omit<KpiCardProps, 'label'> {
   const vsAnchor = anchor ? ` · vs ${anchor}` : ''
   if (!hunt || hunt.phase === 'none') {
+    // Aligned with the HTF: the continuation leg is the live regime — its
+    // pending pullback grab is the "active" read here, amber like the hunt's.
+    if (continuation && continuation.active && continuation.direction) {
+      const dir = continuation.direction === 'bullish' ? 'Bull' : 'Bear'
+      const trapped = continuation.hunted_side === 'short' ? 'shorts' : 'longs'
+      return {
+        value: `${dir} continuation`,
+        accent: '#ff9800',
+        badge: { text: '⚡ ACTIVE', color: '#ff9800' },
+        sub: `${continuation.grabs_in_leg} grab(s) in leg · pullback traps ${trapped}${vsAnchor}`,
+        title: continuation.description,
+      }
+    }
     return { value: '◆ —', sub: `structure aligned with ${anchor ?? 'HTF'}` }
   }
   const side = hunt.hunted_side === 'short' ? 'Shorts' : 'Longs'
@@ -344,7 +359,7 @@ export function KpiRow({ data }: KpiRowProps) {
       />
       <KpiCard
         label="Liquidity Hunt"
-        {...huntCardProps(data.liquidity_hunt ?? null, htfAnchor)}
+        {...huntCardProps(data.liquidity_hunt ?? null, data.liquidity_continuation ?? null, htfAnchor)}
       />
     </div>
   )

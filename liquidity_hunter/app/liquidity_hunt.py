@@ -40,6 +40,7 @@ from liquidity_hunter.core.domain.enums import (
     timeframe_period,
 )
 from liquidity_hunter.core.domain.liquidity_hunt import (
+    LiquidityContinuationState,
     LiquidityHuntEpisode,
     LiquidityHuntState,
     LiquidityHuntTarget,
@@ -344,6 +345,55 @@ class LiquidityHuntEngine:
                 oi_unwinding=oi_unwinding,
                 last_flush=last_flush,
                 capture_quality=capture_quality,
+            ),
+        )
+
+    def build_continuation_state(
+        self,
+        data: DashboardData,
+        history: list[LiquidityHuntEpisode] | None = None,
+    ) -> LiquidityContinuationState:
+        """The live aligned leg, as the mirror of :meth:`build`.
+
+        Reads the same current trend and the same HTF scalar the live hunt
+        reads (a forming HTF candle is information available *now*), so at
+        any instant exactly one of the two live states is active: the hunt
+        when the standing trend opposes the HTF, this one when it is aligned.
+        ``history`` is the continuation stream (computed once by the caller);
+        the pending window opens at its last grab inside the leg.
+        """
+        htf = data.higher_timeframe_direction
+        trend, flip_timestamp = self._current_trend(data.internal_structure_events)
+        directional = (MarketDirection.BULLISH, MarketDirection.BEARISH)
+        aligned = htf in directional and trend is htf and flip_timestamp is not None
+        if not aligned or trend is None or flip_timestamp is None:
+            return LiquidityContinuationState(
+                symbol=data.symbol,
+                timeframe=data.timeframe,
+                description=(
+                    "Current-timeframe structure is not aligned with the higher "
+                    "timeframe; no continuation leg open."
+                ),
+            )
+        episodes = history if history is not None else self.build_continuation_history(data)
+        in_leg = [e for e in episodes if e.end_timestamp >= flip_timestamp]
+        start = max((e.end_timestamp for e in in_leg), default=flip_timestamp)
+        hunted_side = (
+            RetailPositioning.SHORT if trend is MarketDirection.BULLISH else RetailPositioning.LONG
+        )
+        trapped = "shorts" if hunted_side is RetailPositioning.SHORT else "longs"
+        return LiquidityContinuationState(
+            symbol=data.symbol,
+            timeframe=data.timeframe,
+            active=True,
+            direction=trend,
+            hunted_side=hunted_side,
+            start_timestamp=start,
+            grabs_in_leg=len(in_leg),
+            description=(
+                f"Continuation leg open: a {trend.value} leg aligned with the "
+                f"{htf.value} higher-timeframe trend; the next pullback that sweeps "
+                f"internal liquidity traps {trapped} ({len(in_leg)} grab(s) so far)."
             ),
         )
 

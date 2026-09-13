@@ -27,6 +27,14 @@ export interface HuntWindow {
    */
   arrow?: 'up' | 'down'
   label?: string
+  /**
+   * Regime texture: 'solid' (counter-trend hunt) or 'hatched' (aligned
+   * continuation — a slim solid strip along the top of the band), so the two
+   * regimes read apart even when they share a direction hue.
+   */
+  pattern?: 'solid' | 'hatched'
+  /** Live (still open) window: stronger edge and a bolder label. */
+  live?: boolean
 }
 
 interface ResolvedWindow {
@@ -36,7 +44,11 @@ interface ResolvedWindow {
   fillColor: string
   arrow?: 'up' | 'down'
   label?: string
+  pattern: 'solid' | 'hatched'
+  live: boolean
 }
+
+const CONT_STRIP = 3
 
 class HuntWindowRenderer implements IPrimitivePaneRenderer {
   private readonly _windows: ResolvedWindow[]
@@ -56,11 +68,20 @@ class HuntWindowRenderer implements IPrimitivePaneRenderer {
         context.fillStyle = win.fillColor
         context.fillRect(left, 0, right - left, mediaSize.height)
 
+        if (win.pattern === 'hatched') {
+          // Continuation texture: a slim solid strip along the top of the band
+          // (one fillRect — the diagonal hatch it replaces drew hundreds of
+          // full-height lines per band per frame and made panning drag).
+          context.fillStyle = win.color + (win.live ? '99' : '55')
+          context.fillRect(left, 0, right - left, CONT_STRIP)
+        }
+
         // Dashed vertical edge at the flip candle (and at the capture candle
-        // when the window is closed inside the pane).
-        context.strokeStyle = win.color + '66'
-        context.lineWidth = 1
-        context.setLineDash([3, 3])
+        // when the window is closed inside the pane). A live window gets a
+        // stronger, longer-dashed edge.
+        context.strokeStyle = win.color + (win.live ? 'aa' : '66')
+        context.lineWidth = win.live ? 1.5 : 1
+        context.setLineDash(win.live ? [6, 3] : [3, 3])
         context.beginPath()
         context.moveTo(left + 0.5, 0)
         context.lineTo(left + 0.5, mediaSize.height)
@@ -71,13 +92,15 @@ class HuntWindowRenderer implements IPrimitivePaneRenderer {
         context.stroke()
         context.setLineDash([])
 
-        const PADDING = 4
+        const PADDING = win.pattern === 'hatched' ? 4 + CONT_STRIP : 4
         context.textBaseline = 'top'
         context.textAlign = 'left'
         context.fillStyle = win.color
         let cursor = left + PADDING
         // Direction cue first: a bold arrow pointing to the raided side, the
-        // primary read. The status label follows in smaller type (or none).
+        // primary read. The regime label follows in smaller type, and only
+        // when the band is wide enough to hold it — overlapping labels on a
+        // run of narrow bands are worse than none.
         if (win.arrow) {
           context.font = 'bold 13px sans-serif'
           const glyph = win.arrow === 'up' ? '▲' : '▼'
@@ -85,8 +108,11 @@ class HuntWindowRenderer implements IPrimitivePaneRenderer {
           cursor += context.measureText(glyph).width + 3
         }
         if (win.label) {
-          context.font = '10px sans-serif'
-          context.fillText(win.label, cursor, PADDING)
+          context.font = win.live ? 'bold 10px sans-serif' : '10px sans-serif'
+          const width = context.measureText(win.label).width
+          if (cursor + width <= right - PADDING) {
+            context.fillText(win.label, cursor, PADDING)
+          }
         }
       }
     })
@@ -120,6 +146,8 @@ class HuntWindowPaneView implements IPrimitivePaneView {
       fillColor: win.fillColor,
       arrow: win.arrow,
       label: win.label,
+      pattern: win.pattern ?? 'solid',
+      live: win.live ?? false,
     }))
     return new HuntWindowRenderer(resolved)
   }

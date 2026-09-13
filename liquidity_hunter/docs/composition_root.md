@@ -253,7 +253,12 @@ Extracted from `CLAUDE.md` (2026-08-29) to keep that file under its size limit.
     weighs 4, whatever the analyzer's confidence (`research/
     hunt_pivot_thrust_ext.py`, P3: 332 more grabs at 72.0% vs 53.1%, holdout
     71.6%); reading the pullback's extreme candle next to the pivot (P2)
-    failed its holdout and is not applied.
+    failed its holdout and is not applied. `build_continuation_state(data,
+    history)` is the live mirror of `build()` (surfaced as
+    `DashboardData.liquidity_continuation`): active when the standing trend
+    agrees with the HTF scalar, with the pending grab's window opening at the
+    leg's last continuation grab (or its flip); exactly one of the two live
+    states is active at any instant.
   - **Evidence**: `last_flush_timestamp` = latest `OIQualifiedEvent` with
     `participation=FLUSH` in the capture direction since the flip;
     capture-side `LIQUIDITY_SWEEP` since the flip; `oi_unwinding` =

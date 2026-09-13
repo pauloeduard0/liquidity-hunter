@@ -485,28 +485,45 @@ counts, clock) and `LoadingSkeleton`. The header carries only the logo:
   `Hunting longs · vs 1H` reads as the pair's fractal handoff (the bounce's
   buyers are the H1 correction's fuel), not a contradiction of the 4H story.
 
-- **Hunt window chart shading** (frontend, as of 2026-07-06):
-  `frontend/src/charting/HuntWindowPrimitive.ts` shades the liquidity-hunt
-  window as a **full-pane-height vertical band** on the main pane (modeled on
-  `POIBoxesPrimitive`, but a time span rather than a price box, and rendered
-  at `zOrder 'bottom'` so it paints *behind* the candles and every overlay).
-  `MainChart` fills it from `data.liquidity_hunt`: the band runs from
-  `counter_structure_timestamp` (the counter-trend flip candle, dashed
-  vertical edge) to `captured_at` when `phase === 'captured'`, or to the
-  right edge via the far-future-sentinel clamp while the hunt is still
-  running. Amber (`#ff9800`, ~5% fill) with a `⚡ hunting shorts|longs` label
-  at the top while active; green (`#26a69a`) with `✓ shorts|longs captured`
-  once concluded; nothing when `phase === 'none'`. Only the *current* hunt is
-  drawn (the state is a live snapshot, not a history of past windows).
-  Toggled by the `⚡ Hunt` toolbar button in `App.tsx` (`huntWindowVisible` →
-  the `showHuntWindow` prop on `MainChart`), **off by default**. Independently
-  of the toggle, the structure label of the **flip event itself** — the
-  non-provisional BOS/CHoCH/`CHOCH_FAILED` whose timestamp equals
-  `counter_structure_timestamp` while the hunt phase is not `none` — gets a
-  `⚠` suffix (`CHoCH ▼ ⚠`): the entrants of that break are the resting
-  liquidity being hunted. Only the *standing* flip is marked; historical
-  events would need the HTF trend as of their own time, which a snapshot
-  does not carry.
+- **Hunt / continuation window shading** (frontend; unified 2026-09-13):
+  `frontend/src/charting/HuntWindowPrimitive.ts` shades each hunt or
+  continuation episode as a **full-pane-height vertical band** on the main
+  pane (a time span, not a price box, rendered at `zOrder 'bottom'` behind
+  the candles). One visual system for the two regimes, `HUNT_WINDOW_COLORS`
+  in `theme.ts`:
+  - **hue = direction the move resolves in** — bull teal `#2EE6B8`, bear
+    lilac `#ce93d8`, the same pair as the BOS/CHoCH lines so the bands tune
+    with the structure. A hunt's direction is the side its capture runs
+    toward (shorts hunted → up); a continuation's is the leg itself.
+  - **texture = regime** — a hunt band is a solid translucent fill with a
+    bold `▲/▼` and a `HUNT` label; a continuation band is the same fill
+    with a **slim solid strip along the top of the band** and a `CONT`
+    label (a diagonal hatch was tried first and dropped the same day: hundreds
+    of full-height lines per band per frame made panning drag). The label is drawn only
+    when the band is wide enough to hold it (a run of narrow bands shows
+    arrows only).
+  - **amber `#ff9800` = live** — the pending window of either regime,
+    stronger long-dashed edge, bold `HUNT ⚡` / `CONT ⚡`, clamped to the
+    right edge. A captured live hunt reverts to its direction hue (`HUNT ✓`).
+  The old three-way hunt colouring (green / purple exhaustion / rose failed
+  reversal) was dropped from the bands — those qualities stay in the data
+  and the KPI card, not in the shading.
+  `MainChart` fills the bands from `liquidity_hunt_history` (concluded
+  hunts), `liquidity_hunt` (the live hunt, opening at the leg's last
+  captured grab rather than the flip so it never overlaps a concluded band),
+  `liquidity_continuation_history` (concluded continuation grabs) and
+  `liquidity_continuation` (the **live aligned leg** — new backend field,
+  `LiquidityHuntEngine.build_continuation_state`, the mirror of `build()`:
+  active when the standing trend agrees with the HTF scalar, its window
+  opening at the leg's last continuation grab or its flip). Exactly one of
+  the two live states is active at any instant. Toggled by `▮ Hunt windows`
+  and `▨ Continuation windows` in the `fx Indicators` menu (`App.tsx`),
+  **off by default**. The `KpiRow` hunt card shows `Bull|Bear continuation ·
+  ⚡ ACTIVE` (amber) when the hunt is idle and the continuation leg is live.
+  Independently of the toggles, the structure label of the hunt's **flip
+  event** (the BOS/CHoCH whose timestamp equals `counter_structure_timestamp`
+  while the hunt phase is not `none`) gets a `⚠` suffix: the entrants of that
+  break are the resting liquidity being hunted.
 
 - **OI regime surfaces** (frontend): `KpiRow` renders an **"OI Regime"**
   card (grid is `md:grid-cols-5`; the `LoadingSkeleton` in `App.tsx` matches)

@@ -1826,3 +1826,33 @@ def test_pivot_thrust_is_not_read_for_the_hunt_stream() -> None:
     # location is the confirmation (research/hunt_pivot_thrust_ext.py, P3).
     assert [s for s in with_pivot if s[2] == "vsa"] == [(T0 + H1 * 20, 4.0, "vsa")]
     assert [s for s in without if s[2] == "vsa"] == []
+
+
+# ---------------------------------------------------------------------------
+# Live continuation state (the mirror of `build`)
+# ---------------------------------------------------------------------------
+
+
+def test_continuation_state_is_active_only_when_aligned() -> None:
+    engine = LiquidityHuntEngine()
+    counter = _split_fixture()  # HTF scalar BULLISH, leg bullish -> aligned
+    state = engine.build_continuation_state(counter)
+    assert state.active is True
+    assert state.direction == MarketDirection.BULLISH
+    assert state.hunted_side == RetailPositioning.SHORT
+    # The pending window opens at the leg's last continuation grab (t16).
+    assert state.start_timestamp == T0 + H1 * 16
+    assert state.grabs_in_leg == 1
+
+    opposed = replace(counter, higher_timeframe_direction=MarketDirection.BEARISH)
+    assert engine.build_continuation_state(opposed).active is False
+    assert engine.build(opposed).phase != 'none'
+
+
+def test_continuation_state_opens_at_the_flip_without_grabs() -> None:
+    data = _pivot_thrust_fixture()
+    data = replace(data, candles=[_candle(i) for i in range(40)])  # flat: no grab
+    state = LiquidityHuntEngine().build_continuation_state(data)
+    assert state.active is True
+    assert state.grabs_in_leg == 0
+    assert state.start_timestamp == T0 + H1 * 6

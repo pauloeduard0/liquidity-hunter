@@ -22,6 +22,7 @@ from liquidity_hunter.core.domain import (
     ConsolidationStatus,
     FundingRate,
     LeverageLiquidationMap,
+    LiquidityContinuationState,
     LiquidityGrab,
     LiquidityHuntEpisode,
     LiquidityHuntState,
@@ -1091,6 +1092,10 @@ class DashboardData:
     # its own meaning, drawn in its own colour, never mixed with the
     # counter-trend hunt.
     liquidity_continuation_history: list[LiquidityHuntEpisode] = field(default_factory=list)
+    # The live aligned leg (mirror of `liquidity_hunt`): active when the
+    # standing trend agrees with the HTF, with the pending grab's window
+    # opening at the last continuation grab of the leg.
+    liquidity_continuation: LiquidityContinuationState | None = None
     # The anchor timeframe `higher_timeframe_direction` was measured on (the
     # `_HIGHER_TIMEFRAME_MAP` pair; None for the top timeframe, whose direction
     # falls back to the current series' own internal trend). Exposed so the
@@ -3132,6 +3137,9 @@ def load_dashboard_data(
     liquidity_hunt = hunt_engine.build(data)
     liquidity_hunt_history = hunt_engine.build_history(data)
     liquidity_continuation_history = hunt_engine.build_continuation_history(data)
+    liquidity_continuation = hunt_engine.build_continuation_state(
+        data, liquidity_continuation_history
+    )
     structure_confluence = StructureConfluenceEngine().build(data)
     # Last of all, and read by nothing: the standing leg's stall state, over
     # the *final* event stream (post composition passes) and the same visible
@@ -3148,6 +3156,7 @@ def load_dashboard_data(
         liquidity_hunt=liquidity_hunt,
         liquidity_hunt_history=liquidity_hunt_history,
         liquidity_continuation_history=liquidity_continuation_history,
+        liquidity_continuation=liquidity_continuation,
         structure_confluence=structure_confluence,
         structural_stall=structural_stall,
     )
