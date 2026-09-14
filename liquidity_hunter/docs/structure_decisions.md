@@ -4259,3 +4259,64 @@ estrutura carimbou como pivo, lido sem o gate de extremo.
 **O que continua vazio, e por que.** Os pullbacks de 29/05 em diante nao
 imprimem thrust nem climax no candle do pivo: nao ha rejeicao para marcar.
 Um vazio assim e o motor dizendo "o pullback nao rejeitou", e nao um furo.
+
+## 2026-09-13 — HUNT H10: o contexto do Tide (fase da VWAP e agressao) como FILTRO — HUNT reprovado no corte, CONTINUATION reprovada
+
+*Medicao em `research/hunt_tide_context.py`, baseline
+`research/hunt_tide_context_baseline.json`. Nada em producao muda.*
+
+Pergunta do usuario: o Tide (fita VWAP ±1σ, matiz = estrutura, saturacao =
+control) tem alguma confluencia que deixe o HUNT/CONT mais especifico? Dois
+cenarios: (1) hunt de comprados com o preco "muito alto" (queremos em fundo,
+nao no topo que comecou a cair); (2) CONT de alta que segue marcando com o
+preco ja caindo. Depois de H5/H6 (toda fonte nova ao limiar = marca
+aleatoria) o Tide entra como filtro, nunca como fonte.
+
+Dois canais reconstruiveis no historico so com candles, lidos no candle
+FECHADO do grab e **orientados a direcao da captura** (positivo = preco
+ainda esticado a favor da captura; negativo = retraido contra ela):
+**fase** = 50 × (close − VWAP) / (upper_1 − VWAP), a linha de fase do Tide;
+**agressao** = CVD da janela do `MarketControlAnalyzer` em % do volume, o
+fallback de saturacao. O controller creditado (bordas) exige OI (~30 dias
+na Binance) e ficou de fora. Corte candidato unico, fixado antes: reter
+fase < +50; aprova se em discovery E holdout o retido bate o controle, o
+removido fica abaixo dele e o net total em ATR nao cai.
+
+72 simbolos × M15/H1/H4 × 3 janelas, controle casado em simbolo, TF e
+direcao, h=20: hunt 594 episodios (54,1% vs 50,1%), continuation 2204
+(61,2% vs 51,8%).
+
+**HUNT — a fase separa, o corte pre-registrado nao passa.** Por balde
+(acerto vs controle): (−50,+50) **62,9% vs 50,5%**, R 1,69, n=202;
+[+50,+100) 50,0% vs 50,0%, n=216; ≥+100 **43,2% vs 51,9%**, R 0,91, n=88.
+O balde esticado fica abaixo do controle em TODO timeframe (M15 42/42, H1
+37,5/55,3, H4 48,6/53,9) e nos dois lados cacados (vendidos 38,8/51,1,
+comprados 48,7/52,8). Veredito no corte +50: discovery passa nos tres
+criterios (retido 58,7 vs 48,8; removido 46,2 vs 50,3; net +88 vs +49);
+holdout **falha** dois — o removido mede 52,1% vs 51,1% (n=96) e net +0,48,
+porque o balde [+50,+100) no holdout deu 53,8% com net +0,63 (n=65). O ≥+100
+segue abaixo do controle no holdout (48,4 vs 52,4, n=31). Por bloco temporal
+o retido bate o removido em 3 de 4 blocos (o bloco 0 inverte, n=24/35).
+
+**Leitura honesta.** O corte foi fixado em +50 e reprovou; +100 teria
+passado, mas escolher o corte depois de olhar e exatamente o que a regra
+proibe. O que fica como ACHADO (previsao pre-registrada que se confirmou):
+a queda monotona do acerto do envelope para fora (62,9 → 50,0 → 43,2) e o
+balde ≥+100 abaixo do controle nas duas amostras. O cenario (1) do usuario
+(comprados cacados com o grab ≤ −100, o fundo ainda longe acima da VWAP)
+mede 50,0% vs 48,1% com R 0,46 e net −0,61, n=24 — pequeno demais para
+afirmar. Se houver um proximo passo, e um painel novo com corte +100
+pre-registrado em periodo/simbolos novos, nao esta baseline.
+
+**CONTINUATION — nada filtra.** Todos os baldes de fase batem o controle
+(≤−100 67,0%; (−50,+50) 60,4%; ≥+100 62,5%); o removido no discovery mede
+67,4% vs 52,0%, ACIMA do retido. REPROVADA sem ambiguidade. A H10b
+(cenario 2: agressao contra a perna + fase ≤ −100 = "perna quebrada")
+mede **65,9% vs 51,1%** — o oposto da previsao: agressao contra nao
+piora a continuation (59,7 vs 51,0; a favor 64,8 vs 53,6). Coerente com
+`research/control_continuation.py`: agressao/dinheiro novo nao preve
+sustentacao. O CONT ja e o stream forte; o Tide nao o afina.
+
+**Regra que sai daqui.** No hunt, a fase da VWAP no grab e informacao (a
+caca boa acontece no lugar que todo mundo olha); no CONT, nao e. Nao ha
+nada para desenhar ate um corte pre-registrado passar em holdout.
