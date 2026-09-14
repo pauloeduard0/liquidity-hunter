@@ -4320,3 +4320,87 @@ sustentacao. O CONT ja e o stream forte; o Tide nao o afina.
 **Regra que sai daqui.** No hunt, a fase da VWAP no grab e informacao (a
 caca boa acontece no lugar que todo mundo olha); no CONT, nao e. Nao ha
 nada para desenhar ate um corte pre-registrado passar em holdout.
+
+## 2026-09-13 — HUNT K1: o grab do HUNT/CONT nao existe no candle em que e carimbado (NEGATIVO)
+
+*Medicao em `research/hunt_knowability.py`, baseline
+`research/hunt_knowability_baseline.json` (cache de replay em
+`research/.replay_cache/hunt_knowability/`). Nada em producao muda.*
+
+Pre-requisito da estrategia de operacao com HUNT/CONT pedida pelo usuario.
+Todos os paineis H2-H10 entravam no fechamento do candle ancora do episodio,
+mas o VSA de pivo so existe depois da confirmacao do pivo, o `realignment` e
+um BOS/CHoCH atrasado, e o `require_vsa` re-ancora o cluster para tras.
+
+Replay ao vivo: 72 simbolos × M15/H1/H4, 1000 candles, `load_dashboard_data`
++ `LiquidityHuntEngine` em cada prefixo com 500 visiveis; primeira aparicao
+de cada episodio; entrada no fechamento desse candle; controle casado em
+simbolo, TF e direcao; discovery/holdout 70/30 por serie. Criterio fixado
+antes: operavel se, na entrada conhecivel, acerto > controle e net > 0 nas
+duas amostras.
+
+| stream | replay na ancora | ao vivo conhecivel | somem depois de aparecer |
+|---|---|---|---|
+| HUNT | 59,2% vs 51,3% (n=304) | **53,6% vs 51,3%** (n=698) | 422 de 738 (57%) |
+| CONTINUATION | 61,2% vs 52,0% (n=1089) | **51,4% vs 51,5%** (n=1501) | 452 de 1590 (28%) |
+
+**Nenhum stream/TF passa.** O caso mais limpo e a continuation: +9,1 pp
+sobre o controle no replay viram −0,1 pp ao vivo, igual em discovery e
+holdout. Atraso mediano do grab: hunt 5 candles (p90 235), continuation 3
+(p90 21). A previa de trade (stop no extremo do grab, 2R, sem custo) cai de
++0,30R para 0,00R na continuation e de +0,02 para +0,02 no hunt; o unico
+recorte positivo (hunt H4 com r_atr ≤ 1,0, +0,35R, n=62) e um de 18 e nao
+sustenta afirmacao.
+
+**Dois mecanismos, os dois conhecidos.** (1) Atraso de confirmacao, o mesmo
+de `research/control_continuation.py`: o carimbo cai antes do instante em que
+a informacao existe. (2) Sobrevivencia: 57% dos hunts e 28% das continuations
+que aparecem ao vivo somem da passada final, e os que somem acertam menos
+(hunt 49,5%, continuation 47,2%). O replay mede so os sobreviventes.
+
+**O que isto invalida e o que nao.** Os acertos das H8/H9 (72%) e da H10
+(62,9% no envelope) sao leituras DESCRITIVAS corretas da historia, e seguem
+validas como rotulo. Nao sao claims operaveis. Qualquer estrategia sobre
+HUNT/CONT exige primeiro um sinal que exista no candle e nao repinte; a
+estrategia nao foi construida.
+
+**Achado lateral para o grafico.** Mais da metade das janelas HUNT que um
+observador ve ao vivo desaparecem depois. Isso e repaint visivel, e deve ser
+tratado antes de qualquer uso das janelas como leitura ao vivo.
+
+## 2026-09-13 — HUNT K2: setup com gatilho causal (sweep no fechamento + contexto do hunt) — NEGATIVO
+
+*Medicao em `research/hunt_reclaim_setup.py`, baseline
+`research/hunt_reclaim_setup_baseline.json`. Nada em producao muda.*
+
+Depois do K1 o usuario pediu para construir o setup mesmo assim. Gatilho
+trocado por algo conhecido no fechamento: sweep da minima (maxima) dos 20
+candles anteriores com fechamento de volta, a favor da HTF lida sem o candle
+HTF em formacao. Entrada no fechamento, stop no pavio do sweep, alvo 2R,
+horizonte 60, custo 0,13% ida e volta, gate r_atr ≤ 1,0. Contexto lido do
+snapshot ao vivo de cada corte. Bracos fixados antes: S0 base (= o
+`raid/cont` ja morto em `research/raid_reversal.py`), S1 perna LTF contra a
+HTF (HUNT), S1c perna a favor (CONT), S2/S2c os mesmos com fase da VWAP em
+(−50,+50). 72 simbolos × M15/H1/H4, 3000 candles (M15 ~25 dias, H1 ~104,
+H4 ~416 escaneados), controle casado em direcao, r_atr e custo.
+
+**Nenhum braco aprovado em nenhum TF.** Com gate, net em R apos custo:
+
+| TF | S0 base | S1 HUNT | S1c CONT | S2 HUNT envelope | S2c CONT envelope |
+|---|---|---|---|---|---|
+| M15 | −0,60 (ctl −0,65) | −0,63 (−0,65) | −0,59 (−0,65) | −0,47 (−0,47) | −0,54 (−0,57) |
+| H1 | −0,35 (−0,37) | −0,39 (−0,37) | −0,33 (−0,37) | −0,31 (−0,20) | −0,29 (−0,18) |
+| H4 | −0,19 (−0,20) | −0,22 (−0,21) | −0,18 (−0,19) | −0,03 (−0,09) | −0,12 (−0,06) |
+
+O gatilho e indistinguivel do candle aleatorio com o mesmo risco (net ≈
+controle em toda celula, alvo 2R batido em 30-36% contra ~33% do acaso), e
+o contexto do hunt nao acrescenta nada ao S0. O unico canto sem gate que
+fica positivo (H4 S2 +0,05R, S2c +0,05R, t ≈ 1) some com o gate e nao passa
+no holdout. O custo decide o sinal no M15: o stop no pavio de um candle
+M15 e tao curto que 0,13% vira ~0,4-0,6R.
+
+**Leitura.** Somado ao K1, o registro fecha: o HUNT/CONT descreve bem a
+historia, mas nem o episodio (atrasado) nem a traducao causal dele
+(sweep + contexto) carregam direcao que pague. A diferenca para o Block
+Reclaim e o LUGAR: la o gatilho exige o bloco e a VWAP; um sweep de 20
+candles acontece em qualquer lugar, e e isso que o controle mede.
