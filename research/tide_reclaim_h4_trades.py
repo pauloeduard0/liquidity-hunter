@@ -69,7 +69,9 @@ def simulate(
     risk = (entry - stop) if up else (stop - entry)
     if risk <= 0 or i + HORIZON >= len(candles):
         return None
-    target = {"X2": 2.0, "X15": 1.5, "X3": 3.0, "XV3": 3.0}.get(exit_rule)
+    target = {"X2": 2.0, "X15": 1.5, "X3": 3.0, "XV3": 3.0, "X4": 4.0, "X5": 5.0}.get(
+        exit_rule
+    )  # "XN" (K16): sem alvo, so stop ou horizonte
     goal = None if target is None else (entry + target * risk if up else entry - target * risk)
     by_vwap = exit_rule in ("XV", "XV3")
     for j in range(i + 1, i + 1 + HORIZON):

@@ -4695,3 +4695,21 @@ o H4 é fraco (SR 0,31, DD −538R). Predição: correlação baixa (acertou),
 carteira melhora o SR (errou), 2023 segue negativo (acertou). Uma
 ponderação por risco (H4 com fração de R) ficaria melhor, mas o peso seria
 escolhido olhando este resultado — não medido. Decisão: o setup é o D1.
+
+## 2026-09-15 — K16: alvo 4R, 5R e sem alvo no Tide Reclaim D1 — 3R FICA
+
+`research/tide_reclaim_d1_targets.py`, uma posição por vez, regra do K10 escrita antes.
+
+| V0 | R/trade | R total | SR diário | 2021 | 2022 | 2023 | 2024 | 2025 | 2026 |
+|---|---|---|---|---|---|---|---|---|---|
+| **3R** | +0,098 | +212 | **0,84** | +14 | +39 | −6 | +29 | +84 | +53 |
+| 4R | +0,092 | +192 | 0,72 | 0 | +9 | +3 | +48 | +80 | +52 |
+| 5R | +0,100 | +205 | 0,72 | −8 | −13 | +8 | +69 | +82 | +66 |
+| sem alvo | +0,220 | +442 | 0,74 | −29 | −36 | −54 | **+396** | +111 | +55 |
+
+Nenhum substitui o 3R: cada um vence em 3/6 anos e todos têm SR diário menor.
+"Sem alvo" dobra o R total, mas +396R vêm só de 2024 (uma perna longa) e ele
+perde em 2021, 2022 e 2023. É cauda de um ano, não edge estável. V_hunt:
+mesma leitura (3R: SR 0,76; 4R 0,53; 5R 0,50; sem alvo 0,64 com +363R em 2024).
+Predição: 4R empata (acertou em anos, SR um pouco pior); 5R e sem alvo perdem
+em SR (acertou).
