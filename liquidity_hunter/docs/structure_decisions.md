@@ -4404,3 +4404,294 @@ historia, mas nem o episodio (atrasado) nem a traducao causal dele
 (sweep + contexto) carregam direcao que pague. A diferenca para o Block
 Reclaim e o LUGAR: la o gatilho exige o bloco e a VWAP; um sweep de 20
 candles acontece em qualquer lugar, e e isso que o controle mede.
+
+## 2026-09-14 — HUNT K3: contexto do hunt (ao vivo) como filtro do Block Reclaim — NEGATIVO
+
+*Medicao em `research/block_reclaim_hunt_context.py`, baseline
+`research/block_reclaim_hunt_context_baseline.json`. Nada em producao muda.*
+
+Depois do K2, a unica forma restante de usar o HUNT/CONT numa operacao: como
+FILTRO de um setup que ja tem lugar. Populacao = as operacoes do plano do
+Block Reclaim (`quality_features.scan` + `OPERATING_GATES` + pierced +
+`MAX_BLOCK_PENETRATION`), 72 simbolos, ate 60k candles, M15/M30/H1/H4, 2R
+h120, custo 0,10%. Contexto lido so do snapshot de 500 candles terminando no
+gatilho, sem o candle HTF em formacao. Quatro regras fixadas antes; passa se
+bater o baseline no R medio E no Sharpe diario nos quatro recortes
+(search/holdout, early/late). Predicao escrita: nenhuma passa.
+
+**Nenhuma passa em nenhum TF.**
+
+| TF | base 2R / R | R1 exige episodio a favor | R2 veta episodio contra | R3 exige HTF a favor | R4 veta hunt ativo contra |
+|---|---|---|---|---|---|
+| M15 (n=1175) | 64,3% / +0,627 | 62,1% / +0,566 | 64,2% / +0,620 | 63,5% / +0,600 | 64,1% / +0,621 |
+| M30 (n=1516) | 57,2% / +0,500 | 53,4% / +0,393 | 57,9% / +0,524 | 54,6% / +0,425 | 56,9% / +0,491 |
+| H1 (n=1614) | 50,9% / +0,407 | 47,6% / +0,308 | 51,6% / +0,428 | 50,1% / +0,381 | 51,9% / +0,437 |
+| H4 (n=245) | 55,9% / +0,622 | 47,2% / +0,356 | 59,2% / +0,720 | 51,3% / +0,484 | 57,0% / +0,655 |
+
+- **R1 (a hipotese do usuario) e o PIOR corte em todo TF**: episodio a favor
+  mede abaixo do baseline nos quatro.
+- R2/R4 sobem o R por trade em M30/H1/H4, mas caem no Sharpe diario em pelo
+  menos um recorte (H4 R2: holdout 1,76 = 1,76, early 2,26 < 2,32) e o total
+  sempre cai. Mesmo padrao da EMA9 e do `acum15`.
+- R3 (controle): HTF a favor mede PIOR que contra nos quatro TFs — as claims
+  de direcao do re-baseline do Block Reclaim continuam mortas.
+- Descritivo, NAO pre-registrado: `episode=none` e o melhor grupo em M30/H1/H4
+  (H4 61,8% vs 38,5-47,2% com episodio). A leitura seria "entrar quando o hunt
+  nao esta mexendo", mas e escolha pos-hoc sobre este mesmo painel; so vale
+  com painel novo, pre-registrado, em janela nova.
+
+**Leitura.** Fecha o arco: o HUNT/CONT nao serve como gatilho (K1, K2) nem
+como filtro do setup que tem lugar (K3). Fica como leitura descritiva do grafico.
+
+## 2026-09-14 — K4: clímax VSA contra o hunt (A) e Block Reclaim de stop largo (B), H1 — NEGATIVO
+
+Origem: exemplo do usuário (BTCUSDT H1, 13/09 21:00 UTC-3). A caixa CONT do
+gráfico começa no pavio, mas no replay ao vivo o CONT só aparece no
+fechamento das 01:00 (5 candles, ~1.300 pontos acima) — repinta para trás.
+No pavio existiam: selling climax, H4 de alta com perna H1 contra (HUNT) e um
+Block Reclaim com r_atr 1,43 (fora do gate). `research/climax_hunt_setup.py`,
+contexto ao vivo do cache K2 (71 símbolos, ~102 dias, jun–set 2026), régua K2
+(h60, custo 0,13%, 2R), controle casado em direção e r_atr, braços fixados antes.
+
+| braço | n | net R | controle | disc | hold | veredito |
+|---|---|---|---|---|---|---|
+| A0 clímax a favor da HTF | 1299 | −0,10 | −0,12 | −0,13 | −0,05 | reprovado |
+| **A1** A0 + HUNT ativo | 470 | +0,02 | −0,17 | −0,03 | +0,13 | reprovado (disc ≤ 0) |
+| A1c A0 + perna a favor | 825 | −0,17 | −0,10 | −0,20 | −0,12 | reprovado |
+| Bref Block Reclaim r_atr ≤ 1 | 91 | +0,28 | −0,25 | +0,40 | +0,07 | aprova (referência) |
+| B0 Block Reclaim 1 < r_atr ≤ 2 | 465 | +0,03 | −0,08 | +0,04 | −0,01 | reprovado |
+| **B1** B0 + clímax na visita | 31 | −0,15 | −0,06 | −0,28 | +0,18 (n=9) | reprovado |
+| **B2** B0 + HUNT a favor da HTF | 94 | +0,09 | −0,05 | +0,18 | −0,21 | reprovado |
+
+Leitura: o HUNT separa o clímax (A1 bate A1c por ~19pp de R e bate o próprio
+controle) mas não chega a pagar custo em discovery; o stop largo continua sem
+edge com ou sem contexto (5ª rejeição do stop largo). Único recorte
+marginalmente positivo: A1 r_atr > 1 (+0,06R, n=289) — post-hoc, não é achado.
+Janela de um regime só (controle negativo em todo braço).
+
+## 2026-09-14 — K5: clímax + Tide + confirmação, H1 — NENHUM APROVADO, 1 candidato
+
+`research/climax_tide_setup.py`, mesma janela/régua/controle do K4, braços fixados antes.
+
+| braço | n | net R | controle | disc | hold | veredito |
+|---|---|---|---|---|---|---|
+| A0 clímax a favor da HTF | 1299 | −0,10 | −0,14 | −0,13 | −0,05 | reprovado |
+| T_env A0 + fase no envelope | 305 | −0,19 | −0,10 | −0,15 | −0,30 | reprovado |
+| T_str A0 + esticado contra | 930 | −0,08 | −0,15 | −0,13 | −0,00 | reprovado |
+| T_rec A0 + lado certo da VWAP | 43 | −0,27 | −0,05 | −0,39 | +0,08 | reprovado |
+| **H_env** A0 + HUNT + envelope | 80 | **+0,17** | −0,12 | +0,07 | +0,52 (n=18) | inconclusivo (holdout < 30) |
+| H_str A0 + HUNT + esticado | 360 | +0,00 | −0,20 | −0,04 | +0,11 | reprovado |
+| H_rec | 11 | +0,04 | +0,03 | −0,31 | +0,95 (n=3) | reprovado |
+| C0 confirmação no candle seguinte | 726 | −0,10 | −0,11 | +0,04 | −0,31 | reprovado |
+| HC C0 + HUNT | 259 | −0,01 | −0,12 | +0,12 | −0,23 | reprovado |
+
+Sem HUNT o Tide não salva o clímax; a confirmação no candle seguinte não
+replica (inverte no holdout). H_env repete a direção do H10 (hunt no envelope
+63% vs esticado 43%) e é positivo nas duas amostras, mas com n pequeno numa
+janela de ~102 dias: candidato para um replay ao vivo em janela longa, não setup.
+
+## 2026-09-14 — K6: H_env (clímax + HUNT + Tide) em janela longa — NEGATIVO em todo TF
+
+`research/climax_hunt_long.py`: contexto ao vivo só nos candles de clímax, série inteira do cache
+(span mediano M15 619d, M30 1238d, H1 2178d, H4 2108d), régua K4/K5, 4 recortes.
+
+| TF | A0 clímax | A1 +HUNT | T_env +Tide | **H_env** | trades/mês H_env |
+|---|---|---|---|---|---|
+| M15 | −0,30 (n=22774) | −0,30 | −0,32 | **−0,32** (ctl −0,20) | 48 |
+| M30 | −0,19 | −0,20 | −0,12 | **−0,11** (ctl −0,11) | 35 |
+| H1 | −0,10 | −0,10 | +0,00 | **−0,02** (ctl −0,08) | 25 |
+| H4 | −0,04 | −0,08 | +0,01 | **+0,02** (ctl −0,03) | 6 |
+
+O +0,17R do K5 era da janela de 102 dias. Com 2.035 trades no H1 o H_env empata;
+nenhum recorte fecha os 4 critérios em TF nenhum. O HUNT não acrescenta ao clímax
+em janela longa (A1 ≈ A0); o envelope do Tide melhora ~0,1R no H1/H4 mas não
+leva a positivo. Por lado, o único ponto positivo é venda H1 H_env +0,07R (n=982)
+— post-hoc, não é achado. Predição escrita (passa no H1 ou em nenhum): nenhum.
+
+## 2026-09-14 — K7: clímax VSA num lugar (OB / pool) + HTF + Tide — NEGATIVO em todo TF
+
+`research/climax_place_setup.py`, régua K4–K6, lugar lido do snapshot ao vivo do candle do clímax.
+
+| TF | P0 clímax | P_ob | P_pool | P_any | P_htf | P_env | P_full (trades/mês) |
+|---|---|---|---|---|---|---|---|
+| M15 | −0,29 | −0,29 | −0,25 | −0,27 | −0,28 | −0,29 | −0,30 (224) |
+| M30 | −0,18 | −0,18 | −0,17 | −0,17 | −0,18 | −0,13 | −0,11 (114) |
+| H1 | −0,12 | −0,12 | −0,11 | −0,11 | −0,09 | −0,04 | −0,01 (53) |
+| H4 | −0,08 | −0,12 | −0,06 | −0,07 | −0,04 | −0,00 | +0,01 (13) |
+
+Nenhum braço aprovado. OB e pool não mudam o clímax (±0,02R); o acerto
+fica em ~30% em todo braço, o mesmo do controle aleatório com o mesmo stop.
+O único efeito consistente em K6 e K7 é o envelope do Tide (+0,08 a +0,10R
+em M30/H1/H4), que leva de negativo a zero e nunca a positivo. Predição
+(lugar +0,1R, no máximo um braço em H1/H4) errou para baixo: lugar ≈ 0.
+Conclusão da família K4–K7: entrar no fechamento do clímax com stop no
+extremo dele não tem edge, com qualquer contexto disponível no projeto.
+
+## 2026-09-14 — K8: retomada da VWAP do Tide + HUNT/CONT — H4 positivo pequeno, M15–H1 negativos
+
+`research/tide_reclaim_setup.py`. Gatilho: fechamento de volta do lado da HTF
+da VWAP periódica depois de ≥ 3 candles fechando contra no mesmo período;
+stop no extremo do recuo, 2R, h60, custo 0,13%, sem OB. Braços fixados antes.
+
+| TF | V0 | V_hunt | V_ep | V_env | V_he | V_ee |
+|---|---|---|---|---|---|---|
+| M15 | −0,13 | −0,13 | −0,15 | −0,13 | −0,13 | −0,14 |
+| M30 | −0,09 | −0,10 | −0,10 | −0,09 | −0,10 | −0,10 |
+| H1 | −0,03 (ctl −0,07) | −0,04 | −0,02 | −0,04 | −0,04 | −0,02 |
+| **H4** | **+0,03** (ctl −0,02) ✔ | +0,04 | **+0,05** ✔ | +0,03 | +0,04 | +0,04 |
+
+H4: V0 e V_ep passam os 4 recortes (V_ep empata com V0 no holdout: +0,038 vs
++0,038). É o primeiro positivo da linha HUNT/Tide, mas pequeno (+0,03 a
++0,05R, acerto ~30% a 2R) e com RESSALVAS antes de chamar de setup: os
+gatilhos se sobrepõem (vários por perna, posições simultâneas no mesmo
+símbolo), então n e t estão inflados; não houve Sharpe diário nem
+uma-posição-por-vez. HUNT e envelope não acrescentam de forma replicada
+(V_hunt/V_he falham no early). A predição (V0 ~0 em H1/H4, envelope +0,1R)
+acertou o nível e errou o envelope, que aqui não soma nada.
+
+## 2026-09-14 — K9: retomada da VWAP H4 como operação (1 posição por vez, por dia, saída)
+
+`research/tide_reclaim_h4_trades.py`, população do K8 re-simulada sem novo snapshot.
+Sobreposição: V0 26.477 gatilhos → 16.773 com uma posição por vez (X2).
+
+| V0, 1 posição por vez | early+search | late | holdout | tudo |
+|---|---|---|---|---|
+| X2 (régua K8) | +0,018R / SR +0,24 | +0,074R / SR +0,77 | +0,024R / SR +0,30 | +0,032R, +532R, SR +0,44, ~234/mês |
+| X1,5 | +0,004 / +0,07 | +0,046 / +0,56 | +0,022 / +0,31 | +0,018R |
+| X3 | +0,027 / +0,29 | +0,097 / +0,84 | +0,032 / +0,34 | +0,043R, +686R, SR +0,50 |
+| XV (sai na VWAP) | +0,031 / **+0,52** | **−0,014 / −0,26** | +0,033 / +0,51 | +0,022R |
+| XV3 | +0,007 / +0,16 | −0,010 / −0,19 | +0,002 / +0,05 | +0,001R |
+
+Veredito pela regra fixada: a saída escolhida em early+search foi XV, e ela
+FALHA no late → reprovado. Fora da regra de escolha: X2 (a régua que já
+existia antes do K9) e X3 continuam positivos nos três recortes com uma
+posição por vez e por dia — o edge do K8 não era só sobreposição. É fraco
+(SR diário 0,44–0,50 anualizado no universo). V_ep não bate V0 por dia de forma
+estável (X3: SR late 0,99 / holdout 0,59 vs V0 0,84 / 0,34, mas early+search 0,30 ≈ V0).
+X3 como saída precisa de confirmação própria (não foi a escolhida pela regra).
+
+## 2026-09-14 — K10: retomada VWAP H4 — alvo 3R CONFIRMADO; nenhuma faixa de stop cortada; 2023–2024 negativos
+
+`research/tide_reclaim_h4_refine.py`, V0, uma posição por vez, regras fixadas antes.
+
+Teste 1, X3 vs X2 por ano (SR diário): X3 vence em 6/7 anos (perde só 2022) e
+tem R total > 0 em late (+477R) e holdout (+172R) → **X3 confirmado**.
+
+| ano | X2 R total / SR | X3 R total / SR |
+|---|---|---|
+| 2020 | +114 / 2,22 | +148 / 2,74 |
+| 2021 | +104 / 0,70 | +174 / 1,01 |
+| 2022 | +232 / 1,16 | +147 / 0,70 |
+| 2023 | **−284 / −1,47** | **−278 / −1,20** |
+| 2024 | **−136 / −0,74** | **−144 / −0,68** |
+| 2025 | +411 / 1,62 | +491 / 1,71 |
+| 2026 | +91 / 0,68 | +149 / 1,01 |
+
+Teste 2, faixas de r_atr (X3): nenhuma é negativa em late E holdout → nenhum
+corte. ≤1 é ~0 (X3 −83R no total), 2–3 é ~0, 1–2 (+543R) e >3 (+257R, 44% de
+ganho) carregam o resultado. Predição (>3 seria cortada) errou: a faixa >3 é
+a melhor por trade.
+
+Estado: V0 H4 + X3, uma posição por vez: +0,043R/trade, +686R em ~6 anos,
+~220 trades/mês no universo, SR diário 0,50. Dois anos seguidos negativos
+(2023–2024) — o risco operacional principal é regime, não o trade médio.
+
+## 2026-09-14 — K11: regime da retomada VWAP H4 — nenhum corte passa a regra; BTC a favor explica 2023–24
+
+`research/tide_reclaim_h4_regime.py`, V0 + X3, uma posição por vez, features no gatilho, corte escolhido em early+search.
+
+| corte | mantido: tudo | late SR | holdout SR | 2023–24 | veredito |
+|---|---|---|---|---|---|
+| inteiro | +686R, SR 0,50 | 0,84 | 0,34 | −422R | — |
+| vol: tirar alto | +548R, SR 0,46 | 0,37 | 0,21 | −333R | reprovado |
+| eff: tirar alto (tendência) | +972R, SR 0,85 | 0,84 (≈) | 0,67 | −77R | reprovado (descartado +169R no late; SR late empata) |
+| **btc: tirar BTC contra** | **+994R, SR 0,86** | 0,75 | 0,80 | **+155R** | reprovado (descartado +150R no late; SR late < inteiro) |
+| curve: tirar curva ≤ 0 | +732R, SR 0,64 | 0,87 | 0,49 | −513R | reprovado (piora 23–24) |
+
+Leitura: pela regra fixada nada passa, porque no late (2025–26) o grupo
+descartado de btc e eff ainda foi positivo. Mas o grupo "BTC contra a EMA200
+do trade" é −604R em 2023–24 e −300R no total, e o "BTC a favor" é positivo
+em TODOS os recortes, inclusive 2023–24 (+182R). É o candidato forte de
+regime — medido post-hoc sobre a própria população, portanto precisa de
+replicação pré-registrada fora dela (outro TF) antes de entrar no setup.
+Predição: eff era o mais provável (errou a direção: o terço de ALTA
+eficiência é o ruim); curve passaria (não passou); vol não passa (acertou).
+
+## 2026-09-14 — K12: "BTC a favor" fora do H4 — NÃO replica (direção sim, nível e 2023–24 não)
+
+`research/tide_reclaim_btc_replication.py`, retomada VWAP (V0 do K8), X3, uma posição por vez, critério escrito antes.
+
+| TF | inteiro | BTC a favor | BTC contra | a favor em 2023–24 | contra em 2023–24 |
+|---|---|---|---|---|---|
+| M15 | −0,129R | −0,104R | −0,166R | −0,225R | −0,098R |
+| M30 | −0,089R | −0,086R | −0,095R | −0,113R | −0,059R |
+| H1 | −0,034R | **−0,013R** | −0,072R | −0,085R | −0,033R |
+
+O grupo a favor é melhor que o contra em todos os TFs (+0,01 a +0,06R) e
+melhora o SR diário, mas não fica positivo em late/holdout em nenhum → não
+passa. E o que tornava o K11 forte — BTC a favor positivo em 2023–24 — se
+INVERTE fora do H4: em 2023–24 o grupo a favor é pior que o contra em M15,
+M30 e H1. O filtro fica como ajuste pequeno de direção; a "explicação de
+2023–24" do K11 não é confirmada. Predição (replica no H1) errou.
+
+## 2026-09-14 — K13: retomada da VWAP do Tide no D1 — APROVADO, e aqui o HUNT soma
+
+Motivo: em K8/K12 a retomada melhora monotonicamente com o TF (M15 −0,13 →
+H4 +0,03). Mesmo `research/tide_reclaim_setup.py` com `--tfs 1d` (VWAP mensal,
+HTF W1 ao vivo), critério do K8 sem mudança; saída `research/tide_reclaim_setup_d1_baseline.json`.
+
+| braço | n | net R | controle | 4 recortes | compra / venda |
+|---|---|---|---|---|---|
+| V0 | 3860 | +0,123 | +0,032 | APROVADO | +0,01 (ctl −0,10) / +0,20 (ctl +0,13) |
+| **V_hunt** | 1942 | **+0,180** | −0,016 | APROVADO (> V0) | +0,06 (ctl −0,12) / +0,33 (ctl +0,12) |
+| V_ep | 913 | +0,160 | +0,056 | APROVADO | |
+| V_env | 2948 | +0,119 | +0,032 | reprovado (≤ V0) | |
+| **V_he** | 1487 | **+0,194** | −0,009 | APROVADO | +0,10 / +0,32 |
+| V_ee | 689 | +0,117 | +0,049 | reprovado | |
+
+Operação (uma posição por vez, custo 0,13%), por ano:
+- V0 X3: +0,098R/trade, +212R, SR diário 0,84, ~75/mês no universo; anos +14, +39, −6, +29, +84, +53R.
+- V_hunt X3: +0,111R, +131R, SR 0,76, ~40/mês; anos +21, +3, −16, +69, +32, +21R.
+
+Ressalvas: a venda carrega o resultado bruto, mas o controle da venda também
+é positivo (alts em queda) — contra o controle, compra (+0,11) e venda
+(+0,08 a +0,21) têm edge parecido. Só ~6 anos de D1 (VISIBLE=500 consome 2019–20).
+D1 escolhido depois de ver a tendência por TF — a regra de aprovação é a do K8, não nova.
+
+## 2026-09-14 — K14: robustez da retomada VWAP D1 — PASSA custo e concentração
+
+`research/tide_reclaim_d1_robust.py`, X3, uma posição por vez, regras escritas antes.
+
+Custo (R total late / holdout / tudo):
+- V0: 0,13% +144/+35/+212R · 0,20% +140/+30/+199R · **0,30% +134/+23/+180R** → passa.
+- V_hunt: 0,13% +67/+41/+131R · **0,30% +64/+36/+115R** → passa.
+
+Com stop largo em %, triplicar o custo tira só ~0,015R por trade.
+
+Concentração (0,13%):
+- V0: sem os 5 melhores símbolos +124R (+0,061R/trade); 67% dos 72 símbolos positivos, mediana +2,6R → passa.
+- V_hunt: sem top 5 +76R (+0,071R/trade); 64% positivos, mediana +1,9R → passa.
+
+Predição: custo sobrevive (acertou); a) folga pequena (acertou: o top 5
+carrega ~40% do total); b) perto de 50% (errou para cima, 64–67%). O ponto
+fraco segue o holdout (+0,03–0,04R/trade no V0 a 0,30%): o late carrega.
+
+## 2026-09-14 — K15: carteira retomada VWAP H4 + D1 — REPROVADA; o D1 sozinho é melhor
+
+`research/tide_reclaim_portfolio.py`, 1R por trade, janela comum 2021-04 a 2026-07, X3, custo 0,13%.
+
+| livro | 2021 | 2022 | 2023 | 2024 | 2025 | 2026 | total | SR diário | pior DD | trades/mês |
+|---|---|---|---|---|---|---|---|---|---|---|
+| H4 | +3 | +146 | −278 | −144 | +491 | +146 | +364 | 0,31 | −538R | 248 |
+| **D1** | +14 | +39 | −5 | +29 | +84 | +53 | +212 | **0,60** | **−196R** | 38 |
+| H4+D1 | +17 | +185 | −284 | −115 | +574 | +199 | +577 | 0,45 | −582R | 286 |
+| **D1 hunt** | +21 | +3 | −16 | +69 | +32 | +21 | +130 | 0,54 | **−88R** | 20 |
+| H4+D1 hunt | +25 | +150 | −294 | −75 | +522 | +167 | +495 | 0,40 | −536R | 268 |
+
+Correlação mensal H4×D1 = +0,02 (64 meses): os dois são independentes, mas
+com 1R por trade o H4 faz ~6× mais trades e domina a carteira, que herda
+2023–24. Pela regra: reprovada (SR combinado < D1 sozinho). Na janela comum
+o H4 é fraco (SR 0,31, DD −538R). Predição: correlação baixa (acertou),
+carteira melhora o SR (errou), 2023 segue negativo (acertou). Uma
+ponderação por risco (H4 com fração de R) ficaria melhor, mas o peso seria
+escolhido olhando este resultado — não medido. Decisão: o setup é o D1.
