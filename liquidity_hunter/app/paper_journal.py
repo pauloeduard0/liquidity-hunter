@@ -397,7 +397,9 @@ def record_decisions(
 
 
 def _settle(
-    decision: PaperDecision, candles: Sequence[Candle]
+    decision: PaperDecision,
+    candles: Sequence[Candle],
+    horizon: int = HORIZON_CANDLES,
 ) -> tuple[PaperOutcome, datetime | None, int | None, float | None]:
     """Walk the candles after the trigger and settle one decision.
 
@@ -433,7 +435,7 @@ def _settle(
                 else decision.observed_price - decision.target_price
             )
             return PaperOutcome.TARGET, candle.timestamp, i, (move / r if r else 0.0)
-        if i >= HORIZON_CANDLES:
+        if i >= horizon:
             move = (
                 candle.close - decision.observed_price
                 if bullish
@@ -448,8 +450,13 @@ def resolve_open(
     path: Path = DEFAULT_JOURNAL_PATH,
     provider: OHLCVProvider | None = None,
     lookback: int = RESOLVE_LOOKBACK,
+    horizon: int = HORIZON_CANDLES,
 ) -> list[PaperDecision]:
-    """Settle every open decision whose outcome the candles now show."""
+    """Settle every open decision whose outcome the candles now show.
+
+    `horizon` is the setup's own expiry in candles: the block reclaim settles
+    at 40, the D1 tide reclaim (`app.tide_reclaim_journal`) at 60.
+    """
     from liquidity_hunter.app.dashboard_data import default_ohlcv_provider
 
     decisions = read_journal(path)
@@ -469,7 +476,7 @@ def resolve_open(
         except (DataProviderError, ValueError):
             updated.append(decision)  # try again next pass
             continue
-        outcome, at, bars, realized = _settle(decision, candles)
+        outcome, at, bars, realized = _settle(decision, candles, horizon)
         if outcome is PaperOutcome.OPEN:
             updated.append(decision)
             continue

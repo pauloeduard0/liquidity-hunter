@@ -132,7 +132,8 @@ Other references: `docs/architecture.md` (SOLID rationale),
 `docs/psychology.md` (bias formula), `docs/scoring.md`,
 `docs/volume_profile.md`, `docs/volume_e_confluencia.md`,
 `docs/block_reclaim.md`, `docs/deep_reclaim.md` (o setup do leitor -- a
-visita rasa e curta -- medido a parte, com o que foi rejeitado).
+visita rasa e curta -- medido a parte, com o que foi rejeitado),
+`docs/tide_reclaim.md` (retomada da VWAP do Tide no D1 + HUNT, K4-K15).
 
 ### Scoring layer (`liquidity_hunter/scoring`)
 
